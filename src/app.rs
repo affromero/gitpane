@@ -31,6 +31,7 @@ pub(crate) struct App {
     context_menu: ContextMenu,
     status_bar: StatusBar,
     right_pane: RightPane,
+    focus_right: bool,
     action_tx: UnboundedSender<Action>,
     action_rx: UnboundedReceiver<Action>,
 }
@@ -49,6 +50,7 @@ impl App {
             context_menu: ContextMenu::new(),
             status_bar: StatusBar::new(),
             right_pane: RightPane::FileList,
+            focus_right: false,
             action_tx,
             action_rx,
         }
@@ -85,10 +87,12 @@ impl App {
         )?;
 
         // If there are repos, auto-select the first one
-        if let Some(entry) = self.repo_list.selected_repo()
+        if let Some(idx) = self.repo_list.selected_index()
+            && let Some(entry) = self.repo_list.repos.get(idx)
             && let Some(ref status) = entry.status
         {
-            self.file_list.set_files(status.files.clone(), &entry.name);
+            self.file_list
+                .set_files(status.files.clone(), &entry.name, idx);
         }
 
         loop {
@@ -144,7 +148,7 @@ impl App {
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
-                            self.file_list.set_files(files, &name);
+                            self.file_list.set_files(files, &name, idx);
                         }
                     }
                     Action::RepoStatusUpdated {
@@ -165,7 +169,7 @@ impl App {
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
-                            self.file_list.set_files(files, &name);
+                            self.file_list.set_files(files, &name, idx);
                         }
                     }
                     Action::RefreshAll => {
@@ -214,7 +218,14 @@ impl App {
                         self.git_graph.set_error(msg.clone());
                     }
                     Action::ShowContextMenu { index, row, col } => {
-                        self.context_menu.show(index, col, row);
+                        let (ahead, behind) = self
+                            .repo_list
+                            .repos
+                            .get(index)
+                            .and_then(|e| e.status.as_ref())
+                            .map(|s| (s.ahead, s.behind))
+                            .unwrap_or((0, 0));
+                        self.context_menu.show(index, col, row, ahead, behind);
                     }
                     Action::HideContextMenu => {
                         self.context_menu.hide();
@@ -228,6 +239,110 @@ impl App {
                             let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
                             let _ = std::io::stdout().flush();
                         }
+                    }
+                    Action::GitPush(idx) | Action::GitPull(idx) | Action::GitPullRebase(idx) => {
+                        let git_args: Vec<&str> = match action {
+                            Action::GitPush(_) => vec!["push"],
+                            Action::GitPull(_) => vec!["pull"],
+                            Action::GitPullRebase(_) => vec!["pull", "--rebase"],
+                            _ => unreachable!(),
+                        };
+                        let op_name = git_args.join(" ");
+                        if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                            entry.loading = true;
+                            let path = entry.path.clone();
+                            let tx = self.action_tx.clone();
+                            let args: Vec<String> =
+                                git_args.iter().map(|s| s.to_string()).collect();
+                            tokio::task::spawn_blocking(move || {
+                                let output = std::process::Command::new("git")
+                                    .arg("-C")
+                                    .arg(&path)
+                                    .args(&args)
+                                    .output();
+                                match output {
+                                    Ok(o) if o.status.success() => {
+                                        let _ = tx.send(Action::GitOpComplete {
+                                            index: idx,
+                                            message: format!("git {} succeeded", args.join(" ")),
+                                        });
+                                    }
+                                    Ok(o) => {
+                                        let stderr = String::from_utf8_lossy(&o.stderr);
+                                        let _ = tx.send(Action::Error(format!(
+                                            "git {} failed: {}",
+                                            args.join(" "),
+                                            stderr.trim()
+                                        )));
+                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::Error(format!(
+                                            "git {} failed: {}",
+                                            args.join(" "),
+                                            e
+                                        )));
+                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                    }
+                                }
+                            });
+                        }
+                        drop(op_name);
+                    }
+                    Action::GitOpComplete { index, .. } => {
+                        self.action_tx.send(Action::RefreshRepo(index))?;
+                    }
+                    Action::ShowDiff(repo_idx, ref file_path) => {
+                        if let Some(entry) = self.repo_list.repos.get(repo_idx) {
+                            let path = entry.path.clone();
+                            let fp = file_path.clone();
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let output = std::process::Command::new("git")
+                                    .arg("-C")
+                                    .arg(&path)
+                                    .arg("diff")
+                                    .arg("HEAD")
+                                    .arg("--")
+                                    .arg(&fp)
+                                    .output();
+                                match output {
+                                    Ok(o) => {
+                                        let mut text =
+                                            String::from_utf8_lossy(&o.stdout).to_string();
+                                        if text.is_empty() {
+                                            // Might be untracked — show file contents
+                                            text = String::from_utf8_lossy(&{
+                                                std::process::Command::new("git")
+                                                    .arg("-C")
+                                                    .arg(&path)
+                                                    .arg("diff")
+                                                    .arg("--no-index")
+                                                    .arg("/dev/null")
+                                                    .arg(&fp)
+                                                    .output()
+                                                    .map(|o| o.stdout)
+                                                    .unwrap_or_default()
+                                            })
+                                            .to_string();
+                                        }
+                                        if text.is_empty() {
+                                            text = "(no diff available)".to_string();
+                                        }
+                                        let _ = tx.send(Action::DiffLoaded(text));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::DiffLoaded(format!(
+                                            "Failed to get diff: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    Action::DiffLoaded(ref content) => {
+                        self.file_list.set_diff(content.clone());
                     }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
@@ -263,6 +378,14 @@ impl App {
             }
         }
 
+        // If file list is showing a diff, it gets priority
+        if self.file_list.viewing_diff() {
+            if let Some(action) = self.file_list.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('q') => {
                 self.action_tx.send(Action::Quit)?;
@@ -270,8 +393,15 @@ impl App {
             KeyCode::Esc => {
                 if self.right_pane == RightPane::GitGraph {
                     self.action_tx.send(Action::ShowFileList)?;
+                } else if self.focus_right {
+                    self.focus_right = false;
                 } else {
                     self.action_tx.send(Action::Quit)?;
+                }
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                if self.right_pane == RightPane::FileList {
+                    self.focus_right = !self.focus_right;
                 }
             }
             KeyCode::Char('r') => {
@@ -281,9 +411,12 @@ impl App {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
             _ => {
-                // Route to active right-pane component or repo list
                 if self.right_pane == RightPane::GitGraph {
                     if let Some(action) = self.git_graph.handle_key_event(key)? {
+                        self.action_tx.send(action)?;
+                    }
+                } else if self.focus_right {
+                    if let Some(action) = self.file_list.handle_key_event(key)? {
                         self.action_tx.send(action)?;
                     }
                 } else if let Some(action) = self.repo_list.handle_key_event(key)? {
@@ -330,35 +463,32 @@ impl App {
         let main_area = vertical[0];
         let status_area = vertical[1];
 
-        // Responsive: single pane if terminal < 80 cols
-        if area.width < 80 {
-            match self.right_pane {
-                RightPane::FileList => {
-                    self.repo_list.draw(frame, main_area)?;
-                }
-                RightPane::GitGraph => {
-                    self.git_graph.draw(frame, main_area)?;
-                }
-            }
+        // Layout: narrow = vertical stack, wide = horizontal split
+        let (repo_area, right_area) = if area.width < 80 {
+            let vertical_split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(main_area);
+            (vertical_split[0], vertical_split[1])
         } else {
-            // Horizontal: repo list (35%) + right pane (65%)
             let horizontal = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
                 .split(main_area);
+            (horizontal[0], horizontal[1])
+        };
 
-            let repo_area = horizontal[0];
-            let right_area = horizontal[1];
+        self.repo_list.focused = !self.focus_right;
+        self.file_list.focused = self.focus_right;
 
-            self.repo_list.draw(frame, repo_area)?;
+        self.repo_list.draw(frame, repo_area)?;
 
-            match self.right_pane {
-                RightPane::FileList => {
-                    self.file_list.draw(frame, right_area)?;
-                }
-                RightPane::GitGraph => {
-                    self.git_graph.draw(frame, right_area)?;
-                }
+        match self.right_pane {
+            RightPane::FileList => {
+                self.file_list.draw(frame, right_area)?;
+            }
+            RightPane::GitGraph => {
+                self.git_graph.draw(frame, right_area)?;
             }
         }
 

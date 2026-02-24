@@ -26,6 +26,7 @@ pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     pub state: ListState,
     pub render_area: Rect,
+    pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -56,6 +57,7 @@ impl RepoList {
             repos,
             state,
             render_area: Rect::default(),
+            focused: true,
             action_tx: None,
         }
     }
@@ -279,12 +281,18 @@ impl Component for RepoList {
             })
             .collect();
 
+        let border_color = if self.focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+
         let list = List::new(items)
             .block(
                 Block::default()
                     .title(" Repositories ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(border_color)),
             )
             .highlight_style(
                 Style::default()

@@ -4,6 +4,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -11,25 +12,27 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::action::Action;
 use crate::components::Component;
 
-const MENU_ITEMS: &[(&str, MenuAction)] = &[
-    ("Open git graph", MenuAction::OpenGraph),
-    ("Refresh", MenuAction::Refresh),
-    ("Copy path", MenuAction::CopyPath),
-];
-
 #[derive(Clone, Debug)]
 enum MenuAction {
     OpenGraph,
     Refresh,
     CopyPath,
+    Push,
+    Pull,
+    PullRebase,
+}
+
+struct MenuItem {
+    label: String,
+    action: MenuAction,
 }
 
 pub(crate) struct ContextMenu {
     pub visible: bool,
     pub repo_index: usize,
     pub position: (u16, u16), // (col, row)
+    items: Vec<MenuItem>,
     state: ListState,
-    /// Cached from last draw so mouse hit-testing uses the same rect as rendering.
     last_rendered_area: Rect,
     action_tx: Option<UnboundedSender<Action>>,
 }
@@ -40,16 +43,52 @@ impl ContextMenu {
             visible: false,
             repo_index: 0,
             position: (0, 0),
+            items: Vec::new(),
             state: ListState::default(),
             last_rendered_area: Rect::default(),
             action_tx: None,
         }
     }
 
-    pub fn show(&mut self, repo_index: usize, col: u16, row: u16) {
+    pub fn show(&mut self, repo_index: usize, col: u16, row: u16, ahead: usize, behind: usize) {
         self.visible = true;
         self.repo_index = repo_index;
         self.position = (col, row);
+
+        self.items = vec![
+            MenuItem {
+                label: "Open git graph".into(),
+                action: MenuAction::OpenGraph,
+            },
+            MenuItem {
+                label: "Refresh".into(),
+                action: MenuAction::Refresh,
+            },
+            MenuItem {
+                label: "Copy path".into(),
+                action: MenuAction::CopyPath,
+            },
+        ];
+
+        if ahead > 0 {
+            self.items.push(MenuItem {
+                label: format!("Push  ↑{}", ahead),
+                action: MenuAction::Push,
+            });
+        }
+        if behind > 0 {
+            self.items.push(MenuItem {
+                label: format!("Pull  ↓{}", behind),
+                action: MenuAction::Pull,
+            });
+        }
+        if ahead > 0 && behind > 0 {
+            self.items.push(MenuItem {
+                label: "Pull --rebase".into(),
+                action: MenuAction::PullRebase,
+            });
+        }
+
         self.state.select(Some(0));
     }
 
@@ -58,8 +97,8 @@ impl ContextMenu {
     }
 
     fn menu_rect(&self, terminal_area: Rect) -> Rect {
-        let width = 20u16;
-        let height = (MENU_ITEMS.len() as u16) + 2; // +2 for border
+        let width = 22u16;
+        let height = (self.items.len() as u16) + 2; // +2 for border
 
         let x = self
             .position
@@ -74,8 +113,11 @@ impl ContextMenu {
     }
 
     fn select_next(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
         let i = match self.state.selected() {
-            Some(i) => (i + 1).min(MENU_ITEMS.len() - 1),
+            Some(i) => (i + 1).min(self.items.len() - 1),
             None => 0,
         };
         self.state.select(Some(i));
@@ -91,24 +133,25 @@ impl ContextMenu {
 
     fn activate_selected(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
-        let (_, menu_action) = MENU_ITEMS.get(idx)?;
-        let action = match menu_action {
+        let item = self.items.get(idx)?;
+        let action = match item.action {
             MenuAction::OpenGraph => Action::ShowGitGraph,
             MenuAction::Refresh => Action::RefreshRepo(self.repo_index),
             MenuAction::CopyPath => Action::CopyPath(self.repo_index),
+            MenuAction::Push => Action::GitPush(self.repo_index),
+            MenuAction::Pull => Action::GitPull(self.repo_index),
+            MenuAction::PullRebase => Action::GitPullRebase(self.repo_index),
         };
         self.hide();
         Some(action)
     }
 
-    /// Returns the item index if the click is inside the menu, None otherwise.
     fn click_item_index(&self, col: u16, row: u16) -> Option<usize> {
         let rect = self.menu_rect(self.last_rendered_area);
-        // Content area is inside the border (1px each side)
         let content_x = rect.x + 1;
         let content_y = rect.y + 1;
         let content_right = rect.x + rect.width.saturating_sub(1);
-        let content_bottom = content_y + MENU_ITEMS.len() as u16;
+        let content_bottom = content_y + self.items.len() as u16;
 
         if col >= content_x && col < content_right && row >= content_y && row < content_bottom {
             Some((row - content_y) as usize)
@@ -144,8 +187,6 @@ impl Component for ContextMenu {
             }
             KeyCode::Enter => Ok(self.activate_selected()),
             _ => {
-                // Hide and return HideContextMenu so the app can re-dispatch
-                // the key to normal handling instead of swallowing it.
                 self.hide();
                 Ok(Some(Action::HideContextMenu))
             }
@@ -163,11 +204,9 @@ impl Component for ContextMenu {
                     self.state.select(Some(idx));
                     return Ok(self.activate_selected());
                 }
-                // Click outside menu — dismiss
                 self.hide();
                 Ok(None)
             }
-            // Right-click or middle-click also dismisses
             MouseEventKind::Down(_) => {
                 self.hide();
                 Ok(None)
@@ -181,17 +220,22 @@ impl Component for ContextMenu {
             return Ok(());
         }
 
-        // Cache the terminal area so mouse hit-testing matches rendering
         self.last_rendered_area = area;
-
         let rect = self.menu_rect(area);
 
-        // Clear the area behind the menu
         frame.render_widget(Clear, rect);
 
-        let items: Vec<ListItem> = MENU_ITEMS
+        let items: Vec<ListItem> = self
+            .items
             .iter()
-            .map(|(label, _)| ListItem::new(*label))
+            .map(|item| {
+                let style = match item.action {
+                    MenuAction::Push => Style::default().fg(Color::Green),
+                    MenuAction::Pull | MenuAction::PullRebase => Style::default().fg(Color::Yellow),
+                    _ => Style::default(),
+                };
+                ListItem::new(Line::from(Span::styled(&item.label, style)))
+            })
             .collect();
 
         let list = List::new(items)
