@@ -68,6 +68,8 @@ pub(crate) struct App {
     success_message: Option<(String, Instant)>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
     dragging_border: Option<u8>,
+    /// Which border the mouse is hovering near (for visual highlight)
+    hovered_border: Option<u8>,
     /// Fraction of total width for each border position (0.0..1.0)
     /// border_frac[0] = repos/changes split, border_frac[1] = changes/graph split
     border_frac: [f64; 2],
@@ -97,6 +99,7 @@ impl App {
             error_message: None,
             success_message: None,
             dragging_border: None,
+            hovered_border: None,
             border_frac: [0.25, 0.50],
         }
     }
@@ -749,6 +752,7 @@ impl App {
         }
 
         let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+        const GRAB_ZONE: u16 = 2; // ±2 columns hit zone for border grab
 
         // Border dragging for panel resize (horizontal layout only)
         if self.repo_area.width > 0 {
@@ -756,13 +760,35 @@ impl App {
             let border2_x = self.changes_area.x + self.changes_area.width;
             let in_main_y = mouse.row >= self.repo_area.y
                 && mouse.row < self.repo_area.y + self.repo_area.height;
+            let near_b1 = mouse.column.abs_diff(border1_x) <= GRAB_ZONE;
+            let near_b2 = mouse.column.abs_diff(border2_x) <= GRAB_ZONE;
+
+            // Update hover state on any mouse movement
+            match mouse.kind {
+                MouseEventKind::Moved if in_main_y => {
+                    if near_b1 {
+                        self.hovered_border = Some(0);
+                    } else if near_b2 {
+                        self.hovered_border = Some(1);
+                    } else {
+                        self.hovered_border = None;
+                    }
+                }
+                MouseEventKind::Moved => {
+                    self.hovered_border = None;
+                }
+                _ => {}
+            }
 
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) if in_main_y => {
-                    if mouse.column.abs_diff(border1_x) <= 1 {
+                    // Prefer the closer border if zones overlap
+                    let d1 = mouse.column.abs_diff(border1_x);
+                    let d2 = mouse.column.abs_diff(border2_x);
+                    if d1 <= GRAB_ZONE && (d1 <= d2 || d2 > GRAB_ZONE) {
                         self.dragging_border = Some(0);
                         return Ok(());
-                    } else if mouse.column.abs_diff(border2_x) <= 1 {
+                    } else if d2 <= GRAB_ZONE {
                         self.dragging_border = Some(1);
                         return Ok(());
                     }
@@ -773,15 +799,14 @@ impl App {
                         self.repo_area.width + self.changes_area.width + self.graph_area.width;
                     let origin = self.repo_area.x;
                     let rel = mouse.column.saturating_sub(origin) as f64 / total as f64;
-                    let min_f = 8.0 / total as f64; // minimum ~8 columns per panel
+                    let min_f = 8.0 / total as f64;
                     match self.dragging_border {
                         Some(0) => {
-                            let clamped = rel.clamp(min_f, self.border_frac[1] - min_f);
-                            self.border_frac[0] = clamped;
+                            self.border_frac[0] = rel.clamp(min_f, self.border_frac[1] - min_f);
                         }
                         Some(1) => {
-                            let clamped = rel.clamp(self.border_frac[0] + min_f, 1.0 - min_f);
-                            self.border_frac[1] = clamped;
+                            self.border_frac[1] =
+                                rel.clamp(self.border_frac[0] + min_f, 1.0 - min_f);
                         }
                         _ => {}
                     }
@@ -874,6 +899,43 @@ impl App {
         self.repo_list.draw(frame, repo_area)?;
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
+
+        // Highlight panel borders on hover/drag to signal they are draggable
+        if main_area.width >= 100 {
+            use ratatui::style::{Color, Style};
+
+            let active_border = |idx: u8| -> Option<Color> {
+                if self.dragging_border == Some(idx) {
+                    Some(Color::Yellow)
+                } else if self.hovered_border == Some(idx) {
+                    Some(Color::White)
+                } else {
+                    None
+                }
+            };
+
+            // Border 0: rightmost column of repo_area
+            if let Some(color) = active_border(0) {
+                let x = repo_area.x + repo_area.width.saturating_sub(1);
+                let buf = frame.buffer_mut();
+                for y in repo_area.y..repo_area.y + repo_area.height {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                        cell.set_style(Style::default().fg(color));
+                    }
+                }
+            }
+
+            // Border 1: rightmost column of changes_area
+            if let Some(color) = active_border(1) {
+                let x = changes_area.x + changes_area.width.saturating_sub(1);
+                let buf = frame.buffer_mut();
+                for y in changes_area.y..changes_area.y + changes_area.height {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                        cell.set_style(Style::default().fg(color));
+                    }
+                }
+            }
+        }
 
         self.status_bar.focus = self.focus;
         self.status_bar.sort_order = self.sort_order;
