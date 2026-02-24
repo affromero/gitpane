@@ -15,6 +15,7 @@ pub(crate) struct StatusBar {
     started_at: Instant,
     pub focus: FocusPanel,
     pub sort_order: SortOrder,
+    pub error: Option<(String, Instant)>,
 }
 
 impl StatusBar {
@@ -23,12 +24,33 @@ impl StatusBar {
             started_at: Instant::now(),
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
+            error: None,
         }
     }
 }
 
 impl Component for StatusBar {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        // Show error for 5 seconds, then clear
+        if let Some((ref msg, when)) = self.error {
+            if when.elapsed().as_secs() < 5 {
+                let error_bar = Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        " ERROR ",
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" {}", msg), Style::default().fg(Color::Red)),
+                ]));
+                frame.render_widget(error_bar, area);
+                return Ok(());
+            } else {
+                self.error = None;
+            }
+        }
+
         let elapsed = self.started_at.elapsed().as_secs();
 
         let spans = if elapsed < 60 {
@@ -55,6 +77,8 @@ impl Component for StatusBar {
                 Span::raw(" add  "),
                 key_span("d"),
                 Span::raw(" remove  "),
+                key_span("y"),
+                Span::raw(" copy  "),
                 key_span("s"),
                 Span::raw(format!(" sort ({})  ", self.sort_order.label())),
                 key_span("q"),
@@ -88,6 +112,8 @@ impl Component for StatusBar {
                 Span::raw(" Add  "),
                 key_span("d"),
                 Span::raw(" Remove  "),
+                key_span("y"),
+                Span::raw(" Copy  "),
                 key_span("s"),
                 Span::raw(format!(" Sort ({})  ", self.sort_order.label())),
                 key_span("q"),

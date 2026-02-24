@@ -59,13 +59,20 @@ impl GitGraph {
     }
 
     pub fn load_repo(&mut self, path: PathBuf, repo_name: &str) {
+        let is_same_repo = self.repo_path.as_deref() == Some(path.as_path());
+
         self.repo_name = repo_name.to_string();
         self.repo_path = Some(path.clone());
-        self.loading = true;
         self.error = None;
-        self.rows.clear();
-        self.state.select(None);
-        self.commit_detail = None;
+
+        // Keep old rows visible during reload (prevents blinking).
+        // Only clear on repo switch.
+        if !is_same_repo {
+            self.loading = true;
+            self.rows.clear();
+            self.state.select(None);
+            self.commit_detail = None;
+        }
 
         let Some(tx) = &self.action_tx else { return };
         let tx = tx.clone();
@@ -89,10 +96,15 @@ impl GitGraph {
     }
 
     pub fn set_rows(&mut self, rows: Vec<GraphRow>) {
+        // Preserve selection position on refresh if possible
+        let prev_selected = self.state.selected();
         self.rows = rows;
         self.loading = false;
         if !self.rows.is_empty() {
-            self.state.select(Some(0));
+            let idx = prev_selected
+                .map(|i| i.min(self.rows.len() - 1))
+                .unwrap_or(0);
+            self.state.select(Some(idx));
         }
     }
 
@@ -119,6 +131,20 @@ impl GitGraph {
 
     pub fn has_detail(&self) -> bool {
         self.commit_detail.is_some()
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        // If viewing commit files, copy the selected file path
+        if let Some(ref detail) = self.commit_detail
+            && let Some(idx) = detail.file_state.selected()
+            && let Some((_, path)) = detail.files.get(idx)
+        {
+            return Some(path.clone());
+        }
+        // Otherwise copy the selected commit's short id + message
+        let idx = self.state.selected()?;
+        let row = self.rows.get(idx)?;
+        Some(format!("{} {}", row.short_id, row.message))
     }
 
     fn select_next(&mut self) {

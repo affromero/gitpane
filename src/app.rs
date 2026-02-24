@@ -1,6 +1,7 @@
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
@@ -63,6 +64,7 @@ pub(crate) struct App {
     repo_area: Rect,
     changes_area: Rect,
     graph_area: Rect,
+    error_message: Option<(String, Instant)>,
 }
 
 impl App {
@@ -86,6 +88,7 @@ impl App {
             repo_area: Rect::default(),
             changes_area: Rect::default(),
             graph_area: Rect::default(),
+            error_message: None,
         }
     }
 
@@ -526,6 +529,7 @@ impl App {
                     }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
+                        self.error_message = Some((msg.clone(), Instant::now()));
                     }
                     _ => {
                         let _ = self.repo_list.update(action)?;
@@ -613,6 +617,23 @@ impl App {
             }
             KeyCode::Char('s') => {
                 self.action_tx.send(Action::CycleSortOrder)?;
+            }
+            KeyCode::Char('y') => {
+                // Copy selected item to clipboard (OSC 52)
+                let text = match self.focus {
+                    FocusPanel::Repos => self
+                        .repo_list
+                        .selected_repo()
+                        .map(|e| e.path.to_string_lossy().to_string()),
+                    FocusPanel::Changes => self.file_list.selected_path(),
+                    FocusPanel::Graph => self.git_graph.selected_text(),
+                };
+                if let Some(text) = text {
+                    use std::io::Write;
+                    let encoded = base64_encode(text.as_bytes());
+                    let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
+                    let _ = std::io::stdout().flush();
+                }
             }
             _ => {
                 // Route to focused panel
@@ -731,6 +752,7 @@ impl App {
 
         self.status_bar.focus = self.focus;
         self.status_bar.sort_order = self.sort_order;
+        self.status_bar.error = self.error_message.clone();
         self.status_bar.draw(frame, status_area)?;
 
         // Overlays rendered last
