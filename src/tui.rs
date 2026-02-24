@@ -28,6 +28,7 @@ pub(crate) struct Tui {
     task: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
     tick_rate: Duration,
+    poll_interval: Duration,
     mouse: bool,
 }
 
@@ -43,6 +44,7 @@ impl Tui {
             task: None,
             cancellation_token: CancellationToken::new(),
             tick_rate: Duration::from_millis(250),
+            poll_interval: Duration::from_secs(30),
             mouse: false,
         })
     }
@@ -50,6 +52,11 @@ impl Tui {
     #[allow(dead_code)]
     pub fn mouse(mut self, mouse: bool) -> Self {
         self.mouse = mouse;
+        self
+    }
+
+    pub fn poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
         self
     }
 
@@ -111,17 +118,20 @@ impl Tui {
     /// (250ms). No separate render timer — idle CPU is near zero.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
+        let poll_interval = self.poll_interval;
         let event_tx = self.event_tx.clone();
         let token = self.cancellation_token.clone();
 
         self.task = Some(tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = tokio::time::interval(tick_rate);
+            let mut poll_timer = tokio::time::interval(poll_interval);
 
             let _ = event_tx.send(Event::Init);
 
             loop {
                 let tick_delay = tick_interval.tick();
+                let poll_delay = poll_timer.tick();
                 let crossterm_event = reader.next();
 
                 tokio::select! {
@@ -129,6 +139,10 @@ impl Tui {
                     _ = tick_delay => {
                         // Tick + render: processes pending actions and redraws
                         let _ = event_tx.send(Event::Tick);
+                        let _ = event_tx.send(Event::Render);
+                    }
+                    _ = poll_delay => {
+                        let _ = event_tx.send(Event::PollRefresh);
                         let _ = event_tx.send(Event::Render);
                     }
                     Some(Ok(event)) = crossterm_event => {

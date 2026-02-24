@@ -17,6 +17,8 @@ pub(crate) enum Action {
     },
     RefreshAll,
     RefreshRepo(usize),
+    /// Periodic background refresh with fetch (no spinner)
+    PollRefresh,
     ShowGitGraph,
     ShowFileList,
     GraphLoaded(Vec<GraphRow>),

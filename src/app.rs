@@ -147,7 +147,11 @@ impl App {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut tui = Tui::new()?.mouse(true);
+        let mut tui = Tui::new()?
+            .mouse(true)
+            .poll_interval(std::time::Duration::from_secs(
+                self.config.watch.poll_interval_secs,
+            ));
         tui.enter()?;
 
         // Register action handlers
@@ -203,6 +207,9 @@ impl App {
                     }
                     Event::RepoChanged(idx) => {
                         self.action_tx.send(Action::RefreshRepo(idx))?;
+                    }
+                    Event::PollRefresh => {
+                        self.action_tx.send(Action::PollRefresh)?;
                     }
                     _ => {}
                 }
@@ -280,6 +287,34 @@ impl App {
                                     Err(e) => {
                                         let _ = tx
                                             .send(Action::Error(format!("Failed to query: {}", e)));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    Action::PollRefresh => {
+                        // Periodic background refresh: fetch + status, no spinner.
+                        // Skip repos with active git ops to avoid conflicts.
+                        for (idx, entry) in self.repo_list.repos.iter().enumerate() {
+                            if entry.git_op {
+                                continue;
+                            }
+                            let path = entry.path.clone();
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                match crate::git::status::query_status_with_fetch(&path) {
+                                    Ok(s) => {
+                                        let _ = tx.send(Action::RepoStatusUpdated {
+                                            index: idx,
+                                            status: s,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            "Poll refresh failed for {}: {}",
+                                            path.display(),
+                                            e
+                                        );
                                     }
                                 }
                             });
