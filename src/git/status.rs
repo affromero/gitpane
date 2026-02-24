@@ -8,6 +8,8 @@ pub(crate) struct RepoStatus {
     pub ahead: usize,
     pub behind: usize,
     pub is_dirty: bool,
+    /// Number of linked worktrees (excludes the main working tree)
+    pub worktrees: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -105,12 +107,16 @@ fn query_status_inner(path: &Path, fetch: bool) -> color_eyre::Result<RepoStatus
 
     let is_dirty = !files.is_empty();
 
+    // Count linked worktrees (excludes the main working tree)
+    let worktrees = repo.worktrees().map(|wt| wt.len()).unwrap_or(0);
+
     Ok(RepoStatus {
         branch,
         files,
         ahead,
         behind,
         is_dirty,
+        worktrees,
     })
 }
 
@@ -237,6 +243,34 @@ mod tests {
                 .iter()
                 .any(|f| f.status == FileStatus::Untracked)
         );
+    }
+
+    #[test]
+    fn test_worktree_count_zero_for_plain_repo() {
+        let (tmp, _repo) = init_temp_repo();
+        let status = query_status(tmp.path()).unwrap();
+        assert_eq!(status.worktrees, 0);
+    }
+
+    #[test]
+    fn test_worktree_count_reflects_linked_worktrees() {
+        let (tmp, _repo) = init_temp_repo();
+        // Create a linked worktree via git CLI
+        let wt_dir = tmp.path().join("wt1");
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .arg("worktree")
+            .arg("add")
+            .arg(&wt_dir)
+            .arg("-b")
+            .arg("wt-branch")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git worktree add failed");
+
+        let status = query_status(tmp.path()).unwrap();
+        assert_eq!(status.worktrees, 1);
     }
 
     #[test]

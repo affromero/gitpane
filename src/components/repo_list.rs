@@ -277,6 +277,14 @@ impl Component for RepoList {
                             ));
                         }
 
+                        // Worktree count (linked worktrees, e.g. from agentic AI)
+                        if status.worktrees > 0 {
+                            spans.push(Span::styled(
+                                format!("⎇{} ", status.worktrees),
+                                Style::default().fg(Color::Magenta),
+                            ));
+                        }
+
                         // Change count
                         if !status.files.is_empty() {
                             spans.push(Span::styled(
