@@ -895,7 +895,7 @@ impl App {
                 let (sym, color) = if dragging {
                     ("█", Color::Yellow)
                 } else {
-                    ("┃", Color::DarkGray)
+                    ("█", Color::Rgb(60, 60, 60))
                 };
                 let style = Style::default().fg(color);
                 for x in [x_left, x_right] {
