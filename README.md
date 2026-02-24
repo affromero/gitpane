@@ -75,14 +75,9 @@ Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`)
 <img src="assets/screenshot-main.png" alt="Three-panel overview" width="800">
 
 ### Split diff view
-Click a changed file to see its diff side-by-side. File list stays navigable on the left.
+Click a changed file (or press Enter) to see its diff side-by-side. File list stays navigable on the left. Same drill-down works in the graph panel for commit diffs.
 
 <img src="assets/screenshot-diff.png" alt="Split diff view" width="800">
-
-### Commit detail drill-down
-Click a commit in the graph to see its files, then click a file to see the commit diff.
-
-<img src="assets/screenshot-commit.png" alt="Commit detail view" width="800">
 
 ## Features
 

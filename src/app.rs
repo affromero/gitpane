@@ -578,11 +578,17 @@ impl App {
                 self.action_tx.send(Action::Quit)?;
             }
             KeyCode::Esc => {
-                // Move focus left, or quit from repos
-                match self.focus {
-                    FocusPanel::Graph => self.focus = FocusPanel::Changes,
-                    FocusPanel::Changes => self.focus = FocusPanel::Repos,
-                    FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
+                // Close active detail/diff first, then navigate panels
+                if self.focus == FocusPanel::Changes && self.file_list.viewing_diff() {
+                    self.file_list.handle_key_event(key)?;
+                } else if self.focus == FocusPanel::Graph && self.git_graph.has_detail() {
+                    self.git_graph.handle_key_event(key)?;
+                } else {
+                    match self.focus {
+                        FocusPanel::Graph => self.focus = FocusPanel::Changes,
+                        FocusPanel::Changes => self.focus = FocusPanel::Repos,
+                        FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
+                    }
                 }
             }
             KeyCode::Tab => {

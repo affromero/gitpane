@@ -1,96 +1,72 @@
-# VHS tape for gitpane demo recording
+# VHS tape for gitpane demo GIF
 # Run: vhs assets/demo.tape
 
 Output assets/demo.gif
-Output assets/screenshot.png
 
 Set Theme "Catppuccin Mocha"
-Set FontFamily "JetBrains Mono"
-Set FontSize 14
-Set Width 1400
-Set Height 800
-Set Padding 20
-Set TypingSpeed 50ms
-Set PlaybackSpeed 0.5
+Set FontFamily "Fira Code"
+Set FontSize 13
+Set Width 1600
+Set Height 900
+Set Padding 24
+Set TypingSpeed 30ms
+Set PlaybackSpeed 2
 
-# Start gitpane pointing at ~/Code
-Type "cd /Users/afromero/Code/gitpane && cargo run --release -- --root ~/Code"
+# Start gitpane
+Type "/Users/afromero/Code/gitpane/target/release/gitpane --root /Users/afromero/Code"
 Enter
-Sleep 4s
 
-# Let it load repos and show status
-Sleep 2s
+# Wait for load
+Sleep 5s
 
-# Navigate through repos
+# Navigate repos
 Type "j"
-Sleep 800ms
-Type "j"
-Sleep 800ms
-Type "j"
-Sleep 800ms
-
-# Switch to Changes panel
-Type@0ms ""
 Sleep 200ms
-# Press Tab
+Type "j"
+Sleep 200ms
+
+# Tab to Changes, open diff
 Tab
-Sleep 1s
-
-# Navigate files
-Type "j"
-Sleep 500ms
-Type "j"
-Sleep 500ms
-
-# Open diff
+Sleep 400ms
 Enter
 Sleep 1.5s
 
-# Close diff
+# Close diff with Esc (now fixed to close diff first)
 Escape
-Sleep 500ms
+Sleep 400ms
 
-# Switch to Graph panel
+# Tab to Graph
 Tab
-Sleep 1s
-
-# Navigate graph
-Type "j"
-Sleep 400ms
-Type "j"
-Sleep 400ms
-Type "j"
 Sleep 400ms
 
-# Open commit detail
+# Navigate graph, open commit detail
+Type "j"
+Sleep 150ms
+Type "j"
+Sleep 150ms
 Enter
 Sleep 1.5s
 
-# Navigate commit files
+# Navigate commit files, open commit diff
 Type "j"
-Sleep 400ms
-
-# Open commit file diff
+Sleep 200ms
 Enter
-Sleep 2s
+Sleep 1.5s
 
-# Close everything
+# Close all with Esc (layered: diff → files → panel nav)
 Escape
-Sleep 500ms
+Sleep 300ms
 Escape
-Sleep 500ms
+Sleep 300ms
+Escape
+Sleep 300ms
 
 # Sort repos
 Type "s"
-Sleep 1s
-
-# Back to alphabetical
+Sleep 500ms
 Type "s"
-Sleep 1s
-
-# Final pause to show the full UI
-Sleep 2s
+Sleep 500ms
 
 # Quit
 Type "q"
-Sleep 500ms
+Sleep 200ms
