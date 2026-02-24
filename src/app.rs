@@ -1026,6 +1026,18 @@ impl App {
             }
         }
 
+        // Clear timed-out messages so they don't keep re-appearing
+        if let Some((_, when)) = &self.error_message
+            && when.elapsed().as_secs() >= 5
+        {
+            self.error_message = None;
+        }
+        if let Some((_, when)) = &self.success_message
+            && when.elapsed().as_secs() >= 3
+        {
+            self.success_message = None;
+        }
+
         self.status_bar.focus = self.focus;
         self.status_bar.sort_order = self.sort_order;
         self.status_bar.error = self.error_message.clone();
