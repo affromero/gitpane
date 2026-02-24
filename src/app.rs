@@ -332,7 +332,14 @@ impl App {
 
         // Responsive: single pane if terminal < 80 cols
         if area.width < 80 {
-            self.repo_list.draw(frame, main_area)?;
+            match self.right_pane {
+                RightPane::FileList => {
+                    self.repo_list.draw(frame, main_area)?;
+                }
+                RightPane::GitGraph => {
+                    self.git_graph.draw(frame, main_area)?;
+                }
+            }
         } else {
             // Horizontal: repo list (35%) + right pane (65%)
             let horizontal = Layout::default()
