@@ -900,7 +900,7 @@ impl App {
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
 
-        // Highlight panel borders on hover/drag to signal they are draggable
+        // Highlight panel borders on hover/drag with thick block characters
         if main_area.width >= 100 {
             use ratatui::style::{Color, Style};
 
@@ -908,32 +908,47 @@ impl App {
                 if self.dragging_border == Some(idx) {
                     Some(Color::Yellow)
                 } else if self.hovered_border == Some(idx) {
-                    Some(Color::White)
+                    Some(Color::DarkGray)
                 } else {
                     None
+                }
+            };
+
+            let paint_thick_border = |buf: &mut ratatui::buffer::Buffer,
+                                      x: u16,
+                                      y_start: u16,
+                                      y_end: u16,
+                                      color: Color| {
+                for y in y_start..y_end {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                        cell.set_symbol("█");
+                        cell.set_style(Style::default().fg(color));
+                    }
                 }
             };
 
             // Border 0: rightmost column of repo_area
             if let Some(color) = active_border(0) {
                 let x = repo_area.x + repo_area.width.saturating_sub(1);
-                let buf = frame.buffer_mut();
-                for y in repo_area.y..repo_area.y + repo_area.height {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                        cell.set_style(Style::default().fg(color));
-                    }
-                }
+                paint_thick_border(
+                    frame.buffer_mut(),
+                    x,
+                    repo_area.y,
+                    repo_area.y + repo_area.height,
+                    color,
+                );
             }
 
             // Border 1: rightmost column of changes_area
             if let Some(color) = active_border(1) {
                 let x = changes_area.x + changes_area.width.saturating_sub(1);
-                let buf = frame.buffer_mut();
-                for y in changes_area.y..changes_area.y + changes_area.height {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                        cell.set_style(Style::default().fg(color));
-                    }
-                }
+                paint_thick_border(
+                    frame.buffer_mut(),
+                    x,
+                    changes_area.y,
+                    changes_area.y + changes_area.height,
+                    color,
+                );
             }
         }
 
