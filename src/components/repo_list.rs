@@ -267,47 +267,41 @@ impl Component for RepoList {
                     }
                 }
 
-                match &entry.status {
-                    Some(status) => {
-                        // Branch name
+                if let Some(status) = &entry.status {
+                    // Branch name
+                    spans.push(Span::styled(
+                        format!("{:<12} ", status.branch),
+                        Style::default().fg(Color::Cyan),
+                    ));
+
+                    // Ahead/behind (VSCode-style ↑↓ arrows)
+                    if status.ahead > 0 {
                         spans.push(Span::styled(
-                            format!("{:<12} ", status.branch),
-                            Style::default().fg(Color::Cyan),
+                            format!("↑{} ", status.ahead),
+                            Style::default().fg(Color::Green),
                         ));
-
-                        // Ahead/behind (VSCode-style ↑↓ arrows)
-                        if status.ahead > 0 {
-                            spans.push(Span::styled(
-                                format!("↑{} ", status.ahead),
-                                Style::default().fg(Color::Green),
-                            ));
-                        }
-                        if status.behind > 0 {
-                            spans.push(Span::styled(
-                                format!("↓{} ", status.behind),
-                                Style::default().fg(Color::Red),
-                            ));
-                        }
-
-                        // Worktree count (linked worktrees, e.g. from agentic AI)
-                        if status.worktrees > 0 {
-                            spans.push(Span::styled(
-                                format!("⎇{} ", status.worktrees),
-                                Style::default().fg(Color::Magenta),
-                            ));
-                        }
-
-                        // Change count
-                        if !status.files.is_empty() {
-                            spans.push(Span::styled(
-                                format!("[{}] ", status.files.len()),
-                                Style::default().fg(Color::Yellow),
-                            ));
-                        }
                     }
-                    None => {
-                        // Status not yet loaded — show placeholder
-                        spans.push(Span::styled("... ", Style::default().fg(Color::DarkGray)));
+                    if status.behind > 0 {
+                        spans.push(Span::styled(
+                            format!("↓{} ", status.behind),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+
+                    // Worktree count (linked worktrees, e.g. from agentic AI)
+                    if status.worktrees > 0 {
+                        spans.push(Span::styled(
+                            format!("⎇{} ", status.worktrees),
+                            Style::default().fg(Color::Magenta),
+                        ));
+                    }
+
+                    // Change count
+                    if !status.files.is_empty() {
+                        spans.push(Span::styled(
+                            format!("[{}] ", status.files.len()),
+                            Style::default().fg(Color::Yellow),
+                        ));
                     }
                 }
 
