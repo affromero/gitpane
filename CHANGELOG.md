@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.1.3] - 2026-02-24
+
+### Fixed
+- Auto-refresh after commits, pulls, and checkouts (watch key `.git/` files like HEAD, index, refs/)
+
 ## [0.1.2] - 2026-02-24
 
 ### Added
