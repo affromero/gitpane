@@ -102,10 +102,12 @@ Click a changed file (or press Enter) to see its diff side-by-side. File list st
 |-----|--------|
 | `Tab` / `Shift+Tab` | Cycle focus between panels |
 | `r` | Refresh all repo statuses |
+| `R` | Rescan directories for repos (clears exclusions) |
 | `g` | Reload git graph for selected repo |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo from the list |
 | `s` | Cycle sort order (Alphabetical / Dirty-first) |
+| `y` | Copy selected item to clipboard |
 | `q` | Quit (or close diff if one is open) |
 | `Esc` | Navigate back through panels, then quit |
 

@@ -55,5 +55,6 @@ pub(crate) enum Action {
     AddRepo(std::path::PathBuf),
     RemoveRepo(usize),
     CycleSortOrder,
+    RescanRepos,
     Error(String),
 }

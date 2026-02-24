@@ -527,6 +527,20 @@ impl App {
                         self.sort_repos();
                         self.sync_selection();
                     }
+                    Action::RescanRepos => {
+                        // Clear user-added exclusions, save, and re-discover repos
+                        self.config.excluded_repos.clear();
+                        if let Err(e) = self.config.save() {
+                            tracing::error!("Failed to save config: {}", e);
+                        }
+                        let repo_paths = scanner::discover_repos(&self.config);
+                        self.repo_list = RepoList::new(repo_paths);
+                        self.repo_list
+                            .register_action_handler(self.action_tx.clone())?;
+                        self.repo_list.init()?;
+                        self.sort_repos();
+                        self.sync_selection();
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                         self.error_message = Some((msg.clone(), Instant::now()));
@@ -609,6 +623,9 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.action_tx.send(Action::RefreshAll)?;
+            }
+            KeyCode::Char('R') => {
+                self.action_tx.send(Action::RescanRepos)?;
             }
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
