@@ -51,5 +51,7 @@ pub(crate) enum Action {
         file_path: String,
     },
     CommitDiffLoaded(String),
+    OpenAddRepo,
+    AddRepo(std::path::PathBuf),
     Error(String),
 }

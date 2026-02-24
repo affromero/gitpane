@@ -49,6 +49,8 @@ impl Component for StatusBar {
                 Span::raw(" reload graph  "),
                 key_span("r"),
                 Span::raw(" refresh  "),
+                key_span("a"),
+                Span::raw(" add repo  "),
                 key_span("q"),
                 Span::raw(" quit"),
             ]
@@ -76,6 +78,8 @@ impl Component for StatusBar {
                 Span::raw(" Graph  "),
                 key_span("r"),
                 Span::raw(" Refresh  "),
+                key_span("a"),
+                Span::raw(" Add  "),
                 key_span("q"),
                 Span::raw(" Quit"),
             ]

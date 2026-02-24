@@ -8,6 +8,8 @@ use crate::components::Component;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
+use crate::components::path_input::PathInput;
+use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
 use crate::config::Config;
@@ -30,6 +32,7 @@ pub(crate) struct App {
     file_list: FileList,
     git_graph: GitGraph,
     context_menu: ContextMenu,
+    path_input: PathInput,
     status_bar: StatusBar,
     focus: FocusPanel,
     action_tx: UnboundedSender<Action>,
@@ -51,6 +54,7 @@ impl App {
             file_list: FileList::new(),
             git_graph: GitGraph::new(),
             context_menu: ContextMenu::new(),
+            path_input: PathInput::new(),
             status_bar: StatusBar::new(),
             focus: FocusPanel::Repos,
             action_tx,
@@ -412,6 +416,34 @@ impl App {
                     Action::CommitDiffLoaded(ref content) => {
                         self.git_graph.set_commit_diff(content.clone());
                     }
+                    Action::OpenAddRepo => {
+                        self.path_input.show();
+                    }
+                    Action::AddRepo(ref path) => {
+                        self.path_input.hide();
+                        let path = path.clone();
+                        if !path.join(".git").exists() && !path.join("HEAD").exists() {
+                            tracing::error!("Not a git repository: {}", path.display());
+                        } else {
+                            let name = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.to_string_lossy().to_string());
+                            self.config.add_pinned_repo(path.clone());
+                            if let Err(e) = self.config.save() {
+                                tracing::error!("Failed to save config: {}", e);
+                            }
+                            self.repo_list.repos.push(RepoEntry {
+                                path,
+                                name,
+                                status: None,
+                                loading: true,
+                            });
+                            let idx = self.repo_list.repos.len() - 1;
+                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                            self.action_tx.send(Action::SelectRepo(idx))?;
+                        }
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                     }
@@ -430,6 +462,14 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        // Path input gets top priority
+        if self.path_input.visible {
+            if let Some(action) = self.path_input.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         // Context menu gets priority
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_key_event(key)? {
@@ -482,6 +522,9 @@ impl App {
             }
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
+            }
+            KeyCode::Char('a') => {
+                self.action_tx.send(Action::OpenAddRepo)?;
             }
             _ => {
                 // Route to focused panel
@@ -601,8 +644,9 @@ impl App {
         self.status_bar.focus = self.focus;
         self.status_bar.draw(frame, status_area)?;
 
-        // Context menu rendered last (overlay)
+        // Overlays rendered last
         self.context_menu.draw(frame, area)?;
+        self.path_input.draw(frame, area);
 
         Ok(())
     }

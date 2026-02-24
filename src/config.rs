@@ -97,6 +97,22 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
+    pub fn save(&self) -> Result<()> {
+        let config_path = Self::config_path();
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let contents = toml::to_string_pretty(self)?;
+        std::fs::write(&config_path, contents)?;
+        Ok(())
+    }
+
+    pub fn add_pinned_repo(&mut self, path: PathBuf) {
+        if !self.pinned_repos.contains(&path) {
+            self.pinned_repos.push(path);
+        }
+    }
+
     pub fn override_root(&mut self, root: PathBuf) {
         self.root_dirs = vec![root];
     }
@@ -134,5 +150,30 @@ mod tests {
         let mut config = Config::default();
         config.override_root(PathBuf::from("/tmp/my-repos"));
         assert_eq!(config.root_dirs, vec![PathBuf::from("/tmp/my-repos")]);
+    }
+
+    #[test]
+    fn test_save_and_reload_roundtrip() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let mut config = Config::default();
+        config.pinned_repos.push(PathBuf::from("/tmp/test-repo"));
+
+        // Write directly to temp path
+        let contents = toml::to_string_pretty(&config).unwrap();
+        std::fs::write(&path, &contents).unwrap();
+
+        let loaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.pinned_repos, vec![PathBuf::from("/tmp/test-repo")]);
+    }
+
+    #[test]
+    fn test_add_pinned_repo_deduplication() {
+        let mut config = Config::default();
+        config.add_pinned_repo(PathBuf::from("/tmp/repo-a"));
+        config.add_pinned_repo(PathBuf::from("/tmp/repo-a"));
+        config.add_pinned_repo(PathBuf::from("/tmp/repo-b"));
+        assert_eq!(config.pinned_repos.len(), 2);
     }
 }
