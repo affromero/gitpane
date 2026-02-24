@@ -856,12 +856,14 @@ impl App {
                     let d2 = mouse_pos.abs_diff(border2);
                     if d1 <= GRAB_ZONE && (d1 <= d2 || d2 > GRAB_ZONE) {
                         self.dragging_border = Some(0);
-                        return Ok(());
                     } else if d2 <= GRAB_ZONE {
                         self.dragging_border = Some(1);
-                        return Ok(());
+                    } else {
+                        self.dragging_border = None;
                     }
-                    self.dragging_border = None;
+                    // Don't return — let the click propagate to panels
+                    // so items near borders remain clickable. The drag
+                    // will only engage on MouseEventKind::Drag.
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.dragging_border.is_some() => {
                     let rel = mouse_pos.saturating_sub(origin) as f64 / total as f64;
