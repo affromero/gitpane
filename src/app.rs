@@ -68,8 +68,6 @@ pub(crate) struct App {
     success_message: Option<(String, Instant)>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
     dragging_border: Option<u8>,
-    /// Which border the mouse is hovering near (for visual highlight)
-    hovered_border: Option<u8>,
     /// Fraction of total width for each border position (0.0..1.0)
     /// border_frac[0] = repos/changes split, border_frac[1] = changes/graph split
     border_frac: [f64; 2],
@@ -99,7 +97,6 @@ impl App {
             error_message: None,
             success_message: None,
             dragging_border: None,
-            hovered_border: None,
             border_frac: [0.25, 0.50],
         }
     }
@@ -760,26 +757,6 @@ impl App {
             let border2_x = self.changes_area.x + self.changes_area.width;
             let in_main_y = mouse.row >= self.repo_area.y
                 && mouse.row < self.repo_area.y + self.repo_area.height;
-            let near_b1 = mouse.column.abs_diff(border1_x) <= GRAB_ZONE;
-            let near_b2 = mouse.column.abs_diff(border2_x) <= GRAB_ZONE;
-
-            // Update hover state on any mouse movement
-            match mouse.kind {
-                MouseEventKind::Moved if in_main_y => {
-                    if near_b1 {
-                        self.hovered_border = Some(0);
-                    } else if near_b2 {
-                        self.hovered_border = Some(1);
-                    } else {
-                        self.hovered_border = None;
-                    }
-                }
-                MouseEventKind::Moved => {
-                    self.hovered_border = None;
-                }
-                _ => {}
-            }
-
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) if in_main_y => {
                     // Prefer the closer border if zones overlap
@@ -900,60 +877,58 @@ impl App {
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
 
-        // Highlight panel borders on hover/drag with thick block characters.
-        // Each seam has TWO border columns (right of left panel + left of right panel),
-        // so we paint both to make the highlight visually thick and unmistakable.
+        // Paint panel seam borders: always thick to signal "draggable",
+        // yellow during active drag. Each seam has two columns (right of
+        // left panel + left of right panel).
         if main_area.width >= 100 {
             use ratatui::style::{Color, Style};
-
-            let active_color = |idx: u8| -> Option<Color> {
-                if self.dragging_border == Some(idx) {
-                    Some(Color::Yellow)
-                } else if self.hovered_border == Some(idx) {
-                    Some(Color::White)
-                } else {
-                    None
-                }
-            };
-
-            let paint_col =
-                |buf: &mut ratatui::buffer::Buffer, x: u16, y0: u16, y1: u16, color: Color| {
-                    for y in y0..y1 {
-                        if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                            cell.set_symbol("█");
-                            cell.set_style(Style::default().fg(color));
-                        }
-                    }
-                };
 
             let y0 = repo_area.y;
             let y1 = repo_area.y + repo_area.height;
 
-            // Border 0: repo_area right border + changes_area left border
-            if let Some(color) = active_color(0) {
-                let buf = frame.buffer_mut();
-                paint_col(
-                    buf,
-                    repo_area.x + repo_area.width.saturating_sub(1),
-                    y0,
-                    y1,
-                    color,
-                );
-                paint_col(buf, changes_area.x, y0, y1, color);
-            }
+            let paint_seam = |buf: &mut ratatui::buffer::Buffer,
+                              x_left: u16,
+                              x_right: u16,
+                              y0: u16,
+                              y1: u16,
+                              dragging: bool| {
+                let (sym, color) = if dragging {
+                    ("█", Color::Yellow)
+                } else {
+                    ("┃", Color::DarkGray)
+                };
+                let style = Style::default().fg(color);
+                for x in [x_left, x_right] {
+                    for y in y0..y1 {
+                        if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                            cell.set_symbol(sym);
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            };
 
-            // Border 1: changes_area right border + graph_area left border
-            if let Some(color) = active_color(1) {
-                let buf = frame.buffer_mut();
-                paint_col(
-                    buf,
-                    changes_area.x + changes_area.width.saturating_sub(1),
-                    y0,
-                    y1,
-                    color,
-                );
-                paint_col(buf, graph_area.x, y0, y1, color);
-            }
+            let buf = frame.buffer_mut();
+
+            // Seam 0: repos | changes
+            paint_seam(
+                buf,
+                repo_area.x + repo_area.width.saturating_sub(1),
+                changes_area.x,
+                y0,
+                y1,
+                self.dragging_border == Some(0),
+            );
+
+            // Seam 1: changes | graph
+            paint_seam(
+                buf,
+                changes_area.x + changes_area.width.saturating_sub(1),
+                graph_area.x,
+                y0,
+                y1,
+                self.dragging_border == Some(1),
+            );
         }
 
         self.status_bar.focus = self.focus;
