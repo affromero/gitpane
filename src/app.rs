@@ -68,9 +68,12 @@ pub(crate) struct App {
     success_message: Option<(String, Instant)>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
     dragging_border: Option<u8>,
-    /// Fraction of total width for each border position (0.0..1.0)
-    /// border_frac[0] = repos/changes split, border_frac[1] = changes/graph split
+    /// Fraction of the layout axis for each border (0.0..1.0).
+    /// [0] = repos/changes split, [1] = changes/graph split.
+    /// Applies to width in horizontal mode, height in vertical mode.
     border_frac: [f64; 2],
+    /// True when the layout is horizontal (side-by-side panels)
+    horizontal_layout: bool,
 }
 
 impl App {
@@ -98,6 +101,7 @@ impl App {
             success_message: None,
             dragging_border: None,
             border_frac: [0.25, 0.50],
+            horizontal_layout: false,
         }
     }
 
@@ -749,19 +753,33 @@ impl App {
         }
 
         let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
-        const GRAB_ZONE: u16 = 2; // ±2 columns hit zone for border grab
+        const GRAB_ZONE: u16 = 2; // ±2 cells hit zone for border grab
 
-        // Border dragging for panel resize (horizontal layout only)
+        // Border dragging for panel resize (works in both orientations)
         if self.repo_area.width > 0 {
-            let border1_x = self.repo_area.x + self.repo_area.width;
-            let border2_x = self.changes_area.x + self.changes_area.width;
-            let in_main_y = mouse.row >= self.repo_area.y
-                && mouse.row < self.repo_area.y + self.repo_area.height;
+            // Compute border positions and mouse coordinate along the layout axis
+            let (border1, border2, mouse_pos, total, origin) = if self.horizontal_layout {
+                (
+                    self.repo_area.x + self.repo_area.width,
+                    self.changes_area.x + self.changes_area.width,
+                    mouse.column,
+                    self.repo_area.width + self.changes_area.width + self.graph_area.width,
+                    self.repo_area.x,
+                )
+            } else {
+                (
+                    self.repo_area.y + self.repo_area.height,
+                    self.changes_area.y + self.changes_area.height,
+                    mouse.row,
+                    self.repo_area.height + self.changes_area.height + self.graph_area.height,
+                    self.repo_area.y,
+                )
+            };
+
             match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) if in_main_y => {
-                    // Prefer the closer border if zones overlap
-                    let d1 = mouse.column.abs_diff(border1_x);
-                    let d2 = mouse.column.abs_diff(border2_x);
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let d1 = mouse_pos.abs_diff(border1);
+                    let d2 = mouse_pos.abs_diff(border2);
                     if d1 <= GRAB_ZONE && (d1 <= d2 || d2 > GRAB_ZONE) {
                         self.dragging_border = Some(0);
                         return Ok(());
@@ -772,11 +790,8 @@ impl App {
                     self.dragging_border = None;
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.dragging_border.is_some() => {
-                    let total =
-                        self.repo_area.width + self.changes_area.width + self.graph_area.width;
-                    let origin = self.repo_area.x;
-                    let rel = mouse.column.saturating_sub(origin) as f64 / total as f64;
-                    let min_f = 8.0 / total as f64;
+                    let rel = mouse_pos.saturating_sub(origin) as f64 / total as f64;
+                    let min_f = 3.0 / total as f64;
                     match self.dragging_border {
                         Some(0) => {
                             self.border_frac[0] = rel.clamp(min_f, self.border_frac[1] - min_f);
@@ -837,24 +852,13 @@ impl App {
         let main_area = outer[0];
         let status_area = outer[1];
 
-        // Three-panel layout — drag borders to resize in horizontal mode
-        let (repo_area, changes_area, graph_area) = if main_area.width < 100 {
-            // Narrow: vertical stack (not resizable)
-            let v = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(40),
-                ])
-                .split(main_area);
-            (v[0], v[1], v[2])
-        } else {
-            // Wide: horizontal with exact column splits from border_frac
+        // Three-panel layout — drag borders to resize in both orientations
+        self.horizontal_layout = main_area.width >= 100;
+        let (repo_area, changes_area, graph_area) = if self.horizontal_layout {
             let w = main_area.width as f64;
             let c1 = (self.border_frac[0] * w).round() as u16;
             let c2 = ((self.border_frac[1] - self.border_frac[0]) * w).round() as u16;
-            let h = Layout::default()
+            let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Length(c1),
@@ -862,7 +866,20 @@ impl App {
                     Constraint::Min(8),
                 ])
                 .split(main_area);
-            (h[0], h[1], h[2])
+            (chunks[0], chunks[1], chunks[2])
+        } else {
+            let h = main_area.height as f64;
+            let r1 = (self.border_frac[0] * h).round() as u16;
+            let r2 = ((self.border_frac[1] - self.border_frac[0]) * h).round() as u16;
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(r1),
+                    Constraint::Length(r2),
+                    Constraint::Min(3),
+                ])
+                .split(main_area);
+            (chunks[0], chunks[1], chunks[2])
         };
 
         self.repo_area = repo_area;
@@ -877,58 +894,73 @@ impl App {
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
 
-        // Paint panel seam borders: always thick to signal "draggable",
-        // yellow during active drag. Each seam has two columns (right of
-        // left panel + left of right panel).
-        if main_area.width >= 100 {
+        // Paint panel seam borders: thick to signal "draggable",
+        // yellow during active drag.
+        {
             use ratatui::style::{Color, Style};
 
-            let y0 = repo_area.y;
-            let y1 = repo_area.y + repo_area.height;
+            let dragging_0 = self.dragging_border == Some(0);
+            let dragging_1 = self.dragging_border == Some(1);
 
-            let paint_seam = |buf: &mut ratatui::buffer::Buffer,
-                              x_left: u16,
-                              x_right: u16,
-                              y0: u16,
-                              y1: u16,
-                              dragging: bool| {
-                let (sym, color) = if dragging {
-                    ("█", Color::Yellow)
+            let color = |dragging: bool| -> Color {
+                if dragging {
+                    Color::Yellow
                 } else {
-                    ("█", Color::Rgb(60, 60, 60))
-                };
-                let style = Style::default().fg(color);
-                for x in [x_left, x_right] {
-                    for y in y0..y1 {
-                        if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                            cell.set_symbol(sym);
-                            cell.set_style(style);
-                        }
-                    }
+                    Color::Rgb(60, 60, 60)
                 }
             };
 
             let buf = frame.buffer_mut();
 
-            // Seam 0: repos | changes
-            paint_seam(
-                buf,
-                repo_area.x + repo_area.width.saturating_sub(1),
-                changes_area.x,
-                y0,
-                y1,
-                self.dragging_border == Some(0),
-            );
-
-            // Seam 1: changes | graph
-            paint_seam(
-                buf,
-                changes_area.x + changes_area.width.saturating_sub(1),
-                graph_area.x,
-                y0,
-                y1,
-                self.dragging_border == Some(1),
-            );
+            if self.horizontal_layout {
+                // Vertical seam lines (two columns per seam)
+                for (dragging, x_a, x_b) in [
+                    (
+                        dragging_0,
+                        repo_area.x + repo_area.width.saturating_sub(1),
+                        changes_area.x,
+                    ),
+                    (
+                        dragging_1,
+                        changes_area.x + changes_area.width.saturating_sub(1),
+                        graph_area.x,
+                    ),
+                ] {
+                    let style = Style::default().fg(color(dragging));
+                    for x in [x_a, x_b] {
+                        for y in repo_area.y..repo_area.y + repo_area.height {
+                            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                                cell.set_symbol("█");
+                                cell.set_style(style);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Horizontal seam lines (two rows per seam: bottom of upper + top of lower)
+                for (dragging, y_a, y_b) in [
+                    (
+                        dragging_0,
+                        repo_area.y + repo_area.height.saturating_sub(1),
+                        changes_area.y,
+                    ),
+                    (
+                        dragging_1,
+                        changes_area.y + changes_area.height.saturating_sub(1),
+                        graph_area.y,
+                    ),
+                ] {
+                    let style = Style::default().fg(color(dragging));
+                    for y in [y_a, y_b] {
+                        for x in repo_area.x..repo_area.x + repo_area.width {
+                            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                                cell.set_symbol("▀");
+                                cell.set_style(style);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         self.status_bar.focus = self.focus;
