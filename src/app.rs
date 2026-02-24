@@ -248,9 +248,16 @@ impl App {
         // Context menu gets priority
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_key_event(key)? {
-                self.action_tx.send(action)?;
+                if matches!(action, Action::HideContextMenu) {
+                    // Menu closed on unrecognized key — re-dispatch to normal handling
+                    // (fall through below instead of returning)
+                } else {
+                    self.action_tx.send(action)?;
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
             }
-            return Ok(());
         }
 
         match key.code {

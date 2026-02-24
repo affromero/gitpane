@@ -29,6 +29,8 @@ pub(crate) struct ContextMenu {
     pub repo_index: usize,
     pub position: (u16, u16), // (col, row)
     state: ListState,
+    /// Cached from last draw so mouse hit-testing uses the same rect as rendering.
+    last_rendered_area: Rect,
     action_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -39,6 +41,7 @@ impl ContextMenu {
             repo_index: 0,
             position: (0, 0),
             state: ListState::default(),
+            last_rendered_area: Rect::default(),
             action_tx: None,
         }
     }
@@ -98,13 +101,20 @@ impl ContextMenu {
         Some(action)
     }
 
-    #[allow(dead_code)]
-    pub fn hit_test(&self, col: u16, row: u16, terminal_area: Rect) -> bool {
-        if !self.visible {
-            return false;
+    /// Returns the item index if the click is inside the menu, None otherwise.
+    fn click_item_index(&self, col: u16, row: u16) -> Option<usize> {
+        let rect = self.menu_rect(self.last_rendered_area);
+        // Content area is inside the border (1px each side)
+        let content_x = rect.x + 1;
+        let content_y = rect.y + 1;
+        let content_right = rect.x + rect.width.saturating_sub(1);
+        let content_bottom = content_y + MENU_ITEMS.len() as u16;
+
+        if col >= content_x && col < content_right && row >= content_y && row < content_bottom {
+            Some((row - content_y) as usize)
+        } else {
+            None
         }
-        let rect = self.menu_rect(terminal_area);
-        col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
     }
 }
 
@@ -134,8 +144,10 @@ impl Component for ContextMenu {
             }
             KeyCode::Enter => Ok(self.activate_selected()),
             _ => {
+                // Hide and return HideContextMenu so the app can re-dispatch
+                // the key to normal handling instead of swallowing it.
                 self.hide();
-                Ok(None)
+                Ok(Some(Action::HideContextMenu))
             }
         }
     }
@@ -147,13 +159,16 @@ impl Component for ContextMenu {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Check if click is inside menu
-                let menu_rect = self.menu_rect(Rect::new(0, 0, 200, 200)); // approximate
-                let rel_y = mouse.row.saturating_sub(menu_rect.y + 1); // -1 for border
-                if rel_y < MENU_ITEMS.len() as u16 {
-                    self.state.select(Some(rel_y as usize));
+                if let Some(idx) = self.click_item_index(mouse.column, mouse.row) {
+                    self.state.select(Some(idx));
                     return Ok(self.activate_selected());
                 }
+                // Click outside menu — dismiss
+                self.hide();
+                Ok(None)
+            }
+            // Right-click or middle-click also dismisses
+            MouseEventKind::Down(_) => {
                 self.hide();
                 Ok(None)
             }
@@ -165,6 +180,9 @@ impl Component for ContextMenu {
         if !self.visible {
             return Ok(());
         }
+
+        // Cache the terminal area so mouse hit-testing matches rendering
+        self.last_rendered_area = area;
 
         let rect = self.menu_rect(area);
 
