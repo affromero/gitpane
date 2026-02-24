@@ -394,16 +394,13 @@ impl App {
             }
         }
 
-        // Diff view gets priority
-        if self.file_list.viewing_diff() {
-            if let Some(action) = self.file_list.handle_key_event(key)? {
-                self.action_tx.send(action)?;
-            }
-            return Ok(());
-        }
-
         match key.code {
             KeyCode::Char('q') => {
+                // If viewing diff, close it instead of quitting
+                if self.focus == FocusPanel::Changes && self.file_list.viewing_diff() {
+                    self.file_list.handle_key_event(key)?;
+                    return Ok(());
+                }
                 self.action_tx.send(Action::Quit)?;
             }
             KeyCode::Esc => {
