@@ -894,70 +894,57 @@ impl App {
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
 
-        // Paint panel seam borders: thick to signal "draggable",
-        // yellow during active drag.
-        {
+        // Paint thick seam borders in horizontal mode to signal "draggable".
+        // Vertical mode doesn't need this — the full-width horizontal borders
+        // are already easy grab targets, and painting over them destroys titles.
+        if self.horizontal_layout {
             use ratatui::style::{Color, Style};
 
-            let dragging_0 = self.dragging_border == Some(0);
-            let dragging_1 = self.dragging_border == Some(1);
-
-            let color = |dragging: bool| -> Color {
-                if dragging {
+            let buf = frame.buffer_mut();
+            for (dragging, x_a, x_b) in [
+                (
+                    self.dragging_border == Some(0),
+                    repo_area.x + repo_area.width.saturating_sub(1),
+                    changes_area.x,
+                ),
+                (
+                    self.dragging_border == Some(1),
+                    changes_area.x + changes_area.width.saturating_sub(1),
+                    graph_area.x,
+                ),
+            ] {
+                let color = if dragging {
                     Color::Yellow
                 } else {
-                    Color::Rgb(60, 60, 60)
-                }
-            };
-
-            let buf = frame.buffer_mut();
-
-            if self.horizontal_layout {
-                // Vertical seam lines (two columns per seam)
-                for (dragging, x_a, x_b) in [
-                    (
-                        dragging_0,
-                        repo_area.x + repo_area.width.saturating_sub(1),
-                        changes_area.x,
-                    ),
-                    (
-                        dragging_1,
-                        changes_area.x + changes_area.width.saturating_sub(1),
-                        graph_area.x,
-                    ),
-                ] {
-                    let style = Style::default().fg(color(dragging));
-                    for x in [x_a, x_b] {
-                        for y in repo_area.y..repo_area.y + repo_area.height {
-                            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                                cell.set_symbol("█");
-                                cell.set_style(style);
-                            }
+                    Color::DarkGray
+                };
+                let style = Style::default().fg(color);
+                for x in [x_a, x_b] {
+                    for y in repo_area.y..repo_area.y + repo_area.height {
+                        if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                            cell.set_symbol("█");
+                            cell.set_style(style);
                         }
                     }
                 }
-            } else {
-                // Horizontal seam lines (two rows per seam: bottom of upper + top of lower)
-                for (dragging, y_a, y_b) in [
-                    (
-                        dragging_0,
-                        repo_area.y + repo_area.height.saturating_sub(1),
-                        changes_area.y,
-                    ),
-                    (
-                        dragging_1,
-                        changes_area.y + changes_area.height.saturating_sub(1),
-                        graph_area.y,
-                    ),
-                ] {
-                    let style = Style::default().fg(color(dragging));
-                    for y in [y_a, y_b] {
-                        for x in repo_area.x..repo_area.x + repo_area.width {
-                            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                                cell.set_symbol("▀");
-                                cell.set_style(style);
-                            }
-                        }
+            }
+        } else if self.dragging_border.is_some() {
+            // In vertical mode, only highlight the seam during active drag
+            use ratatui::style::{Color, Style};
+
+            let style = Style::default().fg(Color::Yellow);
+            let buf = frame.buffer_mut();
+            for (dragging, y) in [
+                (self.dragging_border == Some(0), changes_area.y),
+                (self.dragging_border == Some(1), graph_area.y),
+            ] {
+                if !dragging {
+                    continue;
+                }
+                // Paint just the border characters (skip first col = title area preserved)
+                for x in repo_area.x..repo_area.x + repo_area.width {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                        cell.set_style(style);
                     }
                 }
             }
