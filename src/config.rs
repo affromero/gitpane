@@ -46,7 +46,7 @@ fn default_debounce_ms() -> u64 {
 }
 
 fn default_frame_rate() -> u16 {
-    30
+    10
 }
 
 impl Default for WatchConfig {

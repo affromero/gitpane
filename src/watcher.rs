@@ -28,13 +28,20 @@ impl RepoWatcher {
         // Bridge channel: notify callback (OS thread) -> tokio task
         let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<PathBuf>>();
 
-        // Spawn tokio task to route changed paths to repo indices
+        // Spawn tokio task to route changed paths to repo indices.
+        // Filters out .git/ internals to prevent feedback loops (git2 reads
+        // trigger watcher events which would re-trigger git2 queries).
         let paths_for_routing = indexed_paths.clone();
         tokio::spawn(async move {
             while let Some(changed_paths) = bridge_rx.recv().await {
                 let mut affected_repos = HashSet::new();
 
                 for changed_path in &changed_paths {
+                    // Skip .git internal files — prevents feedback loop with git2
+                    if changed_path.components().any(|c| c.as_os_str() == ".git") {
+                        continue;
+                    }
+
                     for (idx, repo_path) in &paths_for_routing {
                         if changed_path.starts_with(repo_path) {
                             affected_repos.insert(*idx);
