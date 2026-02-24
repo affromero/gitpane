@@ -900,55 +900,59 @@ impl App {
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
 
-        // Highlight panel borders on hover/drag with thick block characters
+        // Highlight panel borders on hover/drag with thick block characters.
+        // Each seam has TWO border columns (right of left panel + left of right panel),
+        // so we paint both to make the highlight visually thick and unmistakable.
         if main_area.width >= 100 {
             use ratatui::style::{Color, Style};
 
-            let active_border = |idx: u8| -> Option<Color> {
+            let active_color = |idx: u8| -> Option<Color> {
                 if self.dragging_border == Some(idx) {
                     Some(Color::Yellow)
                 } else if self.hovered_border == Some(idx) {
-                    Some(Color::DarkGray)
+                    Some(Color::White)
                 } else {
                     None
                 }
             };
 
-            let paint_thick_border = |buf: &mut ratatui::buffer::Buffer,
-                                      x: u16,
-                                      y_start: u16,
-                                      y_end: u16,
-                                      color: Color| {
-                for y in y_start..y_end {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
-                        cell.set_symbol("█");
-                        cell.set_style(Style::default().fg(color));
+            let paint_col =
+                |buf: &mut ratatui::buffer::Buffer, x: u16, y0: u16, y1: u16, color: Color| {
+                    for y in y0..y1 {
+                        if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(x, y)) {
+                            cell.set_symbol("█");
+                            cell.set_style(Style::default().fg(color));
+                        }
                     }
-                }
-            };
+                };
 
-            // Border 0: rightmost column of repo_area
-            if let Some(color) = active_border(0) {
-                let x = repo_area.x + repo_area.width.saturating_sub(1);
-                paint_thick_border(
-                    frame.buffer_mut(),
-                    x,
-                    repo_area.y,
-                    repo_area.y + repo_area.height,
+            let y0 = repo_area.y;
+            let y1 = repo_area.y + repo_area.height;
+
+            // Border 0: repo_area right border + changes_area left border
+            if let Some(color) = active_color(0) {
+                let buf = frame.buffer_mut();
+                paint_col(
+                    buf,
+                    repo_area.x + repo_area.width.saturating_sub(1),
+                    y0,
+                    y1,
                     color,
                 );
+                paint_col(buf, changes_area.x, y0, y1, color);
             }
 
-            // Border 1: rightmost column of changes_area
-            if let Some(color) = active_border(1) {
-                let x = changes_area.x + changes_area.width.saturating_sub(1);
-                paint_thick_border(
-                    frame.buffer_mut(),
-                    x,
-                    changes_area.y,
-                    changes_area.y + changes_area.height,
+            // Border 1: changes_area right border + graph_area left border
+            if let Some(color) = active_color(1) {
+                let buf = frame.buffer_mut();
+                paint_col(
+                    buf,
+                    changes_area.x + changes_area.width.saturating_sub(1),
+                    y0,
+                    y1,
                     color,
                 );
+                paint_col(buf, graph_area.x, y0, y1, color);
             }
         }
 
