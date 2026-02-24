@@ -2,6 +2,20 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.2.0] - 2026-02-24
+
+### Added
+- Branch labels on commit graph: colored tags on tip commits showing branch names
+- Multi-branch graph walking: all branches visible, not just HEAD
+- HEAD branch marked with green `*` prefix, worktree branches with magenta `⌂`
+- Remote branches shown in red, local in cyan, comma-separated in parentheses
+- Long branch names truncated with `…` (configurable `label_max_len`)
+- `[graph]` config section: `branches` filter (`all`/`local`/`remote`/`none`) and `label_max_len`
+- Merge commits rendered with dimmed message text (VS Code style)
+
+### Fixed
+- Clicking first item in Changes or Git Graph panels no longer triggers panel resize
+
 ## [0.1.3] - 2026-02-24
 
 ### Added
