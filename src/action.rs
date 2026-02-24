@@ -53,5 +53,7 @@ pub(crate) enum Action {
     CommitDiffLoaded(String),
     OpenAddRepo,
     AddRepo(std::path::PathBuf),
+    RemoveRepo(usize),
+    CycleSortOrder,
     Error(String),
 }

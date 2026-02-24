@@ -117,6 +117,10 @@ impl GitGraph {
         }
     }
 
+    pub fn has_detail(&self) -> bool {
+        self.commit_detail.is_some()
+    }
+
     fn select_next(&mut self) {
         if self.rows.is_empty() {
             return;

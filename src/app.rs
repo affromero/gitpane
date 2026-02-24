@@ -25,6 +25,28 @@ pub(crate) enum FocusPanel {
     Graph,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SortOrder {
+    Alphabetical,
+    DirtyFirst,
+}
+
+impl SortOrder {
+    fn next(self) -> Self {
+        match self {
+            Self::Alphabetical => Self::DirtyFirst,
+            Self::DirtyFirst => Self::Alphabetical,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Alphabetical => "A-Z",
+            Self::DirtyFirst => "Dirty",
+        }
+    }
+}
+
 pub(crate) struct App {
     config: Config,
     should_quit: bool,
@@ -35,6 +57,7 @@ pub(crate) struct App {
     path_input: PathInput,
     status_bar: StatusBar,
     focus: FocusPanel,
+    sort_order: SortOrder,
     action_tx: UnboundedSender<Action>,
     action_rx: UnboundedReceiver<Action>,
     repo_area: Rect,
@@ -57,11 +80,35 @@ impl App {
             path_input: PathInput::new(),
             status_bar: StatusBar::new(),
             focus: FocusPanel::Repos,
+            sort_order: SortOrder::Alphabetical,
             action_tx,
             action_rx,
             repo_area: Rect::default(),
             changes_area: Rect::default(),
             graph_area: Rect::default(),
+        }
+    }
+
+    fn sort_repos(&mut self) {
+        match self.sort_order {
+            SortOrder::Alphabetical => {
+                self.repo_list
+                    .repos
+                    .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            }
+            SortOrder::DirtyFirst => {
+                self.repo_list.repos.sort_by(|a, b| {
+                    let a_dirty = a.status.as_ref().map(|s| s.is_dirty).unwrap_or(false);
+                    let b_dirty = b.status.as_ref().map(|s| s.is_dirty).unwrap_or(false);
+                    b_dirty
+                        .cmp(&a_dirty)
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+            }
+        }
+        // Reset selection to first
+        if !self.repo_list.repos.is_empty() {
+            self.repo_list.state.select(Some(0));
         }
     }
 
@@ -182,8 +229,11 @@ impl App {
                         let status_clone = status.clone();
                         self.repo_list.update_status(idx, status_clone);
 
-                        // Refresh file list + graph if this is the selected repo
+                        // Refresh file list + graph if this is the selected repo,
+                        // but skip if user is actively inspecting (diff or commit detail)
                         if self.repo_list.selected_index() == Some(idx)
+                            && !self.file_list.viewing_diff()
+                            && !self.git_graph.has_detail()
                             && let Some(entry) = self.repo_list.repos.get(idx)
                         {
                             let name = entry.name.clone();
@@ -444,6 +494,36 @@ impl App {
                             self.action_tx.send(Action::SelectRepo(idx))?;
                         }
                     }
+                    Action::RemoveRepo(idx) => {
+                        if idx < self.repo_list.repos.len() {
+                            let entry = &self.repo_list.repos[idx];
+                            // Remove from pinned if it was pinned
+                            self.config.pinned_repos.retain(|p| *p != entry.path);
+                            // Add to excluded so it won't reappear on rescan
+                            let name = entry.name.clone();
+                            if !self.config.excluded_repos.contains(&name) {
+                                self.config.excluded_repos.push(name);
+                            }
+                            if let Err(e) = self.config.save() {
+                                tracing::error!("Failed to save config: {}", e);
+                            }
+                            self.repo_list.repos.remove(idx);
+                            // Fix selection
+                            if self.repo_list.repos.is_empty() {
+                                self.repo_list.state.select(None);
+                                self.file_list.set_files(Vec::new(), "", 0);
+                            } else {
+                                let new_idx = idx.min(self.repo_list.repos.len() - 1);
+                                self.repo_list.state.select(Some(new_idx));
+                                self.action_tx.send(Action::SelectRepo(new_idx))?;
+                            }
+                        }
+                    }
+                    Action::CycleSortOrder => {
+                        self.sort_order = self.sort_order.next();
+                        self.sort_repos();
+                        self.sync_selection();
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                     }
@@ -525,6 +605,14 @@ impl App {
             }
             KeyCode::Char('a') => {
                 self.action_tx.send(Action::OpenAddRepo)?;
+            }
+            KeyCode::Char('d') => {
+                if let Some(idx) = self.repo_list.selected_index() {
+                    self.action_tx.send(Action::RemoveRepo(idx))?;
+                }
+            }
+            KeyCode::Char('s') => {
+                self.action_tx.send(Action::CycleSortOrder)?;
             }
             _ => {
                 // Route to focused panel
@@ -642,6 +730,7 @@ impl App {
         self.git_graph.draw(frame, graph_area)?;
 
         self.status_bar.focus = self.focus;
+        self.status_bar.sort_order = self.sort_order;
         self.status_bar.draw(frame, status_area)?;
 
         // Overlays rendered last

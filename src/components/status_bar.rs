@@ -8,12 +8,13 @@ use ratatui::{
 };
 use std::time::Instant;
 
-use crate::app::FocusPanel;
+use crate::app::{FocusPanel, SortOrder};
 use crate::components::Component;
 
 pub(crate) struct StatusBar {
     started_at: Instant,
     pub focus: FocusPanel,
+    pub sort_order: SortOrder,
 }
 
 impl StatusBar {
@@ -21,6 +22,7 @@ impl StatusBar {
         Self {
             started_at: Instant::now(),
             focus: FocusPanel::Repos,
+            sort_order: SortOrder::Alphabetical,
         }
     }
 }
@@ -50,7 +52,11 @@ impl Component for StatusBar {
                 key_span("r"),
                 Span::raw(" refresh  "),
                 key_span("a"),
-                Span::raw(" add repo  "),
+                Span::raw(" add  "),
+                key_span("d"),
+                Span::raw(" remove  "),
+                key_span("s"),
+                Span::raw(format!(" sort ({})  ", self.sort_order.label())),
                 key_span("q"),
                 Span::raw(" quit"),
             ]
@@ -80,6 +86,10 @@ impl Component for StatusBar {
                 Span::raw(" Refresh  "),
                 key_span("a"),
                 Span::raw(" Add  "),
+                key_span("d"),
+                Span::raw(" Remove  "),
+                key_span("s"),
+                Span::raw(format!(" Sort ({})  ", self.sort_order.label())),
                 key_span("q"),
                 Span::raw(" Quit"),
             ]
