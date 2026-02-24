@@ -149,8 +149,11 @@ impl App {
     pub async fn run(&mut self) -> Result<()> {
         let mut tui = Tui::new()?
             .mouse(true)
-            .poll_interval(std::time::Duration::from_secs(
-                self.config.watch.poll_interval_secs,
+            .poll_local_interval(std::time::Duration::from_secs(
+                self.config.watch.poll_local_secs,
+            ))
+            .poll_fetch_interval(std::time::Duration::from_secs(
+                self.config.watch.poll_fetch_secs,
             ));
         tui.enter()?;
 
@@ -208,8 +211,11 @@ impl App {
                     Event::RepoChanged(idx) => {
                         self.action_tx.send(Action::RefreshRepo(idx))?;
                     }
-                    Event::PollRefresh => {
-                        self.action_tx.send(Action::PollRefresh)?;
+                    Event::PollLocal => {
+                        self.action_tx.send(Action::PollLocal)?;
+                    }
+                    Event::PollFetch => {
+                        self.action_tx.send(Action::PollFetch)?;
                     }
                     _ => {}
                 }
@@ -292,9 +298,35 @@ impl App {
                             });
                         }
                     }
-                    Action::PollRefresh => {
-                        // Periodic background refresh: fetch + status, no spinner.
-                        // Skip repos with active git ops to avoid conflicts.
+                    Action::PollLocal => {
+                        // Fast local status poll (no network, no spinner)
+                        for (idx, entry) in self.repo_list.repos.iter().enumerate() {
+                            if entry.git_op {
+                                continue;
+                            }
+                            let path = entry.path.clone();
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                match crate::git::status::query_status(&path) {
+                                    Ok(s) => {
+                                        let _ = tx.send(Action::RepoStatusUpdated {
+                                            index: idx,
+                                            status: s,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            "Local poll failed for {}: {}",
+                                            path.display(),
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    Action::PollFetch => {
+                        // Remote fetch poll (updates ahead/behind, no spinner)
                         for (idx, entry) in self.repo_list.repos.iter().enumerate() {
                             if entry.git_op {
                                 continue;
@@ -311,7 +343,7 @@ impl App {
                                     }
                                     Err(e) => {
                                         tracing::debug!(
-                                            "Poll refresh failed for {}: {}",
+                                            "Fetch poll failed for {}: {}",
                                             path.display(),
                                             e
                                         );

@@ -5,7 +5,7 @@ All notable changes to gitpane are documented here.
 ## [0.1.3] - 2026-02-24
 
 ### Added
-- Periodic background fetch + status poll every 30s (configurable via `watch.poll_interval_secs`)
+- Separate local (5s) and remote fetch (60s) poll timers, configurable via `watch.poll_local_secs` and `watch.poll_fetch_secs`
 
 ### Fixed
 - Auto-refresh after commits, pulls, and checkouts (watch key `.git/` files like HEAD, index, refs/)

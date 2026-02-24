@@ -28,7 +28,8 @@ pub(crate) struct Tui {
     task: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
     tick_rate: Duration,
-    poll_interval: Duration,
+    poll_local_interval: Duration,
+    poll_fetch_interval: Duration,
     mouse: bool,
 }
 
@@ -44,7 +45,8 @@ impl Tui {
             task: None,
             cancellation_token: CancellationToken::new(),
             tick_rate: Duration::from_millis(250),
-            poll_interval: Duration::from_secs(30),
+            poll_local_interval: Duration::from_secs(5),
+            poll_fetch_interval: Duration::from_secs(60),
             mouse: false,
         })
     }
@@ -55,8 +57,13 @@ impl Tui {
         self
     }
 
-    pub fn poll_interval(mut self, interval: Duration) -> Self {
-        self.poll_interval = interval;
+    pub fn poll_local_interval(mut self, interval: Duration) -> Self {
+        self.poll_local_interval = interval;
+        self
+    }
+
+    pub fn poll_fetch_interval(mut self, interval: Duration) -> Self {
+        self.poll_fetch_interval = interval;
         self
     }
 
@@ -118,20 +125,23 @@ impl Tui {
     /// (250ms). No separate render timer — idle CPU is near zero.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
-        let poll_interval = self.poll_interval;
+        let poll_local = self.poll_local_interval;
+        let poll_fetch = self.poll_fetch_interval;
         let event_tx = self.event_tx.clone();
         let token = self.cancellation_token.clone();
 
         self.task = Some(tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = tokio::time::interval(tick_rate);
-            let mut poll_timer = tokio::time::interval(poll_interval);
+            let mut local_timer = tokio::time::interval(poll_local);
+            let mut fetch_timer = tokio::time::interval(poll_fetch);
 
             let _ = event_tx.send(Event::Init);
 
             loop {
                 let tick_delay = tick_interval.tick();
-                let poll_delay = poll_timer.tick();
+                let local_delay = local_timer.tick();
+                let fetch_delay = fetch_timer.tick();
                 let crossterm_event = reader.next();
 
                 tokio::select! {
@@ -141,8 +151,12 @@ impl Tui {
                         let _ = event_tx.send(Event::Tick);
                         let _ = event_tx.send(Event::Render);
                     }
-                    _ = poll_delay => {
-                        let _ = event_tx.send(Event::PollRefresh);
+                    _ = local_delay => {
+                        let _ = event_tx.send(Event::PollLocal);
+                        let _ = event_tx.send(Event::Render);
+                    }
+                    _ = fetch_delay => {
+                        let _ = event_tx.send(Event::PollFetch);
                         let _ = event_tx.send(Event::Render);
                     }
                     Some(Ok(event)) = crossterm_event => {

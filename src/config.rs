@@ -23,9 +23,12 @@ pub(crate) struct Config {
 pub(crate) struct WatchConfig {
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
-    /// Periodic full-status poll interval in seconds (fallback for missed watcher events)
-    #[serde(default = "default_poll_interval_secs")]
-    pub poll_interval_secs: u64,
+    /// Local status poll interval in seconds (fast, catches missed watcher events)
+    #[serde(default = "default_poll_local_secs")]
+    pub poll_local_secs: u64,
+    /// Remote fetch poll interval in seconds (updates ahead/behind from origin)
+    #[serde(default = "default_poll_fetch_secs")]
+    pub poll_fetch_secs: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,8 +51,12 @@ fn default_debounce_ms() -> u64 {
     500
 }
 
-fn default_poll_interval_secs() -> u64 {
-    30
+fn default_poll_local_secs() -> u64 {
+    5
+}
+
+fn default_poll_fetch_secs() -> u64 {
+    60
 }
 
 fn default_frame_rate() -> u16 {
@@ -60,7 +67,8 @@ impl Default for WatchConfig {
     fn default() -> Self {
         Self {
             debounce_ms: default_debounce_ms(),
-            poll_interval_secs: default_poll_interval_secs(),
+            poll_local_secs: default_poll_local_secs(),
+            poll_fetch_secs: default_poll_fetch_secs(),
         }
     }
 }

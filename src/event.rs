@@ -13,6 +13,8 @@ pub(crate) enum Event {
     FocusGained,
     FocusLost,
     RepoChanged(usize),
-    /// Periodic poll: refresh all repo statuses (local-only, no fetch)
-    PollRefresh,
+    /// Fast local status poll (no network)
+    PollLocal,
+    /// Remote fetch poll (updates ahead/behind)
+    PollFetch,
 }
