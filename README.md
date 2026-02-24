@@ -56,6 +56,14 @@ gitpane                     # Scans ~/Code by default
 gitpane --root ~/projects   # Scan a specific directory
 ```
 
+## Update
+
+```bash
+cargo install gitpane       # Same command — overwrites the old binary
+```
+
+If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), re-download the latest binary for your platform using the same commands from the install section above.
+
 ## Why gitpane?
 
 If you work across multiple repositories — microservices, monorepos with submodules, a mix of projects — you know the pain of `cd`-ing into each one to check status. Existing TUI tools focus on **one repo at a time**:
