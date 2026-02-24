@@ -28,12 +28,11 @@ pub(crate) struct Tui {
     task: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
     tick_rate: Duration,
-    frame_rate: Duration,
     mouse: bool,
 }
 
 impl Tui {
-    pub fn new(frame_rate: u16) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let backend = CrosstermBackend::new(stdout());
         let terminal = ratatui::Terminal::new(backend)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -44,7 +43,6 @@ impl Tui {
             task: None,
             cancellation_token: CancellationToken::new(),
             tick_rate: Duration::from_millis(250),
-            frame_rate: Duration::from_secs_f64(1.0 / frame_rate as f64),
             mouse: false,
         })
     }
@@ -109,30 +107,28 @@ impl Tui {
         }));
     }
 
+    /// Render-on-demand event loop: renders after user input and on each tick
+    /// (250ms). No separate render timer — idle CPU is near zero.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
-        let frame_rate = self.frame_rate;
         let event_tx = self.event_tx.clone();
         let token = self.cancellation_token.clone();
 
         self.task = Some(tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = tokio::time::interval(tick_rate);
-            let mut render_interval = tokio::time::interval(frame_rate);
 
             let _ = event_tx.send(Event::Init);
 
             loop {
                 let tick_delay = tick_interval.tick();
-                let render_delay = render_interval.tick();
                 let crossterm_event = reader.next();
 
                 tokio::select! {
                     _ = token.cancelled() => break,
                     _ = tick_delay => {
+                        // Tick + render: processes pending actions and redraws
                         let _ = event_tx.send(Event::Tick);
-                    }
-                    _ = render_delay => {
                         let _ = event_tx.send(Event::Render);
                     }
                     Some(Ok(event)) = crossterm_event => {
@@ -154,6 +150,8 @@ impl Tui {
                             }
                             _ => {}
                         }
+                        // Render immediately after any user input
+                        let _ = event_tx.send(Event::Render);
                     }
                 }
             }

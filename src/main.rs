@@ -18,8 +18,8 @@ struct Cli {
     #[arg(long)]
     root: Option<PathBuf>,
 
-    /// UI frame rate (fps)
-    #[arg(long, default_value_t = 30)]
+    /// UI frame rate (deprecated — rendering is now on-demand)
+    #[arg(long, default_value_t = 10, hide = true)]
     frame_rate: u16,
 }
 

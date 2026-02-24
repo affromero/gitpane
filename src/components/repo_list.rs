@@ -121,6 +121,18 @@ impl RepoList {
                         path.display(),
                         e
                     )));
+                    // Send a minimal status so the "..." placeholder clears
+                    let _ = tx.send(Action::RepoStatusUpdated {
+                        index,
+                        status: RepoStatus {
+                            branch: "error".to_string(),
+                            files: Vec::new(),
+                            ahead: 0,
+                            behind: 0,
+                            is_dirty: false,
+                            worktrees: 0,
+                        },
+                    });
                 }
             });
         }

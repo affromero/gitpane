@@ -136,7 +136,7 @@ impl App {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut tui = Tui::new(self.config.ui.frame_rate)?.mouse(true);
+        let mut tui = Tui::new()?.mouse(true);
         tui.enter()?;
 
         // Register action handlers
