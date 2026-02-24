@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::event::Event;
 use crate::git::scanner;
 use crate::tui::Tui;
+use crate::watcher::RepoWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -60,6 +61,19 @@ impl App {
 
         // Init components
         self.repo_list.init()?;
+
+        // Start filesystem watcher
+        let repo_paths: Vec<_> = self
+            .repo_list
+            .repos
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        let _watcher = RepoWatcher::new(
+            &repo_paths,
+            self.config.watch.debounce_ms,
+            tui.event_tx.clone(),
+        )?;
 
         // If there are repos, auto-select the first one
         if let Some(entry) = self.repo_list.selected_repo()

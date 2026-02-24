@@ -5,6 +5,7 @@ mod config;
 mod event;
 mod git;
 mod tui;
+mod watcher;
 
 use clap::Parser;
 use color_eyre::Result;

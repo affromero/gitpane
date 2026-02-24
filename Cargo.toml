@@ -23,6 +23,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 git2 = "0.20"
 walkdir = "2"
 dirs = "6"
+notify = "8"
+notify-debouncer-full = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
