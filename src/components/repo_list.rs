@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -25,6 +25,7 @@ pub(crate) struct RepoEntry {
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     pub state: ListState,
+    pub render_area: Rect,
     action_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -54,6 +55,7 @@ impl RepoList {
         Self {
             repos,
             state,
+            render_area: Rect::default(),
             action_tx: None,
         }
     }
@@ -144,6 +146,55 @@ impl Component for RepoList {
         }
     }
 
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Hit-test against rendered rows (area.y + 1 for border)
+                let content_y = self.render_area.y + 1;
+                if mouse.column >= self.render_area.x
+                    && mouse.column < self.render_area.x + self.render_area.width
+                    && mouse.row >= content_y
+                {
+                    let idx = (mouse.row - content_y) as usize;
+                    if idx < self.repos.len() {
+                        self.state.select(Some(idx));
+                        return Ok(Some(Action::SelectRepo(idx)));
+                    }
+                }
+                Ok(None)
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let content_y = self.render_area.y + 1;
+                if mouse.column >= self.render_area.x
+                    && mouse.column < self.render_area.x + self.render_area.width
+                    && mouse.row >= content_y
+                {
+                    let idx = (mouse.row - content_y) as usize;
+                    if idx < self.repos.len() {
+                        self.state.select(Some(idx));
+                        return Ok(Some(Action::ShowContextMenu {
+                            index: idx,
+                            row: mouse.row,
+                            col: mouse.column,
+                        }));
+                    }
+                }
+                Ok(None)
+            }
+            MouseEventKind::ScrollUp => {
+                self.select_prev();
+                let idx = self.state.selected().unwrap_or(0);
+                Ok(Some(Action::SelectRepo(idx)))
+            }
+            MouseEventKind::ScrollDown => {
+                self.select_next();
+                let idx = self.state.selected().unwrap_or(0);
+                Ok(Some(Action::SelectRepo(idx)))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         match action {
             Action::SelectNextRepo => {
@@ -165,6 +216,7 @@ impl Component for RepoList {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        self.render_area = area;
         let items: Vec<ListItem> = self
             .repos
             .iter()

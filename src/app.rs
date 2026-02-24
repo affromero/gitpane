@@ -5,6 +5,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
 use crate::components::repo_list::RepoList;
@@ -16,7 +17,6 @@ use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum RightPane {
     FileList,
     GitGraph,
@@ -28,6 +28,7 @@ pub(crate) struct App {
     repo_list: RepoList,
     file_list: FileList,
     git_graph: GitGraph,
+    context_menu: ContextMenu,
     status_bar: StatusBar,
     right_pane: RightPane,
     action_tx: UnboundedSender<Action>,
@@ -45,6 +46,7 @@ impl App {
             repo_list: RepoList::new(repo_paths),
             file_list: FileList::new(),
             git_graph: GitGraph::new(),
+            context_menu: ContextMenu::new(),
             status_bar: StatusBar::new(),
             right_pane: RightPane::FileList,
             action_tx,
@@ -53,7 +55,7 @@ impl App {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut tui = Tui::new(self.config.ui.frame_rate)?;
+        let mut tui = Tui::new(self.config.ui.frame_rate)?.mouse(true);
         tui.enter()?;
 
         // Register action handlers
@@ -62,6 +64,8 @@ impl App {
         self.file_list
             .register_action_handler(self.action_tx.clone())?;
         self.git_graph
+            .register_action_handler(self.action_tx.clone())?;
+        self.context_menu
             .register_action_handler(self.action_tx.clone())?;
 
         // Init components
@@ -103,6 +107,9 @@ impl App {
                     Event::Key(key) => {
                         self.handle_key_event(key)?;
                     }
+                    Event::Mouse(mouse) => {
+                        self.handle_mouse_event(mouse)?;
+                    }
                     Event::Resize(w, h) => {
                         self.action_tx.send(Action::Resize(w, h))?;
                     }
@@ -129,6 +136,7 @@ impl App {
                             .resize(ratatui::layout::Rect::new(0, 0, w, h))?;
                     }
                     Action::SelectRepo(idx) => {
+                        self.context_menu.hide();
                         if let Some(entry) = self.repo_list.repos.get(idx) {
                             let name = entry.name.clone();
                             let files = entry
@@ -188,6 +196,7 @@ impl App {
                         }
                     }
                     Action::ShowGitGraph => {
+                        self.context_menu.hide();
                         if let Some(entry) = self.repo_list.selected_repo() {
                             let path = entry.path.clone();
                             let name = entry.name.clone();
@@ -200,6 +209,22 @@ impl App {
                     }
                     Action::GraphLoaded(rows) => {
                         self.git_graph.set_rows(rows);
+                    }
+                    Action::ShowContextMenu { index, row, col } => {
+                        self.context_menu.show(index, col, row);
+                    }
+                    Action::HideContextMenu => {
+                        self.context_menu.hide();
+                    }
+                    Action::CopyPath(idx) => {
+                        if let Some(entry) = self.repo_list.repos.get(idx) {
+                            let path_str = entry.path.to_string_lossy().to_string();
+                            // Copy to clipboard via OSC 52 escape sequence
+                            use std::io::Write;
+                            let encoded = base64_encode(path_str.as_bytes());
+                            let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
+                            let _ = std::io::stdout().flush();
+                        }
                     }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
@@ -220,9 +245,24 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        // Context menu gets priority
+        if self.context_menu.visible {
+            if let Some(action) = self.context_menu.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') => {
                 self.action_tx.send(Action::Quit)?;
+            }
+            KeyCode::Esc => {
+                if self.right_pane == RightPane::GitGraph {
+                    self.action_tx.send(Action::ShowFileList)?;
+                } else {
+                    self.action_tx.send(Action::Quit)?;
+                }
             }
             KeyCode::Char('r') => {
                 self.action_tx.send(Action::RefreshAll)?;
@@ -244,6 +284,30 @@ impl App {
         Ok(())
     }
 
+    fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        // Context menu gets priority for mouse events
+        if self.context_menu.visible {
+            if let Some(action) = self.context_menu.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            } else {
+                // Click outside menu dismisses it
+                if matches!(
+                    mouse.kind,
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                ) {
+                    self.context_menu.hide();
+                }
+            }
+            return Ok(());
+        }
+
+        // Route to repo list
+        if let Some(action) = self.repo_list.handle_mouse_event(mouse)? {
+            self.action_tx.send(action)?;
+        }
+        Ok(())
+    }
+
     fn draw(&mut self, frame: &mut ratatui::Frame) -> Result<()> {
         let area = frame.area();
 
@@ -256,28 +320,61 @@ impl App {
         let main_area = vertical[0];
         let status_area = vertical[1];
 
-        // Horizontal: repo list (35%) + right pane (65%)
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-            .split(main_area);
+        // Responsive: single pane if terminal < 80 cols
+        if area.width < 80 {
+            self.repo_list.draw(frame, main_area)?;
+        } else {
+            // Horizontal: repo list (35%) + right pane (65%)
+            let horizontal = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+                .split(main_area);
 
-        let repo_area = horizontal[0];
-        let right_area = horizontal[1];
+            let repo_area = horizontal[0];
+            let right_area = horizontal[1];
 
-        self.repo_list.draw(frame, repo_area)?;
+            self.repo_list.draw(frame, repo_area)?;
 
-        match self.right_pane {
-            RightPane::FileList => {
-                self.file_list.draw(frame, right_area)?;
-            }
-            RightPane::GitGraph => {
-                self.git_graph.draw(frame, right_area)?;
+            match self.right_pane {
+                RightPane::FileList => {
+                    self.file_list.draw(frame, right_area)?;
+                }
+                RightPane::GitGraph => {
+                    self.git_graph.draw(frame, right_area)?;
+                }
             }
         }
 
         self.status_bar.draw(frame, status_area)?;
 
+        // Context menu rendered last (overlay)
+        self.context_menu.draw(frame, area)?;
+
         Ok(())
     }
+}
+
+/// Simple base64 encoder for OSC 52 clipboard
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[(n >> 18 & 0x3f) as usize] as char);
+        result.push(CHARS[(n >> 12 & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[(n >> 6 & 0x3f) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(n & 0x3f) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }

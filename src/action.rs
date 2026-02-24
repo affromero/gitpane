@@ -17,5 +17,8 @@ pub(crate) enum Action {
     ShowGitGraph,
     ShowFileList,
     GraphLoaded(Vec<GraphRow>),
+    ShowContextMenu { index: usize, row: u16, col: u16 },
+    HideContextMenu,
+    CopyPath(usize),
     Error(String),
 }

@@ -1,3 +1,4 @@
+pub(crate) mod context_menu;
 pub(crate) mod file_list;
 pub(crate) mod git_graph;
 pub(crate) mod repo_list;
