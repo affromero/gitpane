@@ -37,9 +37,23 @@ impl RepoWatcher {
                 let mut affected_repos = HashSet::new();
 
                 for changed_path in &changed_paths {
-                    // Skip .git internal files — prevents feedback loop with git2
+                    // Allow key .git/ files that change on commit/pull/checkout,
+                    // but skip noisy internals that cause feedback loops with git2.
                     if changed_path.components().any(|c| c.as_os_str() == ".git") {
-                        continue;
+                        let name = changed_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default();
+                        let path_str = changed_path.to_string_lossy();
+                        let is_meaningful = name == "HEAD"
+                            || name == "index"
+                            || name == "MERGE_HEAD"
+                            || name == "REBASE_HEAD"
+                            || name == "COMMIT_EDITMSG"
+                            || path_str.contains(".git/refs/");
+                        if !is_meaningful {
+                            continue;
+                        }
                     }
 
                     for (idx, repo_path) in &paths_for_routing {
