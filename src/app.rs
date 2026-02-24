@@ -65,6 +65,7 @@ pub(crate) struct App {
     changes_area: Rect,
     graph_area: Rect,
     error_message: Option<(String, Instant)>,
+    success_message: Option<(String, Instant)>,
 }
 
 impl App {
@@ -89,6 +90,7 @@ impl App {
             changes_area: Rect::default(),
             graph_area: Rect::default(),
             error_message: None,
+            success_message: None,
         }
     }
 
@@ -378,7 +380,8 @@ impl App {
                             });
                         }
                     }
-                    Action::GitOpComplete { index, .. } => {
+                    Action::GitOpComplete { index, ref message } => {
+                        self.success_message = Some((message.clone(), Instant::now()));
                         self.action_tx.send(Action::RefreshRepo(index))?;
                     }
                     Action::ShowDiff(repo_idx, ref file_path) => {
@@ -789,6 +792,7 @@ impl App {
         self.status_bar.focus = self.focus;
         self.status_bar.sort_order = self.sort_order;
         self.status_bar.error = self.error_message.clone();
+        self.status_bar.success = self.success_message.clone();
         self.status_bar.draw(frame, status_area)?;
 
         // Overlays rendered last

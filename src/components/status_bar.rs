@@ -16,6 +16,7 @@ pub(crate) struct StatusBar {
     pub focus: FocusPanel,
     pub sort_order: SortOrder,
     pub error: Option<(String, Instant)>,
+    pub success: Option<(String, Instant)>,
 }
 
 impl StatusBar {
@@ -25,6 +26,7 @@ impl StatusBar {
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
             error: None,
+            success: None,
         }
     }
 }
@@ -48,6 +50,26 @@ impl Component for StatusBar {
                 return Ok(());
             } else {
                 self.error = None;
+            }
+        }
+
+        // Show success for 3 seconds
+        if let Some((ref msg, when)) = self.success {
+            if when.elapsed().as_secs() < 3 {
+                let success_bar = Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        " OK ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" {}", msg), Style::default().fg(Color::Green)),
+                ]));
+                frame.render_widget(success_bar, area);
+                return Ok(());
+            } else {
+                self.success = None;
             }
         }
 

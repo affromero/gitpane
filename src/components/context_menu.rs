@@ -68,26 +68,27 @@ impl ContextMenu {
                 label: "Copy path".into(),
                 action: MenuAction::CopyPath,
             },
-        ];
-
-        if ahead > 0 {
-            self.items.push(MenuItem {
-                label: format!("Push  ↑{}", ahead),
+            MenuItem {
+                label: if ahead > 0 {
+                    format!("Push  ↑{}", ahead)
+                } else {
+                    "Push".into()
+                },
                 action: MenuAction::Push,
-            });
-        }
-        if behind > 0 {
-            self.items.push(MenuItem {
-                label: format!("Pull  ↓{}", behind),
+            },
+            MenuItem {
+                label: if behind > 0 {
+                    format!("Pull  ↓{}", behind)
+                } else {
+                    "Pull".into()
+                },
                 action: MenuAction::Pull,
-            });
-        }
-        if ahead > 0 && behind > 0 {
-            self.items.push(MenuItem {
+            },
+            MenuItem {
                 label: "Pull --rebase".into(),
                 action: MenuAction::PullRebase,
-            });
-        }
+            },
+        ];
 
         self.state.select(Some(0));
     }
