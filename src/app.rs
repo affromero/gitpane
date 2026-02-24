@@ -17,9 +17,10 @@ use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RightPane {
-    FileList,
-    GitGraph,
+pub(crate) enum FocusPanel {
+    Repos,
+    Changes,
+    Graph,
 }
 
 pub(crate) struct App {
@@ -30,8 +31,7 @@ pub(crate) struct App {
     git_graph: GitGraph,
     context_menu: ContextMenu,
     status_bar: StatusBar,
-    right_pane: RightPane,
-    focus_right: bool,
+    focus: FocusPanel,
     action_tx: UnboundedSender<Action>,
     action_rx: UnboundedReceiver<Action>,
 }
@@ -49,10 +49,27 @@ impl App {
             git_graph: GitGraph::new(),
             context_menu: ContextMenu::new(),
             status_bar: StatusBar::new(),
-            right_pane: RightPane::FileList,
-            focus_right: false,
+            focus: FocusPanel::Repos,
             action_tx,
             action_rx,
+        }
+    }
+
+    /// Auto-load graph + file list for the selected repo.
+    fn sync_selection(&mut self) {
+        if let Some(idx) = self.repo_list.selected_index()
+            && let Some(entry) = self.repo_list.repos.get(idx)
+        {
+            let name = entry.name.clone();
+            let files = entry
+                .status
+                .as_ref()
+                .map(|s| s.files.clone())
+                .unwrap_or_default();
+            self.file_list.set_files(files, &name, idx);
+
+            let path = entry.path.clone();
+            self.git_graph.load_repo(path, &name);
         }
     }
 
@@ -86,14 +103,8 @@ impl App {
             tui.event_tx.clone(),
         )?;
 
-        // If there are repos, auto-select the first one
-        if let Some(idx) = self.repo_list.selected_index()
-            && let Some(entry) = self.repo_list.repos.get(idx)
-            && let Some(ref status) = entry.status
-        {
-            self.file_list
-                .set_files(status.files.clone(), &entry.name, idx);
-        }
+        // Auto-select the first repo (graph loads once status arrives)
+        self.sync_selection();
 
         loop {
             // Process events from TUI
@@ -143,12 +154,14 @@ impl App {
                         self.context_menu.hide();
                         if let Some(entry) = self.repo_list.repos.get(idx) {
                             let name = entry.name.clone();
+                            let path = entry.path.clone();
                             let files = entry
                                 .status
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
                             self.file_list.set_files(files, &name, idx);
+                            self.git_graph.load_repo(path, &name);
                         }
                     }
                     Action::RepoStatusUpdated {
@@ -159,17 +172,19 @@ impl App {
                         let status_clone = status.clone();
                         self.repo_list.update_status(idx, status_clone);
 
-                        // Refresh file list if this is the selected repo
+                        // Refresh file list + graph if this is the selected repo
                         if self.repo_list.selected_index() == Some(idx)
                             && let Some(entry) = self.repo_list.repos.get(idx)
                         {
                             let name = entry.name.clone();
+                            let path = entry.path.clone();
                             let files = entry
                                 .status
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
                             self.file_list.set_files(files, &name, idx);
+                            self.git_graph.load_repo(path, &name);
                         }
                     }
                     Action::RefreshAll => {
@@ -200,16 +215,17 @@ impl App {
                         }
                     }
                     Action::ShowGitGraph => {
+                        // Force-reload graph for selected repo
                         self.context_menu.hide();
                         if let Some(entry) = self.repo_list.selected_repo() {
                             let path = entry.path.clone();
                             let name = entry.name.clone();
                             self.git_graph.load_repo(path, &name);
-                            self.right_pane = RightPane::GitGraph;
                         }
+                        self.focus = FocusPanel::Graph;
                     }
                     Action::ShowFileList => {
-                        self.right_pane = RightPane::FileList;
+                        self.focus = FocusPanel::Changes;
                     }
                     Action::GraphLoaded(rows) => {
                         self.git_graph.set_rows(rows);
@@ -233,7 +249,6 @@ impl App {
                     Action::CopyPath(idx) => {
                         if let Some(entry) = self.repo_list.repos.get(idx) {
                             let path_str = entry.path.to_string_lossy().to_string();
-                            // Copy to clipboard via OSC 52 escape sequence
                             use std::io::Write;
                             let encoded = base64_encode(path_str.as_bytes());
                             let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
@@ -247,7 +262,6 @@ impl App {
                             Action::GitPullRebase(_) => vec!["pull", "--rebase"],
                             _ => unreachable!(),
                         };
-                        let op_name = git_args.join(" ");
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
                             entry.loading = true;
                             let path = entry.path.clone();
@@ -287,7 +301,6 @@ impl App {
                                 }
                             });
                         }
-                        drop(op_name);
                     }
                     Action::GitOpComplete { index, .. } => {
                         self.action_tx.send(Action::RefreshRepo(index))?;
@@ -311,7 +324,6 @@ impl App {
                                         let mut text =
                                             String::from_utf8_lossy(&o.stdout).to_string();
                                         if text.is_empty() {
-                                            // Might be untracked — show file contents
                                             text = String::from_utf8_lossy(&{
                                                 std::process::Command::new("git")
                                                     .arg("-C")
@@ -348,7 +360,6 @@ impl App {
                         tracing::error!("{}", msg);
                     }
                     _ => {
-                        // Forward to components
                         let _ = self.repo_list.update(action)?;
                     }
                 }
@@ -367,8 +378,7 @@ impl App {
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_key_event(key)? {
                 if matches!(action, Action::HideContextMenu) {
-                    // Menu closed on unrecognized key — re-dispatch to normal handling
-                    // (fall through below instead of returning)
+                    // fall through to normal handling
                 } else {
                     self.action_tx.send(action)?;
                     return Ok(());
@@ -378,7 +388,7 @@ impl App {
             }
         }
 
-        // If file list is showing a diff, it gets priority
+        // Diff view gets priority
         if self.file_list.viewing_diff() {
             if let Some(action) = self.file_list.handle_key_event(key)? {
                 self.action_tx.send(action)?;
@@ -391,18 +401,28 @@ impl App {
                 self.action_tx.send(Action::Quit)?;
             }
             KeyCode::Esc => {
-                if self.right_pane == RightPane::GitGraph {
-                    self.action_tx.send(Action::ShowFileList)?;
-                } else if self.focus_right {
-                    self.focus_right = false;
-                } else {
-                    self.action_tx.send(Action::Quit)?;
+                // Move focus left, or quit from repos
+                match self.focus {
+                    FocusPanel::Graph => self.focus = FocusPanel::Changes,
+                    FocusPanel::Changes => self.focus = FocusPanel::Repos,
+                    FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
                 }
             }
-            KeyCode::Tab | KeyCode::BackTab => {
-                if self.right_pane == RightPane::FileList {
-                    self.focus_right = !self.focus_right;
-                }
+            KeyCode::Tab => {
+                // Cycle focus right
+                self.focus = match self.focus {
+                    FocusPanel::Repos => FocusPanel::Changes,
+                    FocusPanel::Changes => FocusPanel::Graph,
+                    FocusPanel::Graph => FocusPanel::Repos,
+                };
+            }
+            KeyCode::BackTab => {
+                // Cycle focus left
+                self.focus = match self.focus {
+                    FocusPanel::Repos => FocusPanel::Graph,
+                    FocusPanel::Changes => FocusPanel::Repos,
+                    FocusPanel::Graph => FocusPanel::Changes,
+                };
             }
             KeyCode::Char('r') => {
                 self.action_tx.send(Action::RefreshAll)?;
@@ -411,16 +431,23 @@ impl App {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
             _ => {
-                if self.right_pane == RightPane::GitGraph {
-                    if let Some(action) = self.git_graph.handle_key_event(key)? {
-                        self.action_tx.send(action)?;
+                // Route to focused panel
+                match self.focus {
+                    FocusPanel::Repos => {
+                        if let Some(action) = self.repo_list.handle_key_event(key)? {
+                            self.action_tx.send(action)?;
+                        }
                     }
-                } else if self.focus_right {
-                    if let Some(action) = self.file_list.handle_key_event(key)? {
-                        self.action_tx.send(action)?;
+                    FocusPanel::Changes => {
+                        if let Some(action) = self.file_list.handle_key_event(key)? {
+                            self.action_tx.send(action)?;
+                        }
                     }
-                } else if let Some(action) = self.repo_list.handle_key_event(key)? {
-                    self.action_tx.send(action)?;
+                    FocusPanel::Graph => {
+                        if let Some(action) = self.git_graph.handle_key_event(key)? {
+                            self.action_tx.send(action)?;
+                        }
+                    }
                 }
             }
         }
@@ -428,23 +455,18 @@ impl App {
     }
 
     fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
-        // Context menu gets priority for mouse events
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_mouse_event(mouse)? {
                 self.action_tx.send(action)?;
-            } else {
-                // Click outside menu dismisses it
-                if matches!(
-                    mouse.kind,
-                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
-                ) {
-                    self.context_menu.hide();
-                }
+            } else if matches!(
+                mouse.kind,
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+            ) {
+                self.context_menu.hide();
             }
             return Ok(());
         }
 
-        // Route to repo list
         if let Some(action) = self.repo_list.handle_mouse_event(mouse)? {
             self.action_tx.send(action)?;
         }
@@ -455,44 +477,48 @@ impl App {
         let area = frame.area();
 
         // Vertical: main area + status bar
-        let vertical = Layout::default()
+        let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(3), Constraint::Length(1)])
             .split(area);
 
-        let main_area = vertical[0];
-        let status_area = vertical[1];
+        let main_area = outer[0];
+        let status_area = outer[1];
 
-        // Layout: narrow = vertical stack, wide = horizontal split
-        let (repo_area, right_area) = if area.width < 80 {
-            let vertical_split = Layout::default()
+        // Three-panel layout
+        let (repo_area, changes_area, graph_area) = if area.width < 100 {
+            // Narrow: vertical stack
+            let v = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .constraints([
+                    Constraint::Percentage(30),
+                    Constraint::Percentage(30),
+                    Constraint::Percentage(40),
+                ])
                 .split(main_area);
-            (vertical_split[0], vertical_split[1])
+            (v[0], v[1], v[2])
         } else {
-            let horizontal = Layout::default()
+            // Wide: horizontal
+            let h = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+                .constraints([
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(50),
+                ])
                 .split(main_area);
-            (horizontal[0], horizontal[1])
+            (h[0], h[1], h[2])
         };
 
-        self.repo_list.focused = !self.focus_right;
-        self.file_list.focused = self.focus_right;
+        self.repo_list.focused = self.focus == FocusPanel::Repos;
+        self.file_list.focused = self.focus == FocusPanel::Changes;
+        self.git_graph.focused = self.focus == FocusPanel::Graph;
 
         self.repo_list.draw(frame, repo_area)?;
+        self.file_list.draw(frame, changes_area)?;
+        self.git_graph.draw(frame, graph_area)?;
 
-        match self.right_pane {
-            RightPane::FileList => {
-                self.file_list.draw(frame, right_area)?;
-            }
-            RightPane::GitGraph => {
-                self.git_graph.draw(frame, right_area)?;
-            }
-        }
-
-        self.status_bar.right_pane = self.right_pane;
+        self.status_bar.focus = self.focus;
         self.status_bar.draw(frame, status_area)?;
 
         // Context menu rendered last (overlay)

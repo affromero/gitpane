@@ -21,6 +21,7 @@ pub(crate) struct GitGraph {
     repo_name: String,
     loading: bool,
     error: Option<String>,
+    pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -32,6 +33,7 @@ impl GitGraph {
             repo_name: String::new(),
             loading: false,
             error: None,
+            focused: false,
             action_tx: None,
         }
     }
@@ -111,18 +113,22 @@ impl Component for GitGraph {
                 self.select_prev();
                 Ok(None)
             }
-            KeyCode::Esc => Ok(Some(Action::ShowFileList)),
             _ => Ok(None),
         }
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let title = format!(" Git Graph — {} ", self.repo_name);
+        let border_color = if self.focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
 
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(border_color));
 
         if self.loading {
             let paragraph = Paragraph::new("Loading graph...")
