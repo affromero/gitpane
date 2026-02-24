@@ -361,10 +361,15 @@ impl App {
                                     }
                                     Ok(o) => {
                                         let stderr = String::from_utf8_lossy(&o.stderr);
+                                        let first_line = stderr
+                                            .lines()
+                                            .find(|l| !l.trim().is_empty())
+                                            .unwrap_or("unknown error")
+                                            .trim();
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
-                                            stderr.trim()
+                                            first_line
                                         )));
                                         let _ = tx.send(Action::RefreshRepo(idx));
                                     }
@@ -559,7 +564,17 @@ impl App {
                     }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
-                        self.error_message = Some((msg.clone(), Instant::now()));
+                        // Sanitize: single line, max 120 chars for status bar
+                        let clean: String = msg
+                            .chars()
+                            .map(|c| if c == '\n' { ' ' } else { c })
+                            .collect();
+                        let truncated = if clean.len() > 120 {
+                            format!("{}...", &clean[..117])
+                        } else {
+                            clean
+                        };
+                        self.error_message = Some((truncated, Instant::now()));
                     }
                     _ => {
                         let _ = self.repo_list.update(action)?;
