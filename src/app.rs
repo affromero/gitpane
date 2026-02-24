@@ -253,14 +253,30 @@ impl App {
                         }
                     }
                     Action::RefreshAll => {
-                        for entry in &mut self.repo_list.repos {
-                            entry.loading = true;
+                        // User-initiated refresh: fetch from remote + show spinner
+                        for (idx, entry) in self.repo_list.repos.iter_mut().enumerate() {
+                            entry.git_op = true;
+                            let path = entry.path.clone();
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                match crate::git::status::query_status_with_fetch(&path) {
+                                    Ok(s) => {
+                                        let _ = tx.send(Action::RepoStatusUpdated {
+                                            index: idx,
+                                            status: s,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx
+                                            .send(Action::Error(format!("Failed to query: {}", e)));
+                                    }
+                                }
+                            });
                         }
-                        self.repo_list.init()?;
                     }
                     Action::RefreshRepo(idx) => {
+                        // Watcher-triggered: fast local-only, no spinner
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
-                            entry.loading = true;
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
@@ -340,7 +356,7 @@ impl App {
                                 git_args.push("origin".into());
                                 git_args.push(branch);
                             }
-                            entry.loading = true;
+                            entry.git_op = true;
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
@@ -511,7 +527,7 @@ impl App {
                                 path,
                                 name,
                                 status: None,
-                                loading: true,
+                                git_op: false,
                             });
                             let idx = self.repo_list.repos.len() - 1;
                             self.action_tx.send(Action::RefreshRepo(idx))?;

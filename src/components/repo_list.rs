@@ -20,7 +20,8 @@ pub(crate) struct RepoEntry {
     pub path: PathBuf,
     pub name: String,
     pub status: Option<RepoStatus>,
-    pub loading: bool,
+    /// True only during push/pull/rebase — shows animated spinner
+    pub git_op: bool,
 }
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -47,7 +48,7 @@ impl RepoList {
                     path,
                     name,
                     status: None,
-                    loading: true,
+                    git_op: false,
                 }
             })
             .collect();
@@ -100,7 +101,7 @@ impl RepoList {
     pub fn update_status(&mut self, index: usize, repo_status: RepoStatus) {
         if let Some(entry) = self.repos.get_mut(index) {
             entry.status = Some(repo_status);
-            entry.loading = false;
+            entry.git_op = false;
         }
     }
 
@@ -232,8 +233,8 @@ impl Component for RepoList {
             .map(|entry| {
                 let mut spans = Vec::new();
 
-                // Spinner for loading state (works even when status exists)
-                if entry.loading {
+                // Spinner for active git operations (push/pull/rebase)
+                if entry.git_op {
                     let ch = SPINNER[tick % SPINNER.len()];
                     spans.push(Span::styled(
                         format!("{ch} "),
@@ -285,12 +286,8 @@ impl Component for RepoList {
                         }
                     }
                     None => {
-                        if entry.loading {
-                            spans.push(Span::styled(
-                                "loading... ",
-                                Style::default().fg(Color::DarkGray),
-                            ));
-                        }
+                        // Status not yet loaded — show placeholder
+                        spans.push(Span::styled("... ", Style::default().fg(Color::DarkGray)));
                     }
                 }
 

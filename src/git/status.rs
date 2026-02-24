@@ -39,7 +39,17 @@ impl FileStatus {
     }
 }
 
+/// Fast local-only status query (no network). Used by filesystem watcher refreshes.
 pub(crate) fn query_status(path: &Path) -> color_eyre::Result<RepoStatus> {
+    query_status_inner(path, false)
+}
+
+/// Status query with `git fetch` first. Used by explicit user refresh (`r` key).
+pub(crate) fn query_status_with_fetch(path: &Path) -> color_eyre::Result<RepoStatus> {
+    query_status_inner(path, true)
+}
+
+fn query_status_inner(path: &Path, fetch: bool) -> color_eyre::Result<RepoStatus> {
     let repo = Repository::open(path)?;
 
     // Branch name
@@ -48,8 +58,10 @@ pub(crate) fn query_status(path: &Path) -> color_eyre::Result<RepoStatus> {
         Err(_) => "(no branch)".to_string(),
     };
 
-    // Fetch remote-tracking refs so ahead/behind is current
-    fetch_remote_silent(path);
+    // Only fetch remote-tracking refs when explicitly requested
+    if fetch {
+        fetch_remote_silent(path);
+    }
 
     // Ahead/behind
     let (ahead, behind) = compute_ahead_behind(&repo);
