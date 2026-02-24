@@ -56,7 +56,7 @@ fn default_poll_local_secs() -> u64 {
 }
 
 fn default_poll_fetch_secs() -> u64 {
-    60
+    30
 }
 
 fn default_frame_rate() -> u16 {
