@@ -1,3 +1,4 @@
+use crate::git::graph::GraphRow;
 use crate::git::status::RepoStatus;
 
 #[derive(Clone, Debug)]
@@ -13,5 +14,8 @@ pub(crate) enum Action {
     RepoStatusUpdated { index: usize, status: RepoStatus },
     RefreshAll,
     RefreshRepo(usize),
+    ShowGitGraph,
+    ShowFileList,
+    GraphLoaded(Vec<GraphRow>),
     Error(String),
 }

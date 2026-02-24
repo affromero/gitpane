@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::action::Action;
 use crate::components::Component;
 use crate::components::file_list::FileList;
+use crate::components::git_graph::GitGraph;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
 use crate::config::Config;
@@ -26,6 +27,7 @@ pub(crate) struct App {
     should_quit: bool,
     repo_list: RepoList,
     file_list: FileList,
+    git_graph: GitGraph,
     status_bar: StatusBar,
     right_pane: RightPane,
     action_tx: UnboundedSender<Action>,
@@ -42,6 +44,7 @@ impl App {
             should_quit: false,
             repo_list: RepoList::new(repo_paths),
             file_list: FileList::new(),
+            git_graph: GitGraph::new(),
             status_bar: StatusBar::new(),
             right_pane: RightPane::FileList,
             action_tx,
@@ -57,6 +60,8 @@ impl App {
         self.repo_list
             .register_action_handler(self.action_tx.clone())?;
         self.file_list
+            .register_action_handler(self.action_tx.clone())?;
+        self.git_graph
             .register_action_handler(self.action_tx.clone())?;
 
         // Init components
@@ -182,6 +187,20 @@ impl App {
                             });
                         }
                     }
+                    Action::ShowGitGraph => {
+                        if let Some(entry) = self.repo_list.selected_repo() {
+                            let path = entry.path.clone();
+                            let name = entry.name.clone();
+                            self.git_graph.load_repo(path, &name);
+                            self.right_pane = RightPane::GitGraph;
+                        }
+                    }
+                    Action::ShowFileList => {
+                        self.right_pane = RightPane::FileList;
+                    }
+                    Action::GraphLoaded(rows) => {
+                        self.git_graph.set_rows(rows);
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                     }
@@ -208,8 +227,16 @@ impl App {
             KeyCode::Char('r') => {
                 self.action_tx.send(Action::RefreshAll)?;
             }
+            KeyCode::Char('g') => {
+                self.action_tx.send(Action::ShowGitGraph)?;
+            }
             _ => {
-                if let Some(action) = self.repo_list.handle_key_event(key)? {
+                // Route to active right-pane component or repo list
+                if self.right_pane == RightPane::GitGraph {
+                    if let Some(action) = self.git_graph.handle_key_event(key)? {
+                        self.action_tx.send(action)?;
+                    }
+                } else if let Some(action) = self.repo_list.handle_key_event(key)? {
                     self.action_tx.send(action)?;
                 }
             }
@@ -245,8 +272,7 @@ impl App {
                 self.file_list.draw(frame, right_area)?;
             }
             RightPane::GitGraph => {
-                // Will be implemented in Phase 4
-                self.file_list.draw(frame, right_area)?;
+                self.git_graph.draw(frame, right_area)?;
             }
         }
 

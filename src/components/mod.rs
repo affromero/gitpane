@@ -1,4 +1,5 @@
 pub(crate) mod file_list;
+pub(crate) mod git_graph;
 pub(crate) mod repo_list;
 pub(crate) mod status_bar;
 
