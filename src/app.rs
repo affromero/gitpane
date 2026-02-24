@@ -66,6 +66,10 @@ pub(crate) struct App {
     graph_area: Rect,
     error_message: Option<(String, Instant)>,
     success_message: Option<(String, Instant)>,
+    /// Panel width percentages [repos, changes, graph] — must sum to 100
+    panel_widths: [u16; 3],
+    /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
+    dragging_border: Option<u8>,
 }
 
 impl App {
@@ -91,6 +95,8 @@ impl App {
             graph_area: Rect::default(),
             error_message: None,
             success_message: None,
+            panel_widths: [25, 25, 50],
+            dragging_border: None,
         }
     }
 
@@ -743,6 +749,35 @@ impl App {
 
         let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
 
+        // Border dragging for panel resize (horizontal layout only)
+        let border1_x = self.repo_area.x + self.repo_area.width;
+        let border2_x = self.changes_area.x + self.changes_area.width;
+        let in_main_y =
+            mouse.row >= self.repo_area.y && mouse.row < self.repo_area.y + self.repo_area.height;
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) if in_main_y => {
+                // Check if clicking on a border (within 1 col)
+                if mouse.column.abs_diff(border1_x) <= 1 {
+                    self.dragging_border = Some(0);
+                    return Ok(());
+                } else if mouse.column.abs_diff(border2_x) <= 1 {
+                    self.dragging_border = Some(1);
+                    return Ok(());
+                }
+                self.dragging_border = None;
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging_border.is_some() => {
+                self.resize_panels(mouse.column);
+                return Ok(());
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging_border.is_some() => {
+                self.dragging_border = None;
+                return Ok(());
+            }
+            _ => {}
+        }
+
         // Set focus on left click based on which panel was clicked
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             if self.repo_area.contains(pos) {
@@ -771,6 +806,52 @@ impl App {
         Ok(())
     }
 
+    fn resize_panels(&mut self, col: u16) {
+        let total_width = self.repo_area.width + self.changes_area.width + self.graph_area.width;
+        if total_width == 0 {
+            return;
+        }
+        let origin_x = self.repo_area.x;
+        let rel = col.saturating_sub(origin_x);
+        let min_pct: u16 = 10; // minimum 10% per panel
+
+        match self.dragging_border {
+            Some(0) => {
+                // Dragging border between repos and changes
+                let new_repos_pct =
+                    ((rel as u32 * 100) / total_width as u32).clamp(min_pct as u32, 80) as u16;
+                let remaining = 100 - new_repos_pct;
+                // Keep graph width proportional to what it had vs (changes+graph)
+                let old_cg = self.panel_widths[1] + self.panel_widths[2];
+                let new_graph = if old_cg > 0 {
+                    (self.panel_widths[2] as u32 * remaining as u32 / old_cg as u32) as u16
+                } else {
+                    remaining / 2
+                };
+                let new_changes = remaining.saturating_sub(new_graph);
+                if new_changes >= min_pct && new_graph >= min_pct {
+                    self.panel_widths = [new_repos_pct, new_changes, new_graph];
+                }
+            }
+            Some(1) => {
+                // Dragging border between changes and graph
+                let repos_cols = self.repo_area.width;
+                let rel_after_repos = rel.saturating_sub(repos_cols);
+                let cg_width = total_width - repos_cols;
+                if cg_width == 0 {
+                    return;
+                }
+                let cg_pct = 100 - self.panel_widths[0];
+                let new_changes_pct = ((rel_after_repos as u32 * cg_pct as u32) / cg_width as u32)
+                    .clamp(min_pct as u32, (cg_pct - min_pct) as u32)
+                    as u16;
+                let new_graph_pct = cg_pct - new_changes_pct;
+                self.panel_widths = [self.panel_widths[0], new_changes_pct, new_graph_pct];
+            }
+            _ => {}
+        }
+    }
+
     fn draw(&mut self, frame: &mut ratatui::Frame) -> Result<()> {
         let area = frame.area();
 
@@ -783,26 +864,27 @@ impl App {
         let main_area = outer[0];
         let status_area = outer[1];
 
-        // Three-panel layout
+        // Three-panel layout using adjustable widths
+        let [pw0, pw1, pw2] = self.panel_widths;
         let (repo_area, changes_area, graph_area) = if area.width < 100 {
-            // Narrow: vertical stack
+            // Narrow: vertical stack (not resizable)
             let v = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(40),
+                    Constraint::Percentage(pw0),
+                    Constraint::Percentage(pw1),
+                    Constraint::Percentage(pw2),
                 ])
                 .split(main_area);
             (v[0], v[1], v[2])
         } else {
-            // Wide: horizontal
+            // Wide: horizontal (drag borders to resize)
             let h = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(50),
+                    Constraint::Percentage(pw0),
+                    Constraint::Percentage(pw1),
+                    Constraint::Percentage(pw2),
                 ])
                 .split(main_area);
             (h[0], h[1], h[2])
