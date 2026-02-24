@@ -20,6 +20,7 @@ pub(crate) struct GitGraph {
     state: ListState,
     repo_name: String,
     loading: bool,
+    error: Option<String>,
     action_tx: Option<UnboundedSender<Action>>,
 }
 
@@ -30,6 +31,7 @@ impl GitGraph {
             state: ListState::default(),
             repo_name: String::new(),
             loading: false,
+            error: None,
             action_tx: None,
         }
     }
@@ -37,6 +39,7 @@ impl GitGraph {
     pub fn load_repo(&mut self, path: PathBuf, repo_name: &str) {
         self.repo_name = repo_name.to_string();
         self.loading = true;
+        self.error = None;
         self.rows.clear();
         self.state.select(None);
 
@@ -50,10 +53,15 @@ impl GitGraph {
                     let _ = tx.send(Action::GraphLoaded(rows));
                 }
                 Err(e) => {
-                    let _ = tx.send(Action::Error(format!("Failed to load graph: {}", e)));
+                    let _ = tx.send(Action::GraphError(format!("Failed to load graph: {}", e)));
                 }
             }
         });
+    }
+
+    pub fn set_error(&mut self, msg: String) {
+        self.error = Some(msg);
+        self.loading = false;
     }
 
     pub fn set_rows(&mut self, rows: Vec<GraphRow>) {
@@ -117,8 +125,16 @@ impl Component for GitGraph {
             .border_style(Style::default().fg(Color::DarkGray));
 
         if self.loading {
-            let paragraph = Paragraph::new("Loading...")
-                .style(Style::default().fg(Color::DarkGray))
+            let paragraph = Paragraph::new("Loading graph...")
+                .style(Style::default().fg(Color::Yellow))
+                .block(block);
+            frame.render_widget(paragraph, area);
+            return Ok(());
+        }
+
+        if let Some(ref err) = self.error {
+            let paragraph = Paragraph::new(err.as_str())
+                .style(Style::default().fg(Color::Red))
                 .block(block);
             frame.render_widget(paragraph, area);
             return Ok(());
@@ -126,7 +142,7 @@ impl Component for GitGraph {
 
         if self.rows.is_empty() {
             let paragraph = Paragraph::new("No commits")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(Color::Gray))
                 .block(block);
             frame.render_widget(paragraph, area);
             return Ok(());

@@ -210,6 +210,9 @@ impl App {
                     Action::GraphLoaded(rows) => {
                         self.git_graph.set_rows(rows);
                     }
+                    Action::GraphError(ref msg) => {
+                        self.git_graph.set_error(msg.clone());
+                    }
                     Action::ShowContextMenu { index, row, col } => {
                         self.context_menu.show(index, col, row);
                     }
@@ -352,6 +355,7 @@ impl App {
             }
         }
 
+        self.status_bar.right_pane = self.right_pane;
         self.status_bar.draw(frame, status_area)?;
 
         // Context menu rendered last (overlay)

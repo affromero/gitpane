@@ -20,5 +20,6 @@ pub(crate) enum Action {
     ShowContextMenu { index: usize, row: u16, col: u16 },
     HideContextMenu,
     CopyPath(usize),
+    GraphError(String),
     Error(String),
 }

@@ -238,10 +238,18 @@ impl Component for RepoList {
                             Style::default().fg(Color::Cyan),
                         ));
 
-                        // Ahead/behind
-                        if status.ahead > 0 || status.behind > 0 {
-                            let ab = format!("[+{}/-{}] ", status.ahead, status.behind);
-                            spans.push(Span::styled(ab, Style::default().fg(Color::Magenta)));
+                        // Ahead/behind (VSCode-style ↑↓ arrows)
+                        if status.ahead > 0 {
+                            spans.push(Span::styled(
+                                format!("↑{} ", status.ahead),
+                                Style::default().fg(Color::Green),
+                            ));
+                        }
+                        if status.behind > 0 {
+                            spans.push(Span::styled(
+                                format!("↓{} ", status.behind),
+                                Style::default().fg(Color::Red),
+                            ));
                         }
 
                         // Change count
