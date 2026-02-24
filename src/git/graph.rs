@@ -8,7 +8,6 @@ const MAX_COMMITS: usize = 200;
 const PALETTE_SIZE: usize = 6;
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // fields used in Phase 2 rendering
 pub(crate) struct BranchLabel {
     pub name: String,
     pub is_head: bool,
@@ -17,7 +16,6 @@ pub(crate) struct BranchLabel {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // label_max_len used in Phase 2 rendering
 pub(crate) struct GraphOptions {
     pub branch_filter: BranchFilter,
     pub label_max_len: usize,

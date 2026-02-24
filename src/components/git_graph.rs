@@ -231,6 +231,7 @@ impl GitGraph {
             return;
         }
 
+        let label_max_len = self.graph_options.label_max_len;
         let items: Vec<ListItem> = self
             .rows
             .iter()
@@ -244,9 +245,19 @@ impl GitGraph {
                         .add_modifier(Modifier::BOLD),
                 ));
 
+                spans.extend(graph_render::render_branch_labels(
+                    &row.labels,
+                    label_max_len,
+                ));
+
+                let msg_color = if row.is_merge {
+                    Color::Rgb(130, 130, 130)
+                } else {
+                    Color::White
+                };
                 spans.push(Span::styled(
-                    &row.message,
-                    Style::default().fg(Color::White),
+                    row.message.clone(),
+                    Style::default().fg(msg_color),
                 ));
 
                 spans.push(Span::styled(
