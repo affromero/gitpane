@@ -319,36 +319,49 @@ impl App {
                         }
                     }
                     Action::GitPush(idx) | Action::GitPull(idx) | Action::GitPullRebase(idx) => {
-                        let git_args: Vec<&str> = match action {
-                            Action::GitPush(_) => vec!["push"],
-                            Action::GitPull(_) => vec!["pull"],
-                            Action::GitPullRebase(_) => vec!["pull", "--rebase"],
-                            _ => unreachable!(),
-                        };
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                            let branch = entry
+                                .status
+                                .as_ref()
+                                .map(|s| s.branch.clone())
+                                .unwrap_or_default();
+                            let mut git_args: Vec<String> = match action {
+                                Action::GitPush(_) => vec!["push".into()],
+                                Action::GitPull(_) => vec!["pull".into()],
+                                Action::GitPullRebase(_) => {
+                                    vec!["pull".into(), "--rebase".into()]
+                                }
+                                _ => unreachable!(),
+                            };
+                            // Add origin <branch> so pull/push works even without upstream config
+                            if !branch.is_empty() && branch != "(no branch)" {
+                                git_args.push("origin".into());
+                                git_args.push(branch);
+                            }
                             entry.loading = true;
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            let args: Vec<String> =
-                                git_args.iter().map(|s| s.to_string()).collect();
                             tokio::task::spawn_blocking(move || {
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
-                                    .args(&args)
+                                    .args(&git_args)
                                     .output();
                                 match output {
                                     Ok(o) if o.status.success() => {
                                         let _ = tx.send(Action::GitOpComplete {
                                             index: idx,
-                                            message: format!("git {} succeeded", args.join(" ")),
+                                            message: format!(
+                                                "git {} succeeded",
+                                                git_args.join(" ")
+                                            ),
                                         });
                                     }
                                     Ok(o) => {
                                         let stderr = String::from_utf8_lossy(&o.stderr);
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
-                                            args.join(" "),
+                                            git_args.join(" "),
                                             stderr.trim()
                                         )));
                                         let _ = tx.send(Action::RefreshRepo(idx));
@@ -356,7 +369,7 @@ impl App {
                                     Err(e) => {
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
-                                            args.join(" "),
+                                            git_args.join(" "),
                                             e
                                         )));
                                         let _ = tx.send(Action::RefreshRepo(idx));

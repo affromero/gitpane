@@ -6,7 +6,10 @@
   <p align="center">
     <a href="https://github.com/afromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/afromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg" alt="crates.io"></a>
+    <a href="https://github.com/afromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/release/afromero/gitpane?label=release" alt="GitHub Release"></a>
     <a href="https://github.com/afromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
+    <img src="https://img.shields.io/github/languages/top/afromero/gitpane" alt="Language">
   </p>
 </p>
 
@@ -57,15 +60,19 @@ gitpane --root ~/projects   # Scan a specific directory
 
 If you work across multiple repositories — microservices, monorepos with submodules, a mix of projects — you know the pain of `cd`-ing into each one to check status. Existing TUI tools focus on **one repo at a time**:
 
-| Tool | Multi-repo | Real-time watch | Mouse | Commit graph | Split diffs |
-|------|:---:|:---:|:---:|:---:|:---:|
-| **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
-| lazygit | No | No | Yes | Yes | Yes |
-| gitui | No | No | Yes | Yes | Yes |
-| tig | No | No | No | Yes | No |
-| git-summary | Yes (list only) | No | No | No | No |
+| Tool | Multi-repo | Real-time watch | Mouse | Commit graph | Split diffs | Push/Pull |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|
+| **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+| [lazygit](https://github.com/jesseduffield/lazygit) | No | No | Yes | Yes | Yes | Yes |
+| [gitui](https://github.com/extrawurst/gitui) | No | No | Yes | Yes | Yes | Yes |
+| [tig](https://github.com/jonas/tig) | No | No | No | Yes | No | No |
+| [git-delta](https://github.com/dandavison/delta) | No | No | No | No | Yes (pager) | No |
+| [grv](https://github.com/rgburke/grv) | No | No | Yes | Yes | No | No |
+| [git-summary](https://github.com/MircoT/git-summary) | Yes (list only) | No | No | No | No | No |
+| [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No |
+| [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | Yes |
 
-gitpane is the **workspace-level dashboard** — see everything, drill into anything, never leave the terminal.
+**lazygit** and **gitui** are excellent for deep single-repo work — staging hunks, interactive rebase, conflict resolution. gitpane is the **workspace-level dashboard** — see everything across all repos, drill into anything, never leave the terminal. They complement each other.
 
 ## Screenshots
 
@@ -75,9 +82,14 @@ Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`)
 <img src="assets/screenshot-main.png" alt="Three-panel overview" width="800">
 
 ### Split diff view
-Click a changed file (or press Enter) to see its diff side-by-side. File list stays navigable on the left. Same drill-down works in the graph panel for commit diffs.
+Click a changed file (or press Enter) to see its diff side-by-side. File list stays navigable on the left.
 
 <img src="assets/screenshot-diff.png" alt="Split diff view" width="800">
+
+### Commit detail drill-down
+Click a commit in the graph to see its files. Click a file to see the commit diff. Layered Esc dismissal: diff → files → graph.
+
+<img src="assets/screenshot-commit.png" alt="Commit detail drill-down" width="800">
 
 ## Features
 
@@ -86,10 +98,10 @@ Click a changed file (or press Enter) to see its diff side-by-side. File list st
 - **Commit graph** — Lane-based graph with colored box-drawing characters, up to 200 commits
 - **Split diff views** — Click a file to see its diff side-by-side; click a commit to see its files and per-file diffs
 - **Full mouse support** — Click to select, right-click for context menu, scroll wheel everywhere
-- **Push / Pull / Rebase** — Right-click context menu with ahead/behind-aware git operations
-- **Add & remove repos** — Press `a` to add any repo with tab-completing path input; `d` to remove
+- **Push / Pull / Rebase** — Right-click context menu with ahead/behind-aware git operations (explicit `origin <branch>` for reliability)
+- **Add & remove repos** — Press `a` to add any repo with tab-completing path input; `d` to remove; `R` to rescan
 - **Sort repos** — Cycle between alphabetical and dirty-first with `s`
-- **Copy to clipboard** — Copy repo paths via context menu (OSC 52)
+- **Copy to clipboard** — Press `y` to copy selected item from any panel (OSC 52)
 - **Configurable** — TOML config for root dirs, scan depth, pinned repos, exclusions, frame rate
 - **Responsive layout** — Three horizontal panels on wide terminals, vertical stack on narrow ones
 - **Cross-platform** — Linux, macOS, Windows
@@ -189,10 +201,10 @@ See [`examples/config.toml`](examples/config.toml) for a fully annotated example
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **ratatui** + **crossterm** — TUI rendering with full mouse support
-- **git2** (libgit2) — Branch, status, ahead/behind, graph, commit diffs
-- **notify** — Filesystem watching with configurable debounce
-- **tokio** — Async runtime; git queries run in `spawn_blocking` to keep the UI responsive
+- **[ratatui](https://github.com/ratatui/ratatui)** + **[crossterm](https://github.com/crossterm-rs/crossterm)** — TUI rendering with full mouse support
+- **[git2](https://github.com/rust-lang/git2-rs)** (libgit2) — Branch, status, ahead/behind, graph, commit diffs
+- **[notify](https://github.com/notify-rs/notify)** — Filesystem watching with configurable debounce
+- **[tokio](https://github.com/tokio-rs/tokio)** — Async runtime; git queries run in `spawn_blocking` to keep the UI responsive
 
 Message-passing architecture: terminal events → actions → component updates → render. Each component implements a `Component` trait with `draw`, `handle_key_event`, `handle_mouse_event`, and `update`.
 
