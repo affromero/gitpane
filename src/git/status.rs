@@ -48,6 +48,9 @@ pub(crate) fn query_status(path: &Path) -> color_eyre::Result<RepoStatus> {
         Err(_) => "(no branch)".to_string(),
     };
 
+    // Fetch remote-tracking refs so ahead/behind is current
+    fetch_remote_silent(path);
+
     // Ahead/behind
     let (ahead, behind) = compute_ahead_behind(&repo);
 
@@ -99,6 +102,20 @@ pub(crate) fn query_status(path: &Path) -> color_eyre::Result<RepoStatus> {
     })
 }
 
+/// Run `git fetch` in the background to update remote-tracking refs.
+/// Uses the CLI because git2 fetch doesn't support SSH agent / credential helpers
+/// out of the box. Silently ignores failures (offline, auth issues, etc.).
+fn fetch_remote_silent(path: &Path) {
+    let _ = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("fetch")
+        .arg("--quiet")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {
     let head = match repo.head() {
         Ok(h) => h,
@@ -115,13 +132,18 @@ fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {
         None => return (0, 0),
     };
 
-    let upstream_name = format!("refs/remotes/origin/{}", branch_name);
-    let upstream_ref = match repo.find_reference(&upstream_name) {
-        Ok(r) => r,
+    // Use git2's branch upstream tracking instead of hardcoding "origin"
+    let branch = match repo.find_branch(&branch_name, git2::BranchType::Local) {
+        Ok(b) => b,
         Err(_) => return (0, 0),
     };
 
-    let upstream_oid = match upstream_ref.target() {
+    let upstream = match branch.upstream() {
+        Ok(u) => u,
+        Err(_) => return (0, 0),
+    };
+
+    let upstream_oid = match upstream.get().target() {
         Some(oid) => oid,
         None => return (0, 0),
     };
