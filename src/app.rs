@@ -362,6 +362,56 @@ impl App {
                     Action::DiffLoaded(ref content) => {
                         self.file_list.set_diff(content.clone());
                     }
+                    Action::ShowCommitFiles {
+                        ref repo_path,
+                        ref oid,
+                    } => {
+                        let path = repo_path.clone();
+                        let oid = oid.clone();
+                        let tx = self.action_tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            match crate::git::commit_files::list_commit_files(&path, &oid) {
+                                Ok(files) => {
+                                    let _ = tx.send(Action::CommitFilesLoaded { oid, files });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::Error(format!(
+                                        "Failed to list commit files: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    Action::CommitFilesLoaded { ref oid, ref files } => {
+                        self.git_graph.set_commit_files(oid.clone(), files.clone());
+                    }
+                    Action::ShowCommitDiff {
+                        ref repo_path,
+                        ref oid,
+                        ref file_path,
+                    } => {
+                        let path = repo_path.clone();
+                        let oid = oid.clone();
+                        let fp = file_path.clone();
+                        let tx = self.action_tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            match crate::git::commit_files::commit_file_diff(&path, &oid, &fp) {
+                                Ok(diff) => {
+                                    let _ = tx.send(Action::CommitDiffLoaded(diff));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::Error(format!(
+                                        "Failed to get commit diff: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    Action::CommitDiffLoaded(ref content) => {
+                        self.git_graph.set_commit_diff(content.clone());
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                     }
