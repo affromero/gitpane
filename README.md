@@ -4,12 +4,12 @@
     <strong>Multi-repo Git workspace dashboard for the terminal</strong>
   </p>
   <p align="center">
-    <a href="https://github.com/afromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/afromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg" alt="crates.io"></a>
-    <a href="https://github.com/afromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/release/afromero/gitpane?label=release" alt="GitHub Release"></a>
-    <a href="https://github.com/afromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/release/affromero/gitpane?label=release" alt="GitHub Release"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
-    <img src="https://img.shields.io/github/languages/top/afromero/gitpane" alt="Language">
+    <img src="https://img.shields.io/github/languages/top/affromero/gitpane" alt="Language">
   </p>
 </p>
 
@@ -29,23 +29,23 @@ cargo install gitpane
 
 That's it. No cloning, no building from source. Runs on **Linux, macOS, and Windows**.
 
-> **Don't have Rust?** Download a pre-built binary from [GitHub Releases](https://github.com/afromero/gitpane/releases/latest) — single static binary, zero dependencies.
+> **Don't have Rust?** Download a pre-built binary from [GitHub Releases](https://github.com/affromero/gitpane/releases/latest) — single static binary, zero dependencies.
 >
 > ```bash
 > # macOS (Apple Silicon)
-> curl -LO https://github.com/afromero/gitpane/releases/latest/download/gitpane-aarch64-apple-darwin.tar.gz
+> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-aarch64-apple-darwin.tar.gz
 > tar xzf gitpane-aarch64-apple-darwin.tar.gz && sudo mv gitpane /usr/local/bin/
 >
 > # macOS (Intel)
-> curl -LO https://github.com/afromero/gitpane/releases/latest/download/gitpane-x86_64-apple-darwin.tar.gz
+> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-x86_64-apple-darwin.tar.gz
 > tar xzf gitpane-x86_64-apple-darwin.tar.gz && sudo mv gitpane /usr/local/bin/
 >
 > # Linux (x86_64, statically linked)
-> curl -LO https://github.com/afromero/gitpane/releases/latest/download/gitpane-x86_64-unknown-linux-musl.tar.gz
+> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-x86_64-unknown-linux-musl.tar.gz
 > tar xzf gitpane-x86_64-unknown-linux-musl.tar.gz && sudo mv gitpane /usr/local/bin/
 >
 > # Linux (ARM64)
-> curl -LO https://github.com/afromero/gitpane/releases/latest/download/gitpane-aarch64-unknown-linux-gnu.tar.gz
+> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-aarch64-unknown-linux-gnu.tar.gz
 > tar xzf gitpane-aarch64-unknown-linux-gnu.tar.gz && sudo mv gitpane /usr/local/bin/
 > ```
 
