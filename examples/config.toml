@@ -1,0 +1,23 @@
+# gitpane configuration
+# Place this file at ~/.config/gitpane/config.toml
+
+# Directories to scan for git repositories
+root_dirs = ["~/Code"]
+
+# Maximum depth to walk when discovering repos (default: 2)
+scan_depth = 2
+
+# Repos to always show at the top of the list
+pinned_repos = []
+
+# Patterns to exclude from repo discovery
+# Matches against repo directory name or any path component
+excluded_repos = ["node_modules", ".cargo"]
+
+[watch]
+# Filesystem change debounce interval in milliseconds (default: 500)
+debounce_ms = 500
+
+[ui]
+# Terminal refresh rate in frames per second (default: 30)
+frame_rate = 30
