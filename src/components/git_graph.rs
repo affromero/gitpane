@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::graph::{GraphBuilder, GraphRow};
+use crate::git::graph::{GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 
 struct CommitDetail {
@@ -37,6 +37,7 @@ pub(crate) struct GitGraph {
     files_area: Rect,
     diff_area: Rect,
     commit_detail: Option<CommitDetail>,
+    pub(crate) graph_options: GraphOptions,
 }
 
 impl GitGraph {
@@ -55,6 +56,7 @@ impl GitGraph {
             files_area: Rect::default(),
             diff_area: Rect::default(),
             commit_detail: None,
+            graph_options: GraphOptions::default(),
         }
     }
 
@@ -76,10 +78,11 @@ impl GitGraph {
 
         let Some(tx) = &self.action_tx else { return };
         let tx = tx.clone();
+        let options = self.graph_options.clone();
 
         tokio::task::spawn_blocking(move || {
             let builder = GraphBuilder::new();
-            match builder.build(&path) {
+            match builder.build(&path, &options) {
                 Ok(rows) => {
                     let _ = tx.send(Action::GraphLoaded(rows));
                 }

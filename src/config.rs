@@ -17,6 +17,8 @@ pub(crate) struct Config {
     pub watch: WatchConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub graph: GraphConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -35,6 +37,37 @@ pub(crate) struct WatchConfig {
 pub(crate) struct UiConfig {
     #[serde(default = "default_frame_rate")]
     pub frame_rate: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum BranchFilter {
+    #[default]
+    All,
+    Local,
+    Remote,
+    None,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct GraphConfig {
+    #[serde(default)]
+    pub branches: BranchFilter,
+    #[serde(default = "default_label_max_len")]
+    pub label_max_len: usize,
+}
+
+fn default_label_max_len() -> usize {
+    24
+}
+
+impl Default for GraphConfig {
+    fn default() -> Self {
+        Self {
+            branches: BranchFilter::default(),
+            label_max_len: default_label_max_len(),
+        }
+    }
 }
 
 fn default_root_dirs() -> Vec<PathBuf> {
@@ -90,6 +123,7 @@ impl Default for Config {
             scan_depth: default_scan_depth(),
             watch: WatchConfig::default(),
             ui: UiConfig::default(),
+            graph: GraphConfig::default(),
         }
     }
 }
@@ -191,5 +225,34 @@ mod tests {
         config.add_pinned_repo(PathBuf::from("/tmp/repo-a"));
         config.add_pinned_repo(PathBuf::from("/tmp/repo-b"));
         assert_eq!(config.pinned_repos.len(), 2);
+    }
+
+    #[test]
+    fn test_branch_filter_parse_local() {
+        let toml_str = r#"
+            [graph]
+            branches = "local"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.graph.branches, BranchFilter::Local);
+    }
+
+    #[test]
+    fn test_graph_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.graph.branches, BranchFilter::All);
+        assert_eq!(config.graph.label_max_len, 24);
+    }
+
+    #[test]
+    fn test_graph_config_roundtrip() {
+        let mut config = Config::default();
+        config.graph.branches = BranchFilter::Remote;
+        config.graph.label_max_len = 16;
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(loaded.graph.branches, BranchFilter::Remote);
+        assert_eq!(loaded.graph.label_max_len, 16);
     }
 }
