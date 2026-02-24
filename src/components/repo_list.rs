@@ -8,7 +8,6 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 use std::path::PathBuf;
-use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
@@ -24,15 +23,12 @@ pub(crate) struct RepoEntry {
     pub git_op: bool,
 }
 
-const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     pub state: ListState,
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
-    created_at: Instant,
 }
 
 impl RepoList {
@@ -64,7 +60,6 @@ impl RepoList {
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
-            created_at: Instant::now(),
         }
     }
 
@@ -238,33 +233,19 @@ impl Component for RepoList {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         self.render_area = area;
-        let tick = (self.created_at.elapsed().as_millis() / 80) as usize;
         let items: Vec<ListItem> = self
             .repos
             .iter()
             .map(|entry| {
                 let mut spans = Vec::new();
 
-                // Spinner for active git operations (push/pull/rebase)
+                // Dirty / git-op indicator
                 if entry.git_op {
-                    let ch = SPINNER[tick % SPINNER.len()];
-                    spans.push(Span::styled(
-                        format!("{ch} "),
-                        Style::default().fg(Color::Cyan),
-                    ));
+                    spans.push(Span::styled("~ ", Style::default().fg(Color::Cyan)));
+                } else if entry.status.as_ref().map(|s| s.is_dirty).unwrap_or(false) {
+                    spans.push(Span::styled("* ", Style::default().fg(Color::Yellow)));
                 } else {
-                    match &entry.status {
-                        Some(status) => {
-                            if status.is_dirty {
-                                spans.push(Span::styled("* ", Style::default().fg(Color::Yellow)));
-                            } else {
-                                spans.push(Span::raw("  "));
-                            }
-                        }
-                        None => {
-                            spans.push(Span::raw("  "));
-                        }
-                    }
+                    spans.push(Span::raw("  "));
                 }
 
                 if let Some(status) = &entry.status {
