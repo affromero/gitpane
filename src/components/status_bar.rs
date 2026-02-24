@@ -30,45 +30,39 @@ impl Component for StatusBar {
         let elapsed = self.started_at.elapsed().as_secs();
 
         let spans = if elapsed < 60 {
-            // Onboarding: explain the layout
+            // Onboarding: symbol legend + keybindings
             match self.right_pane {
                 RightPane::FileList => vec![
-                    Span::styled(
-                        " Left: ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("repos ("),
+                    Span::styled(" * ", Style::default().fg(Color::Yellow)),
+                    Span::styled("dirty  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("↑", Style::default().fg(Color::Green)),
+                    Span::styled("push ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("↓", Style::default().fg(Color::Red)),
+                    Span::styled("pull  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("[n]", Style::default().fg(Color::Yellow)),
+                    Span::styled(" changed files  ", Style::default().fg(Color::DarkGray)),
+                    dim_sep(),
                     key_span("j/k"),
-                    Span::raw(" navigate)  "),
-                    Span::styled(
-                        "Right: ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("changed files for selected repo  "),
+                    Span::raw(" navigate  "),
                     key_span("g"),
-                    Span::raw(" git graph  "),
+                    Span::raw(" graph  "),
                     key_span("r"),
                     Span::raw(" refresh  "),
                     key_span("q"),
-                    Span::raw(" quit  "),
-                    Span::styled("↑push ↓pull", Style::default().fg(Color::DarkGray)),
+                    Span::raw(" quit"),
                 ],
                 RightPane::GitGraph => vec![
-                    Span::styled(
-                        "Git Graph: ",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("commit history with branch lanes  "),
+                    Span::styled("● ", Style::default().fg(Color::Cyan)),
+                    Span::styled("commit  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("│ ", Style::default().fg(Color::Green)),
+                    Span::styled("branch lane  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("╭╮", Style::default().fg(Color::Yellow)),
+                    Span::styled(" merge/fork  ", Style::default().fg(Color::DarkGray)),
+                    dim_sep(),
                     key_span("j/k"),
                     Span::raw(" scroll  "),
                     key_span("Esc"),
-                    Span::raw(" back to files  "),
+                    Span::raw(" back  "),
                     key_span("q"),
                     Span::raw(" quit"),
                 ],
@@ -102,6 +96,10 @@ impl Component for StatusBar {
         frame.render_widget(bar, area);
         Ok(())
     }
+}
+
+fn dim_sep() -> Span<'static> {
+    Span::styled("│ ", Style::default().fg(Color::DarkGray))
 }
 
 fn key_span(key: &str) -> Span<'_> {
