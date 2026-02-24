@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
@@ -34,6 +34,9 @@ pub(crate) struct App {
     focus: FocusPanel,
     action_tx: UnboundedSender<Action>,
     action_rx: UnboundedReceiver<Action>,
+    repo_area: Rect,
+    changes_area: Rect,
+    graph_area: Rect,
 }
 
 impl App {
@@ -52,6 +55,9 @@ impl App {
             focus: FocusPanel::Repos,
             action_tx,
             action_rx,
+            repo_area: Rect::default(),
+            changes_area: Rect::default(),
+            graph_area: Rect::default(),
         }
     }
 
@@ -455,19 +461,42 @@ impl App {
     }
 
     fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_mouse_event(mouse)? {
                 self.action_tx.send(action)?;
-            } else if matches!(
-                mouse.kind,
-                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
-            ) {
+            } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 self.context_menu.hide();
             }
             return Ok(());
         }
 
-        if let Some(action) = self.repo_list.handle_mouse_event(mouse)? {
+        let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+
+        // Set focus on left click based on which panel was clicked
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if self.repo_area.contains(pos) {
+                self.focus = FocusPanel::Repos;
+            } else if self.changes_area.contains(pos) {
+                self.focus = FocusPanel::Changes;
+            } else if self.graph_area.contains(pos) {
+                self.focus = FocusPanel::Graph;
+            }
+        }
+
+        // Route to the panel under the mouse
+        if self.repo_area.contains(pos) {
+            if let Some(action) = self.repo_list.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+        } else if self.changes_area.contains(pos) {
+            if let Some(action) = self.file_list.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+        } else if self.graph_area.contains(pos)
+            && let Some(action) = self.git_graph.handle_mouse_event(mouse)?
+        {
             self.action_tx.send(action)?;
         }
         Ok(())
@@ -509,6 +538,10 @@ impl App {
                 .split(main_area);
             (h[0], h[1], h[2])
         };
+
+        self.repo_area = repo_area;
+        self.changes_area = changes_area;
+        self.graph_area = graph_area;
 
         self.repo_list.focused = self.focus == FocusPanel::Repos;
         self.file_list.focused = self.focus == FocusPanel::Changes;

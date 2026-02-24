@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -20,6 +20,7 @@ pub(crate) struct FileList {
     repo_index: Option<usize>,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
+    render_area: Rect,
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
@@ -34,6 +35,7 @@ impl FileList {
             repo_index: None,
             focused: false,
             action_tx: None,
+            render_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
         }
@@ -129,7 +131,46 @@ impl Component for FileList {
         }
     }
 
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.diff_content.is_some() {
+                    return Ok(None);
+                }
+                let content_y = self.render_area.y + 1;
+                if mouse.column >= self.render_area.x
+                    && mouse.column < self.render_area.x + self.render_area.width
+                    && mouse.row >= content_y
+                {
+                    let idx = (mouse.row - content_y) as usize;
+                    if idx < self.files.len() {
+                        self.state.select(Some(idx));
+                    }
+                }
+                Ok(None)
+            }
+            MouseEventKind::ScrollUp => {
+                if self.diff_content.is_some() {
+                    self.diff_scroll = self.diff_scroll.saturating_sub(1);
+                } else {
+                    self.select_prev();
+                }
+                Ok(None)
+            }
+            MouseEventKind::ScrollDown => {
+                if self.diff_content.is_some() {
+                    self.diff_scroll = self.diff_scroll.saturating_add(1);
+                } else {
+                    self.select_next();
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        self.render_area = area;
         let border_color = if self.focused {
             Color::Cyan
         } else {

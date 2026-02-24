@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -23,6 +23,7 @@ pub(crate) struct GitGraph {
     error: Option<String>,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
+    render_area: Rect,
 }
 
 impl GitGraph {
@@ -35,6 +36,7 @@ impl GitGraph {
             error: None,
             focused: false,
             action_tx: None,
+            render_area: Rect::default(),
         }
     }
 
@@ -117,7 +119,35 @@ impl Component for GitGraph {
         }
     }
 
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let content_y = self.render_area.y + 1;
+                if mouse.column >= self.render_area.x
+                    && mouse.column < self.render_area.x + self.render_area.width
+                    && mouse.row >= content_y
+                {
+                    let idx = (mouse.row - content_y) as usize;
+                    if idx < self.rows.len() {
+                        self.state.select(Some(idx));
+                    }
+                }
+                Ok(None)
+            }
+            MouseEventKind::ScrollUp => {
+                self.select_prev();
+                Ok(None)
+            }
+            MouseEventKind::ScrollDown => {
+                self.select_next();
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        self.render_area = area;
         let title = format!(" Git Graph — {} ", self.repo_name);
         let border_color = if self.focused {
             Color::Cyan
