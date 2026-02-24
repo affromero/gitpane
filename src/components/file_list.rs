@@ -7,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
@@ -27,9 +26,6 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
-    // Double-click detection
-    last_click_time: Option<Instant>,
-    last_click_row: Option<usize>,
 }
 
 impl FileList {
@@ -46,8 +42,6 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
-            last_click_time: None,
-            last_click_row: None,
         }
     }
 
@@ -261,23 +255,14 @@ impl Component for FileList {
                 if click_area.contains(pos) {
                     let content_y = click_area.y + 1; // +1 for border
                     if mouse.row >= content_y {
-                        let idx = (mouse.row - content_y) as usize;
+                        let visual_row = (mouse.row - content_y) as usize;
+                        let idx = visual_row + self.state.offset();
                         if idx < self.files.len() {
-                            // Double-click detection
-                            let now = Instant::now();
-                            let is_double = self
-                                .last_click_time
-                                .is_some_and(|t| now.duration_since(t).as_millis() < 300)
-                                && self.last_click_row == Some(idx);
-
-                            self.state.select(Some(idx));
-                            self.last_click_time = Some(now);
-                            self.last_click_row = Some(idx);
-
-                            if is_double {
-                                self.last_click_time = None;
+                            // Click on already-selected row opens diff
+                            if self.state.selected() == Some(idx) {
                                 return Ok(self.try_show_diff());
                             }
+                            self.state.select(Some(idx));
                         }
                     }
                 }

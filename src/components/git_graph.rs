@@ -8,7 +8,6 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::path::PathBuf;
-use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
@@ -38,8 +37,6 @@ pub(crate) struct GitGraph {
     files_area: Rect,
     diff_area: Rect,
     commit_detail: Option<CommitDetail>,
-    last_click_time: Option<Instant>,
-    last_click_row: Option<usize>,
 }
 
 impl GitGraph {
@@ -58,8 +55,6 @@ impl GitGraph {
             files_area: Rect::default(),
             diff_area: Rect::default(),
             commit_detail: None,
-            last_click_time: None,
-            last_click_row: None,
         }
     }
 
@@ -408,39 +403,40 @@ impl Component for GitGraph {
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
                     if mouse.row >= content_y {
-                        let idx = (mouse.row - content_y) as usize;
+                        let visual_row = (mouse.row - content_y) as usize;
+                        let idx = visual_row + self.state.offset();
                         if idx < self.rows.len() {
-                            let now = Instant::now();
-                            let is_double = self
-                                .last_click_time
-                                .is_some_and(|t| now.duration_since(t).as_millis() < 300)
-                                && self.last_click_row == Some(idx);
-
-                            self.state.select(Some(idx));
-                            self.commit_detail = None; // Close old detail
-                            self.last_click_time = Some(now);
-                            self.last_click_row = Some(idx);
-
-                            if is_double {
-                                self.last_click_time = None;
+                            // Click on already-selected row opens commit files
+                            if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
                                 return Ok(self.try_show_commit_files());
                             }
+                            self.state.select(Some(idx));
+                            self.commit_detail = None;
                         }
                     }
                     return Ok(None);
                 }
 
                 // Click in commit files area
+                let mut open_file_diff = false;
                 if let Some(ref mut detail) = self.commit_detail
                     && self.files_area.contains(pos)
                 {
                     let content_y = self.files_area.y + 1;
                     if mouse.row >= content_y {
-                        let idx = (mouse.row - content_y) as usize;
+                        let visual_row = (mouse.row - content_y) as usize;
+                        let idx = visual_row + detail.file_state.offset();
                         if idx < detail.files.len() {
-                            detail.file_state.select(Some(idx));
+                            if detail.file_state.selected() == Some(idx) {
+                                open_file_diff = true;
+                            } else {
+                                detail.file_state.select(Some(idx));
+                            }
                         }
                     }
+                }
+                if open_file_diff {
+                    return Ok(self.try_show_commit_diff());
                 }
 
                 Ok(None)

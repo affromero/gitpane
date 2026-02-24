@@ -151,13 +151,13 @@ impl Component for RepoList {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Hit-test against rendered rows (area.y + 1 for border)
                 let content_y = self.render_area.y + 1;
                 if mouse.column >= self.render_area.x
                     && mouse.column < self.render_area.x + self.render_area.width
                     && mouse.row >= content_y
                 {
-                    let idx = (mouse.row - content_y) as usize;
+                    let visual_row = (mouse.row - content_y) as usize;
+                    let idx = visual_row + self.state.offset();
                     if idx < self.repos.len() {
                         self.state.select(Some(idx));
                         return Ok(Some(Action::SelectRepo(idx)));
@@ -171,7 +171,8 @@ impl Component for RepoList {
                     && mouse.column < self.render_area.x + self.render_area.width
                     && mouse.row >= content_y
                 {
-                    let idx = (mouse.row - content_y) as usize;
+                    let visual_row = (mouse.row - content_y) as usize;
+                    let idx = visual_row + self.state.offset();
                     if idx < self.repos.len() {
                         self.state.select(Some(idx));
                         return Ok(Some(Action::ShowContextMenu {
