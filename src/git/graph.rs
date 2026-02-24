@@ -1,8 +1,34 @@
-use git2::{Oid, Repository, Sort};
+use git2::{BranchType, Oid, Repository, Sort};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+use crate::config::BranchFilter;
 
 const MAX_COMMITS: usize = 200;
 const PALETTE_SIZE: usize = 6;
+
+#[derive(Clone, Debug)]
+pub(crate) struct BranchLabel {
+    pub name: String,
+    pub is_head: bool,
+    pub is_remote: bool,
+    pub is_worktree: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GraphOptions {
+    pub branch_filter: BranchFilter,
+    pub label_max_len: usize,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        Self {
+            branch_filter: BranchFilter::All,
+            label_max_len: 24,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -14,6 +40,8 @@ pub(crate) struct GraphRow {
     pub message: String,
     pub author: String,
     pub time: i64,
+    pub labels: Vec<BranchLabel>,
+    pub is_merge: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,10 +67,19 @@ impl GraphBuilder {
         }
     }
 
-    pub fn build(mut self, path: &Path) -> color_eyre::Result<Vec<GraphRow>> {
+    pub fn build(
+        mut self,
+        path: &Path,
+        options: &GraphOptions,
+    ) -> color_eyre::Result<Vec<GraphRow>> {
         let repo = Repository::open(path)?;
+        let mut ref_map = resolve_refs(&repo, &options.branch_filter);
+
         let mut revwalk = repo.revwalk()?;
-        revwalk.push_head()?;
+        revwalk.push_head().ok(); // ok: handles unborn HEAD
+        for &oid in ref_map.keys() {
+            revwalk.push(oid).ok(); // git2 deduplicates
+        }
         revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
 
         let mut rows = Vec::new();
@@ -52,6 +89,8 @@ impl GraphBuilder {
             let commit = repo.find_commit(oid)?;
 
             let parent_oids: Vec<Oid> = commit.parent_ids().collect();
+            let is_merge = commit.parent_count() > 1;
+            let labels = ref_map.remove(&oid).unwrap_or_default();
             let row = self.process_commit(oid, &parent_oids);
 
             let short_id = oid.to_string()[..7].to_string();
@@ -67,6 +106,8 @@ impl GraphBuilder {
                 message,
                 author,
                 time,
+                labels,
+                is_merge,
             });
         }
 
@@ -174,6 +215,100 @@ impl GraphBuilder {
     }
 }
 
+fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<BranchLabel>> {
+    if *filter == BranchFilter::None {
+        return HashMap::new();
+    }
+
+    let head_oid = repo.head().ok().and_then(|r| r.target());
+    let head_name = repo
+        .head()
+        .ok()
+        .and_then(|r| r.shorthand().map(String::from));
+    let wt_branches = collect_worktree_branches(repo);
+
+    let mut map: HashMap<Oid, Vec<BranchLabel>> = HashMap::new();
+
+    let branch_types: Vec<BranchType> = match filter {
+        BranchFilter::All => vec![BranchType::Local, BranchType::Remote],
+        BranchFilter::Local => vec![BranchType::Local],
+        BranchFilter::Remote => vec![BranchType::Remote],
+        BranchFilter::None => unreachable!(),
+    };
+
+    for bt in branch_types {
+        let branches = match repo.branches(Some(bt)) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        for branch_result in branches {
+            let (branch, _) = match branch_result {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let target = match branch.get().target() {
+                Some(oid) => oid,
+                None => continue,
+            };
+            let name = match branch.name() {
+                Ok(Some(n)) => n.to_string(),
+                _ => continue,
+            };
+            let is_remote = bt == BranchType::Remote;
+            let is_head =
+                !is_remote && head_oid == Some(target) && head_name.as_deref() == Some(&name);
+            let is_worktree = !is_remote && wt_branches.contains(&name);
+
+            map.entry(target).or_default().push(BranchLabel {
+                name,
+                is_head,
+                is_remote,
+                is_worktree,
+            });
+        }
+    }
+
+    // Sort: HEAD first, then local, then remote, then alphabetical
+    for labels in map.values_mut() {
+        labels.sort_by(|a, b| {
+            b.is_head
+                .cmp(&a.is_head)
+                .then(a.is_remote.cmp(&b.is_remote))
+                .then(a.name.cmp(&b.name))
+        });
+    }
+
+    map
+}
+
+fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
+    let mut branches = HashSet::new();
+    let wt_names = match repo.worktrees() {
+        Ok(names) => names,
+        Err(_) => return branches,
+    };
+    for i in 0..wt_names.len() {
+        let name = match wt_names.get(i) {
+            Some(n) => n,
+            None => continue,
+        };
+        let wt = match repo.find_worktree(name) {
+            Ok(wt) => wt,
+            Err(_) => continue,
+        };
+        let wt_repo = match Repository::open(wt.path()) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if let Ok(head) = wt_repo.head()
+            && let Some(shorthand) = head.shorthand()
+        {
+            branches.insert(shorthand.to_string());
+        }
+    }
+    branches
+}
+
 /// Assign a color index (0..PALETTE_SIZE) for a given lane column.
 /// Adjacent lanes get different colors.
 pub(crate) fn lane_color(col: usize) -> usize {
@@ -204,7 +339,7 @@ mod tests {
         let _oid2 = create_commit(&repo, "second", &[&c1]);
 
         let builder = GraphBuilder::new();
-        let rows = builder.build(tmp.path()).unwrap();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
 
         assert_eq!(rows.len(), 2);
         // All commits should be in column 0
@@ -243,7 +378,7 @@ mod tests {
         repo.set_head_detached(merge_oid).unwrap();
 
         let builder = GraphBuilder::new();
-        let rows = builder.build(tmp.path()).unwrap();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
 
         assert!(rows.len() >= 3);
         let merge_row = &rows[0];
@@ -258,7 +393,7 @@ mod tests {
         let _oid1 = create_commit(&repo, "only", &[]);
 
         let builder = GraphBuilder::new();
-        let rows = builder.build(tmp.path()).unwrap();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].commit_col, 0);
@@ -293,7 +428,7 @@ mod tests {
         repo.set_head_detached(merge_oid).unwrap();
 
         let builder = GraphBuilder::new();
-        let rows = builder.build(tmp.path()).unwrap();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
 
         // After merge, we should see a fork to a second column
         let merge_row = &rows[0];
@@ -302,5 +437,98 @@ mod tests {
             "Expected >= 2 lanes at merge, got {}",
             merge_row.lanes.len()
         );
+    }
+
+    #[test]
+    fn test_graph_rows_carry_labels() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let oid1 = create_commit(&repo, "first", &[]);
+        let c1 = repo.find_commit(oid1).unwrap();
+        let _oid2 = create_commit(&repo, "second", &[&c1]);
+
+        // HEAD is on the default branch — tip commit should have a label
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        let tip = &rows[0];
+        assert!(
+            !tip.labels.is_empty(),
+            "tip commit should have at least one branch label"
+        );
+    }
+
+    #[test]
+    fn test_head_marked() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let _oid1 = create_commit(&repo, "init", &[]);
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        let head_labels: Vec<_> = rows[0].labels.iter().filter(|l| l.is_head).collect();
+        assert_eq!(head_labels.len(), 1, "exactly one label should be HEAD");
+    }
+
+    #[test]
+    fn test_merge_is_merge_true() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let oid1 = create_commit(&repo, "root", &[]);
+        let c1 = repo.find_commit(oid1).unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+
+        let oid2 = repo
+            .commit(None, &sig, &sig, "branch-a", &tree, &[&c1])
+            .unwrap();
+        let c2 = repo.find_commit(oid2).unwrap();
+
+        let oid3 = repo
+            .commit(None, &sig, &sig, "branch-b", &tree, &[&c1])
+            .unwrap();
+        let c3 = repo.find_commit(oid3).unwrap();
+
+        let merge_oid = repo
+            .commit(None, &sig, &sig, "merge", &tree, &[&c2, &c3])
+            .unwrap();
+        repo.set_head_detached(merge_oid).unwrap();
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        assert!(rows[0].is_merge, "first row should be a merge commit");
+        assert!(
+            !rows[1].is_merge,
+            "non-merge commit should have is_merge=false"
+        );
+    }
+
+    #[test]
+    fn test_filter_none_yields_no_labels() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let _oid1 = create_commit(&repo, "init", &[]);
+
+        let options = GraphOptions {
+            branch_filter: BranchFilter::None,
+            label_max_len: 24,
+        };
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &options).unwrap();
+
+        for row in &rows {
+            assert!(
+                row.labels.is_empty(),
+                "filter=None should produce no labels"
+            );
+        }
     }
 }

@@ -15,6 +15,7 @@ use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
 use crate::config::Config;
 use crate::event::Event;
+use crate::git::graph::GraphOptions;
 use crate::git::scanner;
 use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
@@ -81,12 +82,18 @@ impl App {
         let repo_paths = scanner::discover_repos(&config);
         let (action_tx, action_rx) = mpsc::unbounded_channel();
 
+        let mut git_graph = GitGraph::new();
+        git_graph.graph_options = GraphOptions {
+            branch_filter: config.graph.branches,
+            label_max_len: config.graph.label_max_len,
+        };
+
         Self {
             config,
             should_quit: false,
             repo_list: RepoList::new(repo_paths),
             file_list: FileList::new(),
-            git_graph: GitGraph::new(),
+            git_graph,
             context_menu: ContextMenu::new(),
             path_input: PathInput::new(),
             status_bar: StatusBar::new(),
