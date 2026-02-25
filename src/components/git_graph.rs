@@ -23,6 +23,31 @@ struct CommitDetail {
     diff_scroll: u16,
 }
 
+struct SearchState {
+    visible: bool,
+    input: String,
+    matches: Vec<usize>,
+    current_match: Option<usize>,
+}
+
+impl SearchState {
+    fn new() -> Self {
+        Self {
+            visible: false,
+            input: String::new(),
+            matches: Vec::new(),
+            current_match: None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.visible = false;
+        self.input.clear();
+        self.matches.clear();
+        self.current_match = None;
+    }
+}
+
 pub(crate) struct GitGraph {
     rows: Vec<GraphRow>,
     state: ListState,
@@ -38,6 +63,7 @@ pub(crate) struct GitGraph {
     diff_area: Rect,
     commit_detail: Option<CommitDetail>,
     pub(crate) graph_options: GraphOptions,
+    search: SearchState,
 }
 
 impl GitGraph {
@@ -57,6 +83,7 @@ impl GitGraph {
             diff_area: Rect::default(),
             commit_detail: None,
             graph_options: GraphOptions::default(),
+            search: SearchState::new(),
         }
     }
 
@@ -74,6 +101,7 @@ impl GitGraph {
             self.rows.clear();
             self.state.select(None);
             self.commit_detail = None;
+            self.search.clear();
         }
 
         let Some(tx) = &self.action_tx else { return };
@@ -148,6 +176,80 @@ impl GitGraph {
         let idx = self.state.selected()?;
         let row = self.rows.get(idx)?;
         Some(format!("{} {}", row.short_id, row.message))
+    }
+
+    pub fn search_visible(&self) -> bool {
+        self.search.visible
+    }
+
+    pub fn handle_search_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        match key.code {
+            KeyCode::Esc => {
+                self.search.visible = false;
+            }
+            KeyCode::Enter => {
+                self.search.visible = false;
+                // Jump to first match if any
+                if let Some(&idx) = self.search.matches.first() {
+                    self.search.current_match = Some(0);
+                    self.state.select(Some(idx));
+                }
+            }
+            KeyCode::Backspace => {
+                self.search.input.pop();
+                self.update_search_matches();
+            }
+            KeyCode::Char(c) => {
+                self.search.input.push(c);
+                self.update_search_matches();
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    fn update_search_matches(&mut self) {
+        self.search.matches.clear();
+        self.search.current_match = None;
+        if self.search.input.is_empty() {
+            return;
+        }
+        let query = self.search.input.to_lowercase();
+        for (i, row) in self.rows.iter().enumerate() {
+            if row.message.to_lowercase().contains(&query)
+                || row.author.to_lowercase().contains(&query)
+                || row.short_id.to_lowercase().contains(&query)
+            {
+                self.search.matches.push(i);
+            }
+        }
+        if !self.search.matches.is_empty() {
+            self.search.current_match = Some(0);
+        }
+    }
+
+    fn search_next(&mut self) {
+        if self.search.matches.is_empty() {
+            return;
+        }
+        let next = match self.search.current_match {
+            Some(i) => (i + 1) % self.search.matches.len(),
+            None => 0,
+        };
+        self.search.current_match = Some(next);
+        self.state.select(Some(self.search.matches[next]));
+    }
+
+    fn search_prev(&mut self) {
+        if self.search.matches.is_empty() {
+            return;
+        }
+        let prev = match self.search.current_match {
+            Some(0) | None => self.search.matches.len() - 1,
+            Some(i) => i - 1,
+        };
+        self.search.current_match = Some(prev);
+        self.state.select(Some(self.search.matches[prev]));
     }
 
     fn select_next(&mut self) {
@@ -236,25 +338,41 @@ impl GitGraph {
         }
 
         let label_max_len = self.graph_options.label_max_len;
+        let has_search = !self.search.input.is_empty() && !self.search.matches.is_empty();
         let items: Vec<ListItem> = self
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(i, row)| {
+                let dimmed = has_search && !self.search.matches.contains(&i);
                 let mut spans = graph_render::render_graph_prefix(row);
 
-                spans.push(Span::styled(
-                    format!("{} ", row.short_id),
+                if dimmed {
+                    // Override all spans to DarkGray
+                    for span in &mut spans {
+                        span.style = Style::default().fg(Color::DarkGray);
+                    }
+                }
+
+                let id_style = if dimmed {
+                    Style::default().fg(Color::DarkGray)
+                } else {
                     Style::default()
                         .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                        .add_modifier(Modifier::BOLD)
+                };
+                spans.push(Span::styled(format!("{} ", row.short_id), id_style));
 
-                spans.extend(graph_render::render_branch_labels(
-                    &row.labels,
-                    label_max_len,
-                ));
+                if !dimmed {
+                    spans.extend(graph_render::render_branch_labels(
+                        &row.labels,
+                        label_max_len,
+                    ));
+                }
 
-                let msg_color = if row.is_merge {
+                let msg_color = if dimmed {
+                    Color::DarkGray
+                } else if row.is_merge {
                     Color::Rgb(130, 130, 130)
                 } else {
                     Color::White
@@ -264,9 +382,14 @@ impl GitGraph {
                     Style::default().fg(msg_color),
                 ));
 
+                let author_color = if dimmed {
+                    Color::DarkGray
+                } else {
+                    graph_render::author_color(&row.author)
+                };
                 spans.push(Span::styled(
                     format!("  — {}", row.author),
-                    Style::default().fg(graph_render::author_color(&row.author)),
+                    Style::default().fg(author_color),
                 ));
                 spans.push(Span::styled(
                     format!(" {}", graph_render::format_relative_time(row.time)),
@@ -433,6 +556,21 @@ impl Component for GitGraph {
 
         // No detail open — normal graph navigation
         match key.code {
+            KeyCode::Char('n') => {
+                self.search_next();
+                Ok(None)
+            }
+            KeyCode::Char('N') => {
+                self.search_prev();
+                Ok(None)
+            }
+            KeyCode::Char('/') => {
+                self.search.visible = true;
+                self.search.input.clear();
+                self.search.matches.clear();
+                self.search.current_match = None;
+                Ok(None)
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
                 Ok(None)
@@ -592,6 +730,28 @@ impl Component for GitGraph {
 
                 self.draw_graph_list(frame, area);
             }
+        }
+
+        // Search overlay at bottom of graph area
+        if self.search.visible {
+            let match_info = if self.search.input.is_empty() {
+                String::new()
+            } else {
+                let current = self.search.current_match.map(|i| i + 1).unwrap_or(0);
+                format!(" {}/{}", current, self.search.matches.len())
+            };
+            let overlay_text = format!(" / {}{} ", self.search.input, match_info);
+            let overlay_area = Rect::new(
+                self.graph_list_area.x,
+                self.graph_list_area.y + self.graph_list_area.height.saturating_sub(1),
+                self.graph_list_area
+                    .width
+                    .min(overlay_text.len() as u16 + 2),
+                1,
+            );
+            let overlay = Paragraph::new(overlay_text)
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            frame.render_widget(overlay, overlay_area);
         }
 
         Ok(())

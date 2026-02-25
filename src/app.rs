@@ -701,6 +701,12 @@ impl App {
             return Ok(());
         }
 
+        // Search input gets priority when active
+        if self.focus == FocusPanel::Graph && self.git_graph.search_visible() {
+            self.git_graph.handle_search_key(key)?;
+            return Ok(());
+        }
+
         // Context menu gets priority
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_key_event(key)? {
