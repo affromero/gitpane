@@ -881,10 +881,6 @@ impl GitGraph {
                 Span::styled("  f", Style::default().fg(Color::Yellow)),
                 Span::raw("          Toggle first-parent mode"),
             ]),
-            Line::from(vec![
-                Span::styled("  + / -", Style::default().fg(Color::Yellow)),
-                Span::raw("      Widen / narrow graph panel"),
-            ]),
             Line::from(""),
             Line::from(Span::styled(
                 " Other",

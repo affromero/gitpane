@@ -787,18 +787,6 @@ impl App {
             KeyCode::Char('?') => {
                 self.git_graph.toggle_help();
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                // Grow graph panel: shift border_frac[1] left
-                let min_f = 0.10;
-                self.border_frac[1] =
-                    (self.border_frac[1] - 0.05).clamp(self.border_frac[0] + min_f, 1.0 - min_f);
-            }
-            KeyCode::Char('-') => {
-                // Shrink graph panel: shift border_frac[1] right
-                let min_f = 0.10;
-                self.border_frac[1] =
-                    (self.border_frac[1] + 0.05).clamp(self.border_frac[0] + min_f, 1.0 - min_f);
-            }
             KeyCode::Char('y') => {
                 // Copy selected item to clipboard (OSC 52)
                 let text = match self.focus {
