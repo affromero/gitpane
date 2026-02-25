@@ -784,6 +784,9 @@ impl App {
             KeyCode::Char('s') => {
                 self.action_tx.send(Action::CycleSortOrder)?;
             }
+            KeyCode::Char('?') => {
+                self.git_graph.toggle_help();
+            }
             KeyCode::Char('y') => {
                 // Copy selected item to clipboard (OSC 52)
                 let text = match self.focus {

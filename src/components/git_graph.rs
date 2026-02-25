@@ -65,6 +65,7 @@ pub(crate) struct GitGraph {
     pub(crate) graph_options: GraphOptions,
     search: SearchState,
     graph_width_pct: u16,
+    show_help: bool,
 }
 
 impl GitGraph {
@@ -86,6 +87,7 @@ impl GitGraph {
             graph_options: GraphOptions::default(),
             search: SearchState::new(),
             graph_width_pct: 50,
+            show_help: false,
         }
     }
 
@@ -193,6 +195,10 @@ impl GitGraph {
 
     pub fn has_detail(&self) -> bool {
         self.commit_detail.is_some()
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -549,6 +555,28 @@ impl Component for GitGraph {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // Global keys that work in any state
+        match key.code {
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.graph_width_pct = (self.graph_width_pct + 5).min(80);
+                return Ok(None);
+            }
+            KeyCode::Char('-') => {
+                self.graph_width_pct = self.graph_width_pct.saturating_sub(5).max(20);
+                return Ok(None);
+            }
+            KeyCode::Char('?') => {
+                self.show_help = !self.show_help;
+                return Ok(None);
+            }
+            _ => {
+                if self.show_help {
+                    self.show_help = false;
+                    return Ok(None);
+                }
+            }
+        }
+
         // When detail is open, Esc/keys are layered
         if let Some(ref mut detail) = self.commit_detail {
             if detail.diff_content.is_some() {
@@ -636,14 +664,6 @@ impl Component for GitGraph {
                     let name = self.repo_name.clone();
                     self.load_repo(path, &name);
                 }
-                Ok(None)
-            }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                self.graph_width_pct = (self.graph_width_pct + 5).min(80);
-                Ok(None)
-            }
-            KeyCode::Char('-') => {
-                self.graph_width_pct = self.graph_width_pct.saturating_sub(5).max(20);
                 Ok(None)
             }
             _ => Ok(None),
@@ -817,7 +837,104 @@ impl Component for GitGraph {
             frame.render_widget(overlay, overlay_area);
         }
 
+        // Help overlay
+        if self.show_help {
+            self.draw_help(frame, area);
+        }
+
         Ok(())
+    }
+}
+
+impl GitGraph {
+    fn draw_help(&self, frame: &mut Frame, area: Rect) {
+        let help_lines = vec![
+            Line::from(vec![
+                Span::styled("  ?", Style::default().fg(Color::Yellow)),
+                Span::raw("          Toggle this help"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Navigation",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("  j/k", Style::default().fg(Color::Yellow)),
+                Span::raw("        Move up/down"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Enter", Style::default().fg(Color::Yellow)),
+                Span::raw("      Open commit files"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Esc", Style::default().fg(Color::Yellow)),
+                Span::raw("        Close panel / go back"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Tab", Style::default().fg(Color::Yellow)),
+                Span::raw("        Cycle focus"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Search",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("  /", Style::default().fg(Color::Yellow)),
+                Span::raw("          Search commits"),
+            ]),
+            Line::from(vec![
+                Span::styled("  n / N", Style::default().fg(Color::Yellow)),
+                Span::raw("      Next / prev match"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " View",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("  f", Style::default().fg(Color::Yellow)),
+                Span::raw("          Toggle first-parent mode"),
+            ]),
+            Line::from(vec![
+                Span::styled("  + / -", Style::default().fg(Color::Yellow)),
+                Span::raw("      Widen / narrow graph panel"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Other",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("  y", Style::default().fg(Color::Yellow)),
+                Span::raw("          Copy to clipboard"),
+            ]),
+            Line::from(vec![
+                Span::styled("  r", Style::default().fg(Color::Yellow)),
+                Span::raw("          Refresh"),
+            ]),
+            Line::from(vec![
+                Span::styled("  q", Style::default().fg(Color::Yellow)),
+                Span::raw("          Quit"),
+            ]),
+        ];
+
+        let height = (help_lines.len() as u16 + 2).min(area.height);
+        let width = 40u16.min(area.width);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let help_area = Rect::new(x, y, width, height);
+
+        let block = Block::default()
+            .title(" Keybindings ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+
+        // Clear the area behind the overlay
+        frame.render_widget(ratatui::widgets::Clear, help_area);
+        let paragraph = Paragraph::new(help_lines).block(block);
+        frame.render_widget(paragraph, help_area);
     }
 }
 
