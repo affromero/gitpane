@@ -229,16 +229,49 @@ impl GitGraph {
             return;
         }
 
-        // Otherwise collapse the first non-HEAD branch label on this row
-        let label = row
-            .labels
-            .iter()
-            .find(|l| !l.is_head)
-            .or_else(|| row.labels.first());
-        if let Some(label) = label {
-            self.collapsed_branches.insert(label.name.clone());
+        // Find the branch this row belongs to:
+        // 1) Use a label on this row (prefer non-HEAD)
+        // 2) Walk upward in all_rows through the same commit_col to find a label
+        let branch_name = self.find_branch_for_row(row);
+        if let Some(name) = branch_name {
+            self.collapsed_branches.insert(name);
             self.recompute_collapsed_rows();
         }
+    }
+
+    /// Find the branch name for a given row by checking its labels or walking
+    /// upward through the same lane to find the nearest branch label.
+    fn find_branch_for_row(&self, row: &GraphRow) -> Option<String> {
+        // Check this row's own labels first
+        let own_label = row
+            .labels
+            .iter()
+            .find(|l| !l.is_head && !l.is_tag)
+            .or_else(|| row.labels.iter().find(|l| !l.is_tag));
+        if let Some(label) = own_label {
+            return Some(label.name.clone());
+        }
+
+        // Walk upward in all_rows to find the branch tip for this lane
+        let target_col = row.commit_col;
+        let target_oid = row.oid;
+        let row_idx = self.all_rows.iter().position(|r| r.oid == target_oid)?;
+
+        for i in (0..row_idx).rev() {
+            let r = &self.all_rows[i];
+            if r.commit_col != target_col {
+                continue;
+            }
+            let label = r
+                .labels
+                .iter()
+                .find(|l| !l.is_head && !l.is_tag)
+                .or_else(|| r.labels.iter().find(|l| !l.is_tag));
+            if let Some(label) = label {
+                return Some(label.name.clone());
+            }
+        }
+        None
     }
 
     /// Expand all collapsed branches.
@@ -264,16 +297,14 @@ impl GitGraph {
             return;
         }
 
-        // Find which row indices to collapse for each branch.
-        // A branch's collapsible rows: rows after the tip (label row) that share the
-        // same commit_col and have no labels from non-collapsed branches.
+        // For each collapsed branch, find the tip and all rows belonging to it.
+        // The tip row itself is included in the collapse.
         let mut collapsed_indices: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
-        // Track where to insert summary rows: (tip_row_idx, branch_name, count)
+        // (tip_row_idx, branch_name, count) — placeholder replaces the tip
         let mut summaries: Vec<(usize, String, usize)> = Vec::new();
 
         for branch in &self.collapsed_branches {
-            // Find the tip row (the one with this branch's label)
             let tip_idx = self
                 .all_rows
                 .iter()
@@ -283,14 +314,16 @@ impl GitGraph {
             };
             let tip_col = self.all_rows[tip_idx].commit_col;
 
+            // Include the tip row itself
+            collapsed_indices.insert(tip_idx);
+            let mut count = 1;
+
             // Walk rows after the tip in the same lane
-            let mut count = 0;
             for i in (tip_idx + 1)..self.all_rows.len() {
                 let row = &self.all_rows[i];
                 if row.commit_col != tip_col {
                     break;
                 }
-                // Stop if this row has labels from non-collapsed branches
                 let has_visible_label = row
                     .labels
                     .iter()
@@ -298,38 +331,30 @@ impl GitGraph {
                 if has_visible_label || row.is_merge {
                     break;
                 }
-                if !collapsed_indices.contains(&i) {
-                    collapsed_indices.insert(i);
-                    count += 1;
-                }
+                collapsed_indices.insert(i);
+                count += 1;
             }
 
-            if count > 0 {
-                summaries.push((tip_idx, branch.clone(), count));
-            }
+            summaries.push((tip_idx, branch.clone(), count));
         }
 
         // Build display rows
         let mut rows = Vec::new();
-        let mut inserted_summaries: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
 
         for (i, row) in self.all_rows.iter().enumerate() {
             if collapsed_indices.contains(&i) {
-                // Check if we need to insert a summary before skipping
-                for &(tip_idx, ref branch, count) in &summaries {
-                    if tip_idx + 1 == i && !inserted_summaries.contains(&tip_idx) {
-                        inserted_summaries.insert(tip_idx);
-                        // Create a placeholder row
-                        let mut placeholder = row.clone();
-                        placeholder.message = format!("\u{25b6} {} ({count} commits)", branch,);
-                        placeholder.short_id = String::new();
-                        placeholder.author = String::new();
-                        placeholder.labels = Vec::new();
-                        placeholder.diff_stat = None;
-                        placeholder.collapsed = Some((branch.clone(), count));
-                        rows.push(placeholder);
-                    }
+                // Insert placeholder at the tip position
+                if let Some(&(_, ref branch, count)) =
+                    summaries.iter().find(|&&(tip, _, _)| tip == i)
+                {
+                    let mut placeholder = row.clone();
+                    placeholder.message = format!("\u{25b6} {} ({count} commits)", branch);
+                    placeholder.short_id = String::new();
+                    placeholder.author = String::new();
+                    placeholder.labels = Vec::new();
+                    placeholder.diff_stat = None;
+                    placeholder.collapsed = Some((branch.clone(), count));
+                    rows.push(placeholder);
                 }
                 continue;
             }
@@ -1269,7 +1294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collapse_branch_creates_placeholder() {
+    fn test_collapse_replaces_tip_with_placeholder() {
         let mut graph = GitGraph::new();
         let mut tip = mock_row_with_labels(vec![make_label("feature")]);
         tip.commit_col = 1;
@@ -1283,14 +1308,13 @@ mod tests {
         graph.state.select(Some(0));
         graph.toggle_collapse_selected();
 
-        assert_eq!(graph.collapsed_branches.len(), 1);
         assert!(graph.collapsed_branches.contains("feature"));
-        // rows: tip (kept), placeholder (1 commit), merge base (kept)
-        assert_eq!(graph.rows.len(), 3);
-        assert!(graph.rows[1].collapsed.is_some());
-        let (name, count) = graph.rows[1].collapsed.as_ref().unwrap();
+        // rows: placeholder (replaces tip + mid = 2 commits), merge base (kept)
+        assert_eq!(graph.rows.len(), 2);
+        assert!(graph.rows[0].collapsed.is_some());
+        let (name, count) = graph.rows[0].collapsed.as_ref().unwrap();
         assert_eq!(name, "feature");
-        assert_eq!(*count, 1);
+        assert_eq!(*count, 2);
     }
 
     #[test]
@@ -1308,13 +1332,38 @@ mod tests {
         graph.state.select(Some(0));
         graph.toggle_collapse_selected();
 
-        // Now select the placeholder and toggle again to expand
-        graph.state.select(Some(1));
+        // Select the placeholder (now at index 0) and toggle to expand
+        graph.state.select(Some(0));
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.is_empty());
         assert_eq!(graph.rows.len(), 3);
-        assert!(graph.rows[1].collapsed.is_none());
+        assert!(graph.rows[0].collapsed.is_none());
+    }
+
+    #[test]
+    fn test_collapse_from_middle_of_branch() {
+        let mut graph = GitGraph::new();
+        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
+        tip.commit_col = 1;
+        tip.oid = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let mut mid = mock_row("b", "wip", "Bob");
+        mid.commit_col = 1;
+        mid.oid = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let mut base = mock_row("c", "base", "Charlie");
+        base.commit_col = 1;
+        base.oid = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+        base.is_merge = true;
+
+        graph.set_rows(vec![tip, mid, base]);
+        // Select the middle row (no label) — should walk up to find "feature"
+        graph.state.select(Some(1));
+        graph.toggle_collapse_selected();
+
+        assert!(graph.collapsed_branches.contains("feature"));
+        // Tip + mid collapsed into placeholder, merge base kept
+        assert_eq!(graph.rows.len(), 2);
+        assert!(graph.rows[0].collapsed.is_some());
     }
 
     #[test]
