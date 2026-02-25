@@ -48,13 +48,13 @@ impl FileList {
     pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_index: usize) {
         let is_same_repo = self.repo_index == Some(repo_index);
         let prev_selected = self.state.selected();
+        let files_changed = !is_same_repo || self.files != files;
 
         self.files = files;
         self.repo_name = repo_name.to_string();
         self.repo_index = Some(repo_index);
 
-        // Only reset diff/scroll on repo switch, not on refresh
-        if !is_same_repo {
+        if files_changed {
             self.diff_content = None;
             self.diff_scroll = 0;
         }

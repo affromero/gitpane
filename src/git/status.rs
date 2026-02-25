@@ -12,7 +12,7 @@ pub(crate) struct RepoStatus {
     pub worktrees: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FileEntry {
     pub path: PathBuf,
     pub status: FileStatus,
