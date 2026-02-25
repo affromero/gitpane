@@ -55,6 +55,12 @@ pub(crate) struct GraphConfig {
     pub branches: BranchFilter,
     #[serde(default = "default_label_max_len")]
     pub label_max_len: usize,
+    #[serde(default = "default_show_stats")]
+    pub show_stats: bool,
+}
+
+fn default_show_stats() -> bool {
+    true
 }
 
 fn default_label_max_len() -> usize {
@@ -66,6 +72,7 @@ impl Default for GraphConfig {
         Self {
             branches: BranchFilter::default(),
             label_max_len: default_label_max_len(),
+            show_stats: default_show_stats(),
         }
     }
 }

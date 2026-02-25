@@ -65,6 +65,40 @@ pub(crate) fn commit_file_diff(
     Ok(output)
 }
 
+use crate::git::graph::DiffStat;
+
+/// Compute diff stats (additions/deletions) for a batch of commits.
+pub(crate) fn batch_diff_stats(
+    path: &Path,
+    oids: &[Oid],
+) -> color_eyre::Result<Vec<(Oid, DiffStat)>> {
+    let repo = Repository::open(path)?;
+    let mut results = Vec::with_capacity(oids.len());
+    for &oid in oids {
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let Ok(tree) = commit.tree() else {
+            continue;
+        };
+        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+        let Ok(diff) = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) else {
+            continue;
+        };
+        let Ok(stats) = diff.stats() else {
+            continue;
+        };
+        results.push((
+            oid,
+            DiffStat {
+                additions: stats.insertions(),
+                deletions: stats.deletions(),
+            },
+        ));
+    }
+    Ok(results)
+}
+
 fn diff_to_string(diff: &Diff<'_>, output: &mut String) -> color_eyre::Result<()> {
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
         let prefix = match line.origin() {

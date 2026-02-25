@@ -21,6 +21,7 @@ pub(crate) struct GraphOptions {
     pub branch_filter: BranchFilter,
     pub label_max_len: usize,
     pub first_parent: bool,
+    pub show_stats: bool,
 }
 
 impl Default for GraphOptions {
@@ -29,8 +30,15 @@ impl Default for GraphOptions {
             branch_filter: BranchFilter::All,
             label_max_len: 24,
             first_parent: false,
+            show_stats: true,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DiffStat {
+    pub additions: usize,
+    pub deletions: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +54,7 @@ pub(crate) struct GraphRow {
     pub labels: Vec<BranchLabel>,
     pub is_merge: bool,
     pub horizontal_spans: Vec<(usize, usize, usize)>,
+    pub diff_stat: Option<DiffStat>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +129,7 @@ impl GraphBuilder {
                 labels,
                 is_merge,
                 horizontal_spans,
+                diff_stat: None,
             });
         }
 

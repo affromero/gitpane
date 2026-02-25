@@ -112,7 +112,14 @@ impl GitGraph {
             let builder = GraphBuilder::new();
             match builder.build(&path, &options) {
                 Ok(rows) => {
+                    let oids: Vec<git2::Oid> = rows.iter().map(|r| r.oid).collect();
                     let _ = tx.send(Action::GraphLoaded(rows));
+                    // Compute stats after graph is sent — graph appears instantly
+                    if options.show_stats
+                        && let Ok(stats) = crate::git::commit_files::batch_diff_stats(&path, &oids)
+                    {
+                        let _ = tx.send(Action::DiffStatsLoaded(stats));
+                    }
                 }
                 Err(e) => {
                     let _ = tx.send(Action::GraphError(format!("Failed to load graph: {}", e)));
@@ -136,6 +143,15 @@ impl GitGraph {
                 .map(|i| i.min(self.rows.len() - 1))
                 .unwrap_or(0);
             self.state.select(Some(idx));
+        }
+    }
+
+    pub fn set_diff_stats(&mut self, stats: Vec<(git2::Oid, crate::git::graph::DiffStat)>) {
+        let stat_map: std::collections::HashMap<_, _> = stats.into_iter().collect();
+        for row in &mut self.rows {
+            if let Some(stat) = stat_map.get(&row.oid) {
+                row.diff_stat = Some(stat.clone());
+            }
         }
     }
 
@@ -395,6 +411,23 @@ impl GitGraph {
                     format!(" {}", graph_render::format_relative_time(row.time)),
                     Style::default().fg(Color::DarkGray),
                 ));
+
+                if let Some(ref stat) = row.diff_stat
+                    && !dimmed
+                {
+                    if stat.additions > 0 {
+                        spans.push(Span::styled(
+                            format!(" +{}", stat.additions),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                    if stat.deletions > 0 {
+                        spans.push(Span::styled(
+                            format!(" -{}", stat.deletions),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+                }
 
                 ListItem::new(Line::from(spans))
             })

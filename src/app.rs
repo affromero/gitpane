@@ -87,6 +87,7 @@ impl App {
             branch_filter: config.graph.branches,
             label_max_len: config.graph.label_max_len,
             first_parent: false,
+            show_stats: config.graph.show_stats,
         };
 
         Self {
@@ -396,6 +397,9 @@ impl App {
                     }
                     Action::GraphLoaded(rows) => {
                         self.git_graph.set_rows(rows);
+                    }
+                    Action::DiffStatsLoaded(stats) => {
+                        self.git_graph.set_diff_stats(stats);
                     }
                     Action::GraphError(ref msg) => {
                         self.git_graph.set_error(msg.clone());

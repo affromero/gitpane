@@ -1,4 +1,4 @@
-use crate::git::graph::GraphRow;
+use crate::git::graph::{DiffStat, GraphRow};
 use crate::git::status::RepoStatus;
 
 #[derive(Clone, Debug)]
@@ -24,6 +24,7 @@ pub(crate) enum Action {
     ShowGitGraph,
     ShowFileList,
     GraphLoaded(Vec<GraphRow>),
+    DiffStatsLoaded(Vec<(git2::Oid, DiffStat)>),
     ShowContextMenu {
         index: usize,
         row: u16,
