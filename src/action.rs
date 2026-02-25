@@ -62,4 +62,5 @@ pub(crate) enum Action {
     CycleSortOrder,
     RescanRepos,
     Error(String),
+    UpdateAvailable(String),
 }

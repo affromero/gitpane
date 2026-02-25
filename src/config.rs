@@ -33,10 +33,22 @@ pub(crate) struct WatchConfig {
     pub poll_fetch_secs: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum UpdatePosition {
+    #[default]
+    TopRight,
+    TopLeft,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct UiConfig {
     #[serde(default = "default_frame_rate")]
     pub frame_rate: u16,
+    #[serde(default = "default_check_for_updates")]
+    pub check_for_updates: bool,
+    #[serde(default)]
+    pub update_position: UpdatePosition,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +115,10 @@ fn default_frame_rate() -> u16 {
     10
 }
 
+fn default_check_for_updates() -> bool {
+    true
+}
+
 impl Default for WatchConfig {
     fn default() -> Self {
         Self {
@@ -117,6 +133,8 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             frame_rate: default_frame_rate(),
+            check_for_updates: default_check_for_updates(),
+            update_position: UpdatePosition::default(),
         }
     }
 }
@@ -276,5 +294,35 @@ mod tests {
         let serialized = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&serialized).unwrap();
         assert!(!loaded.graph.show_stats);
+    }
+
+    #[test]
+    fn test_check_for_updates_defaults_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.ui.check_for_updates);
+        assert_eq!(config.ui.update_position, UpdatePosition::TopRight);
+    }
+
+    #[test]
+    fn test_update_position_parse() {
+        let toml_str = r#"
+            [ui]
+            check_for_updates = false
+            update_position = "top-left"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.ui.check_for_updates);
+        assert_eq!(config.ui.update_position, UpdatePosition::TopLeft);
+    }
+
+    #[test]
+    fn test_update_config_roundtrip() {
+        let mut config = Config::default();
+        config.ui.check_for_updates = false;
+        config.ui.update_position = UpdatePosition::TopLeft;
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert!(!loaded.ui.check_for_updates);
+        assert_eq!(loaded.ui.update_position, UpdatePosition::TopLeft);
     }
 }

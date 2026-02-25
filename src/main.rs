@@ -5,6 +5,7 @@ mod config;
 mod event;
 mod git;
 mod tui;
+mod update_checker;
 mod watcher;
 
 use clap::Parser;
