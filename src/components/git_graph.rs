@@ -64,6 +64,7 @@ pub(crate) struct GitGraph {
     commit_detail: Option<CommitDetail>,
     pub(crate) graph_options: GraphOptions,
     search: SearchState,
+    graph_width_pct: u16,
 }
 
 impl GitGraph {
@@ -84,6 +85,7 @@ impl GitGraph {
             commit_detail: None,
             graph_options: GraphOptions::default(),
             search: SearchState::new(),
+            graph_width_pct: 50,
         }
     }
 
@@ -636,6 +638,14 @@ impl Component for GitGraph {
                 }
                 Ok(None)
             }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.graph_width_pct = (self.graph_width_pct + 5).min(80);
+                Ok(None)
+            }
+            KeyCode::Char('-') => {
+                self.graph_width_pct = self.graph_width_pct.saturating_sub(5).max(20);
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -736,13 +746,15 @@ impl Component for GitGraph {
 
         match &self.commit_detail {
             Some(detail) if detail.diff_content.is_some() => {
-                // Graph 40% | Files 25% | Diff 35%
+                let rest = 100u16.saturating_sub(self.graph_width_pct);
+                let files_pct = rest * 40 / 100; // ~40% of remaining
+                let diff_pct = rest - files_pct;
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
-                        Constraint::Percentage(40),
-                        Constraint::Percentage(25),
-                        Constraint::Percentage(35),
+                        Constraint::Percentage(self.graph_width_pct),
+                        Constraint::Percentage(files_pct),
+                        Constraint::Percentage(diff_pct),
                     ])
                     .split(area);
 
@@ -757,10 +769,13 @@ impl Component for GitGraph {
                 Self::draw_commit_diff(detail, frame, chunks[2]);
             }
             Some(_) => {
-                // Graph 50% | Files 50%
+                let rest = 100u16.saturating_sub(self.graph_width_pct);
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .constraints([
+                        Constraint::Percentage(self.graph_width_pct),
+                        Constraint::Percentage(rest),
+                    ])
                     .split(area);
 
                 self.graph_list_area = chunks[0];
