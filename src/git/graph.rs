@@ -335,10 +335,10 @@ pub(crate) fn compute_branch_segments(rows: &[GraphRow]) -> Vec<BranchSegment> {
         if main_trunk.contains(&i) {
             continue;
         }
-        if let Some(&parent_idx) = row.parent_oids.first().and_then(|oid| oid_to_idx.get(oid)) {
-            if !main_trunk.contains(&parent_idx) {
-                uf.union(i, parent_idx);
-            }
+        if let Some(&parent_idx) = row.parent_oids.first().and_then(|oid| oid_to_idx.get(oid))
+            && !main_trunk.contains(&parent_idx)
+        {
+            uf.union(i, parent_idx);
         }
     }
 

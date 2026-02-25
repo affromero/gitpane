@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::graph::{GraphBuilder, GraphOptions, GraphRow};
+use crate::git::graph::{BranchSegment, GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 
 struct CommitDetail {
@@ -55,6 +55,10 @@ pub(crate) struct GitGraph {
     all_rows: Vec<GraphRow>,
     /// Branches currently collapsed in the view.
     collapsed_branches: std::collections::HashSet<String>,
+    /// DAG-computed branch segments (non-trunk groups of commits).
+    segments: Vec<BranchSegment>,
+    /// Maps all_rows index → segment index (None = main trunk).
+    row_to_segment: Vec<Option<usize>>,
     state: ListState,
     repo_name: String,
     repo_path: Option<PathBuf>,
@@ -80,6 +84,8 @@ impl GitGraph {
             rows: Vec::new(),
             all_rows: Vec::new(),
             collapsed_branches: std::collections::HashSet::new(),
+            segments: Vec::new(),
+            row_to_segment: Vec::new(),
             state: ListState::default(),
             repo_name: String::new(),
             repo_path: None,
@@ -116,6 +122,8 @@ impl GitGraph {
             self.commit_detail = None;
             self.search.clear();
             self.collapsed_branches.clear();
+            self.segments.clear();
+            self.row_to_segment.clear();
         }
 
         let Some(tx) = &self.action_tx else { return };
@@ -165,6 +173,7 @@ impl GitGraph {
         }
         self.all_rows = rows;
         self.loading = false;
+        self.recompute_segments();
         self.recompute_collapsed_rows();
         if !self.rows.is_empty() {
             let idx = prev_selected
@@ -229,34 +238,17 @@ impl GitGraph {
             return;
         }
 
-        // Find the tip of the collapse group this row belongs to
-        if let Some(tip_oid) = self.find_collapse_tip(row) {
-            self.collapsed_branches.insert(tip_oid);
-            self.recompute_collapsed_rows();
-        }
-    }
-
-    /// Find the OID (as string) of the topmost row in this row's lane.
-    /// This is the "tip" that anchors the collapse group.
-    fn find_collapse_tip(&self, row: &GraphRow) -> Option<String> {
-        let target_col = row.commit_col;
-        let row_idx = self.all_rows.iter().position(|r| r.oid == row.oid)?;
-
-        // Walk upward through the same commit_col to find the topmost row
-        let mut tip_idx = row_idx;
-        for i in (0..row_idx).rev() {
-            let r = &self.all_rows[i];
-            if r.commit_col == target_col {
-                tip_idx = i;
-            } else {
-                // Allow gaps only if a later row in the same col exists above
-                // (for interleaved lanes). But for simplicity, stop at the
-                // first contiguous break.
-                break;
-            }
-        }
-
-        Some(self.all_rows[tip_idx].oid.to_string())
+        // Find this row in all_rows and look up its segment
+        let row_oid = row.oid;
+        let Some(all_idx) = self.all_rows.iter().position(|r| r.oid == row_oid) else {
+            return;
+        };
+        let Some(Some(seg_idx)) = self.row_to_segment.get(all_idx) else {
+            return; // Main trunk — not collapsible
+        };
+        let seg = &self.segments[*seg_idx];
+        self.collapsed_branches.insert(seg.id.clone());
+        self.recompute_collapsed_rows();
     }
 
     /// Expand all collapsed branches.
@@ -275,80 +267,58 @@ impl GitGraph {
         }
     }
 
+    /// Recompute segments and row_to_segment mapping from all_rows.
+    fn recompute_segments(&mut self) {
+        self.segments = crate::git::graph::compute_branch_segments(&self.all_rows);
+        self.row_to_segment = vec![None; self.all_rows.len()];
+        for (seg_idx, seg) in self.segments.iter().enumerate() {
+            for &row_idx in &seg.row_indices {
+                self.row_to_segment[row_idx] = Some(seg_idx);
+            }
+        }
+    }
+
     /// Recompute `self.rows` from `self.all_rows`, collapsing groups.
-    /// Each entry in `collapsed_branches` is the OID string of the group's tip row.
     fn recompute_collapsed_rows(&mut self) {
         if self.collapsed_branches.is_empty() {
             self.rows = self.all_rows.clone();
             return;
         }
 
-        let mut collapsed_indices: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        // (tip_row_idx, display_name, count)
-        let mut summaries: Vec<(usize, String, usize)> = Vec::new();
+        // Collect all hidden row indices and prepare placeholders
+        let mut hidden: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // (tip_row_idx, segment_id, display_name, count)
+        let mut placeholders: Vec<(usize, String, String, usize)> = Vec::new();
 
-        for tip_oid_str in &self.collapsed_branches {
-            let tip_idx = self
-                .all_rows
-                .iter()
-                .position(|r| r.oid.to_string() == *tip_oid_str);
-            let Some(tip_idx) = tip_idx else {
+        for seg in &self.segments {
+            if !self.collapsed_branches.contains(&seg.id) {
                 continue;
-            };
-            let tip_row = &self.all_rows[tip_idx];
-            let tip_col = tip_row.commit_col;
-
-            // Display name: branch label if present, else short OID
-            let display_name = tip_row
-                .labels
-                .iter()
-                .find(|l| !l.is_tag)
-                .map(|l| l.name.clone())
-                .unwrap_or_else(|| tip_row.short_id.clone());
-
-            // Include the tip row itself
-            collapsed_indices.insert(tip_idx);
-            let mut count = 1;
-
-            // Walk rows after the tip in the same lane
-            for i in (tip_idx + 1)..self.all_rows.len() {
-                let row = &self.all_rows[i];
-                if row.commit_col != tip_col {
-                    break;
-                }
-                // Stop at merges or rows with labels from non-collapsed groups
-                if row.is_merge {
-                    break;
-                }
-                let has_visible_label = row.labels.iter().any(|l| {
-                    // Check if this label's tip OID is NOT in collapsed set
-                    !self.is_label_collapsed(l)
-                });
-                if has_visible_label {
-                    break;
-                }
-                collapsed_indices.insert(i);
-                count += 1;
             }
-
-            summaries.push((tip_idx, display_name, count));
+            for &row_idx in &seg.row_indices {
+                hidden.insert(row_idx);
+            }
+            let tip_idx = seg.row_indices[0];
+            placeholders.push((
+                tip_idx,
+                seg.id.clone(),
+                seg.display_name.clone(),
+                seg.row_indices.len(),
+            ));
         }
 
-        // Build display rows
         let mut rows = Vec::new();
-
         for (i, row) in self.all_rows.iter().enumerate() {
-            if collapsed_indices.contains(&i) {
-                if let Some(&(_, ref name, count)) = summaries.iter().find(|&&(tip, _, _)| tip == i)
+            if hidden.contains(&i) {
+                if let Some((_, seg_id, name, count)) =
+                    placeholders.iter().find(|(tip, _, _, _)| *tip == i)
                 {
                     let mut placeholder = row.clone();
-                    placeholder.message = format!("\u{25b6} {} ({count} commits)", name);
+                    placeholder.message = format!("\u{25b6} {name} ({count} commits)");
                     placeholder.short_id = String::new();
                     placeholder.author = String::new();
                     placeholder.labels = Vec::new();
                     placeholder.diff_stat = None;
-                    placeholder.collapsed = Some((row.oid.to_string(), count));
+                    placeholder.collapsed = Some((seg_id.clone(), *count));
                     rows.push(placeholder);
                 }
                 continue;
@@ -357,15 +327,6 @@ impl GitGraph {
         }
 
         self.rows = rows;
-    }
-
-    /// Check whether a label belongs to a branch whose tip is collapsed.
-    fn is_label_collapsed(&self, label: &crate::git::graph::BranchLabel) -> bool {
-        // Find the row with this label and check if its OID is in collapsed set
-        self.all_rows
-            .iter()
-            .find(|r| r.labels.iter().any(|l| l.name == label.name))
-            .is_some_and(|r| self.collapsed_branches.contains(&r.oid.to_string()))
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -1282,12 +1243,6 @@ mod tests {
         assert_eq!(graph.search.current_match, None);
     }
 
-    fn mock_row_with_labels(labels: Vec<BranchLabel>) -> GraphRow {
-        let mut row = mock_row("abc1234", "commit msg", "Author");
-        row.labels = labels;
-        row
-    }
-
     fn make_label(name: &str) -> BranchLabel {
         BranchLabel {
             name: name.to_string(),
@@ -1298,83 +1253,94 @@ mod tests {
         }
     }
 
+    const OID_M: &str = "1111111111111111111111111111111111111111";
     const OID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const OID_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
+    const OID_D: &str = "dddddddddddddddddddddddddddddddddddddd";
+    const OID_E: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    /// Build a DAG-wired row. `oid_str` must be valid hex.
+    fn dag_row(
+        oid_str: &str,
+        short_id: &str,
+        parent_oids: Vec<Oid>,
+        col: usize,
+        labels: Vec<BranchLabel>,
+    ) -> GraphRow {
+        GraphRow {
+            commit_col: col,
+            lanes: vec![LaneSegment::Commit],
+            horizontal_spans: Vec::new(),
+            oid: Oid::from_str(oid_str).unwrap(),
+            short_id: short_id.to_string(),
+            message: format!("msg-{short_id}"),
+            author: "Author".to_string(),
+            time: 0,
+            labels,
+            is_merge: parent_oids.len() > 1,
+            parent_oids,
+            diff_stat: None,
+            collapsed: None,
+        }
+    }
+
+    /// Standard topology for collapse tests:
+    /// Row 0: main0 (col=0, parents=[], labels=["main"])  ← main trunk
+    /// Row 1: tip   (col=1, parents=[mid], labels)         ← side branch tip
+    /// Row 2: mid   (col=1, parents=[main0])               ← side branch base
+    fn make_branch_rows(tip_labels: Vec<BranchLabel>) -> Vec<GraphRow> {
+        let oid_m = Oid::from_str(OID_M).unwrap();
+        let oid_a = Oid::from_str(OID_A).unwrap();
+        let oid_b = Oid::from_str(OID_B).unwrap();
+
+        vec![
+            dag_row(OID_M, "m", vec![], 0, vec![make_label("main")]),
+            dag_row(OID_A, "a", vec![oid_b], 1, tip_labels),
+            dag_row(OID_B, "b", vec![oid_m], 1, vec![]),
+        ]
+    }
 
     #[test]
     fn test_collapse_labeled_branch() {
         let mut graph = GitGraph::new();
-        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
-        tip.commit_col = 1;
-        tip.oid = Oid::from_str(OID_A).unwrap();
-        let mut mid = mock_row("b", "wip", "Bob");
-        mid.commit_col = 1;
-        mid.oid = Oid::from_str(OID_B).unwrap();
-        let mut base = mock_row("c", "base", "Charlie");
-        base.commit_col = 1;
-        base.oid = Oid::from_str(OID_C).unwrap();
-        base.is_merge = true;
-
-        graph.set_rows(vec![tip, mid, base]);
-        graph.state.select(Some(0));
+        graph.set_rows(make_branch_rows(vec![make_label("feature")]));
+        // Select tip (row 1 in all_rows, row 1 in display)
+        graph.state.select(Some(1));
         graph.toggle_collapse_selected();
 
-        // Keyed by tip OID
         assert!(graph.collapsed_branches.contains(OID_A));
-        // placeholder (tip+mid = 2) + merge base
+        // main0 + placeholder = 2 rows
         assert_eq!(graph.rows.len(), 2);
-        let (_, count) = graph.rows[0].collapsed.as_ref().unwrap();
+        let (_, count) = graph.rows[1].collapsed.as_ref().unwrap();
         assert_eq!(*count, 2);
-        // Placeholder message uses the branch label name
-        assert!(graph.rows[0].message.contains("feature"));
+        assert!(graph.rows[1].message.contains("feature"));
     }
 
     #[test]
     fn test_collapse_unlabeled_merge_lane() {
         let mut graph = GitGraph::new();
-        // No labels — simulates a merged branch whose label was deleted
-        let mut tip = mock_row("a", "Add feature X", "Alice");
-        tip.commit_col = 1;
-        tip.oid = Oid::from_str(OID_A).unwrap();
-        let mut mid = mock_row("b", "Fix bug", "Bob");
-        mid.commit_col = 1;
-        mid.oid = Oid::from_str(OID_B).unwrap();
-        let mut base = mock_row("c", "base", "Charlie");
-        base.commit_col = 1;
-        base.oid = Oid::from_str(OID_C).unwrap();
-        base.is_merge = true;
-
-        graph.set_rows(vec![tip, mid, base]);
-        graph.state.select(Some(1)); // select middle row
+        // No labels on the side branch
+        graph.set_rows(make_branch_rows(vec![]));
+        graph.state.select(Some(2)); // select base row of side branch
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.contains(OID_A));
         assert_eq!(graph.rows.len(), 2);
         // Placeholder uses short OID since there's no label
-        assert!(graph.rows[0].message.contains("a")); // short_id of tip
+        assert!(graph.rows[1].message.contains("a"));
     }
 
     #[test]
     fn test_expand_collapsed_group() {
         let mut graph = GitGraph::new();
-        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
-        tip.commit_col = 1;
-        tip.oid = Oid::from_str(OID_A).unwrap();
-        let mut mid = mock_row("b", "wip", "Bob");
-        mid.commit_col = 1;
-        mid.oid = Oid::from_str(OID_B).unwrap();
-        let mut base = mock_row("c", "base", "Charlie");
-        base.commit_col = 1;
-        base.oid = Oid::from_str(OID_C).unwrap();
-        base.is_merge = true;
-
-        graph.set_rows(vec![tip, mid, base]);
-        graph.state.select(Some(0));
+        graph.set_rows(make_branch_rows(vec![make_label("feature")]));
+        graph.state.select(Some(1));
         graph.toggle_collapse_selected();
+        assert_eq!(graph.rows.len(), 2);
 
-        // Select the placeholder (index 0) and toggle to expand
-        graph.state.select(Some(0));
+        // Select the placeholder and toggle to expand
+        graph.state.select(Some(1));
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.is_empty());
@@ -1384,44 +1350,84 @@ mod tests {
     #[test]
     fn test_collapse_from_middle_of_branch() {
         let mut graph = GitGraph::new();
-        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
-        tip.commit_col = 1;
-        tip.oid = Oid::from_str(OID_A).unwrap();
-        let mut mid = mock_row("b", "wip", "Bob");
-        mid.commit_col = 1;
-        mid.oid = Oid::from_str(OID_B).unwrap();
-        let mut base = mock_row("c", "base", "Charlie");
-        base.commit_col = 1;
-        base.oid = Oid::from_str(OID_C).unwrap();
-        base.is_merge = true;
-
-        graph.set_rows(vec![tip, mid, base]);
-        // Select the middle row — should walk up to find the tip
-        graph.state.select(Some(1));
+        graph.set_rows(make_branch_rows(vec![make_label("feature")]));
+        // Select the base row (row 2) — should collapse the whole segment
+        graph.state.select(Some(2));
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.contains(OID_A));
         assert_eq!(graph.rows.len(), 2);
-        assert!(graph.rows[0].collapsed.is_some());
+        assert!(graph.rows[1].collapsed.is_some());
     }
 
     #[test]
     fn test_expand_all() {
         let mut graph = GitGraph::new();
-        let mut tip = mock_row_with_labels(vec![make_label("feat-a")]);
-        tip.commit_col = 0;
-        tip.oid = Oid::from_str(OID_A).unwrap();
-        let mut mid = mock_row("b", "wip", "Bob");
-        mid.commit_col = 0;
-        mid.oid = Oid::from_str(OID_B).unwrap();
-
-        graph.set_rows(vec![tip, mid]);
-        graph.state.select(Some(0));
+        graph.set_rows(make_branch_rows(vec![make_label("feat-a")]));
+        graph.state.select(Some(1));
         graph.toggle_collapse_selected();
         assert!(!graph.collapsed_branches.is_empty());
 
         graph.expand_all_branches();
         assert!(graph.collapsed_branches.is_empty());
-        assert_eq!(graph.rows.len(), 2);
+        assert_eq!(graph.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_main_trunk_not_collapsible() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(make_branch_rows(vec![]));
+        // Select main trunk row (row 0)
+        graph.state.select(Some(0));
+        graph.toggle_collapse_selected();
+
+        assert!(graph.collapsed_branches.is_empty());
+        assert_eq!(graph.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_interleaved_commits_collapse_together() {
+        // Row 0: main0 (col=0, parents=[main1])
+        // Row 1: tip_x (col=1, parents=[base_x]) -- branch X
+        // Row 2: main1 (col=0, parents=[])        -- main trunk
+        // Row 3: base_x (col=1, parents=[main0])  -- branch X (interleaved with main1)
+        let oid_m0 = Oid::from_str(OID_M).unwrap();
+        let oid_a = Oid::from_str(OID_A).unwrap();
+        let oid_b = Oid::from_str(OID_B).unwrap();
+        let oid_c = Oid::from_str(OID_C).unwrap();
+
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            dag_row(OID_M, "m0", vec![oid_c], 0, vec![make_label("main")]),
+            dag_row(OID_A, "a", vec![oid_b], 1, vec![]),
+            dag_row(OID_C, "c", vec![], 0, vec![]),
+            dag_row(OID_B, "b", vec![oid_m0], 1, vec![]),
+        ]);
+
+        // Select row 1 (tip of branch X)
+        graph.state.select(Some(1));
+        graph.toggle_collapse_selected();
+
+        assert!(graph.collapsed_branches.contains(OID_A));
+        // Rows 1 and 3 (non-contiguous) should both be collapsed
+        // main0 + placeholder + main1 = 3 rows
+        assert_eq!(graph.rows.len(), 3);
+        let (_, count) = graph.rows[1].collapsed.as_ref().unwrap();
+        assert_eq!(*count, 2);
+    }
+
+    #[test]
+    fn test_unlabeled_branch_collapsible() {
+        let mut graph = GitGraph::new();
+        // No labels on any side-branch row
+        graph.set_rows(make_branch_rows(vec![]));
+        graph.state.select(Some(1));
+        graph.toggle_collapse_selected();
+
+        assert!(!graph.collapsed_branches.is_empty());
+        // Placeholder uses short OID as display name
+        let placeholder = &graph.rows[1];
+        assert!(placeholder.collapsed.is_some());
+        assert!(placeholder.message.contains("a")); // short_id of tip
     }
 }
