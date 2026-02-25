@@ -787,13 +787,13 @@ impl App {
             KeyCode::Char('?') => {
                 self.git_graph.toggle_help();
             }
-            KeyCode::Char('+') | KeyCode::Char('=') if self.horizontal_layout => {
+            KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Grow graph panel: shift border_frac[1] left
                 let min_f = 0.10;
                 self.border_frac[1] =
                     (self.border_frac[1] - 0.05).clamp(self.border_frac[0] + min_f, 1.0 - min_f);
             }
-            KeyCode::Char('-') if self.horizontal_layout => {
+            KeyCode::Char('-') => {
                 // Shrink graph panel: shift border_frac[1] right
                 let min_f = 0.10;
                 self.border_frac[1] =
