@@ -64,7 +64,6 @@ pub(crate) struct GitGraph {
     commit_detail: Option<CommitDetail>,
     pub(crate) graph_options: GraphOptions,
     search: SearchState,
-    graph_width_pct: u16,
     show_help: bool,
 }
 
@@ -86,7 +85,6 @@ impl GitGraph {
             commit_detail: None,
             graph_options: GraphOptions::default(),
             search: SearchState::new(),
-            graph_width_pct: 50,
             show_help: false,
         }
     }
@@ -557,14 +555,6 @@ impl Component for GitGraph {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Global keys that work in any state
         match key.code {
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                self.graph_width_pct = (self.graph_width_pct + 5).min(80);
-                return Ok(None);
-            }
-            KeyCode::Char('-') => {
-                self.graph_width_pct = self.graph_width_pct.saturating_sub(5).max(20);
-                return Ok(None);
-            }
             KeyCode::Char('?') => {
                 self.show_help = !self.show_help;
                 return Ok(None);
@@ -766,15 +756,13 @@ impl Component for GitGraph {
 
         match &self.commit_detail {
             Some(detail) if detail.diff_content.is_some() => {
-                let rest = 100u16.saturating_sub(self.graph_width_pct);
-                let files_pct = rest * 40 / 100; // ~40% of remaining
-                let diff_pct = rest - files_pct;
+                // Graph 40% | Files 25% | Diff 35%
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
-                        Constraint::Percentage(self.graph_width_pct),
-                        Constraint::Percentage(files_pct),
-                        Constraint::Percentage(diff_pct),
+                        Constraint::Percentage(40),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(35),
                     ])
                     .split(area);
 
@@ -789,13 +777,10 @@ impl Component for GitGraph {
                 Self::draw_commit_diff(detail, frame, chunks[2]);
             }
             Some(_) => {
-                let rest = 100u16.saturating_sub(self.graph_width_pct);
+                // Graph 50% | Files 50%
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(self.graph_width_pct),
-                        Constraint::Percentage(rest),
-                    ])
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
                 self.graph_list_area = chunks[0];
