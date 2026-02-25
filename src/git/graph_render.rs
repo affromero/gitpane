@@ -324,6 +324,85 @@ mod tests {
     }
 
     #[test]
+    fn test_relative_time_weeks() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        // 2 weeks = 14 days = 14*86400 = 1209600
+        assert_eq!(format_relative_time(now - 1_209_600), "2w ago");
+    }
+
+    #[test]
+    fn test_relative_time_months() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        // ~5 months = 5 * 30 days = 12960000
+        assert_eq!(format_relative_time(now - 12_960_000), "5mo ago");
+    }
+
+    #[test]
+    fn test_relative_time_years() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        // ~2 years = 2 * 365 days = 63072000
+        assert_eq!(format_relative_time(now - 63_072_000), "2y ago");
+    }
+
+    #[test]
+    fn test_relative_time_future_clamps_to_zero() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        // Future timestamp
+        assert_eq!(format_relative_time(now + 1000), "0s ago");
+    }
+
+    #[test]
+    fn test_truncate_line_unicode_chars() {
+        // Box-drawing chars are each 1 display column
+        let mut spans = vec![Span::raw("│ ● "), Span::raw("hello world")];
+        truncate_line(&mut spans, 8);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // 4 chars from first span + 3 chars + ellipsis from second
+        assert_eq!(text, "│ ● hel\u{2026}");
+    }
+
+    #[test]
+    fn test_render_graph_prefix_horizontal_dash_between_spans() {
+        use crate::git::graph::{GraphRow, LaneSegment, lane_color};
+        use git2::Oid;
+
+        let row = GraphRow {
+            commit_col: 2,
+            lanes: vec![
+                LaneSegment::RightTee,
+                LaneSegment::CrossHorizontal,
+                LaneSegment::MergeLeft,
+            ],
+            horizontal_spans: vec![(0, 2, lane_color(2))],
+            oid: Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            short_id: String::new(),
+            message: String::new(),
+            author: String::new(),
+            time: 0,
+            labels: Vec::new(),
+            is_merge: false,
+            diff_stat: None,
+        };
+
+        let spans = render_graph_prefix(&row);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // ├─┼─╯ (space after last glyph)
+        assert_eq!(text, "├─┼─╯ ");
+    }
+
+    #[test]
     fn test_author_color_deterministic() {
         let c1 = author_color("Alice");
         let c2 = author_color("Alice");

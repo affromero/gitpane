@@ -792,3 +792,147 @@ impl Component for GitGraph {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::graph::{GraphRow, LaneSegment};
+    use git2::Oid;
+
+    fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
+        GraphRow {
+            commit_col: 0,
+            lanes: vec![LaneSegment::Commit],
+            horizontal_spans: Vec::new(),
+            oid: Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            short_id: short_id.to_string(),
+            message: message.to_string(),
+            author: author.to_string(),
+            time: 0,
+            labels: Vec::new(),
+            is_merge: false,
+            diff_stat: None,
+        }
+    }
+
+    #[test]
+    fn test_search_matches_message() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            mock_row("abc1234", "fix: resolve crash", "Alice"),
+            mock_row("def5678", "feat: add login", "Bob"),
+            mock_row("ghi9012", "chore: update deps", "Alice"),
+        ]);
+
+        graph.search.input = "login".to_string();
+        graph.update_search_matches();
+
+        assert_eq!(graph.search.matches, vec![1]);
+    }
+
+    #[test]
+    fn test_search_matches_author() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            mock_row("abc1234", "first", "Alice"),
+            mock_row("def5678", "second", "Bob"),
+            mock_row("ghi9012", "third", "Alice"),
+        ]);
+
+        graph.search.input = "alice".to_string();
+        graph.update_search_matches();
+
+        assert_eq!(graph.search.matches, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_search_matches_short_id() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            mock_row("abc1234", "first", "Alice"),
+            mock_row("def5678", "second", "Bob"),
+        ]);
+
+        graph.search.input = "def".to_string();
+        graph.update_search_matches();
+
+        assert_eq!(graph.search.matches, vec![1]);
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![mock_row("abc1234", "Fix Bug", "Alice")]);
+
+        graph.search.input = "fix bug".to_string();
+        graph.update_search_matches();
+
+        assert_eq!(graph.search.matches, vec![0]);
+    }
+
+    #[test]
+    fn test_search_next_wraps_around() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            mock_row("a", "match", "X"),
+            mock_row("b", "no", "Y"),
+            mock_row("c", "match", "Z"),
+        ]);
+
+        graph.search.input = "match".to_string();
+        graph.update_search_matches();
+
+        // matches = [0, 2]
+        assert_eq!(graph.search.current_match, Some(0));
+
+        graph.search_next();
+        assert_eq!(graph.search.current_match, Some(1));
+        assert_eq!(graph.state.selected(), Some(2)); // row index 2
+
+        graph.search_next();
+        assert_eq!(graph.search.current_match, Some(0)); // wraps
+        assert_eq!(graph.state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_search_prev_wraps_around() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![
+            mock_row("a", "match", "X"),
+            mock_row("b", "no", "Y"),
+            mock_row("c", "match", "Z"),
+        ]);
+
+        graph.search.input = "match".to_string();
+        graph.update_search_matches();
+
+        // Start at match 0
+        graph.search_prev();
+        assert_eq!(graph.search.current_match, Some(1)); // wraps to last
+        assert_eq!(graph.state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_search_empty_input_no_matches() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![mock_row("a", "hello", "X")]);
+
+        graph.search.input.clear();
+        graph.update_search_matches();
+
+        assert!(graph.search.matches.is_empty());
+        assert_eq!(graph.search.current_match, None);
+    }
+
+    #[test]
+    fn test_search_no_results() {
+        let mut graph = GitGraph::new();
+        graph.set_rows(vec![mock_row("a", "hello", "Alice")]);
+
+        graph.search.input = "zzzzz".to_string();
+        graph.update_search_matches();
+
+        assert!(graph.search.matches.is_empty());
+        assert_eq!(graph.search.current_match, None);
+    }
+}

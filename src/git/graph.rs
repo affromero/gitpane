@@ -645,6 +645,115 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_right_horizontal_fill() {
+        let mut builder = GraphBuilder::new();
+        let oid_commit = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_b = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let oid_target = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+
+        // Commit at col 0, first parent already in col 2 → MergeRight
+        builder.active_lanes = vec![Some(oid_commit), Some(oid_b), Some(oid_target)];
+
+        let (col, lanes, spans) = builder.process_commit(oid_commit, &[oid_target]);
+
+        assert_eq!(col, 0);
+        assert_eq!(lanes[0], LaneSegment::MergeRight);
+        assert_eq!(lanes[1], LaneSegment::CrossHorizontal);
+        assert_eq!(lanes[2], LaneSegment::LeftTee);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0], (0, 2, lane_color(0)));
+    }
+
+    #[test]
+    fn test_first_parent_simplifies_graph() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let oid1 = create_commit(&repo, "root", &[]);
+        let c1 = repo.find_commit(oid1).unwrap();
+
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+
+        let oid2 = repo
+            .commit(None, &sig, &sig, "branch-a", &tree, &[&c1])
+            .unwrap();
+        let c2 = repo.find_commit(oid2).unwrap();
+
+        let oid3 = repo
+            .commit(None, &sig, &sig, "branch-b", &tree, &[&c1])
+            .unwrap();
+        let c3 = repo.find_commit(oid3).unwrap();
+
+        let merge_oid = repo
+            .commit(None, &sig, &sig, "merge", &tree, &[&c2, &c3])
+            .unwrap();
+        repo.set_head_detached(merge_oid).unwrap();
+
+        let all_opts = GraphOptions::default();
+        let rows_all = GraphBuilder::new().build(tmp.path(), &all_opts).unwrap();
+
+        let fp_opts = GraphOptions {
+            first_parent: true,
+            ..Default::default()
+        };
+        let rows_fp = GraphBuilder::new().build(tmp.path(), &fp_opts).unwrap();
+
+        // First-parent should have fewer rows (skips branch-b)
+        assert!(
+            rows_fp.len() < rows_all.len(),
+            "first-parent ({}) should have fewer rows than all ({})",
+            rows_fp.len(),
+            rows_all.len()
+        );
+    }
+
+    #[test]
+    fn test_tag_labels_appear_on_tagged_commit() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let oid = create_commit(&repo, "tagged commit", &[]);
+
+        // Create a lightweight tag
+        let obj = repo.find_object(oid, None).unwrap();
+        repo.tag_lightweight("v1.0.0", &obj, false).unwrap();
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        let tagged_row = rows.iter().find(|r| r.oid == oid).unwrap();
+        let tag_labels: Vec<_> = tagged_row.labels.iter().filter(|l| l.is_tag).collect();
+        assert_eq!(tag_labels.len(), 1);
+        assert_eq!(tag_labels[0].name, "v1.0.0");
+    }
+
+    #[test]
+    fn test_tags_sort_after_branches() {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        let oid = create_commit(&repo, "init", &[]);
+
+        let obj = repo.find_object(oid, None).unwrap();
+        repo.tag_lightweight("v0.1", &obj, false).unwrap();
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        let row = &rows[0];
+        // HEAD branch label should come before tag
+        assert!(row.labels.len() >= 2);
+        let branch_idx = row.labels.iter().position(|l| !l.is_tag).unwrap();
+        let tag_idx = row.labels.iter().position(|l| l.is_tag).unwrap();
+        assert!(
+            branch_idx < tag_idx,
+            "branch ({branch_idx}) should sort before tag ({tag_idx})"
+        );
+    }
+
+    #[test]
     fn test_filter_none_yields_no_labels() {
         let tmp = TempDir::new().unwrap();
         let repo = Repository::init(tmp.path()).unwrap();

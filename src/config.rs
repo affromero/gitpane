@@ -262,4 +262,19 @@ mod tests {
         assert_eq!(loaded.graph.branches, BranchFilter::Remote);
         assert_eq!(loaded.graph.label_max_len, 16);
     }
+
+    #[test]
+    fn test_show_stats_defaults_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.graph.show_stats);
+    }
+
+    #[test]
+    fn test_show_stats_roundtrip() {
+        let mut config = Config::default();
+        config.graph.show_stats = false;
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert!(!loaded.graph.show_stats);
+    }
 }

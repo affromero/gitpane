@@ -174,4 +174,45 @@ mod tests {
         assert_eq!(files[0].0, "A");
         assert_eq!(files[0].1, "root.txt");
     }
+
+    #[test]
+    fn test_batch_diff_stats_returns_additions() {
+        let (tmp, repo, first_oid) = create_repo_with_file("file.txt", "line1\n");
+
+        // Second commit adds lines
+        fs::write(tmp.path().join("file.txt"), "line1\nline2\nline3\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let parent = repo
+            .find_commit(Oid::from_str(&first_oid).unwrap())
+            .unwrap();
+        let oid2 = repo
+            .commit(Some("HEAD"), &sig, &sig, "Add lines", &tree, &[&parent])
+            .unwrap();
+
+        let stats = batch_diff_stats(tmp.path(), &[oid2]).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].0, oid2);
+        assert!(
+            stats[0].1.additions > 0,
+            "expected additions, got {}",
+            stats[0].1.additions
+        );
+    }
+
+    #[test]
+    fn test_batch_diff_stats_root_commit() {
+        let (tmp, _repo, oid_str) = create_repo_with_file("root.txt", "content\n");
+        let oid = Oid::from_str(&oid_str).unwrap();
+
+        let stats = batch_diff_stats(tmp.path(), &[oid]).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].0, oid);
+        assert!(stats[0].1.additions > 0);
+        assert_eq!(stats[0].1.deletions, 0);
+    }
 }
