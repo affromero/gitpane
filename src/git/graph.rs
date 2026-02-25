@@ -908,7 +908,6 @@ mod tests {
     #[test]
     fn test_segments_linear_history_no_segments() {
         // A -> B -> C (linear, all main trunk)
-        let oid_a = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         let oid_b = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
         let oid_c = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
 

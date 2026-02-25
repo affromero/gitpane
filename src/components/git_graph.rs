@@ -1257,8 +1257,7 @@ mod tests {
     const OID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const OID_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
-    const OID_D: &str = "dddddddddddddddddddddddddddddddddddddd";
-    const OID_E: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
 
     /// Build a DAG-wired row. `oid_str` must be valid hex.
     fn dag_row(
@@ -1291,7 +1290,6 @@ mod tests {
     /// Row 2: mid   (col=1, parents=[main0])               ← side branch base
     fn make_branch_rows(tip_labels: Vec<BranchLabel>) -> Vec<GraphRow> {
         let oid_m = Oid::from_str(OID_M).unwrap();
-        let oid_a = Oid::from_str(OID_A).unwrap();
         let oid_b = Oid::from_str(OID_B).unwrap();
 
         vec![
@@ -1392,7 +1390,6 @@ mod tests {
         // Row 2: main1 (col=0, parents=[])        -- main trunk
         // Row 3: base_x (col=1, parents=[main0])  -- branch X (interleaved with main1)
         let oid_m0 = Oid::from_str(OID_M).unwrap();
-        let oid_a = Oid::from_str(OID_A).unwrap();
         let oid_b = Oid::from_str(OID_B).unwrap();
         let oid_c = Oid::from_str(OID_C).unwrap();
 
