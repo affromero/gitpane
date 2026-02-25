@@ -262,6 +262,10 @@ impl GitGraph {
 
                 spans.push(Span::styled(
                     format!("  — {}", row.author),
+                    Style::default().fg(graph_render::author_color(&row.author)),
+                ));
+                spans.push(Span::styled(
+                    format!(" {}", graph_render::format_relative_time(row.time)),
                     Style::default().fg(Color::DarkGray),
                 ));
 

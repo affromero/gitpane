@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
@@ -109,6 +111,51 @@ pub(crate) fn render_branch_labels(labels: &[BranchLabel], max_len: usize) -> Ve
     spans
 }
 
+pub(crate) fn format_relative_time(epoch_secs: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let delta = (now - epoch_secs).max(0) as u64;
+
+    if delta < 60 {
+        format!("{}s ago", delta)
+    } else if delta < 3600 {
+        format!("{}m ago", delta / 60)
+    } else if delta < 86400 {
+        format!("{}h ago", delta / 3600)
+    } else if delta < 604_800 {
+        format!("{}d ago", delta / 86400)
+    } else if delta < 2_592_000 {
+        format!("{}w ago", delta / 604_800)
+    } else if delta < 31_536_000 {
+        format!("{}mo ago", delta / 2_592_000)
+    } else {
+        format!("{}y ago", delta / 31_536_000)
+    }
+}
+
+const AUTHOR_COLORS: [Color; 8] = [
+    Color::LightBlue,
+    Color::LightGreen,
+    Color::LightCyan,
+    Color::LightMagenta,
+    Color::LightRed,
+    Color::LightYellow,
+    Color::Rgb(255, 165, 0),   // orange
+    Color::Rgb(180, 150, 255), // lavender
+];
+
+pub(crate) fn author_color(name: &str) -> Color {
+    // FNV-1a hash
+    let mut hash: u32 = 2_166_136_261;
+    for byte in name.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    AUTHOR_COLORS[(hash as usize) % AUTHOR_COLORS.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +212,43 @@ mod tests {
         assert!(text.contains(", "), "got: {text}");
         assert!(text.starts_with('('));
         assert!(text.contains(')'));
+    }
+
+    #[test]
+    fn test_relative_time_seconds() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(format_relative_time(now - 30), "30s ago");
+    }
+
+    #[test]
+    fn test_relative_time_hours() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(format_relative_time(now - 7200), "2h ago");
+    }
+
+    #[test]
+    fn test_relative_time_days() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(format_relative_time(now - 259200), "3d ago");
+    }
+
+    #[test]
+    fn test_author_color_deterministic() {
+        let c1 = author_color("Alice");
+        let c2 = author_color("Alice");
+        assert_eq!(c1, c2);
+        // Different names should (likely) get different colors
+        let c3 = author_color("Bob");
+        assert_ne!(c1, c3);
     }
 
     #[test]
