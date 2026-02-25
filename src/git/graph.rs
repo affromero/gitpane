@@ -54,6 +54,7 @@ pub(crate) struct GraphRow {
     pub labels: Vec<BranchLabel>,
     pub is_merge: bool,
     pub horizontal_spans: Vec<(usize, usize, usize)>,
+    pub parent_oids: Vec<Oid>,
     pub diff_stat: Option<DiffStat>,
     /// If set, this row is a collapsed-branch placeholder: (branch_name, hidden_count).
     pub collapsed: Option<(String, usize)>,
@@ -131,6 +132,7 @@ impl GraphBuilder {
                 labels,
                 is_merge,
                 horizontal_spans,
+                parent_oids,
                 diff_stat: None,
                 collapsed: None,
             });
@@ -266,6 +268,111 @@ impl GraphBuilder {
             .position(|lane| lane.is_none())
             .unwrap_or(self.active_lanes.len())
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BranchSegment {
+    pub id: String,
+    pub display_name: String,
+    pub row_indices: Vec<usize>,
+}
+
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra != rb {
+            // Union by smaller index so the tip (earliest row) becomes root
+            if ra < rb {
+                self.parent[rb] = ra;
+            } else {
+                self.parent[ra] = rb;
+            }
+        }
+    }
+}
+
+pub(crate) fn compute_branch_segments(rows: &[GraphRow]) -> Vec<BranchSegment> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let oid_to_idx: HashMap<Oid, usize> =
+        rows.iter().enumerate().map(|(i, r)| (r.oid, i)).collect();
+
+    // Mark main trunk: walk first-parent chain from row 0
+    let mut main_trunk: HashSet<usize> = HashSet::new();
+    let mut cur = 0usize;
+    loop {
+        main_trunk.insert(cur);
+        let first_parent = rows[cur].parent_oids.first();
+        match first_parent.and_then(|oid| oid_to_idx.get(oid)) {
+            Some(&next_idx) => cur = next_idx,
+            None => break,
+        }
+    }
+
+    // Union-Find over non-trunk rows via first-parent links
+    let mut uf = UnionFind::new(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        if main_trunk.contains(&i) {
+            continue;
+        }
+        if let Some(&parent_idx) = row.parent_oids.first().and_then(|oid| oid_to_idx.get(oid))
+            && !main_trunk.contains(&parent_idx)
+        {
+            uf.union(i, parent_idx);
+        }
+    }
+
+    // Group by union-find root
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..rows.len() {
+        if main_trunk.contains(&i) {
+            continue;
+        }
+        let root = uf.find(i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    let mut segments: Vec<BranchSegment> = Vec::new();
+    for (_, mut indices) in groups {
+        indices.sort();
+        let tip_idx = indices[0];
+        let tip = &rows[tip_idx];
+        let display_name = tip
+            .labels
+            .iter()
+            .find(|l| !l.is_tag)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| tip.short_id.clone());
+        segments.push(BranchSegment {
+            id: tip.oid.to_string(),
+            display_name,
+            row_indices: indices,
+        });
+    }
+
+    // Sort segments by their first row index for deterministic ordering
+    segments.sort_by_key(|s| s.row_indices[0]);
+    segments
 }
 
 fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<BranchLabel>> {
@@ -776,5 +883,158 @@ mod tests {
                 "filter=None should produce no labels"
             );
         }
+    }
+
+    // --- compute_branch_segments tests ---
+
+    fn mock_segment_row(oid_str: &str, short_id: &str, parent_oids: Vec<Oid>) -> GraphRow {
+        GraphRow {
+            commit_col: 0,
+            lanes: vec![LaneSegment::Commit],
+            horizontal_spans: Vec::new(),
+            oid: Oid::from_str(oid_str).unwrap(),
+            short_id: short_id.to_string(),
+            message: String::new(),
+            author: String::new(),
+            time: 0,
+            labels: Vec::new(),
+            is_merge: false,
+            parent_oids,
+            diff_stat: None,
+            collapsed: None,
+        }
+    }
+
+    #[test]
+    fn test_segments_linear_history_no_segments() {
+        // A -> B -> C (linear, all main trunk)
+        let oid_a = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_b = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let oid_c = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+
+        let rows = vec![
+            mock_segment_row(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "aaa",
+                vec![oid_b],
+            ),
+            mock_segment_row(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "bbb",
+                vec![oid_c],
+            ),
+            mock_segment_row("cccccccccccccccccccccccccccccccccccccccc", "ccc", vec![]),
+        ];
+
+        let segments = compute_branch_segments(&rows);
+        assert!(
+            segments.is_empty(),
+            "linear history should have no segments"
+        );
+    }
+
+    #[test]
+    fn test_segments_simple_branch_and_merge() {
+        let oid_a = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_e = Oid::from_str("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let oid_f = Oid::from_str("ffffffffffffffffffffffffffffffffffffffff").unwrap();
+
+        let rows = vec![
+            mock_segment_row(
+                "1111111111111111111111111111111111111111",
+                "merge",
+                vec![oid_a, oid_e],
+            ),
+            mock_segment_row(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "aaa",
+                vec![oid_f],
+            ),
+            mock_segment_row(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "eee",
+                vec![oid_f],
+            ),
+            mock_segment_row("ffffffffffffffffffffffffffffffffffffffff", "fff", vec![]),
+        ];
+
+        let segments = compute_branch_segments(&rows);
+        assert_eq!(segments.len(), 1, "one side branch expected");
+        assert_eq!(segments[0].row_indices, vec![2]);
+        assert_eq!(segments[0].id, oid_e.to_string());
+    }
+
+    #[test]
+    fn test_segments_two_independent_branches() {
+        let oid_a = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_d = Oid::from_str("dddddddddddddddddddddddddddddddddddddddd").unwrap();
+        let oid_e = Oid::from_str("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let oid_f = Oid::from_str("ffffffffffffffffffffffffffffffffffffffff").unwrap();
+
+        let rows = vec![
+            mock_segment_row(
+                "1111111111111111111111111111111111111111",
+                "merge",
+                vec![oid_a, oid_d, oid_e],
+            ),
+            mock_segment_row(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "aaa",
+                vec![oid_f],
+            ),
+            mock_segment_row(
+                "dddddddddddddddddddddddddddddddddddddddd",
+                "ddd",
+                vec![oid_f],
+            ),
+            mock_segment_row(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "eee",
+                vec![oid_f],
+            ),
+            mock_segment_row("ffffffffffffffffffffffffffffffffffffffff", "fff", vec![]),
+        ];
+
+        let segments = compute_branch_segments(&rows);
+        assert_eq!(segments.len(), 2, "two side branches expected");
+        assert_eq!(segments[0].row_indices, vec![2]);
+        assert_eq!(segments[1].row_indices, vec![3]);
+    }
+
+    #[test]
+    fn test_segments_multi_commit_branch() {
+        let oid_a = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_d = Oid::from_str("dddddddddddddddddddddddddddddddddddddddd").unwrap();
+        let oid_e = Oid::from_str("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let oid_f = Oid::from_str("ffffffffffffffffffffffffffffffffffffffff").unwrap();
+
+        let rows = vec![
+            mock_segment_row(
+                "1111111111111111111111111111111111111111",
+                "merge",
+                vec![oid_a, oid_d],
+            ),
+            mock_segment_row(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "aaa",
+                vec![oid_f],
+            ),
+            mock_segment_row(
+                "dddddddddddddddddddddddddddddddddddddddd",
+                "tip",
+                vec![oid_e],
+            ),
+            mock_segment_row(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "mid",
+                vec![oid_f],
+            ),
+            mock_segment_row("ffffffffffffffffffffffffffffffffffffffff", "fff", vec![]),
+        ];
+
+        let segments = compute_branch_segments(&rows);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].row_indices, vec![2, 3]);
+        assert_eq!(segments[0].id, oid_d.to_string());
     }
 }

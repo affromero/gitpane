@@ -286,22 +286,24 @@ impl App {
                         let status_clone = status.clone();
                         self.repo_list.update_status(idx, status_clone);
 
-                        // Refresh file list + graph if this is the selected repo,
-                        // but skip if user is actively inspecting (diff or commit detail)
+                        // Always refresh the file list so stale diffs are cleared
+                        // when files are staged/unstaged. Only skip graph reload
+                        // while the user is inspecting commit details.
                         if self.repo_list.selected_index() == Some(idx)
-                            && !self.file_list.viewing_diff()
-                            && !self.git_graph.has_detail()
                             && let Some(entry) = self.repo_list.repos.get(idx)
                         {
                             let name = entry.name.clone();
-                            let path = entry.path.clone();
                             let files = entry
                                 .status
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
                             self.file_list.set_files(files, &name, idx);
-                            self.git_graph.load_repo(path, &name);
+
+                            if !self.git_graph.has_detail() {
+                                let path = entry.path.clone();
+                                self.git_graph.load_repo(path, &name);
+                            }
                         }
                     }
                     Action::RefreshAll => {
