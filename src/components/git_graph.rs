@@ -354,6 +354,7 @@ impl GitGraph {
         }
 
         let label_max_len = self.graph_options.label_max_len;
+        let max_width = area.width.saturating_sub(2) as usize; // 2 for borders
         let has_search = !self.search.input.is_empty() && !self.search.matches.is_empty();
         let items: Vec<ListItem> = self
             .rows
@@ -429,6 +430,7 @@ impl GitGraph {
                     }
                 }
 
+                graph_render::truncate_line(&mut spans, max_width);
                 ListItem::new(Line::from(spans))
             })
             .collect();

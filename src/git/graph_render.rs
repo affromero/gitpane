@@ -111,6 +111,56 @@ pub(crate) fn render_branch_labels(labels: &[BranchLabel], max_len: usize) -> Ve
     spans
 }
 
+/// Truncate a span list so its total display width fits within `max_width`.
+/// Adds an ellipsis (…) at the cut point when truncation occurs.
+pub(crate) fn truncate_line(spans: &mut Vec<Span<'static>>, max_width: usize) {
+    if max_width == 0 {
+        spans.clear();
+        return;
+    }
+
+    let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if total <= max_width {
+        return;
+    }
+
+    let mut used = 0;
+    let mut cut_idx = spans.len();
+    let mut remaining = 0;
+
+    for (i, span) in spans.iter().enumerate() {
+        let w = span.content.chars().count();
+        if used + w > max_width {
+            cut_idx = i;
+            remaining = max_width - used;
+            break;
+        }
+        used += w;
+    }
+
+    spans.truncate(cut_idx + 1);
+
+    if let Some(last) = spans.last_mut() {
+        if remaining > 1 {
+            let content: String = last.content.chars().take(remaining - 1).collect();
+            *last = Span::styled(format!("{}\u{2026}", content), last.style);
+        } else if remaining == 1 {
+            *last = Span::styled("\u{2026}".to_string(), last.style);
+        } else {
+            // No room in this span — back up one
+            spans.pop();
+            if let Some(prev) = spans.last_mut() {
+                let content = prev.content.to_string();
+                let n = content.chars().count();
+                if n > 0 {
+                    let truncated: String = content.chars().take(n - 1).collect();
+                    *prev = Span::styled(format!("{}\u{2026}", truncated), prev.style);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn format_relative_time(epoch_secs: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -168,6 +218,38 @@ mod tests {
             is_worktree,
             is_tag: false,
         }
+    }
+
+    #[test]
+    fn test_truncate_line_no_op_when_fits() {
+        let mut spans = vec![Span::raw("abc"), Span::raw("def")];
+        truncate_line(&mut spans, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "abcdef");
+    }
+
+    #[test]
+    fn test_truncate_line_adds_ellipsis() {
+        let mut spans = vec![Span::raw("hello "), Span::raw("world this is long")];
+        truncate_line(&mut spans, 10);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "hello wor\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_line_cuts_at_span_boundary() {
+        let mut spans = vec![Span::raw("12345"), Span::raw("67890")];
+        truncate_line(&mut spans, 5);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // First span fills exactly 5, second span starts overflow → ellipsis replaces last char
+        assert_eq!(text, "1234\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_line_zero_width() {
+        let mut spans = vec![Span::raw("hello")];
+        truncate_line(&mut spans, 0);
+        assert!(spans.is_empty());
     }
 
     #[test]
