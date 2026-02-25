@@ -80,6 +80,8 @@ pub(crate) struct App {
     update_version: Option<String>,
     /// Where to render the update notification
     update_position: UpdatePosition,
+    /// Show the keybindings help overlay
+    show_help: bool,
 }
 
 impl App {
@@ -120,6 +122,7 @@ impl App {
             horizontal_layout: false,
             update_version: None,
             update_position,
+            show_help: false,
         }
     }
 
@@ -749,6 +752,15 @@ impl App {
             }
         }
 
+        // Help overlay: ? toggles, any other key dismisses
+        if key.code == KeyCode::Char('?') {
+            self.show_help = !self.show_help;
+            return Ok(());
+        } else if self.show_help {
+            self.show_help = false;
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('q') => {
                 // If viewing diff, close it instead of quitting
@@ -807,9 +819,6 @@ impl App {
             }
             KeyCode::Char('s') => {
                 self.action_tx.send(Action::CycleSortOrder)?;
-            }
-            KeyCode::Char('?') => {
-                self.git_graph.toggle_help();
             }
             KeyCode::Char('y') => {
                 // Copy selected item to clipboard (OSC 52)
@@ -1091,6 +1100,11 @@ impl App {
             self.draw_update_notification(frame, main_area, version);
         }
 
+        // Help overlay (rendered last so it's on top of everything)
+        if self.show_help {
+            self.draw_help(frame, main_area);
+        }
+
         Ok(())
     }
 }
@@ -1134,6 +1148,89 @@ impl App {
 
         frame.render_widget(ratatui::widgets::Clear, rect);
         frame.render_widget(paragraph, rect);
+    }
+
+    fn draw_help(&self, frame: &mut ratatui::Frame, area: Rect) {
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Paragraph};
+
+        let key = |k: &str| Span::styled(format!("  {k:<10}"), Style::default().fg(Color::Yellow));
+        let desc = |d: &str| Span::raw(d.to_string());
+        let section = |title: &str| {
+            Line::from(Span::styled(
+                format!(" {title}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ))
+        };
+
+        let mut lines = vec![
+            section("Global"),
+            Line::from(vec![key("?"), desc("Toggle this help")]),
+            Line::from(vec![key("Tab"), desc("Cycle focus forward")]),
+            Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
+            Line::from(vec![key("Esc"), desc("Close / go back")]),
+            Line::from(vec![key("r"), desc("Refresh all repos")]),
+            Line::from(vec![key("y"), desc("Copy to clipboard")]),
+            Line::from(vec![key("q"), desc("Quit")]),
+        ];
+
+        match self.focus {
+            FocusPanel::Repos => {
+                lines.push(Line::from(""));
+                lines.push(section("Repos"));
+                lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
+                lines.push(Line::from(vec![key("a"), desc("Add repo")]));
+                lines.push(Line::from(vec![key("d"), desc("Remove repo")]));
+                lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
+                lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
+                lines.push(Line::from(vec![key("g"), desc("Open git graph")]));
+            }
+            FocusPanel::Changes => {
+                lines.push(Line::from(""));
+                lines.push(section("Changes"));
+                lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
+                lines.push(Line::from(vec![key("Enter"), desc("Open diff view")]));
+                lines.push(Line::from(vec![key("Esc / h"), desc("Close diff view")]));
+            }
+            FocusPanel::Graph => {
+                lines.push(Line::from(""));
+                lines.push(section("Graph"));
+                lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
+                lines.push(Line::from(vec![key("h / l"), desc("Scroll left / right")]));
+                lines.push(Line::from(vec![key("Enter"), desc("Open commit files")]));
+                lines.push(Line::from(""));
+                lines.push(section("Search"));
+                lines.push(Line::from(vec![key("/"), desc("Search commits")]));
+                lines.push(Line::from(vec![key("n / N"), desc("Next / prev match")]));
+                lines.push(Line::from(""));
+                lines.push(section("View"));
+                lines.push(Line::from(vec![key("f"), desc("First-parent mode")]));
+                lines.push(Line::from(vec![key("c"), desc("Collapse / expand branch")]));
+                lines.push(Line::from(vec![key("H"), desc("Expand all collapsed")]));
+            }
+        }
+
+        let height = (lines.len() as u16 + 2).min(area.height);
+        let width = 42u16.min(area.width);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let help_area = Rect::new(x, y, width, height);
+
+        let panel_name = match self.focus {
+            FocusPanel::Repos => "Repos",
+            FocusPanel::Changes => "Changes",
+            FocusPanel::Graph => "Graph",
+        };
+        let block = Block::default()
+            .title(format!(" Keybindings \u{2014} {panel_name} "))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+
+        frame.render_widget(ratatui::widgets::Clear, help_area);
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, help_area);
     }
 }
 
