@@ -133,9 +133,22 @@ impl GitGraph {
         self.loading = false;
     }
 
-    pub fn set_rows(&mut self, rows: Vec<GraphRow>) {
+    pub fn set_rows(&mut self, mut rows: Vec<GraphRow>) {
         // Preserve selection position on refresh if possible
         let prev_selected = self.state.selected();
+        // Carry forward diff_stats from previous rows to avoid blink on refresh
+        if !self.rows.is_empty() {
+            let old_stats: std::collections::HashMap<git2::Oid, crate::git::graph::DiffStat> = self
+                .rows
+                .iter()
+                .filter_map(|r| r.diff_stat.clone().map(|s| (r.oid, s)))
+                .collect();
+            for row in &mut rows {
+                if row.diff_stat.is_none() {
+                    row.diff_stat = old_stats.get(&row.oid).cloned();
+                }
+            }
+        }
         self.rows = rows;
         self.loading = false;
         if !self.rows.is_empty() {
