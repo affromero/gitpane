@@ -435,6 +435,7 @@ mod tests {
             labels: Vec::new(),
             is_merge: false,
             diff_stat: None,
+            collapsed: None,
         };
 
         let spans = render_graph_prefix(&row);

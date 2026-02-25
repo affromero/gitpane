@@ -15,58 +15,6 @@ use crate::components::Component;
 use crate::git::graph::{GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 
-/// Given a graph row, determine if `click_col` (relative to the start of the row content)
-/// falls on a branch label. Returns the label name if so.
-fn label_at_column(row: &GraphRow, click_col: usize, label_max_len: usize) -> Option<String> {
-    if row.labels.is_empty() {
-        return None;
-    }
-
-    // Compute graph prefix width
-    let prefix_width: usize = graph_render::render_graph_prefix(row)
-        .iter()
-        .map(|s| s.content.chars().count())
-        .sum();
-
-    // short_id + space
-    let id_width = row.short_id.len() + 1;
-
-    let mut cursor = prefix_width + id_width;
-
-    // Opening paren "("
-    cursor += 1;
-
-    for (i, label) in row.labels.iter().enumerate() {
-        if i > 0 {
-            cursor += 2; // ", "
-        }
-
-        // Prefix for HEAD or worktree labels
-        let prefix_len = if label.is_head || label.is_worktree {
-            2
-        } else {
-            0
-        };
-        cursor += prefix_len;
-
-        // Label name (may be truncated)
-        let name_len = if label.name.chars().count() > label_max_len {
-            label_max_len + 1 // truncated chars + ellipsis
-        } else {
-            label.name.chars().count()
-        };
-
-        let label_start = cursor;
-        cursor += name_len;
-
-        if click_col >= label_start && click_col < cursor {
-            return Some(label.name.clone());
-        }
-    }
-
-    None
-}
-
 struct CommitDetail {
     oid: String,
     files: Vec<(String, String)>,
@@ -101,7 +49,12 @@ impl SearchState {
 }
 
 pub(crate) struct GitGraph {
+    /// Display rows (may contain collapsed placeholders).
     rows: Vec<GraphRow>,
+    /// Full rows from the graph builder (never filtered).
+    all_rows: Vec<GraphRow>,
+    /// Branches currently collapsed in the view.
+    collapsed_branches: std::collections::HashSet<String>,
     state: ListState,
     repo_name: String,
     repo_path: Option<PathBuf>,
@@ -125,6 +78,8 @@ impl GitGraph {
     pub fn new() -> Self {
         Self {
             rows: Vec::new(),
+            all_rows: Vec::new(),
+            collapsed_branches: std::collections::HashSet::new(),
             state: ListState::default(),
             repo_name: String::new(),
             repo_path: None,
@@ -156,10 +111,11 @@ impl GitGraph {
         if !is_same_repo {
             self.loading = true;
             self.rows.clear();
+            self.all_rows.clear();
             self.state.select(None);
             self.commit_detail = None;
             self.search.clear();
-            self.graph_options.hidden_branches.clear();
+            self.collapsed_branches.clear();
         }
 
         let Some(tx) = &self.action_tx else { return };
@@ -194,10 +150,10 @@ impl GitGraph {
     pub fn set_rows(&mut self, mut rows: Vec<GraphRow>) {
         // Preserve selection position on refresh if possible
         let prev_selected = self.state.selected();
-        // Carry forward diff_stats from previous rows to avoid blink on refresh
-        if !self.rows.is_empty() {
+        // Carry forward diff_stats from previous all_rows to avoid blink on refresh
+        if !self.all_rows.is_empty() {
             let old_stats: std::collections::HashMap<git2::Oid, crate::git::graph::DiffStat> = self
-                .rows
+                .all_rows
                 .iter()
                 .filter_map(|r| r.diff_stat.clone().map(|s| (r.oid, s)))
                 .collect();
@@ -207,8 +163,9 @@ impl GitGraph {
                 }
             }
         }
-        self.rows = rows;
+        self.all_rows = rows;
         self.loading = false;
+        self.recompute_collapsed_rows();
         if !self.rows.is_empty() {
             let idx = prev_selected
                 .map(|i| i.min(self.rows.len() - 1))
@@ -219,11 +176,12 @@ impl GitGraph {
 
     pub fn set_diff_stats(&mut self, stats: Vec<(git2::Oid, crate::git::graph::DiffStat)>) {
         let stat_map: std::collections::HashMap<_, _> = stats.into_iter().collect();
-        for row in &mut self.rows {
+        for row in &mut self.all_rows {
             if let Some(stat) = stat_map.get(&row.oid) {
                 row.diff_stat = Some(stat.clone());
             }
         }
+        self.recompute_collapsed_rows();
     }
 
     pub fn set_commit_files(&mut self, oid: String, files: Vec<(String, String)>) {
@@ -255,23 +213,41 @@ impl GitGraph {
         self.show_help = !self.show_help;
     }
 
-    /// Hide a branch and reload the graph.
-    fn toggle_branch(&mut self, name: String) {
-        if self.graph_options.hidden_branches.contains(&name) {
-            self.graph_options.hidden_branches.remove(&name);
-        } else {
-            self.graph_options.hidden_branches.insert(name);
-        }
-        self.reload_graph();
-    }
+    /// Toggle collapse on the selected row's branch (or expand a collapsed group).
+    fn toggle_collapse_selected(&mut self) {
+        let Some(idx) = self.state.selected() else {
+            return;
+        };
+        let Some(row) = self.rows.get(idx) else {
+            return;
+        };
 
-    /// Show all hidden branches and reload the graph.
-    fn show_all_branches(&mut self) {
-        if self.graph_options.hidden_branches.is_empty() {
+        // If this is a collapsed placeholder, expand it
+        if let Some((ref branch, _)) = row.collapsed {
+            self.collapsed_branches.remove(branch.as_str());
+            self.recompute_collapsed_rows();
             return;
         }
-        self.graph_options.hidden_branches.clear();
-        self.reload_graph();
+
+        // Otherwise collapse the first non-HEAD branch label on this row
+        let label = row
+            .labels
+            .iter()
+            .find(|l| !l.is_head)
+            .or_else(|| row.labels.first());
+        if let Some(label) = label {
+            self.collapsed_branches.insert(label.name.clone());
+            self.recompute_collapsed_rows();
+        }
+    }
+
+    /// Expand all collapsed branches.
+    fn expand_all_branches(&mut self) {
+        if self.collapsed_branches.is_empty() {
+            return;
+        }
+        self.collapsed_branches.clear();
+        self.recompute_collapsed_rows();
     }
 
     fn reload_graph(&mut self) {
@@ -281,19 +257,86 @@ impl GitGraph {
         }
     }
 
-    /// Toggle the first non-HEAD branch label on the given row.
-    /// Falls back to HEAD if it's the only label.
-    fn toggle_row_branch(&mut self, row_idx: usize) {
-        if let Some(row) = self.rows.get(row_idx) {
-            let label = row
-                .labels
+    /// Recompute `self.rows` from `self.all_rows`, collapsing branches.
+    fn recompute_collapsed_rows(&mut self) {
+        if self.collapsed_branches.is_empty() {
+            self.rows = self.all_rows.clone();
+            return;
+        }
+
+        // Find which row indices to collapse for each branch.
+        // A branch's collapsible rows: rows after the tip (label row) that share the
+        // same commit_col and have no labels from non-collapsed branches.
+        let mut collapsed_indices: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        // Track where to insert summary rows: (tip_row_idx, branch_name, count)
+        let mut summaries: Vec<(usize, String, usize)> = Vec::new();
+
+        for branch in &self.collapsed_branches {
+            // Find the tip row (the one with this branch's label)
+            let tip_idx = self
+                .all_rows
                 .iter()
-                .find(|l| !l.is_head)
-                .or_else(|| row.labels.first());
-            if let Some(label) = label {
-                self.toggle_branch(label.name.clone());
+                .position(|r| r.labels.iter().any(|l| l.name == *branch));
+            let Some(tip_idx) = tip_idx else {
+                continue;
+            };
+            let tip_col = self.all_rows[tip_idx].commit_col;
+
+            // Walk rows after the tip in the same lane
+            let mut count = 0;
+            for i in (tip_idx + 1)..self.all_rows.len() {
+                let row = &self.all_rows[i];
+                if row.commit_col != tip_col {
+                    break;
+                }
+                // Stop if this row has labels from non-collapsed branches
+                let has_visible_label = row
+                    .labels
+                    .iter()
+                    .any(|l| !self.collapsed_branches.contains(&l.name));
+                if has_visible_label || row.is_merge {
+                    break;
+                }
+                if !collapsed_indices.contains(&i) {
+                    collapsed_indices.insert(i);
+                    count += 1;
+                }
+            }
+
+            if count > 0 {
+                summaries.push((tip_idx, branch.clone(), count));
             }
         }
+
+        // Build display rows
+        let mut rows = Vec::new();
+        let mut inserted_summaries: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+
+        for (i, row) in self.all_rows.iter().enumerate() {
+            if collapsed_indices.contains(&i) {
+                // Check if we need to insert a summary before skipping
+                for &(tip_idx, ref branch, count) in &summaries {
+                    if tip_idx + 1 == i && !inserted_summaries.contains(&tip_idx) {
+                        inserted_summaries.insert(tip_idx);
+                        // Create a placeholder row
+                        let mut placeholder = row.clone();
+                        placeholder.message = format!("\u{25b6} {} ({count} commits)", branch,);
+                        placeholder.short_id = String::new();
+                        placeholder.author = String::new();
+                        placeholder.labels = Vec::new();
+                        placeholder.diff_stat = None;
+                        placeholder.collapsed = Some((branch.clone(), count));
+                        rows.push(placeholder);
+                    }
+                }
+                continue;
+            }
+            rows.push(row.clone());
+        }
+
+        self.rows = rows;
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -429,12 +472,15 @@ impl GitGraph {
     }
 
     fn draw_graph_list(&mut self, frame: &mut Frame, area: Rect) {
-        let hidden_count = self.graph_options.hidden_branches.len();
-        let title = match (self.graph_options.first_parent, hidden_count) {
+        let collapsed_count = self.collapsed_branches.len();
+        let title = match (self.graph_options.first_parent, collapsed_count) {
             (true, 0) => format!(" Git Graph — {} [1st-parent] ", self.repo_name),
-            (true, n) => format!(" Git Graph — {} [1st-parent] ({n} hidden) ", self.repo_name),
+            (true, n) => format!(
+                " Git Graph — {} [1st-parent] ({n} collapsed) ",
+                self.repo_name
+            ),
             (false, 0) => format!(" Git Graph — {} ", self.repo_name),
-            (false, n) => format!(" Git Graph — {} ({n} hidden) ", self.repo_name),
+            (false, n) => format!(" Git Graph — {} ({n} collapsed) ", self.repo_name),
         };
         let border_color = if self.focused && self.commit_detail.is_none() {
             Color::Cyan
@@ -480,71 +526,81 @@ impl GitGraph {
             .enumerate()
             .map(|(i, row)| {
                 let dimmed = has_search && !self.search.matches.contains(&i);
+                let is_collapsed = row.collapsed.is_some();
                 let mut spans = graph_render::render_graph_prefix(row);
 
-                if dimmed {
-                    // Override all spans to DarkGray
+                if dimmed || is_collapsed {
                     for span in &mut spans {
                         span.style = Style::default().fg(Color::DarkGray);
                     }
                 }
 
-                let id_style = if dimmed {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                };
-                spans.push(Span::styled(format!("{} ", row.short_id), id_style));
-
-                if !dimmed {
-                    spans.extend(graph_render::render_branch_labels(
-                        &row.labels,
-                        label_max_len,
+                if is_collapsed {
+                    // Collapsed placeholder: show only the message with italic style
+                    spans.push(Span::styled(
+                        row.message.clone(),
+                        Style::default()
+                            .fg(Color::Rgb(130, 130, 130))
+                            .add_modifier(Modifier::ITALIC),
                     ));
-                }
-
-                let msg_color = if dimmed {
-                    Color::DarkGray
-                } else if row.is_merge {
-                    Color::Rgb(130, 130, 130)
                 } else {
-                    Color::White
-                };
-                spans.push(Span::styled(
-                    row.message.clone(),
-                    Style::default().fg(msg_color),
-                ));
+                    let id_style = if dimmed {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    spans.push(Span::styled(format!("{} ", row.short_id), id_style));
 
-                let author_color = if dimmed {
-                    Color::DarkGray
-                } else {
-                    graph_render::author_color(&row.author)
-                };
-                spans.push(Span::styled(
-                    format!("  — {}", row.author),
-                    Style::default().fg(author_color),
-                ));
-                spans.push(Span::styled(
-                    format!(" {}", graph_render::format_relative_time(row.time)),
-                    Style::default().fg(Color::DarkGray),
-                ));
-
-                if let Some(ref stat) = row.diff_stat
-                    && !dimmed
-                {
-                    if stat.additions > 0 {
-                        spans.push(Span::styled(
-                            format!(" +{}", stat.additions),
-                            Style::default().fg(Color::Green),
+                    if !dimmed {
+                        spans.extend(graph_render::render_branch_labels(
+                            &row.labels,
+                            label_max_len,
                         ));
                     }
-                    if stat.deletions > 0 {
-                        spans.push(Span::styled(
-                            format!(" -{}", stat.deletions),
-                            Style::default().fg(Color::Red),
-                        ));
+
+                    let msg_color = if dimmed {
+                        Color::DarkGray
+                    } else if row.is_merge {
+                        Color::Rgb(130, 130, 130)
+                    } else {
+                        Color::White
+                    };
+                    spans.push(Span::styled(
+                        row.message.clone(),
+                        Style::default().fg(msg_color),
+                    ));
+
+                    let author_color = if dimmed {
+                        Color::DarkGray
+                    } else {
+                        graph_render::author_color(&row.author)
+                    };
+                    spans.push(Span::styled(
+                        format!("  — {}", row.author),
+                        Style::default().fg(author_color),
+                    ));
+                    spans.push(Span::styled(
+                        format!(" {}", graph_render::format_relative_time(row.time)),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+
+                    if let Some(ref stat) = row.diff_stat
+                        && !dimmed
+                    {
+                        if stat.additions > 0 {
+                            spans.push(Span::styled(
+                                format!(" +{}", stat.additions),
+                                Style::default().fg(Color::Green),
+                            ));
+                        }
+                        if stat.deletions > 0 {
+                            spans.push(Span::styled(
+                                format!(" -{}", stat.deletions),
+                                Style::default().fg(Color::Red),
+                            ));
+                        }
                     }
                 }
 
@@ -752,14 +808,12 @@ impl Component for GitGraph {
                 self.reload_graph();
                 Ok(None)
             }
-            KeyCode::Char('x') => {
-                if let Some(idx) = self.state.selected() {
-                    self.toggle_row_branch(idx);
-                }
+            KeyCode::Char('c') => {
+                self.toggle_collapse_selected();
                 Ok(None)
             }
             KeyCode::Char('H') => {
-                self.show_all_branches();
+                self.expand_all_branches();
                 Ok(None)
             }
             KeyCode::Char('l') | KeyCode::Right => {
@@ -782,23 +836,10 @@ impl Component for GitGraph {
                 // Click in graph list area
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
-                    let content_x = self.graph_list_area.x + 1;
                     if mouse.row >= content_y {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.rows.len() {
-                            // Check if click landed on a branch label
-                            let click_col =
-                                (mouse.column.saturating_sub(content_x)) as usize + self.h_scroll;
-                            if let Some(branch_name) = label_at_column(
-                                &self.rows[idx],
-                                click_col,
-                                self.graph_options.label_max_len,
-                            ) {
-                                self.toggle_branch(branch_name);
-                                return Ok(None);
-                            }
-
                             // Click on already-selected row opens commit files
                             if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
                                 return Ok(self.try_show_commit_files());
@@ -882,21 +923,7 @@ impl Component for GitGraph {
                 self.h_scroll = self.h_scroll.saturating_add(4);
                 Ok(None)
             }
-            MouseEventKind::Down(MouseButton::Right) => {
-                let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
-                if self.graph_list_area.contains(pos) {
-                    let content_y = self.graph_list_area.y + 1;
-                    if mouse.row >= content_y {
-                        let visual_row = (mouse.row - content_y) as usize;
-                        let idx = visual_row + self.state.offset();
-                        if idx < self.rows.len() {
-                            self.state.select(Some(idx));
-                            self.toggle_row_branch(idx);
-                        }
-                    }
-                }
-                Ok(None)
-            }
+            MouseEventKind::Down(MouseButton::Right) => Ok(None),
             _ => Ok(None),
         }
     }
@@ -1036,16 +1063,12 @@ impl GitGraph {
                 Span::raw("          Toggle first-parent mode"),
             ]),
             Line::from(vec![
-                Span::styled("  x", Style::default().fg(Color::Yellow)),
-                Span::raw("          Hide branch on selected row"),
-            ]),
-            Line::from(vec![
-                Span::styled("  click", Style::default().fg(Color::Yellow)),
-                Span::raw("      Click label / right-click row"),
+                Span::styled("  c", Style::default().fg(Color::Yellow)),
+                Span::raw("          Collapse/expand branch"),
             ]),
             Line::from(vec![
                 Span::styled("  H", Style::default().fg(Color::Yellow)),
-                Span::raw("          Show all hidden branches"),
+                Span::raw("          Expand all collapsed"),
             ]),
             Line::from(""),
             Line::from(Span::styled(
@@ -1104,6 +1127,7 @@ mod tests {
             labels: Vec::new(),
             is_merge: false,
             diff_stat: None,
+            collapsed: None,
         }
     }
 
@@ -1245,69 +1269,69 @@ mod tests {
     }
 
     #[test]
-    fn test_label_click_detects_branch_name() {
-        let row = mock_row_with_labels(vec![make_label("main")]);
-        // Layout: "● " (3 chars: commit + space + space) + "abc1234 " (8) + "(" (1) + "main" (4)
-        // Graph prefix for single Commit lane = "●" (1 char) but rendered with separator
-        // render_graph_prefix returns spans: ["●"] = 1 char
-        // So cursor: prefix(1) + id(8) + paren(1) = 10, label "main" at cols 10..14
-        let prefix_width: usize = graph_render::render_graph_prefix(&row)
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
-        let label_start = prefix_width + 8 + 1; // prefix + "abc1234 " + "("
-        assert_eq!(
-            label_at_column(&row, label_start, 24),
-            Some("main".to_string())
-        );
-        assert_eq!(
-            label_at_column(&row, label_start + 3, 24),
-            Some("main".to_string())
-        );
-        // One past the end of "main" should not match
-        assert_eq!(label_at_column(&row, label_start + 4, 24), None);
+    fn test_collapse_branch_creates_placeholder() {
+        let mut graph = GitGraph::new();
+        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
+        tip.commit_col = 1;
+        let mut mid = mock_row("b", "wip", "Bob");
+        mid.commit_col = 1;
+        let mut base = mock_row("c", "base", "Charlie");
+        base.commit_col = 1;
+        base.is_merge = true; // merge stops collapse walk
+
+        graph.set_rows(vec![tip, mid, base]);
+        graph.state.select(Some(0));
+        graph.toggle_collapse_selected();
+
+        assert_eq!(graph.collapsed_branches.len(), 1);
+        assert!(graph.collapsed_branches.contains("feature"));
+        // rows: tip (kept), placeholder (1 commit), merge base (kept)
+        assert_eq!(graph.rows.len(), 3);
+        assert!(graph.rows[1].collapsed.is_some());
+        let (name, count) = graph.rows[1].collapsed.as_ref().unwrap();
+        assert_eq!(name, "feature");
+        assert_eq!(*count, 1);
     }
 
     #[test]
-    fn test_label_click_returns_none_for_no_labels() {
-        let row = mock_row("abc1234", "commit msg", "Author");
-        assert_eq!(label_at_column(&row, 0, 24), None);
-        assert_eq!(label_at_column(&row, 15, 24), None);
+    fn test_expand_collapsed_branch() {
+        let mut graph = GitGraph::new();
+        let mut tip = mock_row_with_labels(vec![make_label("feature")]);
+        tip.commit_col = 1;
+        let mut mid = mock_row("b", "wip", "Bob");
+        mid.commit_col = 1;
+        let mut base = mock_row("c", "base", "Charlie");
+        base.commit_col = 1;
+        base.is_merge = true;
+
+        graph.set_rows(vec![tip, mid, base]);
+        graph.state.select(Some(0));
+        graph.toggle_collapse_selected();
+
+        // Now select the placeholder and toggle again to expand
+        graph.state.select(Some(1));
+        graph.toggle_collapse_selected();
+
+        assert!(graph.collapsed_branches.is_empty());
+        assert_eq!(graph.rows.len(), 3);
+        assert!(graph.rows[1].collapsed.is_none());
     }
 
     #[test]
-    fn test_label_click_multiple_labels() {
-        let row = mock_row_with_labels(vec![make_label("main"), make_label("dev")]);
-        let prefix_width: usize = graph_render::render_graph_prefix(&row)
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
-        let main_start = prefix_width + 8 + 1; // after "("
-        let dev_start = main_start + 4 + 2; // "main" + ", "
-        assert_eq!(
-            label_at_column(&row, main_start, 24),
-            Some("main".to_string())
-        );
-        assert_eq!(
-            label_at_column(&row, dev_start, 24),
-            Some("dev".to_string())
-        );
-    }
+    fn test_expand_all_branches() {
+        let mut graph = GitGraph::new();
+        let mut tip = mock_row_with_labels(vec![make_label("feat-a")]);
+        tip.commit_col = 0;
+        let mut mid = mock_row("b", "wip", "Bob");
+        mid.commit_col = 0;
 
-    #[test]
-    fn test_label_click_head_label_has_prefix() {
-        let mut label = make_label("main");
-        label.is_head = true;
-        let row = mock_row_with_labels(vec![label]);
-        let prefix_width: usize = graph_render::render_graph_prefix(&row)
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
-        // After "(" + "* " (2 char prefix), then "main"
-        let label_start = prefix_width + 8 + 1 + 2;
-        assert_eq!(
-            label_at_column(&row, label_start, 24),
-            Some("main".to_string())
-        );
+        graph.set_rows(vec![tip, mid]);
+        graph.state.select(Some(0));
+        graph.toggle_collapse_selected();
+        assert!(!graph.collapsed_branches.is_empty());
+
+        graph.expand_all_branches();
+        assert!(graph.collapsed_branches.is_empty());
+        assert_eq!(graph.rows.len(), 2);
     }
 }

@@ -22,7 +22,6 @@ pub(crate) struct GraphOptions {
     pub label_max_len: usize,
     pub first_parent: bool,
     pub show_stats: bool,
-    pub hidden_branches: HashSet<String>,
 }
 
 impl Default for GraphOptions {
@@ -32,7 +31,6 @@ impl Default for GraphOptions {
             label_max_len: 24,
             first_parent: false,
             show_stats: true,
-            hidden_branches: HashSet::new(),
         }
     }
 }
@@ -57,6 +55,8 @@ pub(crate) struct GraphRow {
     pub is_merge: bool,
     pub horizontal_spans: Vec<(usize, usize, usize)>,
     pub diff_stat: Option<DiffStat>,
+    /// If set, this row is a collapsed-branch placeholder: (branch_name, hidden_count).
+    pub collapsed: Option<(String, usize)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,7 +92,7 @@ impl GraphBuilder {
         options: &GraphOptions,
     ) -> color_eyre::Result<Vec<GraphRow>> {
         let repo = Repository::open(path)?;
-        let mut ref_map = resolve_refs(&repo, &options.branch_filter, &options.hidden_branches);
+        let mut ref_map = resolve_refs(&repo, &options.branch_filter);
 
         let mut revwalk = repo.revwalk()?;
         revwalk.push_head().ok(); // ok: handles unborn HEAD
@@ -132,6 +132,7 @@ impl GraphBuilder {
                 is_merge,
                 horizontal_spans,
                 diff_stat: None,
+                collapsed: None,
             });
         }
 
@@ -267,11 +268,7 @@ impl GraphBuilder {
     }
 }
 
-fn resolve_refs(
-    repo: &Repository,
-    filter: &BranchFilter,
-    hidden: &HashSet<String>,
-) -> HashMap<Oid, Vec<BranchLabel>> {
+fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<BranchLabel>> {
     if *filter == BranchFilter::None {
         return HashMap::new();
     }
@@ -310,9 +307,6 @@ fn resolve_refs(
                 Ok(Some(n)) => n.to_string(),
                 _ => continue,
             };
-            if hidden.contains(&name) {
-                continue;
-            }
             let is_remote = bt == BranchType::Remote;
             let is_head =
                 !is_remote && head_oid == Some(target) && head_name.as_deref() == Some(&name);
