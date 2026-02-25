@@ -281,6 +281,21 @@ impl GitGraph {
         }
     }
 
+    /// Toggle the first non-HEAD branch label on the given row.
+    /// Falls back to HEAD if it's the only label.
+    fn toggle_row_branch(&mut self, row_idx: usize) {
+        if let Some(row) = self.rows.get(row_idx) {
+            let label = row
+                .labels
+                .iter()
+                .find(|l| !l.is_head)
+                .or_else(|| row.labels.first());
+            if let Some(label) = label {
+                self.toggle_branch(label.name.clone());
+            }
+        }
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         // If viewing commit files, copy the selected file path
         if let Some(ref detail) = self.commit_detail
@@ -737,6 +752,12 @@ impl Component for GitGraph {
                 self.reload_graph();
                 Ok(None)
             }
+            KeyCode::Char('x') => {
+                if let Some(idx) = self.state.selected() {
+                    self.toggle_row_branch(idx);
+                }
+                Ok(None)
+            }
             KeyCode::Char('H') => {
                 self.show_all_branches();
                 Ok(None)
@@ -859,6 +880,21 @@ impl Component for GitGraph {
             }
             MouseEventKind::ScrollRight => {
                 self.h_scroll = self.h_scroll.saturating_add(4);
+                Ok(None)
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if self.graph_list_area.contains(pos) {
+                    let content_y = self.graph_list_area.y + 1;
+                    if mouse.row >= content_y {
+                        let visual_row = (mouse.row - content_y) as usize;
+                        let idx = visual_row + self.state.offset();
+                        if idx < self.rows.len() {
+                            self.state.select(Some(idx));
+                            self.toggle_row_branch(idx);
+                        }
+                    }
+                }
                 Ok(None)
             }
             _ => Ok(None),
@@ -1000,8 +1036,12 @@ impl GitGraph {
                 Span::raw("          Toggle first-parent mode"),
             ]),
             Line::from(vec![
+                Span::styled("  x", Style::default().fg(Color::Yellow)),
+                Span::raw("          Hide branch on selected row"),
+            ]),
+            Line::from(vec![
                 Span::styled("  click", Style::default().fg(Color::Yellow)),
-                Span::raw("      Click branch label to hide"),
+                Span::raw("      Click label / right-click row"),
             ]),
             Line::from(vec![
                 Span::styled("  H", Style::default().fg(Color::Yellow)),
