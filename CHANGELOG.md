@@ -2,6 +2,12 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.1] - 2026-02-26
+
+### Changed
+- Help overlay (`?`) now shows context-aware keybindings per focused panel (Repos, Changes, Graph) with global keys always visible
+- Added missing keybindings to help: `a` (add repo), `d` (remove), `s` (sort), `R` (rescan), `g` (git graph)
+
 ## [0.3.0] - 2025-02-25
 
 ### Added
