@@ -2,6 +2,28 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.0] - 2025-02-25
+
+### Added
+- DAG-based branch collapse/expand (`c` key): computes branch segments from parent OIDs instead of visual lane positions, correctly handling lane reuse, interleaved commits, and unlabeled merged branches
+- Main trunk protection: pressing `c` on the main branch no longer collapses the entire history
+- Horizontal scroll for git graph (`h`/`l` keys + scroll wheel)
+- Search/filter commits with `/` key, `n`/`N` to navigate matches
+- First-parent mode toggle with `f` key
+- Relative timestamps and deterministic author coloring
+- Git tag display in graph labels (LightYellow color)
+- Horizontal merge/fork lines and lane crossings in git graph
+- Diff stats per commit (+N/-M) with async two-stage loading
+- Dynamic row truncation to fit panel width
+- `?` help overlay with keybinding reference
+- Update checker with notification overlay
+- Click branch labels to toggle branch visibility
+
+### Fixed
+- Diff view in changes panel now clears when files are staged (`git add`) or repo status changes
+- Graph reloads no longer interrupt commit detail inspection
+- Error/success messages clear after timeout
+
 ## [0.2.0] - 2026-02-24
 
 ### Added
