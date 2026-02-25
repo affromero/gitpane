@@ -42,6 +42,7 @@ pub(crate) struct GraphRow {
     pub time: i64,
     pub labels: Vec<BranchLabel>,
     pub is_merge: bool,
+    pub horizontal_spans: Vec<(usize, usize, usize)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +54,10 @@ pub(crate) enum LaneSegment {
     MergeRight,
     ForkLeft,
     ForkRight,
+    Horizontal,
+    CrossHorizontal,
+    RightTee,
+    LeftTee,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +96,7 @@ impl GraphBuilder {
             let parent_oids: Vec<Oid> = commit.parent_ids().collect();
             let is_merge = commit.parent_count() > 1;
             let labels = ref_map.remove(&oid).unwrap_or_default();
-            let row = self.process_commit(oid, &parent_oids);
+            let (commit_col, lanes, horizontal_spans) = self.process_commit(oid, &parent_oids);
 
             let short_id = oid.to_string()[..7].to_string();
             let message = commit.summary().unwrap_or("").to_string();
@@ -99,8 +104,8 @@ impl GraphBuilder {
             let time = commit.time().seconds();
 
             rows.push(GraphRow {
-                commit_col: row.0,
-                lanes: row.1,
+                commit_col,
+                lanes,
                 oid,
                 short_id,
                 message,
@@ -108,13 +113,18 @@ impl GraphBuilder {
                 time,
                 labels,
                 is_merge,
+                horizontal_spans,
             });
         }
 
         Ok(rows)
     }
 
-    fn process_commit(&mut self, oid: Oid, parent_oids: &[Oid]) -> (usize, Vec<LaneSegment>) {
+    fn process_commit(
+        &mut self,
+        oid: Oid,
+        parent_oids: &[Oid],
+    ) -> (usize, Vec<LaneSegment>, Vec<(usize, usize, usize)>) {
         // Find which lane this commit occupies
         let commit_col = self
             .active_lanes
@@ -148,6 +158,7 @@ impl GraphBuilder {
         // Process parents
         // Clear this commit's lane first
         self.active_lanes[commit_col] = None;
+        let mut spans: Vec<(usize, usize, usize)> = Vec::new();
 
         if !parent_oids.is_empty() {
             // First parent continues in same lane
@@ -163,8 +174,10 @@ impl GraphBuilder {
                 // First parent already has a lane — merge to it
                 if existing < commit_col {
                     lanes[commit_col] = LaneSegment::MergeLeft;
+                    spans.push((existing, commit_col, lane_color(commit_col)));
                 } else if existing > commit_col {
                     lanes[commit_col] = LaneSegment::MergeRight;
+                    spans.push((commit_col, existing, lane_color(commit_col)));
                 }
                 // Don't re-assign; lane stays as is
             } else {
@@ -192,8 +205,29 @@ impl GraphBuilder {
                     }
                     if new_col > commit_col {
                         lanes[new_col] = LaneSegment::ForkRight;
+                        spans.push((commit_col, new_col, lane_color(new_col)));
                     } else {
                         lanes[new_col] = LaneSegment::ForkLeft;
+                        spans.push((new_col, commit_col, lane_color(new_col)));
+                    }
+                }
+            }
+        }
+
+        // Horizontal fill: connect merge/fork endpoints with ─ and ┼
+        for &(left, right, _) in &spans {
+            if lanes[left] == LaneSegment::Straight {
+                lanes[left] = LaneSegment::RightTee;
+            }
+            if right < lanes.len() && lanes[right] == LaneSegment::Straight {
+                lanes[right] = LaneSegment::LeftTee;
+            }
+            for col in (left + 1)..right {
+                if col < lanes.len() {
+                    if lanes[col] == LaneSegment::Straight {
+                        lanes[col] = LaneSegment::CrossHorizontal;
+                    } else if lanes[col] == LaneSegment::Empty {
+                        lanes[col] = LaneSegment::Horizontal;
                     }
                 }
             }
@@ -204,7 +238,7 @@ impl GraphBuilder {
             self.active_lanes.pop();
         }
 
-        (commit_col, lanes)
+        (commit_col, lanes, spans)
     }
 
     fn find_free_lane(&self) -> usize {
@@ -508,6 +542,64 @@ mod tests {
             !rows[1].is_merge,
             "non-merge commit should have is_merge=false"
         );
+    }
+
+    #[test]
+    fn test_merge_left_horizontal_fill() {
+        let mut builder = GraphBuilder::new();
+        let oid_target = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_b = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let oid_c = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+        let oid_commit = Oid::from_str("dddddddddddddddddddddddddddddddddddddd").unwrap();
+
+        builder.active_lanes = vec![Some(oid_target), Some(oid_b), Some(oid_c), Some(oid_commit)];
+
+        let (col, lanes, spans) = builder.process_commit(oid_commit, &[oid_target]);
+
+        assert_eq!(col, 3);
+        assert_eq!(lanes[0], LaneSegment::RightTee);
+        assert_eq!(lanes[1], LaneSegment::CrossHorizontal);
+        assert_eq!(lanes[2], LaneSegment::CrossHorizontal);
+        assert_eq!(lanes[3], LaneSegment::MergeLeft);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0], (0, 3, lane_color(3)));
+    }
+
+    #[test]
+    fn test_fork_right_horizontal_fill() {
+        let mut builder = GraphBuilder::new();
+        let oid_commit = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_active = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let oid_parent1 = Oid::from_str("cccccccccccccccccccccccccccccccccccccccc").unwrap();
+        let oid_parent2 = Oid::from_str("dddddddddddddddddddddddddddddddddddddd").unwrap();
+
+        builder.active_lanes = vec![Some(oid_commit), Some(oid_active), None];
+
+        let (col, lanes, spans) = builder.process_commit(oid_commit, &[oid_parent1, oid_parent2]);
+
+        assert_eq!(col, 0);
+        assert_eq!(lanes[0], LaneSegment::Commit);
+        assert_eq!(lanes[1], LaneSegment::CrossHorizontal);
+        assert_eq!(lanes[2], LaneSegment::ForkRight);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0], (0, 2, lane_color(2)));
+    }
+
+    #[test]
+    fn test_adjacent_merge_no_intermediate() {
+        let mut builder = GraphBuilder::new();
+        let oid_target = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let oid_commit = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+
+        builder.active_lanes = vec![Some(oid_target), Some(oid_commit)];
+
+        let (col, lanes, spans) = builder.process_commit(oid_commit, &[oid_target]);
+
+        assert_eq!(col, 1);
+        assert_eq!(lanes[0], LaneSegment::RightTee);
+        assert_eq!(lanes[1], LaneSegment::MergeLeft);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0], (0, 1, lane_color(1)));
     }
 
     #[test]

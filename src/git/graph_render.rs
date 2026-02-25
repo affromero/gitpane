@@ -16,7 +16,19 @@ pub(crate) fn render_graph_prefix(row: &GraphRow) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
 
     for (col, segment) in row.lanes.iter().enumerate() {
-        let color = PALETTE[lane_color(col)];
+        // Use span color for horizontal-related segments
+        let color = match segment {
+            LaneSegment::Horizontal
+            | LaneSegment::CrossHorizontal
+            | LaneSegment::RightTee
+            | LaneSegment::LeftTee => row
+                .horizontal_spans
+                .iter()
+                .find(|s| s.0 <= col && col <= s.1)
+                .map(|s| PALETTE[s.2])
+                .unwrap_or(PALETTE[lane_color(col)]),
+            _ => PALETTE[lane_color(col)],
+        };
         let style = Style::default().fg(color);
 
         let ch = match segment {
@@ -27,10 +39,27 @@ pub(crate) fn render_graph_prefix(row: &GraphRow) -> Vec<Span<'static>> {
             LaneSegment::MergeRight => "╰",
             LaneSegment::ForkLeft => "╮",
             LaneSegment::ForkRight => "╭",
+            LaneSegment::Horizontal => "─",
+            LaneSegment::CrossHorizontal => "┼",
+            LaneSegment::RightTee => "├",
+            LaneSegment::LeftTee => "┤",
         };
 
         spans.push(Span::styled(ch.to_string(), style));
-        spans.push(Span::raw(" "));
+
+        // Inter-column space: ─ if within a horizontal span, " " otherwise
+        let h_span = row
+            .horizontal_spans
+            .iter()
+            .find(|s| s.0 <= col && col < s.1);
+        if let Some(s) = h_span {
+            spans.push(Span::styled(
+                "─".to_string(),
+                Style::default().fg(PALETTE[s.2]),
+            ));
+        } else {
+            spans.push(Span::raw(" "));
+        }
     }
 
     spans
