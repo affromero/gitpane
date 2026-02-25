@@ -13,6 +13,7 @@ pub(crate) struct BranchLabel {
     pub is_head: bool,
     pub is_remote: bool,
     pub is_worktree: bool,
+    pub is_tag: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -298,15 +299,41 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
                 is_head,
                 is_remote,
                 is_worktree,
+                is_tag: false,
             });
         }
     }
 
-    // Sort: HEAD first, then local, then remote, then alphabetical
+    // Tags
+    if let Ok(tag_names) = repo.tag_names(None) {
+        for name in tag_names.iter().flatten() {
+            let refname = format!("refs/tags/{}", name);
+            let Ok(reference) = repo.find_reference(&refname) else {
+                continue;
+            };
+            let oid = reference
+                .peel_to_commit()
+                .ok()
+                .map(|c| c.id())
+                .or_else(|| reference.target());
+            if let Some(oid) = oid {
+                map.entry(oid).or_default().push(BranchLabel {
+                    name: name.to_string(),
+                    is_head: false,
+                    is_remote: false,
+                    is_worktree: false,
+                    is_tag: true,
+                });
+            }
+        }
+    }
+
+    // Sort: HEAD first, then local, then remote, then tags, then alphabetical
     for labels in map.values_mut() {
         labels.sort_by(|a, b| {
             b.is_head
                 .cmp(&a.is_head)
+                .then(a.is_tag.cmp(&b.is_tag))
                 .then(a.is_remote.cmp(&b.is_remote))
                 .then(a.name.cmp(&b.name))
         });

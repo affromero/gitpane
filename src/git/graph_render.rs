@@ -82,6 +82,8 @@ pub(crate) fn render_branch_labels(labels: &[BranchLabel], max_len: usize) -> Ve
             ("* ", Color::Green)
         } else if label.is_worktree {
             ("\u{2302} ", Color::Magenta) // ⌂
+        } else if label.is_tag {
+            ("", Color::LightYellow)
         } else if label.is_remote {
             ("", Color::Red)
         } else {
@@ -117,6 +119,7 @@ mod tests {
             is_head,
             is_remote,
             is_worktree,
+            is_tag: false,
         }
     }
 
@@ -162,5 +165,25 @@ mod tests {
         assert!(text.contains(", "), "got: {text}");
         assert!(text.starts_with('('));
         assert!(text.contains(')'));
+    }
+
+    #[test]
+    fn test_tag_label_renders_yellow() {
+        let labels = vec![BranchLabel {
+            name: "v1.0.0".to_string(),
+            is_head: false,
+            is_remote: false,
+            is_worktree: false,
+            is_tag: true,
+        }];
+        let spans = render_branch_labels(&labels, 24);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("v1.0.0"), "got: {text}");
+        // Tag span should use LightYellow
+        let tag_span = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "v1.0.0")
+            .unwrap();
+        assert_eq!(tag_span.style.fg, Some(Color::LightYellow));
     }
 }
