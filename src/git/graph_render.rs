@@ -164,6 +164,44 @@ pub(crate) fn truncate_line(spans: &mut Vec<Span<'static>>, max_width: usize) {
     }
 }
 
+/// Apply horizontal scroll: skip `offset` characters from the left, then truncate to `max_width`.
+pub(crate) fn h_scroll_line(spans: &mut Vec<Span<'static>>, offset: usize, max_width: usize) {
+    if offset == 0 {
+        truncate_line(spans, max_width);
+        return;
+    }
+
+    // Phase 1: skip `offset` characters from the left
+    let mut to_skip = offset;
+    let mut first_kept = 0;
+
+    for (i, span) in spans.iter().enumerate() {
+        let w = span.content.chars().count();
+        if to_skip >= w {
+            to_skip -= w;
+            first_kept = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    // Remove fully-skipped spans
+    if first_kept > 0 {
+        spans.drain(..first_kept);
+    }
+
+    // Partially skip the first remaining span
+    if to_skip > 0
+        && let Some(first) = spans.first_mut()
+    {
+        let remaining: String = first.content.chars().skip(to_skip).collect();
+        *first = Span::styled(remaining, first.style);
+    }
+
+    // Phase 2: truncate to fit max_width
+    truncate_line(spans, max_width);
+}
+
 pub(crate) fn format_relative_time(epoch_secs: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -433,5 +471,47 @@ mod tests {
             .find(|s| s.content.as_ref() == "v1.0.0")
             .unwrap();
         assert_eq!(tag_span.style.fg, Some(Color::LightYellow));
+    }
+
+    #[test]
+    fn test_h_scroll_zero_offset_same_as_truncate() {
+        let mut a = vec![Span::raw("hello "), Span::raw("world this is long")];
+        let mut b = a.clone();
+        h_scroll_line(&mut a, 0, 10);
+        truncate_line(&mut b, 10);
+        let text_a: String = a.iter().map(|s| s.content.as_ref()).collect();
+        let text_b: String = b.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text_a, text_b);
+    }
+
+    #[test]
+    fn test_h_scroll_skips_characters() {
+        let mut spans = vec![Span::raw("abcdef"), Span::raw("ghij")];
+        h_scroll_line(&mut spans, 3, 20);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "defghij");
+    }
+
+    #[test]
+    fn test_h_scroll_skips_full_span() {
+        let mut spans = vec![Span::raw("abc"), Span::raw("def"), Span::raw("ghi")];
+        h_scroll_line(&mut spans, 4, 20);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "efghi");
+    }
+
+    #[test]
+    fn test_h_scroll_then_truncate() {
+        let mut spans = vec![Span::raw("abcdef"), Span::raw("ghijklmnop")];
+        h_scroll_line(&mut spans, 3, 5);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "def..");
+    }
+
+    #[test]
+    fn test_h_scroll_beyond_content_yields_empty() {
+        let mut spans = vec![Span::raw("abc")];
+        h_scroll_line(&mut spans, 10, 20);
+        assert!(spans.is_empty());
     }
 }

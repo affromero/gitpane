@@ -117,6 +117,8 @@ pub(crate) struct GitGraph {
     pub(crate) graph_options: GraphOptions,
     search: SearchState,
     show_help: bool,
+    /// Horizontal scroll offset (characters) for the graph list
+    h_scroll: usize,
 }
 
 impl GitGraph {
@@ -138,6 +140,7 @@ impl GitGraph {
             graph_options: GraphOptions::default(),
             search: SearchState::new(),
             show_help: false,
+            h_scroll: 0,
         }
     }
 
@@ -530,7 +533,7 @@ impl GitGraph {
                     }
                 }
 
-                graph_render::truncate_line(&mut spans, max_width);
+                graph_render::h_scroll_line(&mut spans, self.h_scroll, max_width);
                 ListItem::new(Line::from(spans))
             })
             .collect();
@@ -738,6 +741,14 @@ impl Component for GitGraph {
                 self.show_all_branches();
                 Ok(None)
             }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.h_scroll = self.h_scroll.saturating_add(4);
+                Ok(None)
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.h_scroll = self.h_scroll.saturating_sub(4);
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -756,7 +767,8 @@ impl Component for GitGraph {
                         let idx = visual_row + self.state.offset();
                         if idx < self.rows.len() {
                             // Check if click landed on a branch label
-                            let click_col = (mouse.column.saturating_sub(content_x)) as usize;
+                            let click_col =
+                                (mouse.column.saturating_sub(content_x)) as usize + self.h_scroll;
                             if let Some(branch_name) = label_at_column(
                                 &self.rows[idx],
                                 click_col,
@@ -839,6 +851,14 @@ impl Component for GitGraph {
                     }
                 }
                 self.select_next();
+                Ok(None)
+            }
+            MouseEventKind::ScrollLeft => {
+                self.h_scroll = self.h_scroll.saturating_sub(4);
+                Ok(None)
+            }
+            MouseEventKind::ScrollRight => {
+                self.h_scroll = self.h_scroll.saturating_add(4);
                 Ok(None)
             }
             _ => Ok(None),
@@ -940,6 +960,10 @@ impl GitGraph {
             Line::from(vec![
                 Span::styled("  j/k", Style::default().fg(Color::Yellow)),
                 Span::raw("        Move up/down"),
+            ]),
+            Line::from(vec![
+                Span::styled("  h/l", Style::default().fg(Color::Yellow)),
+                Span::raw("        Scroll left/right"),
             ]),
             Line::from(vec![
                 Span::styled("  Enter", Style::default().fg(Color::Yellow)),
