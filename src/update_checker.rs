@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/affromero/gitpane/releases/latest";
+const GITHUB_API_URL: &str = "https://api.github.com/repos/affromero/gitpane/releases/latest";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Check GitHub for a newer release. Returns `Some(tag)` if a newer version
@@ -62,14 +61,14 @@ mod tests {
     fn test_same_version_returns_none() {
         let remote = parse_semver("0.2.0").unwrap();
         let local = parse_semver("0.2.0").unwrap();
-        assert!(!(remote > local));
+        assert!(remote <= local);
     }
 
     #[test]
     fn test_older_remote_returns_none() {
         let remote = parse_semver("0.1.0").unwrap();
         let local = parse_semver("0.2.0").unwrap();
-        assert!(!(remote > local));
+        assert!(remote <= local);
     }
 
     #[test]

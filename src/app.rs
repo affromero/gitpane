@@ -14,6 +14,7 @@ use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
 use crate::config::Config;
+use crate::config::UpdatePosition;
 use crate::event::Event;
 use crate::git::graph::GraphOptions;
 use crate::git::scanner;
@@ -75,6 +76,10 @@ pub(crate) struct App {
     border_frac: [f64; 2],
     /// True when the layout is horizontal (side-by-side panels)
     horizontal_layout: bool,
+    /// Newer version available (set by background update check)
+    update_version: Option<String>,
+    /// Where to render the update notification
+    update_position: UpdatePosition,
 }
 
 impl App {
@@ -89,6 +94,8 @@ impl App {
             first_parent: false,
             show_stats: config.graph.show_stats,
         };
+
+        let update_position = config.ui.update_position;
 
         Self {
             config,
@@ -111,6 +118,8 @@ impl App {
             dragging_border: None,
             border_frac: [0.25, 0.50],
             horizontal_layout: false,
+            update_version: None,
+            update_position,
         }
     }
 
@@ -191,6 +200,16 @@ impl App {
             self.config.watch.debounce_ms,
             tui.event_tx.clone(),
         )?;
+
+        // Check for updates in the background
+        if self.config.ui.check_for_updates {
+            let tx = self.action_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Some(version) = crate::update_checker::check_latest() {
+                    let _ = tx.send(Action::UpdateAvailable(version));
+                }
+            });
+        }
 
         // Auto-select the first repo (graph loads once status arrives)
         self.sync_selection();
@@ -668,6 +687,9 @@ impl App {
                         self.sort_repos();
                         self.sync_selection();
                     }
+                    Action::UpdateAvailable(ref version) => {
+                        self.update_version = Some(version.clone());
+                    }
                     Action::Error(ref msg) => {
                         tracing::error!("{}", msg);
                         // Sanitize: single line, max 120 chars for status bar
@@ -1062,7 +1084,54 @@ impl App {
         self.context_menu.draw(frame, area)?;
         self.path_input.draw(frame, area);
 
+        // Update notification overlay
+        if let Some(ref version) = self.update_version {
+            self.draw_update_notification(frame, main_area, version);
+        }
+
         Ok(())
+    }
+}
+
+impl App {
+    fn draw_update_notification(&self, frame: &mut ratatui::Frame, area: Rect, version: &str) {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Paragraph};
+
+        let text = format!(" \u{2191} v{version} \u{00b7} cargo install gitpane ");
+        let width = text.len() as u16 + 2; // +2 for border
+        let height = 3; // top border + content + bottom border
+
+        if area.width < width || area.height < height {
+            return;
+        }
+
+        let x = match self.update_position {
+            UpdatePosition::TopRight => area.x + area.width.saturating_sub(width + 1),
+            UpdatePosition::TopLeft => area.x + 1,
+        };
+        let y = area.y;
+
+        let rect = Rect::new(x, y, width, height);
+
+        let line = Line::from(vec![
+            Span::styled(" \u{2191} ", Style::default().fg(Color::Green)),
+            Span::styled(format!("v{version}"), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                " \u{00b7} cargo install gitpane ",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let paragraph = Paragraph::new(line).block(block);
+
+        frame.render_widget(ratatui::widgets::Clear, rect);
+        frame.render_widget(paragraph, rect);
     }
 }
 

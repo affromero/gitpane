@@ -21,3 +21,9 @@ debounce_ms = 500
 [ui]
 # Terminal refresh rate in frames per second (default: 30)
 frame_rate = 30
+
+# Check GitHub for newer releases on startup (default: true)
+check_for_updates = true
+
+# Where to show the update notification: "top-right" or "top-left" (default: "top-right")
+update_position = "top-right"
