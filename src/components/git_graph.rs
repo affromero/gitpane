@@ -1258,7 +1258,6 @@ mod tests {
     const OID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const OID_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
 
-
     /// Build a DAG-wired row. `oid_str` must be valid hex.
     fn dag_row(
         oid_str: &str,
