@@ -86,6 +86,7 @@ impl App {
         git_graph.graph_options = GraphOptions {
             branch_filter: config.graph.branches,
             label_max_len: config.graph.label_max_len,
+            first_parent: false,
         };
 
         Self {

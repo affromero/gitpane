@@ -20,6 +20,7 @@ pub(crate) struct BranchLabel {
 pub(crate) struct GraphOptions {
     pub branch_filter: BranchFilter,
     pub label_max_len: usize,
+    pub first_parent: bool,
 }
 
 impl Default for GraphOptions {
@@ -27,6 +28,7 @@ impl Default for GraphOptions {
         Self {
             branch_filter: BranchFilter::All,
             label_max_len: 24,
+            first_parent: false,
         }
     }
 }
@@ -87,6 +89,9 @@ impl GraphBuilder {
             revwalk.push(oid).ok(); // git2 deduplicates
         }
         revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+        if options.first_parent {
+            revwalk.simplify_first_parent()?;
+        }
 
         let mut rows = Vec::new();
 
@@ -638,7 +643,7 @@ mod tests {
 
         let options = GraphOptions {
             branch_filter: BranchFilter::None,
-            label_max_len: 24,
+            ..Default::default()
         };
         let builder = GraphBuilder::new();
         let rows = builder.build(tmp.path(), &options).unwrap();

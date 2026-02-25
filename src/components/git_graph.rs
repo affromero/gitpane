@@ -195,7 +195,11 @@ impl GitGraph {
     }
 
     fn draw_graph_list(&mut self, frame: &mut Frame, area: Rect) {
-        let title = format!(" Git Graph — {} ", self.repo_name);
+        let title = if self.graph_options.first_parent {
+            format!(" Git Graph — {} [1st-parent] ", self.repo_name)
+        } else {
+            format!(" Git Graph — {} ", self.repo_name)
+        };
         let border_color = if self.focused && self.commit_detail.is_none() {
             Color::Cyan
         } else {
@@ -438,6 +442,14 @@ impl Component for GitGraph {
                 Ok(None)
             }
             KeyCode::Enter => Ok(self.try_show_commit_files()),
+            KeyCode::Char('f') => {
+                self.graph_options.first_parent = !self.graph_options.first_parent;
+                if let Some(path) = self.repo_path.clone() {
+                    let name = self.repo_name.clone();
+                    self.load_repo(path, &name);
+                }
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
