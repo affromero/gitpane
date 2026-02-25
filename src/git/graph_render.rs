@@ -434,6 +434,7 @@ mod tests {
             time: 0,
             labels: Vec::new(),
             is_merge: false,
+            parent_oids: Vec::new(),
             diff_stat: None,
             collapsed: None,
         };
