@@ -22,6 +22,7 @@ pub(crate) struct GraphOptions {
     pub label_max_len: usize,
     pub first_parent: bool,
     pub show_stats: bool,
+    pub hidden_branches: HashSet<String>,
 }
 
 impl Default for GraphOptions {
@@ -31,6 +32,7 @@ impl Default for GraphOptions {
             label_max_len: 24,
             first_parent: false,
             show_stats: true,
+            hidden_branches: HashSet::new(),
         }
     }
 }
@@ -90,7 +92,7 @@ impl GraphBuilder {
         options: &GraphOptions,
     ) -> color_eyre::Result<Vec<GraphRow>> {
         let repo = Repository::open(path)?;
-        let mut ref_map = resolve_refs(&repo, &options.branch_filter);
+        let mut ref_map = resolve_refs(&repo, &options.branch_filter, &options.hidden_branches);
 
         let mut revwalk = repo.revwalk()?;
         revwalk.push_head().ok(); // ok: handles unborn HEAD
@@ -265,7 +267,11 @@ impl GraphBuilder {
     }
 }
 
-fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<BranchLabel>> {
+fn resolve_refs(
+    repo: &Repository,
+    filter: &BranchFilter,
+    hidden: &HashSet<String>,
+) -> HashMap<Oid, Vec<BranchLabel>> {
     if *filter == BranchFilter::None {
         return HashMap::new();
     }
@@ -304,6 +310,9 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
                 Ok(Some(n)) => n.to_string(),
                 _ => continue,
             };
+            if hidden.contains(&name) {
+                continue;
+            }
             let is_remote = bt == BranchType::Remote;
             let is_head =
                 !is_remote && head_oid == Some(target) && head_name.as_deref() == Some(&name);

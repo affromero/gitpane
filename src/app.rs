@@ -1,6 +1,7 @@
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -93,6 +94,7 @@ impl App {
             label_max_len: config.graph.label_max_len,
             first_parent: false,
             show_stats: config.graph.show_stats,
+            hidden_branches: HashSet::new(),
         };
 
         let update_position = config.ui.update_position;

@@ -15,6 +15,58 @@ use crate::components::Component;
 use crate::git::graph::{GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 
+/// Given a graph row, determine if `click_col` (relative to the start of the row content)
+/// falls on a branch label. Returns the label name if so.
+fn label_at_column(row: &GraphRow, click_col: usize, label_max_len: usize) -> Option<String> {
+    if row.labels.is_empty() {
+        return None;
+    }
+
+    // Compute graph prefix width
+    let prefix_width: usize = graph_render::render_graph_prefix(row)
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum();
+
+    // short_id + space
+    let id_width = row.short_id.len() + 1;
+
+    let mut cursor = prefix_width + id_width;
+
+    // Opening paren "("
+    cursor += 1;
+
+    for (i, label) in row.labels.iter().enumerate() {
+        if i > 0 {
+            cursor += 2; // ", "
+        }
+
+        // Prefix for HEAD or worktree labels
+        let prefix_len = if label.is_head || label.is_worktree {
+            2
+        } else {
+            0
+        };
+        cursor += prefix_len;
+
+        // Label name (may be truncated)
+        let name_len = if label.name.chars().count() > label_max_len {
+            label_max_len + 1 // truncated chars + ellipsis
+        } else {
+            label.name.chars().count()
+        };
+
+        let label_start = cursor;
+        cursor += name_len;
+
+        if click_col >= label_start && click_col < cursor {
+            return Some(label.name.clone());
+        }
+    }
+
+    None
+}
+
 struct CommitDetail {
     oid: String,
     files: Vec<(String, String)>,
@@ -104,6 +156,7 @@ impl GitGraph {
             self.state.select(None);
             self.commit_detail = None;
             self.search.clear();
+            self.graph_options.hidden_branches.clear();
         }
 
         let Some(tx) = &self.action_tx else { return };
@@ -197,6 +250,32 @@ impl GitGraph {
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    /// Hide a branch and reload the graph.
+    fn toggle_branch(&mut self, name: String) {
+        if self.graph_options.hidden_branches.contains(&name) {
+            self.graph_options.hidden_branches.remove(&name);
+        } else {
+            self.graph_options.hidden_branches.insert(name);
+        }
+        self.reload_graph();
+    }
+
+    /// Show all hidden branches and reload the graph.
+    fn show_all_branches(&mut self) {
+        if self.graph_options.hidden_branches.is_empty() {
+            return;
+        }
+        self.graph_options.hidden_branches.clear();
+        self.reload_graph();
+    }
+
+    fn reload_graph(&mut self) {
+        if let Some(path) = self.repo_path.clone() {
+            let name = self.repo_name.clone();
+            self.load_repo(path, &name);
+        }
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -332,10 +411,12 @@ impl GitGraph {
     }
 
     fn draw_graph_list(&mut self, frame: &mut Frame, area: Rect) {
-        let title = if self.graph_options.first_parent {
-            format!(" Git Graph — {} [1st-parent] ", self.repo_name)
-        } else {
-            format!(" Git Graph — {} ", self.repo_name)
+        let hidden_count = self.graph_options.hidden_branches.len();
+        let title = match (self.graph_options.first_parent, hidden_count) {
+            (true, 0) => format!(" Git Graph — {} [1st-parent] ", self.repo_name),
+            (true, n) => format!(" Git Graph — {} [1st-parent] ({n} hidden) ", self.repo_name),
+            (false, 0) => format!(" Git Graph — {} ", self.repo_name),
+            (false, n) => format!(" Git Graph — {} ({n} hidden) ", self.repo_name),
         };
         let border_color = if self.focused && self.commit_detail.is_none() {
             Color::Cyan
@@ -650,10 +731,11 @@ impl Component for GitGraph {
             KeyCode::Enter => Ok(self.try_show_commit_files()),
             KeyCode::Char('f') => {
                 self.graph_options.first_parent = !self.graph_options.first_parent;
-                if let Some(path) = self.repo_path.clone() {
-                    let name = self.repo_name.clone();
-                    self.load_repo(path, &name);
-                }
+                self.reload_graph();
+                Ok(None)
+            }
+            KeyCode::Char('H') => {
+                self.show_all_branches();
                 Ok(None)
             }
             _ => Ok(None),
@@ -668,10 +750,22 @@ impl Component for GitGraph {
                 // Click in graph list area
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
+                    let content_x = self.graph_list_area.x + 1;
                     if mouse.row >= content_y {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.rows.len() {
+                            // Check if click landed on a branch label
+                            let click_col = (mouse.column.saturating_sub(content_x)) as usize;
+                            if let Some(branch_name) = label_at_column(
+                                &self.rows[idx],
+                                click_col,
+                                self.graph_options.label_max_len,
+                            ) {
+                                self.toggle_branch(branch_name);
+                                return Ok(None);
+                            }
+
                             // Click on already-selected row opens commit files
                             if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
                                 return Ok(self.try_show_commit_files());
@@ -881,6 +975,14 @@ impl GitGraph {
                 Span::styled("  f", Style::default().fg(Color::Yellow)),
                 Span::raw("          Toggle first-parent mode"),
             ]),
+            Line::from(vec![
+                Span::styled("  click", Style::default().fg(Color::Yellow)),
+                Span::raw("      Click branch label to hide"),
+            ]),
+            Line::from(vec![
+                Span::styled("  H", Style::default().fg(Color::Yellow)),
+                Span::raw("          Show all hidden branches"),
+            ]),
             Line::from(""),
             Line::from(Span::styled(
                 " Other",
@@ -922,7 +1024,7 @@ impl GitGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::graph::{GraphRow, LaneSegment};
+    use crate::git::graph::{BranchLabel, GraphRow, LaneSegment};
     use git2::Oid;
 
     fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
@@ -1060,5 +1162,88 @@ mod tests {
 
         assert!(graph.search.matches.is_empty());
         assert_eq!(graph.search.current_match, None);
+    }
+
+    fn mock_row_with_labels(labels: Vec<BranchLabel>) -> GraphRow {
+        let mut row = mock_row("abc1234", "commit msg", "Author");
+        row.labels = labels;
+        row
+    }
+
+    fn make_label(name: &str) -> BranchLabel {
+        BranchLabel {
+            name: name.to_string(),
+            is_head: false,
+            is_remote: false,
+            is_worktree: false,
+            is_tag: false,
+        }
+    }
+
+    #[test]
+    fn test_label_click_detects_branch_name() {
+        let row = mock_row_with_labels(vec![make_label("main")]);
+        // Layout: "● " (3 chars: commit + space + space) + "abc1234 " (8) + "(" (1) + "main" (4)
+        // Graph prefix for single Commit lane = "●" (1 char) but rendered with separator
+        // render_graph_prefix returns spans: ["●"] = 1 char
+        // So cursor: prefix(1) + id(8) + paren(1) = 10, label "main" at cols 10..14
+        let prefix_width: usize = graph_render::render_graph_prefix(&row)
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        let label_start = prefix_width + 8 + 1; // prefix + "abc1234 " + "("
+        assert_eq!(
+            label_at_column(&row, label_start, 24),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            label_at_column(&row, label_start + 3, 24),
+            Some("main".to_string())
+        );
+        // One past the end of "main" should not match
+        assert_eq!(label_at_column(&row, label_start + 4, 24), None);
+    }
+
+    #[test]
+    fn test_label_click_returns_none_for_no_labels() {
+        let row = mock_row("abc1234", "commit msg", "Author");
+        assert_eq!(label_at_column(&row, 0, 24), None);
+        assert_eq!(label_at_column(&row, 15, 24), None);
+    }
+
+    #[test]
+    fn test_label_click_multiple_labels() {
+        let row = mock_row_with_labels(vec![make_label("main"), make_label("dev")]);
+        let prefix_width: usize = graph_render::render_graph_prefix(&row)
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        let main_start = prefix_width + 8 + 1; // after "("
+        let dev_start = main_start + 4 + 2; // "main" + ", "
+        assert_eq!(
+            label_at_column(&row, main_start, 24),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            label_at_column(&row, dev_start, 24),
+            Some("dev".to_string())
+        );
+    }
+
+    #[test]
+    fn test_label_click_head_label_has_prefix() {
+        let mut label = make_label("main");
+        label.is_head = true;
+        let row = mock_row_with_labels(vec![label]);
+        let prefix_width: usize = graph_render::render_graph_prefix(&row)
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        // After "(" + "* " (2 char prefix), then "main"
+        let label_start = prefix_width + 8 + 1 + 2;
+        assert_eq!(
+            label_at_column(&row, label_start, 24),
+            Some("main".to_string())
+        );
     }
 }
