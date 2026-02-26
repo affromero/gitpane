@@ -2,6 +2,14 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.2] - 2026-02-26
+
+### Added
+- Version display in status bar
+
+### Changed
+- Improved VHS demo recordings for readability
+
 ## [0.3.1] - 2026-02-26
 
 ### Changed
