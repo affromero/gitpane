@@ -1,7 +1,7 @@
 use color_eyre::Result;
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -33,6 +33,19 @@ impl StatusBar {
 
 impl Component for StatusBar {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        let version_text = format!("v{} ", env!("CARGO_PKG_VERSION"));
+        let version_len = version_text.len() as u16;
+        let chunks =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(version_len)]).split(area);
+        let content_area = chunks[0];
+        let version_area = chunks[1];
+
+        // Always render version (right-aligned, dimmed)
+        let version = Paragraph::new(version_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .right_aligned();
+        frame.render_widget(version, version_area);
+
         // Show error for 5 seconds, then clear
         if let Some((ref msg, when)) = self.error {
             if when.elapsed().as_secs() < 5 {
@@ -46,7 +59,7 @@ impl Component for StatusBar {
                     ),
                     Span::styled(format!(" {}", msg), Style::default().fg(Color::Red)),
                 ]));
-                frame.render_widget(error_bar, area);
+                frame.render_widget(error_bar, content_area);
                 return Ok(());
             } else {
                 self.error = None;
@@ -66,7 +79,7 @@ impl Component for StatusBar {
                     ),
                     Span::styled(format!(" {}", msg), Style::default().fg(Color::Green)),
                 ]));
-                frame.render_widget(success_bar, area);
+                frame.render_widget(success_bar, content_area);
                 return Ok(());
             } else {
                 self.success = None;
@@ -148,7 +161,7 @@ impl Component for StatusBar {
         };
 
         let bar = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::Gray));
-        frame.render_widget(bar, area);
+        frame.render_widget(bar, content_area);
         Ok(())
     }
 }
