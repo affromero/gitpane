@@ -5,6 +5,10 @@ edition = "2024"
 description = "Multi-repo Git workspace dashboard TUI"
 license = "MIT"
 repository = "https://github.com/affromero/gitpane"
+homepage = "https://github.com/affromero/gitpane"
+readme = "README.md"
+keywords = ["git", "tui", "dashboard", "multi-repo", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.30"
