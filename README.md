@@ -6,7 +6,8 @@
   <p align="center">
     <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg" alt="crates.io"></a>
-    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/release/affromero/gitpane?label=release" alt="GitHub Release"></a>
+    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release" alt="GitHub Release"></a>
+    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads" alt="Downloads"></a>
     <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
     <img src="https://img.shields.io/github/languages/top/affromero/gitpane" alt="Language">
