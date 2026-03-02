@@ -180,10 +180,19 @@ pinned_repos = ["~/Code/important-project"]
 excluded_repos = ["node_modules", ".cargo", "target"]
 
 [watch]
-debounce_ms = 500    # Filesystem change debounce (ms)
+debounce_ms = 500        # Filesystem change debounce (ms)
+poll_local_secs = 5      # Local status poll interval (catches missed watcher events)
+poll_fetch_secs = 30     # Remote fetch poll interval (updates ahead/behind from origin)
 
 [ui]
-frame_rate = 30      # Terminal refresh rate (fps)
+frame_rate = 10              # Terminal refresh rate (fps)
+check_for_updates = true     # Check for new versions on startup
+update_position = "top-right" # Update notification position ("top-right" or "top-left")
+
+[graph]
+branches = "all"         # Branch filter: "all", "local", "remote", or "none"
+label_max_len = 24       # Max length for branch/tag labels
+show_stats = true        # Show +N/-M diff stats per commit
 ```
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.

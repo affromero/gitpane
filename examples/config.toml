@@ -18,12 +18,28 @@ excluded_repos = ["node_modules", ".cargo"]
 # Filesystem change debounce interval in milliseconds (default: 500)
 debounce_ms = 500
 
+# Local status poll interval in seconds — catches missed watcher events (default: 5)
+poll_local_secs = 5
+
+# Remote fetch poll interval in seconds — updates ahead/behind from origin (default: 30)
+poll_fetch_secs = 30
+
 [ui]
-# Terminal refresh rate in frames per second (default: 30)
-frame_rate = 30
+# Terminal refresh rate in frames per second (default: 10)
+frame_rate = 10
 
 # Check GitHub for newer releases on startup (default: true)
 check_for_updates = true
 
 # Where to show the update notification: "top-right" or "top-left" (default: "top-right")
 update_position = "top-right"
+
+[graph]
+# Branch filter for commit graph: "all", "local", "remote", or "none" (default: "all")
+branches = "all"
+
+# Max length for branch/tag labels in the graph (default: 24)
+label_max_len = 24
+
+# Show +N/-M diff stats per commit (default: true)
+show_stats = true
