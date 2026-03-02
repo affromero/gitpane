@@ -826,10 +826,8 @@ impl App {
             KeyCode::Char('d') => {
                 if let Some(idx) = self.repo_list.selected_index() {
                     let name = &self.repo_list.repos[idx].name;
-                    self.confirm_dialog.show(
-                        format!("Remove {}?", name),
-                        Action::RemoveRepo(idx),
-                    );
+                    self.confirm_dialog
+                        .show(format!("Remove {}?", name), Action::RemoveRepo(idx));
                 }
             }
             KeyCode::Char('s') => {

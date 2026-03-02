@@ -76,11 +76,19 @@ impl ConfirmDialog {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(vec![
-                Span::styled(" y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " y",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("/"),
                 Span::styled("Enter ", Style::default().fg(Color::Green)),
                 Span::raw("confirm   "),
-                Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "n",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("/"),
                 Span::styled("Esc ", Style::default().fg(Color::Red)),
                 Span::raw("cancel"),
