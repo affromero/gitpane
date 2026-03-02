@@ -122,6 +122,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 | Key | Action |
 |-----|--------|
+| `?` | Toggle keybindings help overlay |
 | `Tab` / `Shift+Tab` | Cycle focus between panels |
 | `r` | Refresh all repo statuses |
 | `R` | Rescan directories for repos (clears exclusions) |
@@ -133,14 +134,36 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `q` | Quit (or close diff if one is open) |
 | `Esc` | Navigate back through panels, then quit |
 
-### Panel navigation
+### Repos panel
 
-| Key | Repos | Changes | Graph |
-|-----|-------|---------|-------|
-| `j` / `↓` | Next repo | Next file | Next commit / file |
-| `k` / `↑` | Prev repo | Prev file | Prev commit / file |
-| `Enter` | — | Open diff | Open commit files / file diff |
-| `Esc` / `h` / `←` | — | Close diff | Close diff → close files → back |
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next repo |
+| `k` / `↑` | Previous repo |
+
+### Changes panel
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next file |
+| `k` / `↑` | Previous file |
+| `Enter` | Open split diff view |
+| `Esc` / `h` / `←` | Close diff view |
+
+### Graph panel
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next commit / file |
+| `k` / `↑` | Previous commit / file |
+| `h` / `l` | Scroll graph left / right |
+| `Enter` | Open commit files / file diff |
+| `Esc` | Close diff → close files → back |
+| `/` | Search commits (message, author, short ID) |
+| `n` / `N` | Next / previous search match |
+| `f` | Toggle first-parent mode |
+| `c` | Collapse / expand branch |
+| `H` | Expand all collapsed branches |
 
 ### Mouse
 
