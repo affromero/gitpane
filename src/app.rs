@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
@@ -56,6 +57,7 @@ pub(crate) struct App {
     repo_list: RepoList,
     file_list: FileList,
     git_graph: GitGraph,
+    confirm_dialog: ConfirmDialog,
     context_menu: ContextMenu,
     path_input: PathInput,
     status_bar: StatusBar,
@@ -105,6 +107,7 @@ impl App {
             repo_list: RepoList::new(repo_paths),
             file_list: FileList::new(),
             git_graph,
+            confirm_dialog: ConfirmDialog::new(),
             context_menu: ContextMenu::new(),
             path_input: PathInput::new(),
             status_bar: StatusBar::new(),
@@ -724,7 +727,15 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        // Path input gets top priority
+        // Confirm dialog gets top priority
+        if self.confirm_dialog.visible {
+            if let Some(action) = self.confirm_dialog.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
+        // Path input gets priority
         if self.path_input.visible {
             if let Some(action) = self.path_input.handle_key_event(key)? {
                 self.action_tx.send(action)?;
@@ -814,7 +825,11 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if let Some(idx) = self.repo_list.selected_index() {
-                    self.action_tx.send(Action::RemoveRepo(idx))?;
+                    let name = &self.repo_list.repos[idx].name;
+                    self.confirm_dialog.show(
+                        format!("Remove {}?", name),
+                        Action::RemoveRepo(idx),
+                    );
                 }
             }
             KeyCode::Char('s') => {
@@ -1094,6 +1109,7 @@ impl App {
         // Overlays rendered last
         self.context_menu.draw(frame, area)?;
         self.path_input.draw(frame, area);
+        self.confirm_dialog.draw(frame, area);
 
         // Update notification overlay
         if let Some(ref version) = self.update_version {
@@ -1181,7 +1197,7 @@ impl App {
                 lines.push(section("Repos"));
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("a"), desc("Add repo")]));
-                lines.push(Line::from(vec![key("d"), desc("Remove repo")]));
+                lines.push(Line::from(vec![key("d"), desc("Remove repo (confirm)")]));
                 lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
                 lines.push(Line::from(vec![key("g"), desc("Open git graph")]));

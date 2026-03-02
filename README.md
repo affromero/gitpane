@@ -126,7 +126,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `R` | Rescan directories for repos (clears exclusions) |
 | `g` | Reload git graph for selected repo |
 | `a` | Add a repo (opens path input with tab completion) |
-| `d` | Remove selected repo from the list |
+| `d` | Remove selected repo (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty-first) |
 | `y` | Copy selected item to clipboard |
 | `q` | Quit (or close diff if one is open) |
@@ -221,7 +221,7 @@ Message-passing architecture: terminal events → actions → component updates 
 
 ```bash
 just run           # Build and run
-just test          # Run test suite (17 tests)
+just test          # Run test suite (90 tests)
 just fmt           # Format code
 just lint          # Run clippy
 just ci            # fmt + lint + test (mirrors CI pipeline)
