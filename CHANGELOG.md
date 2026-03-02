@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.4] - 2026-03-02
+
+### Added
+- Confirmation dialog when removing a repo (`d` key) to prevent accidental removal
+
+### Fixed
+- Release badge now resolves correctly (switched from github/v/release to github/v/tag)
+- Added crates.io downloads badge to README
+- Updated README test count (17 → 90)
+
 ## [0.3.2] - 2026-02-26
 
 ### Added
