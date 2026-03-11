@@ -34,6 +34,9 @@ pub(crate) struct WatchConfig {
     /// Max concurrent poll tasks (limits CPU usage with many repos)
     #[serde(default = "default_max_concurrent_polls")]
     pub max_concurrent_polls: usize,
+    /// Directory names to ignore in watcher events (reduces noise)
+    #[serde(default = "default_watch_exclude_dirs")]
+    pub watch_exclude_dirs: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +121,23 @@ fn default_max_concurrent_polls() -> usize {
     4
 }
 
+fn default_watch_exclude_dirs() -> Vec<String> {
+    [
+        "node_modules",
+        "target",
+        ".build",
+        "dist",
+        "vendor",
+        ".venv",
+        "__pycache__",
+        ".next",
+        "Pods",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 fn default_frame_rate() -> u16 {
     10
 }
@@ -133,6 +153,7 @@ impl Default for WatchConfig {
             poll_local_secs: default_poll_local_secs(),
             poll_fetch_secs: default_poll_fetch_secs(),
             max_concurrent_polls: default_max_concurrent_polls(),
+            watch_exclude_dirs: default_watch_exclude_dirs(),
         }
     }
 }
@@ -338,5 +359,13 @@ mod tests {
     fn test_max_concurrent_polls_default() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.watch.max_concurrent_polls, 4);
+    }
+
+    #[test]
+    fn test_watch_exclude_dirs_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.watch.watch_exclude_dirs.contains(&"node_modules".to_string()));
+        assert!(config.watch.watch_exclude_dirs.contains(&"target".to_string()));
+        assert!(config.watch.watch_exclude_dirs.contains(&".next".to_string()));
     }
 }

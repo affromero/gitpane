@@ -214,6 +214,7 @@ impl App {
             &repo_paths,
             self.config.watch.debounce_ms,
             tui.event_tx.clone(),
+            &self.config.watch.watch_exclude_dirs,
         )?;
 
         // Check for updates in the background
