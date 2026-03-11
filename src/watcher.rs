@@ -18,6 +18,7 @@ impl RepoWatcher {
         repo_paths: &[PathBuf],
         debounce_ms: u64,
         event_tx: UnboundedSender<Event>,
+        watch_exclude_dirs: &[String],
     ) -> color_eyre::Result<Self> {
         let indexed_paths: Vec<(usize, PathBuf)> = repo_paths
             .iter()
@@ -32,11 +33,20 @@ impl RepoWatcher {
         // Filters out .git/ internals to prevent feedback loops (git2 reads
         // trigger watcher events which would re-trigger git2 queries).
         let paths_for_routing = indexed_paths.clone();
+        let exclude_set: HashSet<String> = watch_exclude_dirs.iter().cloned().collect();
         tokio::spawn(async move {
             while let Some(changed_paths) = bridge_rx.recv().await {
                 let mut affected_repos = HashSet::new();
 
                 for changed_path in &changed_paths {
+                    // Skip events from excluded directories (node_modules, target, etc.)
+                    if changed_path
+                        .components()
+                        .any(|c| exclude_set.contains(c.as_os_str().to_string_lossy().as_ref()))
+                    {
+                        continue;
+                    }
+
                     // Allow key .git/ files that change on commit/pull/checkout,
                     // but skip noisy internals that cause feedback loops with git2.
                     if changed_path.components().any(|c| c.as_os_str() == ".git") {

@@ -173,9 +173,9 @@ impl GitGraph {
         self.loading = false;
         self.recompute_segments();
         self.recompute_collapsed_rows();
-        if !self.rows.is_empty() {
+        if !self.display_rows().is_empty() {
             let idx = prev_selected
-                .map(|i| i.min(self.rows.len() - 1))
+                .map(|i| i.min(self.display_rows().len() - 1))
                 .unwrap_or(0);
             self.state.select(Some(idx));
         }
@@ -221,19 +221,22 @@ impl GitGraph {
         let Some(idx) = self.state.selected() else {
             return;
         };
-        let Some(row) = self.rows.get(idx) else {
+        let Some(row) = self.display_rows().get(idx) else {
             return;
         };
 
+        // Extract data before dropping the borrow on self
+        let collapsed_key = row.collapsed.as_ref().map(|(k, _)| k.clone());
+        let row_oid = row.oid;
+
         // If this is a collapsed placeholder, expand it
-        if let Some((ref key, _)) = row.collapsed {
+        if let Some(key) = collapsed_key {
             self.collapsed_branches.remove(key.as_str());
             self.recompute_collapsed_rows();
             return;
         }
 
         // Find this row in all_rows and look up its segment
-        let row_oid = row.oid;
         let Some(all_idx) = self.all_rows.iter().position(|r| r.oid == row_oid) else {
             return;
         };
@@ -272,10 +275,21 @@ impl GitGraph {
         }
     }
 
+    /// Returns the appropriate row slice for read-only access.
+    /// When no branches are collapsed, reads directly from `all_rows`
+    /// to avoid an unnecessary clone.
+    fn display_rows(&self) -> &[GraphRow] {
+        if self.collapsed_branches.is_empty() {
+            &self.all_rows
+        } else {
+            &self.rows
+        }
+    }
+
     /// Recompute `self.rows` from `self.all_rows`, collapsing groups.
     fn recompute_collapsed_rows(&mut self) {
         if self.collapsed_branches.is_empty() {
-            self.rows = self.all_rows.clone();
+            self.rows.clear();
             return;
         }
 
@@ -333,7 +347,7 @@ impl GitGraph {
         }
         // Otherwise copy the selected commit's short id + message
         let idx = self.state.selected()?;
-        let row = self.rows.get(idx)?;
+        let row = self.display_rows().get(idx)?;
         Some(format!("{} {}", row.short_id, row.message))
     }
 
@@ -368,23 +382,27 @@ impl GitGraph {
     }
 
     fn update_search_matches(&mut self) {
-        self.search.matches.clear();
         self.search.current_match = None;
         if self.search.input.is_empty() {
+            self.search.matches.clear();
             return;
         }
         let query = self.search.input.to_lowercase();
-        for (i, row) in self.rows.iter().enumerate() {
-            if row.message.to_lowercase().contains(&query)
-                || row.author.to_lowercase().contains(&query)
-                || row.short_id.to_lowercase().contains(&query)
-            {
-                self.search.matches.push(i);
-            }
-        }
-        if !self.search.matches.is_empty() {
+        let matches: Vec<usize> = self
+            .display_rows()
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                row.message.to_lowercase().contains(&query)
+                    || row.author.to_lowercase().contains(&query)
+                    || row.short_id.to_lowercase().contains(&query)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if !matches.is_empty() {
             self.search.current_match = Some(0);
         }
+        self.search.matches = matches;
     }
 
     fn search_next(&mut self) {
@@ -412,18 +430,18 @@ impl GitGraph {
     }
 
     fn select_next(&mut self) {
-        if self.rows.is_empty() {
+        if self.display_rows().is_empty() {
             return;
         }
         let i = match self.state.selected() {
-            Some(i) => (i + 1).min(self.rows.len() - 1),
+            Some(i) => (i + 1).min(self.display_rows().len() - 1),
             None => 0,
         };
         self.state.select(Some(i));
     }
 
     fn select_prev(&mut self) {
-        if self.rows.is_empty() {
+        if self.display_rows().is_empty() {
             return;
         }
         let i = match self.state.selected() {
@@ -435,7 +453,7 @@ impl GitGraph {
 
     fn try_show_commit_files(&self) -> Option<Action> {
         let idx = self.state.selected()?;
-        let row = self.rows.get(idx)?;
+        let row = self.display_rows().get(idx)?;
         let repo_path = self.repo_path.clone()?;
         Some(Action::ShowCommitFiles {
             repo_path,
@@ -493,7 +511,7 @@ impl GitGraph {
             return;
         }
 
-        if self.rows.is_empty() {
+        if self.display_rows().is_empty() {
             let paragraph = Paragraph::new("No commits")
                 .style(Style::default().fg(Color::Gray))
                 .block(block);
@@ -809,7 +827,7 @@ impl Component for GitGraph {
                     if mouse.row >= content_y {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
-                        if idx < self.rows.len() {
+                        if idx < self.display_rows().len() {
                             // Click on already-selected row opens commit files
                             if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
                                 return Ok(self.try_show_commit_files());
@@ -1216,7 +1234,7 @@ mod tests {
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.is_empty());
-        assert_eq!(graph.rows.len(), 3);
+        assert_eq!(graph.display_rows().len(), 3);
     }
 
     #[test]
@@ -1242,7 +1260,7 @@ mod tests {
 
         graph.expand_all_branches();
         assert!(graph.collapsed_branches.is_empty());
-        assert_eq!(graph.rows.len(), 3);
+        assert_eq!(graph.display_rows().len(), 3);
     }
 
     #[test]
@@ -1254,7 +1272,7 @@ mod tests {
         graph.toggle_collapse_selected();
 
         assert!(graph.collapsed_branches.is_empty());
-        assert_eq!(graph.rows.len(), 3);
+        assert_eq!(graph.display_rows().len(), 3);
     }
 
     #[test]

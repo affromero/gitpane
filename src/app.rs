@@ -1,6 +1,8 @@
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -84,6 +86,10 @@ pub(crate) struct App {
     update_position: UpdatePosition,
     /// Show the keybindings help overlay
     show_help: bool,
+    /// Limits concurrent poll/refresh tasks to avoid CPU spikes
+    poll_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Repos with an in-flight status query (prevents duplicate spawns)
+    pending_status: HashSet<usize>,
 }
 
 impl App {
@@ -100,6 +106,7 @@ impl App {
         };
 
         let update_position = config.ui.update_position;
+        let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(config.watch.max_concurrent_polls));
 
         Self {
             config,
@@ -126,6 +133,8 @@ impl App {
             update_version: None,
             update_position,
             show_help: false,
+            poll_semaphore,
+            pending_status: HashSet::new(),
         }
     }
 
@@ -205,6 +214,7 @@ impl App {
             &repo_paths,
             self.config.watch.debounce_ms,
             tui.event_tx.clone(),
+            &self.config.watch.watch_exclude_dirs,
         )?;
 
         // Check for updates in the background
@@ -284,11 +294,15 @@ impl App {
                             self.git_graph.load_repo(path, &name);
                         }
                     }
+                    Action::StatusQueryDone(idx) => {
+                        self.pending_status.remove(&idx);
+                    }
                     Action::RepoStatusUpdated {
                         ref index,
                         ref status,
                     } => {
                         let idx = *index;
+                        self.pending_status.remove(&idx);
                         let status_clone = status.clone();
                         self.repo_list.update_status(idx, status_clone);
 
@@ -316,96 +330,132 @@ impl App {
                         // User-initiated refresh: fetch from remote + show spinner
                         for (idx, entry) in self.repo_list.repos.iter_mut().enumerate() {
                             entry.git_op = true;
+                            self.pending_status.insert(idx);
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status_with_fetch(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status_with_fetch(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            let _ = tx.send(Action::Error(format!(
+                                                "Failed to query: {}",
+                                                e
+                                            )));
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = tx
-                                            .send(Action::Error(format!("Failed to query: {}", e)));
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
                     Action::PollLocal => {
                         // Fast local status poll (no network, no spinner)
                         for (idx, entry) in self.repo_list.repos.iter().enumerate() {
-                            if entry.git_op {
+                            if entry.git_op || self.pending_status.contains(&idx) {
                                 continue;
                             }
+                            self.pending_status.insert(idx);
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            tracing::debug!(
+                                                "Local poll failed for {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::debug!(
-                                            "Local poll failed for {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
                     Action::PollFetch => {
                         // Remote fetch poll (updates ahead/behind, no spinner)
                         for (idx, entry) in self.repo_list.repos.iter().enumerate() {
-                            if entry.git_op {
+                            if entry.git_op || self.pending_status.contains(&idx) {
                                 continue;
                             }
+                            self.pending_status.insert(idx);
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status_with_fetch(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status_with_fetch(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            tracing::debug!(
+                                                "Fetch poll failed for {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::debug!(
-                                            "Fetch poll failed for {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
                     Action::RefreshRepo(idx) => {
                         // Watcher-triggered: fast local-only, no spinner
+                        if self.pending_status.contains(&idx) {
+                            tracing::debug!("skipping repo {}: already in-flight", idx);
+                            continue;
+                        }
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                            self.pending_status.insert(idx);
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            let _ = tx.send(Action::Error(format!(
+                                                "Failed to query: {}",
+                                                e
+                                            )));
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = tx
-                                            .send(Action::Error(format!("Failed to query: {}", e)));
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
