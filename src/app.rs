@@ -1,6 +1,7 @@
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -84,6 +85,8 @@ pub(crate) struct App {
     update_position: UpdatePosition,
     /// Show the keybindings help overlay
     show_help: bool,
+    /// Limits concurrent poll/refresh tasks to avoid CPU spikes
+    poll_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl App {
@@ -100,6 +103,7 @@ impl App {
         };
 
         let update_position = config.ui.update_position;
+        let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(config.watch.max_concurrent_polls));
 
         Self {
             config,
@@ -126,6 +130,7 @@ impl App {
             update_version: None,
             update_position,
             show_help: false,
+            poll_semaphore,
         }
     }
 
@@ -318,19 +323,26 @@ impl App {
                             entry.git_op = true;
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status_with_fetch(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status_with_fetch(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::Error(format!(
+                                                "Failed to query: {}",
+                                                e
+                                            )));
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = tx
-                                            .send(Action::Error(format!("Failed to query: {}", e)));
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
@@ -342,22 +354,27 @@ impl App {
                             }
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            tracing::debug!(
+                                                "Local poll failed for {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::debug!(
-                                            "Local poll failed for {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }
@@ -369,22 +386,27 @@ impl App {
                             }
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match crate::git::status::query_status_with_fetch(&path) {
-                                    Ok(s) => {
-                                        let _ = tx.send(Action::RepoStatusUpdated {
-                                            index: idx,
-                                            status: s,
-                                        });
+                            let sem = self.poll_semaphore.clone();
+                            tokio::spawn(async move {
+                                let _permit = sem.acquire().await;
+                                tokio::task::spawn_blocking(move || {
+                                    match crate::git::status::query_status_with_fetch(&path) {
+                                        Ok(s) => {
+                                            let _ = tx.send(Action::RepoStatusUpdated {
+                                                index: idx,
+                                                status: s,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            tracing::debug!(
+                                                "Fetch poll failed for {}: {}",
+                                                path.display(),
+                                                e
+                                            );
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::debug!(
-                                            "Fetch poll failed for {}: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                    }
-                                }
+                                })
+                                .await
                             });
                         }
                     }

@@ -31,6 +31,9 @@ pub(crate) struct WatchConfig {
     /// Remote fetch poll interval in seconds (updates ahead/behind from origin)
     #[serde(default = "default_poll_fetch_secs")]
     pub poll_fetch_secs: u64,
+    /// Max concurrent poll tasks (limits CPU usage with many repos)
+    #[serde(default = "default_max_concurrent_polls")]
+    pub max_concurrent_polls: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +114,10 @@ fn default_poll_fetch_secs() -> u64 {
     30
 }
 
+fn default_max_concurrent_polls() -> usize {
+    4
+}
+
 fn default_frame_rate() -> u16 {
     10
 }
@@ -125,6 +132,7 @@ impl Default for WatchConfig {
             debounce_ms: default_debounce_ms(),
             poll_local_secs: default_poll_local_secs(),
             poll_fetch_secs: default_poll_fetch_secs(),
+            max_concurrent_polls: default_max_concurrent_polls(),
         }
     }
 }
@@ -324,5 +332,11 @@ mod tests {
         let loaded: Config = toml::from_str(&serialized).unwrap();
         assert!(!loaded.ui.check_for_updates);
         assert_eq!(loaded.ui.update_position, UpdatePosition::TopLeft);
+    }
+
+    #[test]
+    fn test_max_concurrent_polls_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.watch.max_concurrent_polls, 4);
     }
 }
