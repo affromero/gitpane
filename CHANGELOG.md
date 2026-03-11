@@ -2,6 +2,18 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.5] - 2026-03-11
+
+### Fixed
+- High CPU usage when monitoring many repos: poll operations now limited to 4 concurrent tasks via semaphore
+- Duplicate status queries for the same repo are skipped when one is already in-flight
+- Watcher no longer triggers refreshes for events inside node_modules, target, .build, dist, vendor, .venv, __pycache__, .next, or Pods directories
+- Git graph no longer clones ~200 rows on every refresh when no branches are collapsed
+
+### Documentation
+- Added all keybindings to README
+- Documented all configuration parameters
+
 ## [0.3.4] - 2026-03-02
 
 ### Added
