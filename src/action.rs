@@ -63,4 +63,6 @@ pub(crate) enum Action {
     RescanRepos,
     Error(String),
     UpdateAvailable(String),
+    /// Clears the pending_status flag for a repo (sent on error paths)
+    StatusQueryDone(usize),
 }
