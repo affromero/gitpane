@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.6] - 2026-03-12
+
+### Fixed
+- Git graph panel was blank after the 0.3.5 performance optimisation: the render loop was still reading from `self.rows` (cleared by the fast path) instead of `display_rows()`, producing zero list items
+
 ## [0.3.5] - 2026-03-11
 
 ### Fixed
