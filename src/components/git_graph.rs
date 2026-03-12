@@ -523,7 +523,7 @@ impl GitGraph {
         let max_width = area.width.saturating_sub(2) as usize; // 2 for borders
         let has_search = !self.search.input.is_empty() && !self.search.matches.is_empty();
         let items: Vec<ListItem> = self
-            .rows
+            .display_rows()
             .iter()
             .enumerate()
             .map(|(i, row)| {
