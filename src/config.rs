@@ -364,8 +364,23 @@ mod tests {
     #[test]
     fn test_watch_exclude_dirs_default() {
         let config: Config = toml::from_str("").unwrap();
-        assert!(config.watch.watch_exclude_dirs.contains(&"node_modules".to_string()));
-        assert!(config.watch.watch_exclude_dirs.contains(&"target".to_string()));
-        assert!(config.watch.watch_exclude_dirs.contains(&".next".to_string()));
+        assert!(
+            config
+                .watch
+                .watch_exclude_dirs
+                .contains(&"node_modules".to_string())
+        );
+        assert!(
+            config
+                .watch
+                .watch_exclude_dirs
+                .contains(&"target".to_string())
+        );
+        assert!(
+            config
+                .watch
+                .watch_exclude_dirs
+                .contains(&".next".to_string())
+        );
     }
 }

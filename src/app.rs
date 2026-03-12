@@ -106,7 +106,9 @@ impl App {
         };
 
         let update_position = config.ui.update_position;
-        let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(config.watch.max_concurrent_polls));
+        let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(
+            config.watch.max_concurrent_polls,
+        ));
 
         Self {
             config,
