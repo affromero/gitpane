@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.7] - 2026-03-13
+
+### Added
+- Adaptive split direction for diff/detail panels: inner splits use vertical (top/bottom) layout when the terminal is wide enough for side-by-side panels, preventing unreadably cramped content
+
 ## [0.3.6] - 2026-03-12
 
 ### Fixed
