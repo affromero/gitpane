@@ -1078,6 +1078,9 @@ impl App {
         self.file_list.focused = self.focus == FocusPanel::Changes;
         self.git_graph.focused = self.focus == FocusPanel::Graph;
 
+        self.file_list.horizontal_layout = self.horizontal_layout;
+        self.git_graph.horizontal_layout = self.horizontal_layout;
+
         self.repo_list.draw(frame, repo_area)?;
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;

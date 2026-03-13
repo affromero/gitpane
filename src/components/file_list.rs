@@ -26,6 +26,7 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
+    pub horizontal_layout: bool,
 }
 
 impl FileList {
@@ -42,6 +43,7 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
+            horizontal_layout: false,
         }
     }
 
@@ -323,8 +325,9 @@ impl Component for FileList {
 
         if self.diff_content.is_some() {
             // Split: file list 40% | diff 60%
+            let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
             let chunks = Layout::default()
-                .direction(Direction::Horizontal)
+                .direction(dir)
                 .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
                 .split(area);
 

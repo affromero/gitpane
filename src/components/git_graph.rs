@@ -75,6 +75,7 @@ pub(crate) struct GitGraph {
     search: SearchState,
     /// Horizontal scroll offset (characters) for the graph list
     h_scroll: usize,
+    pub horizontal_layout: bool,
 }
 
 impl GitGraph {
@@ -100,6 +101,7 @@ impl GitGraph {
             graph_options: GraphOptions::default(),
             search: SearchState::new(),
             h_scroll: 0,
+            horizontal_layout: false,
         }
     }
 
@@ -922,8 +924,9 @@ impl Component for GitGraph {
         match &self.commit_detail {
             Some(detail) if detail.diff_content.is_some() => {
                 // Graph 40% | Files 25% | Diff 35%
+                let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
                 let chunks = Layout::default()
-                    .direction(Direction::Horizontal)
+                    .direction(dir)
                     .constraints([
                         Constraint::Percentage(40),
                         Constraint::Percentage(25),
@@ -943,8 +946,9 @@ impl Component for GitGraph {
             }
             Some(_) => {
                 // Graph 50% | Files 50%
+                let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
                 let chunks = Layout::default()
-                    .direction(Direction::Horizontal)
+                    .direction(dir)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
