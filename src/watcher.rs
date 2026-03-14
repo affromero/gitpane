@@ -60,6 +60,7 @@ impl RepoWatcher {
                             || name == "MERGE_HEAD"
                             || name == "REBASE_HEAD"
                             || name == "COMMIT_EDITMSG"
+                            || name == "packed-refs"
                             || path_str.contains(".git/refs/");
                         if !is_meaningful {
                             continue;

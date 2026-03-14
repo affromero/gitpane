@@ -23,8 +23,14 @@ pub(crate) enum Action {
     PollFetch,
     ShowGitGraph,
     ShowFileList,
-    GraphLoaded(Vec<GraphRow>),
-    DiffStatsLoaded(Vec<(git2::Oid, DiffStat)>),
+    GraphLoaded {
+        generation: u64,
+        rows: Vec<GraphRow>,
+    },
+    DiffStatsLoaded {
+        generation: u64,
+        stats: Vec<(git2::Oid, DiffStat)>,
+    },
     ShowContextMenu {
         index: usize,
         row: u16,

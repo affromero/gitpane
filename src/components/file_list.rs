@@ -325,7 +325,11 @@ impl Component for FileList {
 
         if self.diff_content.is_some() {
             // Split: file list 40% | diff 60%
-            let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
+            let dir = if self.horizontal_layout {
+                Direction::Vertical
+            } else {
+                Direction::Horizontal
+            };
             let chunks = Layout::default()
                 .direction(dir)
                 .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
