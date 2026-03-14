@@ -76,6 +76,10 @@ pub(crate) struct GitGraph {
     /// Horizontal scroll offset (characters) for the graph list
     h_scroll: usize,
     pub horizontal_layout: bool,
+    /// Deferred reload: set when graph data arrives while detail is open.
+    needs_reload: bool,
+    /// Monotonic counter to discard stale GraphLoaded/DiffStatsLoaded results.
+    load_generation: u64,
 }
 
 impl GitGraph {
@@ -102,6 +106,8 @@ impl GitGraph {
             search: SearchState::new(),
             h_scroll: 0,
             horizontal_layout: false,
+            needs_reload: false,
+            load_generation: 0,
         }
     }
 
@@ -120,6 +126,7 @@ impl GitGraph {
             self.all_rows.clear();
             self.state.select(None);
             self.commit_detail = None;
+            self.needs_reload = false;
             self.search.clear();
             self.collapsed_branches.clear();
             self.segments.clear();
@@ -129,18 +136,26 @@ impl GitGraph {
         let Some(tx) = &self.action_tx else { return };
         let tx = tx.clone();
         let options = self.graph_options.clone();
+        self.load_generation += 1;
+        let load_gen = self.load_generation;
 
         tokio::task::spawn_blocking(move || {
             let builder = GraphBuilder::new();
             match builder.build(&path, &options) {
                 Ok(rows) => {
                     let oids: Vec<git2::Oid> = rows.iter().map(|r| r.oid).collect();
-                    let _ = tx.send(Action::GraphLoaded(rows));
+                    let _ = tx.send(Action::GraphLoaded {
+                        generation: load_gen,
+                        rows,
+                    });
                     // Compute stats after graph is sent — graph appears instantly
                     if options.show_stats
                         && let Ok(stats) = crate::git::commit_files::batch_diff_stats(&path, &oids)
                     {
-                        let _ = tx.send(Action::DiffStatsLoaded(stats));
+                        let _ = tx.send(Action::DiffStatsLoaded {
+                            generation: load_gen,
+                            stats,
+                        });
                     }
                 }
                 Err(e) => {
@@ -216,6 +231,14 @@ impl GitGraph {
 
     pub fn has_detail(&self) -> bool {
         self.commit_detail.is_some()
+    }
+
+    pub fn set_needs_reload(&mut self) {
+        self.needs_reload = true;
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        self.load_generation
     }
 
     /// Toggle collapse on the selected row's branch (or expand a collapsed group).
@@ -736,6 +759,9 @@ impl Component for GitGraph {
             match key.code {
                 KeyCode::Esc => {
                     self.commit_detail = None;
+                    if std::mem::take(&mut self.needs_reload) {
+                        self.reload_graph();
+                    }
                     return Ok(None);
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -836,6 +862,9 @@ impl Component for GitGraph {
                             }
                             self.state.select(Some(idx));
                             self.commit_detail = None;
+                            if std::mem::take(&mut self.needs_reload) {
+                                self.reload_graph();
+                            }
                         }
                     }
                     return Ok(None);
@@ -924,7 +953,11 @@ impl Component for GitGraph {
         match &self.commit_detail {
             Some(detail) if detail.diff_content.is_some() => {
                 // Graph 40% | Files 25% | Diff 35%
-                let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
+                let dir = if self.horizontal_layout {
+                    Direction::Vertical
+                } else {
+                    Direction::Horizontal
+                };
                 let chunks = Layout::default()
                     .direction(dir)
                     .constraints([
@@ -946,7 +979,11 @@ impl Component for GitGraph {
             }
             Some(_) => {
                 // Graph 50% | Files 50%
-                let dir = if self.horizontal_layout { Direction::Vertical } else { Direction::Horizontal };
+                let dir = if self.horizontal_layout {
+                    Direction::Vertical
+                } else {
+                    Direction::Horizontal
+                };
                 let chunks = Layout::default()
                     .direction(dir)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])

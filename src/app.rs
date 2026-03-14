@@ -90,6 +90,8 @@ pub(crate) struct App {
     poll_semaphore: Arc<tokio::sync::Semaphore>,
     /// Repos with an in-flight status query (prevents duplicate spawns)
     pending_status: HashSet<usize>,
+    /// Repos that changed while a status query was in-flight (re-queued on completion)
+    dirty_repos: HashSet<usize>,
 }
 
 impl App {
@@ -137,6 +139,7 @@ impl App {
             show_help: false,
             poll_semaphore,
             pending_status: HashSet::new(),
+            dirty_repos: HashSet::new(),
         }
     }
 
@@ -263,6 +266,11 @@ impl App {
                     Event::PollFetch => {
                         self.action_tx.send(Action::PollFetch)?;
                     }
+                    Event::FocusGained => {
+                        if let Some(idx) = self.repo_list.selected_index() {
+                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -298,6 +306,9 @@ impl App {
                     }
                     Action::StatusQueryDone(idx) => {
                         self.pending_status.remove(&idx);
+                        if self.dirty_repos.remove(&idx) {
+                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                        }
                     }
                     Action::RepoStatusUpdated {
                         ref index,
@@ -305,6 +316,7 @@ impl App {
                     } => {
                         let idx = *index;
                         self.pending_status.remove(&idx);
+                        let is_dirty = self.dirty_repos.remove(&idx);
                         let status_clone = status.clone();
                         self.repo_list.update_status(idx, status_clone);
 
@@ -322,10 +334,15 @@ impl App {
                                 .unwrap_or_default();
                             self.file_list.set_files(files, &name, idx);
 
-                            if !self.git_graph.has_detail() {
+                            if self.git_graph.has_detail() {
+                                self.git_graph.set_needs_reload();
+                            } else {
                                 let path = entry.path.clone();
                                 self.git_graph.load_repo(path, &name);
                             }
+                        }
+                        if is_dirty {
+                            self.action_tx.send(Action::RefreshRepo(idx))?;
                         }
                     }
                     Action::RefreshAll => {
@@ -430,7 +447,11 @@ impl App {
                     Action::RefreshRepo(idx) => {
                         // Watcher-triggered: fast local-only, no spinner
                         if self.pending_status.contains(&idx) {
-                            tracing::debug!("skipping repo {}: already in-flight", idx);
+                            self.dirty_repos.insert(idx);
+                            tracing::debug!(
+                                "skipping repo {}: already in-flight (marked dirty)",
+                                idx
+                            );
                             continue;
                         }
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
@@ -474,11 +495,15 @@ impl App {
                     Action::ShowFileList => {
                         self.focus = FocusPanel::Changes;
                     }
-                    Action::GraphLoaded(rows) => {
-                        self.git_graph.set_rows(rows);
+                    Action::GraphLoaded { generation, rows } => {
+                        if generation == self.git_graph.current_generation() {
+                            self.git_graph.set_rows(rows);
+                        }
                     }
-                    Action::DiffStatsLoaded(stats) => {
-                        self.git_graph.set_diff_stats(stats);
+                    Action::DiffStatsLoaded { generation, stats } => {
+                        if generation == self.git_graph.current_generation() {
+                            self.git_graph.set_diff_stats(stats);
+                        }
                     }
                     Action::GraphError(ref msg) => {
                         self.git_graph.set_error(msg.clone());
