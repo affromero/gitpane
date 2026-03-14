@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.8] - 2026-03-14
+
+### Fixed
+- Graph not updating after `git gc` or packed-ref operations (watcher now monitors `.git/packed-refs`)
+- Graph not refreshing when switching back to gitpane from another terminal (FocusGained now triggers a refresh)
+- Graph staying stale after closing commit details when data arrived while the detail panel was open
+- Stale graph results from a previous repo overwriting the current view on fast repo switching (generation counter guards)
+- Watcher dedup dropping changes that arrived during an in-flight status query (dirty-repo retry on completion)
+
 ## [0.3.7] - 2026-03-13
 
 ### Added
