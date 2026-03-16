@@ -509,14 +509,14 @@ impl App {
                         self.git_graph.set_error(msg.clone());
                     }
                     Action::ShowContextMenu { index, row, col } => {
-                        let (ahead, behind) = self
+                        let (ahead, behind, has_submodules) = self
                             .repo_list
                             .repos
                             .get(index)
                             .and_then(|e| e.status.as_ref())
-                            .map(|s| (s.ahead, s.behind))
-                            .unwrap_or((0, 0));
-                        self.context_menu.show(index, col, row, ahead, behind);
+                            .map(|s| (s.ahead, s.behind, s.has_submodules))
+                            .unwrap_or((0, 0, false));
+                        self.context_menu.show(index, col, row, ahead, behind, has_submodules);
                     }
                     Action::HideContextMenu => {
                         self.context_menu.hide();
@@ -530,7 +530,7 @@ impl App {
                             let _ = std::io::stdout().flush();
                         }
                     }
-                    Action::GitPush(idx) | Action::GitPull(idx) | Action::GitPullRebase(idx) => {
+                    Action::GitPush(idx) | Action::GitPull(idx) | Action::GitPullRebase(idx) | Action::GitPullSubmodules(idx) => {
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
                             let branch = entry
                                 .status
@@ -542,6 +542,9 @@ impl App {
                                 Action::GitPull(_) => vec!["pull".into()],
                                 Action::GitPullRebase(_) => {
                                     vec!["pull".into(), "--rebase".into()]
+                                }
+                                Action::GitPullSubmodules(_) => {
+                                    vec!["pull".into(), "--recurse-submodules".into()]
                                 }
                                 _ => unreachable!(),
                             };
