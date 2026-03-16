@@ -54,6 +54,7 @@ pub(crate) enum Action {
     },
     CommitFilesLoaded {
         oid: String,
+        message: String,
         files: Vec<(String, String)>,
     },
     ShowCommitDiff {
