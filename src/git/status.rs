@@ -10,6 +10,8 @@ pub(crate) struct RepoStatus {
     pub is_dirty: bool,
     /// Number of linked worktrees (excludes the main working tree)
     pub worktrees: usize,
+    /// True when .gitmodules exists (repo uses submodules)
+    pub has_submodules: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +112,9 @@ fn query_status_inner(path: &Path, fetch: bool) -> color_eyre::Result<RepoStatus
     // Count linked worktrees (excludes the main working tree)
     let worktrees = repo.worktrees().map(|wt| wt.len()).unwrap_or(0);
 
+    // Detect submodules by checking for .gitmodules
+    let has_submodules = path.join(".gitmodules").is_file();
+
     Ok(RepoStatus {
         branch,
         files,
@@ -117,6 +122,7 @@ fn query_status_inner(path: &Path, fetch: bool) -> color_eyre::Result<RepoStatus
         behind,
         is_dirty,
         worktrees,
+        has_submodules,
     })
 }
 

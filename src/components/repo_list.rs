@@ -126,6 +126,7 @@ impl RepoList {
                             behind: 0,
                             is_dirty: false,
                             worktrees: 0,
+                            has_submodules: false,
                         },
                     });
                 }
