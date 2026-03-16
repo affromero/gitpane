@@ -2,14 +2,16 @@ use git2::{Diff, DiffOptions, Oid, Repository};
 use std::path::Path;
 
 /// List files changed in a commit (vs its first parent, or empty tree for root).
-/// Returns `(status_label, file_path)` pairs.
+/// Returns the full commit message and `(status_label, file_path)` pairs.
 pub(crate) fn list_commit_files(
     path: &Path,
     oid_str: &str,
-) -> color_eyre::Result<Vec<(String, String)>> {
+) -> color_eyre::Result<(String, Vec<(String, String)>)> {
     let repo = Repository::open(path)?;
     let oid = Oid::from_str(oid_str)?;
     let commit = repo.find_commit(oid)?;
+
+    let message = commit.message().unwrap_or("").trim().to_string();
 
     let tree = commit.tree()?;
     let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
@@ -34,7 +36,7 @@ pub(crate) fn list_commit_files(
         files.push((status.to_string(), file_path));
     }
 
-    Ok(files)
+    Ok((message, files))
 }
 
 /// Get the diff text for a single file in a commit.
@@ -159,7 +161,8 @@ mod tests {
             .commit(Some("HEAD"), &sig, &sig, "Modify file", &tree, &[&parent])
             .unwrap();
 
-        let files = list_commit_files(tmp.path(), &oid2.to_string()).unwrap();
+        let (message, files) = list_commit_files(tmp.path(), &oid2.to_string()).unwrap();
+        assert_eq!(message, "Modify file");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, "M");
         assert_eq!(files[0].1, "hello.txt");
@@ -169,7 +172,8 @@ mod tests {
     fn test_root_commit_lists_files() {
         let (tmp, _repo, oid) = create_repo_with_file("root.txt", "content");
 
-        let files = list_commit_files(tmp.path(), &oid).unwrap();
+        let (message, files) = list_commit_files(tmp.path(), &oid).unwrap();
+        assert_eq!(message, "Add file");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, "A");
         assert_eq!(files[0].1, "root.txt");

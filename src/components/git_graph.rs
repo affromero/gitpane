@@ -17,6 +17,7 @@ use crate::git::graph_render;
 
 struct CommitDetail {
     oid: String,
+    message: String,
     files: Vec<(String, String)>,
     file_state: ListState,
     diff_content: Option<String>,
@@ -208,13 +209,14 @@ impl GitGraph {
         self.recompute_collapsed_rows();
     }
 
-    pub fn set_commit_files(&mut self, oid: String, files: Vec<(String, String)>) {
+    pub fn set_commit_files(&mut self, oid: String, message: String, files: Vec<(String, String)>) {
         let mut file_state = ListState::default();
         if !files.is_empty() {
             file_state.select(Some(0));
         }
         self.commit_detail = Some(CommitDetail {
             oid,
+            message,
             files,
             file_state,
             diff_content: None,
@@ -647,16 +649,39 @@ impl GitGraph {
 
     fn draw_commit_files(detail: &mut CommitDetail, frame: &mut Frame, area: Rect) {
         let title = format!(" Files — {} ", &detail.oid[..7.min(detail.oid.len())]);
-        let block = Block::default()
+
+        // Split area: commit message at top, file list below
+        let msg_line_count = detail.message.lines().count().max(1) as u16;
+        // Cap message height: 2 for border/padding + lines, max ~1/3 of area
+        let msg_height = (msg_line_count + 2).min(area.height / 3).min(8);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(msg_height), Constraint::Min(3)])
+            .split(area);
+
+        // Draw commit message block
+        let msg_block = Block::default()
             .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let msg_paragraph = Paragraph::new(detail.message.as_str())
+            .style(Style::default().fg(Color::White))
+            .block(msg_block)
+            .wrap(Wrap { trim: false });
+        frame.render_widget(msg_paragraph, chunks[0]);
+
+        // Draw file list block
+        let files_block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
         if detail.files.is_empty() {
             let paragraph = Paragraph::new("No files changed")
                 .style(Style::default().fg(Color::DarkGray))
-                .block(block);
-            frame.render_widget(paragraph, area);
+                .block(files_block);
+            frame.render_widget(paragraph, chunks[1]);
             return;
         }
 
@@ -682,13 +707,13 @@ impl GitGraph {
             })
             .collect();
 
-        let list = List::new(items).block(block).highlight_style(
+        let list = List::new(items).block(files_block).highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         );
 
-        frame.render_stateful_widget(list, area, &mut detail.file_state);
+        frame.render_stateful_widget(list, chunks[1], &mut detail.file_state);
     }
 
     fn draw_commit_diff(detail: &CommitDetail, frame: &mut Frame, area: Rect) {

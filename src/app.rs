@@ -659,8 +659,9 @@ impl App {
                         let tx = self.action_tx.clone();
                         tokio::task::spawn_blocking(move || {
                             match crate::git::commit_files::list_commit_files(&path, &oid) {
-                                Ok(files) => {
-                                    let _ = tx.send(Action::CommitFilesLoaded { oid, files });
+                                Ok((message, files)) => {
+                                    let _ =
+                                        tx.send(Action::CommitFilesLoaded { oid, message, files });
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::Error(format!(
@@ -671,8 +672,13 @@ impl App {
                             }
                         });
                     }
-                    Action::CommitFilesLoaded { ref oid, ref files } => {
-                        self.git_graph.set_commit_files(oid.clone(), files.clone());
+                    Action::CommitFilesLoaded {
+                        ref oid,
+                        ref message,
+                        ref files,
+                    } => {
+                        self.git_graph
+                            .set_commit_files(oid.clone(), message.clone(), files.clone());
                     }
                     Action::ShowCommitDiff {
                         ref repo_path,
