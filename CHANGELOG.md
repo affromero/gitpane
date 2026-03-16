@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.10] - 2026-03-16
+
+### Added
+- "Pull --recurse-submodules" option in context menu, shown only for repos that have submodules
+
 ## [0.3.9] - 2026-03-16
 
 ### Added
