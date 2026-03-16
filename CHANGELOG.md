@@ -2,6 +2,13 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.11] - 2026-03-16
+
+### Fixed
+- Clicking files in the commit detail panel did nothing (click coordinates were offset by the message block height)
+- Commit message in detail panel was not scrollable when longer than the visible area
+- Commit message block now always shows at least one line, even in small terminals
+
 ## [0.3.10] - 2026-03-16
 
 ### Added
