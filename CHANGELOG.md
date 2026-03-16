@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.3.9] - 2026-03-16
+
+### Added
+- Full commit message displayed in detail panel when clicking a commit in the git graph (previously only showed OID and file list)
+
 ## [0.3.8] - 2026-03-14
 
 ### Fixed
