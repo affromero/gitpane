@@ -22,6 +22,11 @@ struct CommitDetail {
     file_state: ListState,
     diff_content: Option<String>,
     diff_scroll: u16,
+    msg_scroll: u16,
+    /// Rendered rect for the commit message block (set during draw).
+    msg_area: Rect,
+    /// Rendered rect for the file list block (set during draw).
+    file_list_area: Rect,
 }
 
 struct SearchState {
@@ -221,6 +226,9 @@ impl GitGraph {
             file_state,
             diff_content: None,
             diff_scroll: 0,
+            msg_scroll: 0,
+            msg_area: Rect::default(),
+            file_list_area: Rect::default(),
         });
     }
 
@@ -652,13 +660,21 @@ impl GitGraph {
 
         // Split area: commit message at top, file list below
         let msg_line_count = detail.message.lines().count().max(1) as u16;
-        // Cap message height: 2 for border/padding + lines, max ~1/3 of area
-        let msg_height = (msg_line_count + 2).min(area.height / 3).min(8);
+        // Cap message height: 2 for border + lines, max ~1/3 of area
+        // Always guarantee at least 3 (1 content line + 2 borders)
+        let msg_height = (msg_line_count + 2)
+            .min(area.height / 3)
+            .min(8)
+            .max(3);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(msg_height), Constraint::Min(3)])
             .split(area);
+
+        // Store sub-rects for mouse handling
+        detail.msg_area = chunks[0];
+        detail.file_list_area = chunks[1];
 
         // Draw commit message block
         let msg_block = Block::default()
@@ -669,7 +685,8 @@ impl GitGraph {
         let msg_paragraph = Paragraph::new(detail.message.as_str())
             .style(Style::default().fg(Color::White))
             .block(msg_block)
-            .wrap(Wrap { trim: false });
+            .wrap(Wrap { trim: false })
+            .scroll((detail.msg_scroll, 0));
         frame.render_widget(msg_paragraph, chunks[0]);
 
         // Draw file list block
@@ -895,12 +912,12 @@ impl Component for GitGraph {
                     return Ok(None);
                 }
 
-                // Click in commit files area
+                // Click in commit files area (use file_list_area, not files_area)
                 let mut open_file_diff = false;
                 if let Some(ref mut detail) = self.commit_detail
-                    && self.files_area.contains(pos)
+                    && detail.file_list_area.contains(pos)
                 {
-                    let content_y = self.files_area.y + 1;
+                    let content_y = detail.file_list_area.y + 1;
                     if mouse.row >= content_y {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + detail.file_state.offset();
@@ -926,7 +943,11 @@ impl Component for GitGraph {
                         detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
                         return Ok(None);
                     }
-                    if self.files_area.contains(pos) && !detail.files.is_empty() {
+                    if detail.msg_area.contains(pos) {
+                        detail.msg_scroll = detail.msg_scroll.saturating_sub(1);
+                        return Ok(None);
+                    }
+                    if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
                         let i = detail
                             .file_state
                             .selected()
@@ -946,7 +967,11 @@ impl Component for GitGraph {
                         detail.diff_scroll = detail.diff_scroll.saturating_add(1);
                         return Ok(None);
                     }
-                    if self.files_area.contains(pos) && !detail.files.is_empty() {
+                    if detail.msg_area.contains(pos) {
+                        detail.msg_scroll = detail.msg_scroll.saturating_add(1);
+                        return Ok(None);
+                    }
+                    if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
                         let i = detail
                             .file_state
                             .selected()
