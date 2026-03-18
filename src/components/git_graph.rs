@@ -662,10 +662,7 @@ impl GitGraph {
         let msg_line_count = detail.message.lines().count().max(1) as u16;
         // Cap message height: 2 for border + lines, max ~1/3 of area
         // Always guarantee at least 3 (1 content line + 2 borders)
-        let msg_height = (msg_line_count + 2)
-            .min(area.height / 3)
-            .min(8)
-            .max(3);
+        let msg_height = (msg_line_count + 2).min(area.height / 3).clamp(3, 8);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)

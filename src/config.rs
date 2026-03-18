@@ -79,18 +79,10 @@ pub(crate) struct GraphConfig {
     pub show_stats: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct SubmoduleConfig {
     #[serde(default)]
     pub ignore_dirty: bool,
-}
-
-impl Default for SubmoduleConfig {
-    fn default() -> Self {
-        Self {
-            ignore_dirty: false,
-        }
-    }
 }
 
 fn default_show_stats() -> bool {

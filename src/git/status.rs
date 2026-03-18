@@ -556,11 +556,11 @@ mod tests {
         assert!(!status.submodules.is_empty());
 
         let sub_info = &status.submodules[0];
-        assert_eq!(sub_info.path, PathBuf::from("my-sub"));
+        assert_eq!(sub_info.path, Path::new("my-sub"));
         assert_eq!(sub_info.state, SubmoduleState::Dirty);
 
         // Verify the file entry is annotated
-        let file_entry = status.files.iter().find(|f| f.path == PathBuf::from("my-sub"));
+        let file_entry = status.files.iter().find(|f| f.path == Path::new("my-sub"));
         assert!(file_entry.is_some());
         let file_entry = file_entry.unwrap();
         assert!(file_entry.is_submodule);
@@ -625,7 +625,7 @@ mod tests {
         assert!(!status.submodules.is_empty());
 
         let sub_info = &status.submodules[0];
-        assert_eq!(sub_info.path, PathBuf::from("my-sub"));
+        assert_eq!(sub_info.path, Path::new("my-sub"));
         // Could be Modified or Dirty depending on exact git state
         assert!(
             sub_info.state == SubmoduleState::Modified || sub_info.state == SubmoduleState::Dirty,
