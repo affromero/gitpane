@@ -109,31 +109,33 @@ impl RepoList {
         for (index, entry) in self.repos.iter().enumerate() {
             let path = entry.path.clone();
             let tx = tx.clone();
-            tokio::task::spawn_blocking(move || match status::query_status(&path, ignore_dirty_subs) {
-                Ok(s) => {
-                    let _ = tx.send(Action::RepoStatusUpdated { index, status: s });
-                }
-                Err(e) => {
-                    let _ = tx.send(Action::Error(format!(
-                        "Failed to query {}: {}",
-                        path.display(),
-                        e
-                    )));
-                    // Send a minimal status so the "..." placeholder clears
-                    let _ = tx.send(Action::RepoStatusUpdated {
-                        index,
-                        status: RepoStatus {
-                            branch: "error".to_string(),
-                            files: Vec::new(),
-                            ahead: 0,
-                            behind: 0,
-                            is_dirty: false,
-                            worktrees: 0,
-                            has_submodules: false,
-                            submodules: Vec::new(),
-                            has_dirty_submodules: false,
-                        },
-                    });
+            tokio::task::spawn_blocking(move || {
+                match status::query_status(&path, ignore_dirty_subs) {
+                    Ok(s) => {
+                        let _ = tx.send(Action::RepoStatusUpdated { index, status: s });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Action::Error(format!(
+                            "Failed to query {}: {}",
+                            path.display(),
+                            e
+                        )));
+                        // Send a minimal status so the "..." placeholder clears
+                        let _ = tx.send(Action::RepoStatusUpdated {
+                            index,
+                            status: RepoStatus {
+                                branch: "error".to_string(),
+                                files: Vec::new(),
+                                ahead: 0,
+                                behind: 0,
+                                is_dirty: false,
+                                worktrees: 0,
+                                has_submodules: false,
+                                submodules: Vec::new(),
+                                has_dirty_submodules: false,
+                            },
+                        });
+                    }
                 }
             });
         }
@@ -285,10 +287,7 @@ impl Component for RepoList {
 
                     // Dirty submodule indicator
                     if status.has_dirty_submodules {
-                        spans.push(Span::styled(
-                            "◈ ",
-                            Style::default().fg(Color::LightMagenta),
-                        ));
+                        spans.push(Span::styled("◈ ", Style::default().fg(Color::LightMagenta)));
                     }
 
                     // Change count

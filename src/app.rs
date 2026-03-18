@@ -358,7 +358,10 @@ impl App {
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status_with_fetch(&path, ignore_dirty_subs) {
+                                    match crate::git::status::query_status_with_fetch(
+                                        &path,
+                                        ignore_dirty_subs,
+                                    ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 index: idx,
@@ -392,7 +395,8 @@ impl App {
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, ignore_dirty_subs) {
+                                    match crate::git::status::query_status(&path, ignore_dirty_subs)
+                                    {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 index: idx,
@@ -427,7 +431,10 @@ impl App {
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status_with_fetch(&path, ignore_dirty_subs) {
+                                    match crate::git::status::query_status_with_fetch(
+                                        &path,
+                                        ignore_dirty_subs,
+                                    ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 index: idx,
@@ -467,7 +474,8 @@ impl App {
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, ignore_dirty_subs) {
+                                    match crate::git::status::query_status(&path, ignore_dirty_subs)
+                                    {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 index: idx,
@@ -521,7 +529,8 @@ impl App {
                             .and_then(|e| e.status.as_ref())
                             .map(|s| (s.ahead, s.behind, s.has_submodules))
                             .unwrap_or((0, 0, false));
-                        self.context_menu.show(index, col, row, ahead, behind, has_submodules);
+                        self.context_menu
+                            .show(index, col, row, ahead, behind, has_submodules);
                     }
                     Action::HideContextMenu => {
                         self.context_menu.hide();
@@ -535,7 +544,10 @@ impl App {
                             let _ = std::io::stdout().flush();
                         }
                     }
-                    Action::GitPush(idx) | Action::GitPull(idx) | Action::GitPullRebase(idx) | Action::GitPullSubmodules(idx) => {
+                    Action::GitPush(idx)
+                    | Action::GitPull(idx)
+                    | Action::GitPullRebase(idx)
+                    | Action::GitPullSubmodules(idx) => {
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
                             let branch = entry
                                 .status
@@ -603,12 +615,27 @@ impl App {
                             });
                         }
                     }
-                    Action::GitSubmoduleUpdate(idx) | Action::GitSubmoduleSync(idx) | Action::GitSubmoduleUpdateLatest(idx) => {
+                    Action::GitSubmoduleUpdate(idx)
+                    | Action::GitSubmoduleSync(idx)
+                    | Action::GitSubmoduleUpdateLatest(idx) => {
                         if let Some(entry) = self.repo_list.repos.get_mut(idx) {
                             let git_args: Vec<String> = match action {
-                                Action::GitSubmoduleUpdate(_) => ["submodule", "update", "--init", "--recursive"].iter().map(|s| s.to_string()).collect(),
-                                Action::GitSubmoduleSync(_) => ["submodule", "sync"].iter().map(|s| s.to_string()).collect(),
-                                Action::GitSubmoduleUpdateLatest(_) => ["submodule", "foreach", "git", "pull", "origin", "HEAD"].iter().map(|s| s.to_string()).collect(),
+                                Action::GitSubmoduleUpdate(_) => {
+                                    ["submodule", "update", "--init", "--recursive"]
+                                        .iter()
+                                        .map(|s| s.to_string())
+                                        .collect()
+                                }
+                                Action::GitSubmoduleSync(_) => ["submodule", "sync"]
+                                    .iter()
+                                    .map(|s| s.to_string())
+                                    .collect(),
+                                Action::GitSubmoduleUpdateLatest(_) => {
+                                    ["submodule", "foreach", "git", "pull", "origin", "HEAD"]
+                                        .iter()
+                                        .map(|s| s.to_string())
+                                        .collect()
+                                }
                                 _ => unreachable!(),
                             };
                             entry.git_op = true;
@@ -624,17 +651,32 @@ impl App {
                                     Ok(o) if o.status.success() => {
                                         let _ = tx.send(Action::GitOpComplete {
                                             index: idx,
-                                            message: format!("git {} succeeded", git_args.join(" ")),
+                                            message: format!(
+                                                "git {} succeeded",
+                                                git_args.join(" ")
+                                            ),
                                         });
                                     }
                                     Ok(o) => {
                                         let stderr = String::from_utf8_lossy(&o.stderr);
-                                        let first_line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error").trim();
-                                        let _ = tx.send(Action::Error(format!("git {} failed: {}", git_args.join(" "), first_line)));
+                                        let first_line = stderr
+                                            .lines()
+                                            .find(|l| !l.trim().is_empty())
+                                            .unwrap_or("unknown error")
+                                            .trim();
+                                        let _ = tx.send(Action::Error(format!(
+                                            "git {} failed: {}",
+                                            git_args.join(" "),
+                                            first_line
+                                        )));
                                         let _ = tx.send(Action::RefreshRepo(idx));
                                     }
                                     Err(e) => {
-                                        let _ = tx.send(Action::Error(format!("git {} failed: {}", git_args.join(" "), e)));
+                                        let _ = tx.send(Action::Error(format!(
+                                            "git {} failed: {}",
+                                            git_args.join(" "),
+                                            e
+                                        )));
                                         let _ = tx.send(Action::RefreshRepo(idx));
                                     }
                                 }
@@ -647,7 +689,9 @@ impl App {
                     }
                     Action::ShowDiff(repo_idx, ref file_path) => {
                         if let Some(entry) = self.repo_list.repos.get(repo_idx) {
-                            let sub_info = entry.status.as_ref()
+                            let sub_info = entry
+                                .status
+                                .as_ref()
                                 .and_then(|s| s.submodules.iter().find(|sm| sm.path == *file_path));
 
                             if let Some(sub) = sub_info {
@@ -659,13 +703,25 @@ impl App {
                                 let tx = self.action_tx.clone();
                                 tokio::task::spawn_blocking(move || {
                                     let submodule_abs = repo_path.join(&sub_path);
-                                    let short_old = if old_oid.len() >= 7 { &old_oid[..7] } else { &old_oid };
-                                    let short_new = if new_oid.len() >= 7 { &new_oid[..7] } else { &new_oid };
+                                    let short_old = if old_oid.len() >= 7 {
+                                        &old_oid[..7]
+                                    } else {
+                                        &old_oid
+                                    };
+                                    let short_new = if new_oid.len() >= 7 {
+                                        &new_oid[..7]
+                                    } else {
+                                        &new_oid
+                                    };
 
                                     // Dirty submodule (local uncommitted changes): show git diff
                                     // Modified submodule (pointer changed): show commit log
-                                    let pointer_changed = !old_oid.is_empty() && !new_oid.is_empty() && old_oid != new_oid;
-                                    let use_diff = sub_state == crate::git::status::SubmoduleState::Dirty || !pointer_changed;
+                                    let pointer_changed = !old_oid.is_empty()
+                                        && !new_oid.is_empty()
+                                        && old_oid != new_oid;
+                                    let use_diff = sub_state
+                                        == crate::git::status::SubmoduleState::Dirty
+                                        || !pointer_changed;
 
                                     if use_diff {
                                         let header = format!(
@@ -679,20 +735,27 @@ impl App {
                                             "─".repeat(40),
                                         );
                                         let output = std::process::Command::new("git")
-                                            .arg("-C").arg(&submodule_abs)
+                                            .arg("-C")
+                                            .arg(&submodule_abs)
                                             .args(["diff", "HEAD"])
                                             .output();
                                         let body = match output {
                                             Ok(o) => {
-                                                let text = String::from_utf8_lossy(&o.stdout).to_string();
+                                                let text =
+                                                    String::from_utf8_lossy(&o.stdout).to_string();
                                                 if text.is_empty() {
                                                     // Fallback: show status
-                                                    let status_out = std::process::Command::new("git")
-                                                        .arg("-C").arg(&submodule_abs)
-                                                        .args(["status", "--short"])
-                                                        .output()
-                                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                                                        .unwrap_or_default();
+                                                    let status_out =
+                                                        std::process::Command::new("git")
+                                                            .arg("-C")
+                                                            .arg(&submodule_abs)
+                                                            .args(["status", "--short"])
+                                                            .output()
+                                                            .map(|o| {
+                                                                String::from_utf8_lossy(&o.stdout)
+                                                                    .to_string()
+                                                            })
+                                                            .unwrap_or_default();
                                                     if status_out.is_empty() {
                                                         "(no changes detected)".to_string()
                                                     } else {
@@ -702,24 +765,32 @@ impl App {
                                                     text
                                                 }
                                             }
-                                            Err(e) => format!("Failed to get submodule diff: {}", e),
+                                            Err(e) => {
+                                                format!("Failed to get submodule diff: {}", e)
+                                            }
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!("{}{}", header, body)));
+                                        let _ = tx.send(Action::DiffLoaded(format!(
+                                            "{}{}",
+                                            header, body
+                                        )));
                                     } else {
                                         // Pointer changed: show commit log between old and new
                                         let header = format!(
                                             "Submodule {} → {}\n{}\n",
-                                            short_old, short_new,
+                                            short_old,
+                                            short_new,
                                             "─".repeat(40),
                                         );
                                         let range = format!("{}..{}", old_oid, new_oid);
                                         let output = std::process::Command::new("git")
-                                            .arg("-C").arg(&submodule_abs)
+                                            .arg("-C")
+                                            .arg(&submodule_abs)
                                             .args(["log", "--oneline", "--graph", &range])
                                             .output();
                                         let body = match output {
                                             Ok(o) => {
-                                                let text = String::from_utf8_lossy(&o.stdout).to_string();
+                                                let text =
+                                                    String::from_utf8_lossy(&o.stdout).to_string();
                                                 if text.is_empty() {
                                                     "(no commits in range)".to_string()
                                                 } else {
@@ -728,7 +799,10 @@ impl App {
                                             }
                                             Err(e) => format!("Failed to get submodule log: {}", e),
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!("{}{}", header, body)));
+                                        let _ = tx.send(Action::DiffLoaded(format!(
+                                            "{}{}",
+                                            header, body
+                                        )));
                                     }
                                 });
                             } else {
@@ -792,8 +866,11 @@ impl App {
                         tokio::task::spawn_blocking(move || {
                             match crate::git::commit_files::list_commit_files(&path, &oid) {
                                 Ok((message, files)) => {
-                                    let _ =
-                                        tx.send(Action::CommitFilesLoaded { oid, message, files });
+                                    let _ = tx.send(Action::CommitFilesLoaded {
+                                        oid,
+                                        message,
+                                        files,
+                                    });
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::Error(format!(
@@ -809,8 +886,11 @@ impl App {
                         ref message,
                         ref files,
                     } => {
-                        self.git_graph
-                            .set_commit_files(oid.clone(), message.clone(), files.clone());
+                        self.git_graph.set_commit_files(
+                            oid.clone(),
+                            message.clone(),
+                            files.clone(),
+                        );
                     }
                     Action::ShowCommitDiff {
                         ref repo_path,
@@ -903,7 +983,8 @@ impl App {
                             tracing::error!("Failed to save config: {}", e);
                         }
                         let repo_paths = scanner::discover_repos(&self.config);
-                        self.repo_list = RepoList::new(repo_paths, self.config.submodules.ignore_dirty);
+                        self.repo_list =
+                            RepoList::new(repo_paths, self.config.submodules.ignore_dirty);
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;

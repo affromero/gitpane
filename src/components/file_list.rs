@@ -162,12 +162,10 @@ impl FileList {
                     FileStatus::Conflicted => Color::LightRed,
                 };
 
-                let mut spans = vec![
-                    Span::styled(
-                        format!(" {} ", entry.status.label()),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                ];
+                let mut spans = vec![Span::styled(
+                    format!(" {} ", entry.status.label()),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )];
 
                 if entry.is_submodule {
                     let sub_label = match &entry.submodule_state {

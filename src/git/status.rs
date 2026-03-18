@@ -70,11 +70,18 @@ pub(crate) fn query_status(path: &Path, ignore_dirty_subs: bool) -> color_eyre::
 }
 
 /// Status query with `git fetch` first. Used by explicit user refresh (`r` key).
-pub(crate) fn query_status_with_fetch(path: &Path, ignore_dirty_subs: bool) -> color_eyre::Result<RepoStatus> {
+pub(crate) fn query_status_with_fetch(
+    path: &Path,
+    ignore_dirty_subs: bool,
+) -> color_eyre::Result<RepoStatus> {
     query_status_inner(path, true, ignore_dirty_subs)
 }
 
-fn query_status_inner(path: &Path, fetch: bool, ignore_dirty_subs: bool) -> color_eyre::Result<RepoStatus> {
+fn query_status_inner(
+    path: &Path,
+    fetch: bool,
+    ignore_dirty_subs: bool,
+) -> color_eyre::Result<RepoStatus> {
     let repo = Repository::open(path)?;
 
     // Branch name
@@ -146,7 +153,10 @@ fn query_status_inner(path: &Path, fetch: bool, ignore_dirty_subs: bool) -> colo
     let mut submodules = Vec::new();
     let mut has_dirty_submodules = false;
 
-    if has_submodules && !ignore_dirty_subs && let Ok(subs) = repo.submodules() {
+    if has_submodules
+        && !ignore_dirty_subs
+        && let Ok(subs) = repo.submodules()
+    {
         for sub in &subs {
             let name = sub.name().unwrap_or("").to_string();
             let sub_path = PathBuf::from(sub.path());
@@ -156,12 +166,9 @@ fn query_status_inner(path: &Path, fetch: bool, ignore_dirty_subs: bool) -> colo
 
             let state = if status.is_wd_uninitialized() {
                 Some(SubmoduleState::Uninitialized)
-            } else if status.is_wd_wd_modified()
-                || status.contains(SubmoduleStatus::WD_UNTRACKED)
-            {
+            } else if status.is_wd_wd_modified() || status.contains(SubmoduleStatus::WD_UNTRACKED) {
                 Some(SubmoduleState::Dirty)
-            } else if status.is_wd_modified()
-                || status.contains(SubmoduleStatus::WD_INDEX_MODIFIED)
+            } else if status.is_wd_modified() || status.contains(SubmoduleStatus::WD_INDEX_MODIFIED)
             {
                 Some(SubmoduleState::Modified)
             } else {
@@ -454,7 +461,12 @@ mod tests {
 
         let status = query_status(tmp.path(), true).unwrap();
         assert!(status.is_dirty);
-        assert!(status.files.iter().any(|f| f.status == FileStatus::Untracked));
+        assert!(
+            status
+                .files
+                .iter()
+                .any(|f| f.status == FileStatus::Untracked)
+        );
         // Submodule fields should be empty when ignored
         assert!(status.submodules.is_empty());
         assert!(!status.has_dirty_submodules);
@@ -500,8 +512,10 @@ mod tests {
             .arg("-C")
             .arg(tmp.path())
             .args([
-                "-c", "protocol.file.allow=always",
-                "submodule", "add",
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
                 sub_source.path().to_str().unwrap(),
                 "my-sub",
             ])
@@ -513,7 +527,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        // Commit the submodule addition
+        // Commit the submodule addition (use -c user.* for CI environments without global git config)
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(tmp.path())
@@ -524,7 +538,15 @@ mod tests {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(tmp.path())
-            .args(["commit", "-m", "add submodule"])
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@test.com",
+                "commit",
+                "-m",
+                "add submodule",
+            ])
             .output()
             .unwrap();
         assert!(
@@ -606,7 +628,13 @@ mod tests {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(tmp.path().join("my-sub"))
-            .args(["-c", "protocol.file.allow=always", "pull", "origin", "master"])
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "pull",
+                "origin",
+                "master",
+            ])
             .output()
             .unwrap();
         // Try main if master fails

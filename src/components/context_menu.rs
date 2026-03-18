@@ -54,7 +54,15 @@ impl ContextMenu {
         }
     }
 
-    pub fn show(&mut self, repo_index: usize, col: u16, row: u16, ahead: usize, behind: usize, has_submodules: bool) {
+    pub fn show(
+        &mut self,
+        repo_index: usize,
+        col: u16,
+        row: u16,
+        ahead: usize,
+        behind: usize,
+        has_submodules: bool,
+    ) {
         self.visible = true;
         self.repo_index = repo_index;
         self.position = (col, row);
@@ -259,8 +267,12 @@ impl Component for ContextMenu {
             .map(|item| {
                 let style = match item.action {
                     MenuAction::Push => Style::default().fg(Color::Green),
-                    MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => Style::default().fg(Color::Yellow),
-                    MenuAction::SubmoduleUpdate | MenuAction::SubmoduleSync | MenuAction::SubmoduleUpdateLatest => Style::default().fg(Color::LightMagenta),
+                    MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => {
+                        Style::default().fg(Color::Yellow)
+                    }
+                    MenuAction::SubmoduleUpdate
+                    | MenuAction::SubmoduleSync
+                    | MenuAction::SubmoduleUpdateLatest => Style::default().fg(Color::LightMagenta),
                     _ => Style::default(),
                 };
                 ListItem::new(Line::from(Span::styled(&item.label, style)))
