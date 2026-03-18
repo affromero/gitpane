@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.4.0] - 2026-03-18
+
+### Added
+- Full dirty submodule awareness: detects Modified (pointer changed), Dirty (uncommitted local changes), and Uninitialized states
+- `◈` badge in repo list when any submodule has a non-clean state
+- `[sub: +commit]`, `[sub: ~dirty]`, `[sub: -uninit]` annotations in the file list with LightMagenta styling
+- Submodule-aware diff panel: shows `git diff` for dirty workdirs, commit log for pointer changes
+- Context menu actions: "Sub: update --init", "Sub: sync", "Sub: pull latest"
+- Config toggle `[submodules] ignore_dirty = true` to suppress submodule noise entirely
+
 ## [0.3.11] - 2026-03-16
 
 ### Fixed
