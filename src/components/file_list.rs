@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::status::{FileEntry, FileStatus};
+use crate::git::status::{FileEntry, FileStatus, SubmoduleState};
 
 pub(crate) struct FileList {
     files: Vec<FileEntry>,
@@ -162,16 +162,35 @@ impl FileList {
                     FileStatus::Conflicted => Color::LightRed,
                 };
 
-                let spans = vec![
+                let mut spans = vec![
                     Span::styled(
                         format!(" {} ", entry.status.label()),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        entry.path.to_string_lossy().to_string(),
-                        Style::default().fg(Color::White),
-                    ),
                 ];
+
+                if entry.is_submodule {
+                    let sub_label = match &entry.submodule_state {
+                        Some(SubmoduleState::Modified) => "[sub: +commit] ",
+                        Some(SubmoduleState::Uninitialized) => "[sub: -uninit] ",
+                        Some(SubmoduleState::Dirty) => "[sub: ~dirty] ",
+                        None => "[submodule] ",
+                    };
+                    spans.push(Span::styled(
+                        sub_label,
+                        Style::default().fg(Color::LightMagenta),
+                    ));
+                }
+
+                let path_color = if entry.is_submodule {
+                    Color::LightMagenta
+                } else {
+                    Color::White
+                };
+                spans.push(Span::styled(
+                    entry.path.to_string_lossy().to_string(),
+                    Style::default().fg(path_color),
+                ));
 
                 ListItem::new(Line::from(spans))
             })

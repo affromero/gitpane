@@ -29,10 +29,11 @@ pub(crate) struct RepoList {
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
+    ignore_dirty_subs: bool,
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>, ignore_dirty_subs: bool) -> Self {
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -60,6 +61,7 @@ impl RepoList {
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
+            ignore_dirty_subs,
         }
     }
 
@@ -102,11 +104,12 @@ impl RepoList {
 
     fn spawn_status_queries(&self) {
         let Some(tx) = &self.action_tx else { return };
+        let ignore_dirty_subs = self.ignore_dirty_subs;
 
         for (index, entry) in self.repos.iter().enumerate() {
             let path = entry.path.clone();
             let tx = tx.clone();
-            tokio::task::spawn_blocking(move || match status::query_status(&path) {
+            tokio::task::spawn_blocking(move || match status::query_status(&path, ignore_dirty_subs) {
                 Ok(s) => {
                     let _ = tx.send(Action::RepoStatusUpdated { index, status: s });
                 }
@@ -127,6 +130,8 @@ impl RepoList {
                             is_dirty: false,
                             worktrees: 0,
                             has_submodules: false,
+                            submodules: Vec::new(),
+                            has_dirty_submodules: false,
                         },
                     });
                 }
@@ -275,6 +280,14 @@ impl Component for RepoList {
                         spans.push(Span::styled(
                             format!("⎇{} ", status.worktrees),
                             Style::default().fg(Color::Magenta),
+                        ));
+                    }
+
+                    // Dirty submodule indicator
+                    if status.has_dirty_submodules {
+                        spans.push(Span::styled(
+                            "◈ ",
+                            Style::default().fg(Color::LightMagenta),
                         ));
                     }
 

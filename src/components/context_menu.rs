@@ -21,6 +21,9 @@ enum MenuAction {
     Pull,
     PullRebase,
     PullSubmodules,
+    SubmoduleUpdate,
+    SubmoduleSync,
+    SubmoduleUpdateLatest,
 }
 
 struct MenuItem {
@@ -96,6 +99,18 @@ impl ContextMenu {
                 label: "Pull --recurse-subs".into(),
                 action: MenuAction::PullSubmodules,
             });
+            self.items.push(MenuItem {
+                label: "Sub: update --init".into(),
+                action: MenuAction::SubmoduleUpdate,
+            });
+            self.items.push(MenuItem {
+                label: "Sub: sync".into(),
+                action: MenuAction::SubmoduleSync,
+            });
+            self.items.push(MenuItem {
+                label: "Sub: pull latest".into(),
+                action: MenuAction::SubmoduleUpdateLatest,
+            });
         }
 
         self.state.select(Some(0));
@@ -106,7 +121,7 @@ impl ContextMenu {
     }
 
     fn menu_rect(&self, terminal_area: Rect) -> Rect {
-        let width = 22u16;
+        let width = 24u16;
         let height = (self.items.len() as u16) + 2; // +2 for border
 
         let x = self
@@ -151,6 +166,9 @@ impl ContextMenu {
             MenuAction::Pull => Action::GitPull(self.repo_index),
             MenuAction::PullRebase => Action::GitPullRebase(self.repo_index),
             MenuAction::PullSubmodules => Action::GitPullSubmodules(self.repo_index),
+            MenuAction::SubmoduleUpdate => Action::GitSubmoduleUpdate(self.repo_index),
+            MenuAction::SubmoduleSync => Action::GitSubmoduleSync(self.repo_index),
+            MenuAction::SubmoduleUpdateLatest => Action::GitSubmoduleUpdateLatest(self.repo_index),
         };
         self.hide();
         Some(action)
@@ -242,6 +260,7 @@ impl Component for ContextMenu {
                 let style = match item.action {
                     MenuAction::Push => Style::default().fg(Color::Green),
                     MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => Style::default().fg(Color::Yellow),
+                    MenuAction::SubmoduleUpdate | MenuAction::SubmoduleSync | MenuAction::SubmoduleUpdateLatest => Style::default().fg(Color::LightMagenta),
                     _ => Style::default(),
                 };
                 ListItem::new(Line::from(Span::styled(&item.label, style)))

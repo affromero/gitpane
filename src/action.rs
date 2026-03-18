@@ -42,6 +42,9 @@ pub(crate) enum Action {
     GitPull(usize),
     GitPullRebase(usize),
     GitPullSubmodules(usize),
+    GitSubmoduleUpdate(usize),
+    GitSubmoduleSync(usize),
+    GitSubmoduleUpdateLatest(usize),
     GitOpComplete {
         index: usize,
         message: String,

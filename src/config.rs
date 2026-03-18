@@ -19,6 +19,8 @@ pub(crate) struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub graph: GraphConfig,
+    #[serde(default)]
+    pub submodules: SubmoduleConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,6 +77,20 @@ pub(crate) struct GraphConfig {
     pub label_max_len: usize,
     #[serde(default = "default_show_stats")]
     pub show_stats: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct SubmoduleConfig {
+    #[serde(default)]
+    pub ignore_dirty: bool,
+}
+
+impl Default for SubmoduleConfig {
+    fn default() -> Self {
+        Self {
+            ignore_dirty: false,
+        }
+    }
 }
 
 fn default_show_stats() -> bool {
@@ -178,6 +194,7 @@ impl Default for Config {
             watch: WatchConfig::default(),
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
+            submodules: SubmoduleConfig::default(),
         }
     }
 }
@@ -353,6 +370,31 @@ mod tests {
         let loaded: Config = toml::from_str(&serialized).unwrap();
         assert!(!loaded.ui.check_for_updates);
         assert_eq!(loaded.ui.update_position, UpdatePosition::TopLeft);
+    }
+
+    #[test]
+    fn test_submodule_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.submodules.ignore_dirty);
+    }
+
+    #[test]
+    fn test_submodule_config_roundtrip() {
+        let mut config = Config::default();
+        config.submodules.ignore_dirty = true;
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert!(loaded.submodules.ignore_dirty);
+    }
+
+    #[test]
+    fn test_submodule_config_parse() {
+        let toml_str = r#"
+            [submodules]
+            ignore_dirty = true
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.submodules.ignore_dirty);
     }
 
     #[test]
