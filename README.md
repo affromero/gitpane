@@ -288,6 +288,14 @@ src/
     └── commit_files.rs  # Commit file list and per-file diffs
 ```
 
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [**Fairtrail**](https://github.com/affromero/fairtrail) | Flight price evolution tracker with natural language search |
+| [**PriceToken**](https://github.com/affromero/pricetoken) | Real-time LLM pricing API, npm/PyPI packages, and live dashboard |
+| [**kin3o**](https://github.com/affromero/kin3o) | AI-powered Lottie animation generator CLI |
+
 ## License
 
 [MIT](LICENSE)
