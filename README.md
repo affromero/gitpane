@@ -11,6 +11,7 @@
     <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
     <img src="https://img.shields.io/github/languages/top/affromero/gitpane" alt="Language">
+    <a href="https://socket.dev"><img src="https://img.shields.io/badge/Socket-protected-blueviolet?logo=socket.dev" alt="Socket"></a>
   </p>
 </p>
 
