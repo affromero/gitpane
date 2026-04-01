@@ -2,6 +2,24 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.4.1] - 2026-04-01
+
+### Added
+- Fetch failure indicator: repos show a dim `⚠` when `git fetch` fails (auth, network, timeout), so stale ahead/behind counts are visible
+
+### Fixed
+- Repos no longer get stuck with a permanent spinner when a status query fails (`git_op` is now cleared on error via `StatusQueryDone`)
+- RAII `StatusGuard` ensures `pending_status` is cleaned up even if a spawned task panics
+- RAII `GitOpGuard` ensures push/pull/submodule operations reset `git_op` on panic
+- Rapid file/commit navigation no longer shows stale diffs (generation counters on `DiffLoaded`, `CommitFilesLoaded`, `CommitDiffLoaded`)
+- Background `git fetch` now has a 30-second timeout — hung remotes no longer block all polls indefinitely
+- Startup status queries now go through the shared semaphore, preventing unbounded thread bursts on launch
+
+### Changed
+- Repos are now identified by path (`RepoId`) instead of positional index, fixing a class of bugs where add/remove/sort/rescan could apply status to the wrong repo or corrupt tracking state
+- Watcher uses path-based routing — no longer needs rebuilding when repos are added or removed
+- `RescanRepos` clears `pending_status`/`dirty_repos`; `RemoveRepo` cleans up tracking sets
+
 ## [0.4.0] - 2026-03-18
 
 ### Added
