@@ -112,13 +112,17 @@ impl RepoList {
         let Some(tx) = &self.action_tx else { return };
         let ignore_dirty_subs = self.ignore_dirty_subs;
 
-        for (index, entry) in self.repos.iter().enumerate() {
+        for entry in self.repos.iter() {
+            let repo_id = RepoId(entry.path.clone());
             let path = entry.path.clone();
             let tx = tx.clone();
             tokio::task::spawn_blocking(move || {
                 match status::query_status(&path, ignore_dirty_subs) {
                     Ok(s) => {
-                        let _ = tx.send(Action::RepoStatusUpdated { index, status: s });
+                        let _ = tx.send(Action::RepoStatusUpdated {
+                            id: repo_id,
+                            status: s,
+                        });
                     }
                     Err(e) => {
                         let _ = tx.send(Action::Error(format!(
@@ -128,7 +132,7 @@ impl RepoList {
                         )));
                         // Send a minimal status so the "..." placeholder clears
                         let _ = tx.send(Action::RepoStatusUpdated {
-                            index,
+                            id: repo_id,
                             status: RepoStatus {
                                 branch: "error".to_string(),
                                 files: Vec::new(),
@@ -164,12 +168,14 @@ impl Component for RepoList {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.select_prev();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
             _ => Ok(None),
         }
@@ -187,7 +193,8 @@ impl Component for RepoList {
                     let idx = visual_row + self.state.offset();
                     if idx < self.repos.len() {
                         self.state.select(Some(idx));
-                        return Ok(Some(Action::SelectRepo(idx)));
+                        let id = RepoId(self.repos[idx].path.clone());
+                        return Ok(Some(Action::SelectRepo(id)));
                     }
                 }
                 Ok(None)
@@ -202,8 +209,9 @@ impl Component for RepoList {
                     let idx = visual_row + self.state.offset();
                     if idx < self.repos.len() {
                         self.state.select(Some(idx));
+                        let id = RepoId(self.repos[idx].path.clone());
                         return Ok(Some(Action::ShowContextMenu {
-                            index: idx,
+                            id,
                             row: mouse.row,
                             col: mouse.column,
                         }));
@@ -214,12 +222,14 @@ impl Component for RepoList {
             MouseEventKind::ScrollUp => {
                 self.select_prev();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
             MouseEventKind::ScrollDown => {
                 self.select_next();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
             _ => Ok(None),
         }
@@ -230,15 +240,19 @@ impl Component for RepoList {
             Action::SelectNextRepo => {
                 self.select_next();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
             Action::SelectPrevRepo => {
                 self.select_prev();
                 let idx = self.state.selected().unwrap_or(0);
-                Ok(Some(Action::SelectRepo(idx)))
+                let id = RepoId(self.repos[idx].path.clone());
+                Ok(Some(Action::SelectRepo(id)))
             }
-            Action::RepoStatusUpdated { index, status } => {
-                self.update_status(index, status);
+            Action::RepoStatusUpdated { ref id, ref status } => {
+                if let Some(idx) = self.resolve_index(id) {
+                    self.update_status(idx, status.clone());
+                }
                 Ok(None)
             }
             _ => Ok(None),
