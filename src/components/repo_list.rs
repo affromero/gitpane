@@ -267,6 +267,11 @@ impl Component for RepoList {
                         spans.push(Span::styled("◈ ", Style::default().fg(Color::LightMagenta)));
                     }
 
+                    // Fetch failure indicator
+                    if status.fetch_failed {
+                        spans.push(Span::styled("⚠ ", Style::default().fg(Color::DarkGray)));
+                    }
+
                     // Change count
                     if !status.files.is_empty() {
                         spans.push(Span::styled(

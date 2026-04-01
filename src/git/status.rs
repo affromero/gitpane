@@ -14,6 +14,8 @@ pub(crate) struct RepoStatus {
     pub has_submodules: bool,
     pub submodules: Vec<SubmoduleInfo>,
     pub has_dirty_submodules: bool,
+    /// True when the last `git fetch` failed (auth, network, timeout)
+    pub fetch_failed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,9 +93,11 @@ fn query_status_inner(
     };
 
     // Only fetch remote-tracking refs when explicitly requested
-    if fetch {
-        fetch_remote_silent(path);
-    }
+    let fetch_failed = if fetch {
+        !fetch_remote_silent(path)
+    } else {
+        false
+    };
 
     // Ahead/behind
     let (ahead, behind) = compute_ahead_behind(&repo);
@@ -216,6 +220,7 @@ fn query_status_inner(
         has_submodules,
         submodules,
         has_dirty_submodules,
+        fetch_failed,
     })
 }
 
