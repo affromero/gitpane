@@ -53,6 +53,40 @@ impl SortOrder {
     }
 }
 
+/// RAII guard that sends `StatusQueryDone` if the spawned task exits
+/// without sending a completion message (e.g., on panic). The guard's
+/// `Drop` uses `UnboundedSender::send` which is non-blocking, so it
+/// is safe to call from a synchronous `Drop`.
+struct StatusGuard {
+    idx: usize,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl StatusGuard {
+    fn new(idx: usize, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            idx,
+            tx,
+            completed: false,
+        }
+    }
+
+    /// Mark the guard as completed so `Drop` won't send cleanup.
+    /// Consumes self to prevent accidental reuse.
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for StatusGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::StatusQueryDone(self.idx));
+        }
+    }
+}
+
 pub(crate) struct App {
     config: Config,
     should_quit: bool,
@@ -307,6 +341,11 @@ impl App {
                     }
                     Action::StatusQueryDone(idx) => {
                         self.pending_status.remove(&idx);
+                        // Clear git_op so the repo isn't permanently skipped
+                        // by future polls after a failed status query.
+                        if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                            entry.git_op = false;
+                        }
                         if self.dirty_repos.remove(&idx) {
                             self.action_tx.send(Action::RefreshRepo(idx))?;
                         }
@@ -357,6 +396,7 @@ impl App {
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(idx, tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
@@ -367,8 +407,10 @@ impl App {
                                                 index: idx,
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
+                                            guard.complete();
                                             let _ = tx.send(Action::StatusQueryDone(idx));
                                             let _ = tx.send(Action::Error(format!(
                                                 "Failed to query: {}",
@@ -394,6 +436,7 @@ impl App {
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(idx, tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status(&path, ignore_dirty_subs)
                                     {
@@ -402,8 +445,10 @@ impl App {
                                                 index: idx,
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
+                                            guard.complete();
                                             let _ = tx.send(Action::StatusQueryDone(idx));
                                             tracing::debug!(
                                                 "Local poll failed for {}: {}",
@@ -430,6 +475,7 @@ impl App {
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(idx, tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
@@ -440,8 +486,10 @@ impl App {
                                                 index: idx,
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
+                                            guard.complete();
                                             let _ = tx.send(Action::StatusQueryDone(idx));
                                             tracing::debug!(
                                                 "Fetch poll failed for {}: {}",
@@ -473,6 +521,7 @@ impl App {
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(idx, tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status(&path, ignore_dirty_subs)
                                     {
@@ -481,8 +530,10 @@ impl App {
                                                 index: idx,
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
+                                            guard.complete();
                                             let _ = tx.send(Action::StatusQueryDone(idx));
                                             let _ = tx.send(Action::Error(format!(
                                                 "Failed to query: {}",
