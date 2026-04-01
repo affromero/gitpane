@@ -27,6 +27,8 @@ pub(crate) struct FileList {
     diff_content: Option<String>,
     diff_scroll: u16,
     pub horizontal_layout: bool,
+    /// Monotonic counter to discard stale DiffLoaded results.
+    diff_generation: u64,
 }
 
 impl FileList {
@@ -44,6 +46,7 @@ impl FileList {
             diff_content: None,
             diff_scroll: 0,
             horizontal_layout: false,
+            diff_generation: 0,
         }
     }
 
@@ -111,10 +114,15 @@ impl FileList {
         Some(file.path.to_string_lossy().to_string())
     }
 
-    fn try_show_diff(&self) -> Option<Action> {
+    pub fn diff_generation(&self) -> u64 {
+        self.diff_generation
+    }
+
+    fn try_show_diff(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
         let repo_idx = self.repo_index?;
         let file = self.files.get(idx)?;
+        self.diff_generation += 1;
         Some(Action::ShowDiff(repo_idx, file.path.clone()))
     }
 

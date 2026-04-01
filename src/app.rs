@@ -740,6 +740,7 @@ impl App {
                     }
                     Action::ShowDiff(repo_idx, ref file_path) => {
                         if let Some(entry) = self.repo_list.repos.get(repo_idx) {
+                            let diff_gen = self.file_list.diff_generation();
                             let sub_info = entry
                                 .status
                                 .as_ref()
@@ -820,10 +821,10 @@ impl App {
                                                 format!("Failed to get submodule diff: {}", e)
                                             }
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!(
-                                            "{}{}",
-                                            header, body
-                                        )));
+                                        let _ = tx.send(Action::DiffLoaded {
+                                            generation: diff_gen,
+                                            content: format!("{}{}", header, body),
+                                        });
                                     } else {
                                         // Pointer changed: show commit log between old and new
                                         let header = format!(
@@ -850,10 +851,10 @@ impl App {
                                             }
                                             Err(e) => format!("Failed to get submodule log: {}", e),
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!(
-                                            "{}{}",
-                                            header, body
-                                        )));
+                                        let _ = tx.send(Action::DiffLoaded {
+                                            generation: diff_gen,
+                                            content: format!("{}{}", header, body),
+                                        });
                                     }
                                 });
                             } else {
@@ -891,26 +892,35 @@ impl App {
                                             if text.is_empty() {
                                                 text = "(no diff available)".to_string();
                                             }
-                                            let _ = tx.send(Action::DiffLoaded(text));
+                                            let _ = tx.send(Action::DiffLoaded {
+                                                generation: diff_gen,
+                                                content: text,
+                                            });
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::DiffLoaded(format!(
-                                                "Failed to get diff: {}",
-                                                e
-                                            )));
+                                            let _ = tx.send(Action::DiffLoaded {
+                                                generation: diff_gen,
+                                                content: format!("Failed to get diff: {}", e),
+                                            });
                                         }
                                     }
                                 });
                             }
                         }
                     }
-                    Action::DiffLoaded(ref content) => {
-                        self.file_list.set_diff(content.clone());
+                    Action::DiffLoaded {
+                        generation,
+                        ref content,
+                    } => {
+                        if generation == self.file_list.diff_generation() {
+                            self.file_list.set_diff(content.clone());
+                        }
                     }
                     Action::ShowCommitFiles {
                         ref repo_path,
                         ref oid,
                     } => {
+                        let detail_gen = self.git_graph.current_detail_generation();
                         let path = repo_path.clone();
                         let oid = oid.clone();
                         let tx = self.action_tx.clone();
@@ -918,6 +928,7 @@ impl App {
                             match crate::git::commit_files::list_commit_files(&path, &oid) {
                                 Ok((message, files)) => {
                                     let _ = tx.send(Action::CommitFilesLoaded {
+                                        generation: detail_gen,
                                         oid,
                                         message,
                                         files,
@@ -933,21 +944,25 @@ impl App {
                         });
                     }
                     Action::CommitFilesLoaded {
+                        generation,
                         ref oid,
                         ref message,
                         ref files,
                     } => {
-                        self.git_graph.set_commit_files(
-                            oid.clone(),
-                            message.clone(),
-                            files.clone(),
-                        );
+                        if generation == self.git_graph.current_detail_generation() {
+                            self.git_graph.set_commit_files(
+                                oid.clone(),
+                                message.clone(),
+                                files.clone(),
+                            );
+                        }
                     }
                     Action::ShowCommitDiff {
                         ref repo_path,
                         ref oid,
                         ref file_path,
                     } => {
+                        let detail_gen = self.git_graph.current_detail_generation();
                         let path = repo_path.clone();
                         let oid = oid.clone();
                         let fp = file_path.clone();
@@ -955,7 +970,10 @@ impl App {
                         tokio::task::spawn_blocking(move || {
                             match crate::git::commit_files::commit_file_diff(&path, &oid, &fp) {
                                 Ok(diff) => {
-                                    let _ = tx.send(Action::CommitDiffLoaded(diff));
+                                    let _ = tx.send(Action::CommitDiffLoaded {
+                                        generation: detail_gen,
+                                        content: diff,
+                                    });
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::Error(format!(
@@ -966,8 +984,13 @@ impl App {
                             }
                         });
                     }
-                    Action::CommitDiffLoaded(ref content) => {
-                        self.git_graph.set_commit_diff(content.clone());
+                    Action::CommitDiffLoaded {
+                        generation,
+                        ref content,
+                    } => {
+                        if generation == self.git_graph.current_detail_generation() {
+                            self.git_graph.set_commit_diff(content.clone());
+                        }
                     }
                     Action::OpenAddRepo => {
                         self.path_input.show();

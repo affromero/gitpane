@@ -50,13 +50,17 @@ pub(crate) enum Action {
         message: String,
     },
     ShowDiff(usize, std::path::PathBuf),
-    DiffLoaded(String),
+    DiffLoaded {
+        generation: u64,
+        content: String,
+    },
     GraphError(String),
     ShowCommitFiles {
         repo_path: std::path::PathBuf,
         oid: String,
     },
     CommitFilesLoaded {
+        generation: u64,
         oid: String,
         message: String,
         files: Vec<(String, String)>,
@@ -66,7 +70,10 @@ pub(crate) enum Action {
         oid: String,
         file_path: String,
     },
-    CommitDiffLoaded(String),
+    CommitDiffLoaded {
+        generation: u64,
+        content: String,
+    },
     OpenAddRepo,
     AddRepo(std::path::PathBuf),
     RemoveRepo(usize),
