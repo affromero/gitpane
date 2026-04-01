@@ -13,6 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::status::{self, RepoStatus};
+use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RepoEntry {
@@ -67,6 +68,11 @@ impl RepoList {
 
     pub fn selected_index(&self) -> Option<usize> {
         self.state.selected()
+    }
+
+    /// Resolve a stable `RepoId` to its current positional index.
+    pub fn resolve_index(&self, id: &RepoId) -> Option<usize> {
+        self.repos.iter().position(|e| e.path == id.0)
     }
 
     pub fn selected_repo(&self) -> Option<&RepoEntry> {

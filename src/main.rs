@@ -4,6 +4,7 @@ mod components;
 mod config;
 mod event;
 mod git;
+mod repo_id;
 mod tui;
 mod update_checker;
 mod watcher;
