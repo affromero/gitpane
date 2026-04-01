@@ -11,6 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
 enum MenuAction {
@@ -33,7 +34,7 @@ struct MenuItem {
 
 pub(crate) struct ContextMenu {
     pub visible: bool,
-    pub repo_index: usize,
+    pub repo_id: Option<RepoId>,
     pub position: (u16, u16), // (col, row)
     items: Vec<MenuItem>,
     state: ListState,
@@ -45,7 +46,7 @@ impl ContextMenu {
     pub fn new() -> Self {
         Self {
             visible: false,
-            repo_index: 0,
+            repo_id: None,
             position: (0, 0),
             items: Vec::new(),
             state: ListState::default(),
@@ -56,7 +57,7 @@ impl ContextMenu {
 
     pub fn show(
         &mut self,
-        repo_index: usize,
+        repo_id: RepoId,
         col: u16,
         row: u16,
         ahead: usize,
@@ -64,7 +65,7 @@ impl ContextMenu {
         has_submodules: bool,
     ) {
         self.visible = true;
-        self.repo_index = repo_index;
+        self.repo_id = Some(repo_id);
         self.position = (col, row);
 
         self.items = vec![
@@ -166,17 +167,18 @@ impl ContextMenu {
     fn activate_selected(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
         let item = self.items.get(idx)?;
+        let id = self.repo_id.clone()?;
         let action = match item.action {
             MenuAction::OpenGraph => Action::ShowGitGraph,
-            MenuAction::Refresh => Action::RefreshRepo(self.repo_index),
-            MenuAction::CopyPath => Action::CopyPath(self.repo_index),
-            MenuAction::Push => Action::GitPush(self.repo_index),
-            MenuAction::Pull => Action::GitPull(self.repo_index),
-            MenuAction::PullRebase => Action::GitPullRebase(self.repo_index),
-            MenuAction::PullSubmodules => Action::GitPullSubmodules(self.repo_index),
-            MenuAction::SubmoduleUpdate => Action::GitSubmoduleUpdate(self.repo_index),
-            MenuAction::SubmoduleSync => Action::GitSubmoduleSync(self.repo_index),
-            MenuAction::SubmoduleUpdateLatest => Action::GitSubmoduleUpdateLatest(self.repo_index),
+            MenuAction::Refresh => Action::RefreshRepo(id),
+            MenuAction::CopyPath => Action::CopyPath(id),
+            MenuAction::Push => Action::GitPush(id),
+            MenuAction::Pull => Action::GitPull(id),
+            MenuAction::PullRebase => Action::GitPullRebase(id),
+            MenuAction::PullSubmodules => Action::GitPullSubmodules(id),
+            MenuAction::SubmoduleUpdate => Action::GitSubmoduleUpdate(id),
+            MenuAction::SubmoduleSync => Action::GitSubmoduleSync(id),
+            MenuAction::SubmoduleUpdateLatest => Action::GitSubmoduleUpdateLatest(id),
         };
         self.hide();
         Some(action)

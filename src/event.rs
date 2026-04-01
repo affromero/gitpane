@@ -1,5 +1,6 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum Event {
@@ -12,7 +13,7 @@ pub(crate) enum Event {
     Resize(u16, u16),
     FocusGained,
     FocusLost,
-    RepoChanged(usize),
+    RepoChanged(PathBuf),
     /// Fast local status poll (no network)
     PollLocal,
     /// Remote fetch poll (updates ahead/behind)

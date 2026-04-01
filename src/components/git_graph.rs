@@ -86,6 +86,8 @@ pub(crate) struct GitGraph {
     needs_reload: bool,
     /// Monotonic counter to discard stale GraphLoaded/DiffStatsLoaded results.
     load_generation: u64,
+    /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
+    detail_generation: u64,
 }
 
 impl GitGraph {
@@ -114,6 +116,7 @@ impl GitGraph {
             horizontal_layout: false,
             needs_reload: false,
             load_generation: 0,
+            detail_generation: 0,
         }
     }
 
@@ -249,6 +252,10 @@ impl GitGraph {
 
     pub fn current_generation(&self) -> u64 {
         self.load_generation
+    }
+
+    pub fn current_detail_generation(&self) -> u64 {
+        self.detail_generation
     }
 
     /// Toggle collapse on the selected row's branch (or expand a collapsed group).
@@ -486,21 +493,20 @@ impl GitGraph {
         self.state.select(Some(i));
     }
 
-    fn try_show_commit_files(&self) -> Option<Action> {
+    fn try_show_commit_files(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
-        let row = self.display_rows().get(idx)?;
+        let oid = self.display_rows().get(idx)?.oid.to_string();
         let repo_path = self.repo_path.clone()?;
-        Some(Action::ShowCommitFiles {
-            repo_path,
-            oid: row.oid.to_string(),
-        })
+        self.detail_generation += 1;
+        Some(Action::ShowCommitFiles { repo_path, oid })
     }
 
-    fn try_show_commit_diff(&self) -> Option<Action> {
+    fn try_show_commit_diff(&mut self) -> Option<Action> {
         let detail = self.commit_detail.as_ref()?;
         let file_idx = detail.file_state.selected()?;
         let (_, file_path) = detail.files.get(file_idx)?;
         let repo_path = self.repo_path.clone()?;
+        self.detail_generation += 1;
         Some(Action::ShowCommitDiff {
             repo_path,
             oid: detail.oid.clone(),

@@ -12,12 +12,13 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::status::{FileEntry, FileStatus, SubmoduleState};
+use crate::repo_id::RepoId;
 
 pub(crate) struct FileList {
     files: Vec<FileEntry>,
     state: ListState,
     repo_name: String,
-    repo_index: Option<usize>,
+    repo_id: Option<RepoId>,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
     render_area: Rect,
@@ -27,6 +28,8 @@ pub(crate) struct FileList {
     diff_content: Option<String>,
     diff_scroll: u16,
     pub horizontal_layout: bool,
+    /// Monotonic counter to discard stale DiffLoaded results.
+    diff_generation: u64,
 }
 
 impl FileList {
@@ -35,7 +38,7 @@ impl FileList {
             files: Vec::new(),
             state: ListState::default(),
             repo_name: String::new(),
-            repo_index: None,
+            repo_id: None,
             focused: false,
             action_tx: None,
             render_area: Rect::default(),
@@ -44,17 +47,18 @@ impl FileList {
             diff_content: None,
             diff_scroll: 0,
             horizontal_layout: false,
+            diff_generation: 0,
         }
     }
 
-    pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_index: usize) {
-        let is_same_repo = self.repo_index == Some(repo_index);
+    pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_id: RepoId) {
+        let is_same_repo = self.repo_id.as_ref() == Some(&repo_id);
         let prev_selected = self.state.selected();
         let files_changed = !is_same_repo || self.files != files;
 
         self.files = files;
         self.repo_name = repo_name.to_string();
-        self.repo_index = Some(repo_index);
+        self.repo_id = Some(repo_id);
 
         if files_changed {
             self.diff_content = None;
@@ -111,11 +115,16 @@ impl FileList {
         Some(file.path.to_string_lossy().to_string())
     }
 
-    fn try_show_diff(&self) -> Option<Action> {
+    pub fn diff_generation(&self) -> u64 {
+        self.diff_generation
+    }
+
+    fn try_show_diff(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
-        let repo_idx = self.repo_index?;
+        let repo_id = self.repo_id.clone()?;
         let file = self.files.get(idx)?;
-        Some(Action::ShowDiff(repo_idx, file.path.clone()))
+        self.diff_generation += 1;
+        Some(Action::ShowDiff(repo_id, file.path.clone()))
     }
 
     fn draw_file_list(&mut self, frame: &mut Frame, area: Rect) {

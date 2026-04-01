@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::repo_id::RepoId;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
@@ -53,6 +54,71 @@ impl SortOrder {
     }
 }
 
+/// RAII guard that sends `StatusQueryDone` if the spawned task exits
+/// without sending a completion message (e.g., on panic). The guard's
+/// `Drop` uses `UnboundedSender::send` which is non-blocking, so it
+/// is safe to call from a synchronous `Drop`.
+struct StatusGuard {
+    id: RepoId,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl StatusGuard {
+    fn new(id: RepoId, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            id,
+            tx,
+            completed: false,
+        }
+    }
+
+    /// Mark the guard as completed so `Drop` won't send cleanup.
+    /// Consumes self to prevent accidental reuse.
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for StatusGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::StatusQueryDone(self.id.clone()));
+        }
+    }
+}
+
+/// RAII guard for git operations (push/pull/submodule) that set `git_op = true`.
+/// If the spawned task panics without sending `GitOpComplete` or `RefreshRepo`,
+/// the guard sends `RefreshRepo` to trigger a status query that clears `git_op`.
+struct GitOpGuard {
+    id: RepoId,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl GitOpGuard {
+    fn new(id: RepoId, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            id,
+            tx,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for GitOpGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::RefreshRepo(self.id.clone()));
+        }
+    }
+}
+
 pub(crate) struct App {
     config: Config,
     should_quit: bool,
@@ -89,9 +155,9 @@ pub(crate) struct App {
     /// Limits concurrent poll/refresh tasks to avoid CPU spikes
     poll_semaphore: Arc<tokio::sync::Semaphore>,
     /// Repos with an in-flight status query (prevents duplicate spawns)
-    pending_status: HashSet<usize>,
+    pending_status: HashSet<RepoId>,
     /// Repos that changed while a status query was in-flight (re-queued on completion)
-    dirty_repos: HashSet<usize>,
+    dirty_repos: HashSet<RepoId>,
 }
 
 impl App {
@@ -173,12 +239,13 @@ impl App {
             && let Some(entry) = self.repo_list.repos.get(idx)
         {
             let name = entry.name.clone();
+            let repo_id = RepoId(entry.path.clone());
             let files = entry
                 .status
                 .as_ref()
                 .map(|s| s.files.clone())
                 .unwrap_or_default();
-            self.file_list.set_files(files, &name, idx);
+            self.file_list.set_files(files, &name, repo_id);
 
             let path = entry.path.clone();
             self.git_graph.load_repo(path, &name);
@@ -208,6 +275,10 @@ impl App {
 
         // Init components
         self.repo_list.init()?;
+
+        // Trigger immediate status poll so repos don't show "..." until the
+        // first PollLocal timer fires. Goes through the semaphore-controlled path.
+        self.action_tx.send(Action::PollLocal)?;
 
         // Start filesystem watcher
         let repo_paths: Vec<_> = self
@@ -258,8 +329,9 @@ impl App {
                     Event::Resize(w, h) => {
                         self.action_tx.send(Action::Resize(w, h))?;
                     }
-                    Event::RepoChanged(idx) => {
-                        self.action_tx.send(Action::RefreshRepo(idx))?;
+                    Event::RepoChanged(ref path) => {
+                        self.action_tx
+                            .send(Action::RefreshRepo(RepoId(path.clone())))?;
                     }
                     Event::PollLocal => {
                         self.action_tx.send(Action::PollLocal)?;
@@ -268,8 +340,9 @@ impl App {
                         self.action_tx.send(Action::PollFetch)?;
                     }
                     Event::FocusGained => {
-                        if let Some(idx) = self.repo_list.selected_index() {
-                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                        if let Some(entry) = self.repo_list.selected_repo() {
+                            self.action_tx
+                                .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
                         }
                     }
                     _ => {}
@@ -291,72 +364,85 @@ impl App {
                         tui.terminal
                             .resize(ratatui::layout::Rect::new(0, 0, w, h))?;
                     }
-                    Action::SelectRepo(idx) => {
+                    Action::SelectRepo(ref id) => {
                         self.context_menu.hide();
-                        if let Some(entry) = self.repo_list.repos.get(idx) {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &self.repo_list.repos[idx];
                             let name = entry.name.clone();
                             let path = entry.path.clone();
+                            let repo_id = id.clone();
                             let files = entry
                                 .status
                                 .as_ref()
                                 .map(|s| s.files.clone())
                                 .unwrap_or_default();
-                            self.file_list.set_files(files, &name, idx);
+                            self.file_list.set_files(files, &name, repo_id);
                             self.git_graph.load_repo(path, &name);
+                            self.repo_list.state.select(Some(idx));
                         }
                     }
-                    Action::StatusQueryDone(idx) => {
-                        self.pending_status.remove(&idx);
-                        if self.dirty_repos.remove(&idx) {
-                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                    Action::StatusQueryDone(ref id) => {
+                        self.pending_status.remove(id);
+                        // Clear git_op so the repo isn't permanently skipped
+                        // by future polls after a failed status query.
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            self.repo_list.repos[idx].git_op = false;
+                        }
+                        if self.dirty_repos.remove(id) {
+                            self.action_tx
+                                .send(Action::RefreshRepo(id.clone()))?;
                         }
                     }
                     Action::RepoStatusUpdated {
-                        ref index,
+                        ref id,
                         ref status,
                     } => {
-                        let idx = *index;
-                        self.pending_status.remove(&idx);
-                        let is_dirty = self.dirty_repos.remove(&idx);
-                        let status_clone = status.clone();
-                        self.repo_list.update_status(idx, status_clone);
+                        self.pending_status.remove(id);
+                        let is_dirty = self.dirty_repos.remove(id);
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let status_clone = status.clone();
+                            self.repo_list.update_status(idx, status_clone);
 
-                        // Always refresh the file list so stale diffs are cleared
-                        // when files are staged/unstaged. Only skip graph reload
-                        // while the user is inspecting commit details.
-                        if self.repo_list.selected_index() == Some(idx)
-                            && let Some(entry) = self.repo_list.repos.get(idx)
-                        {
-                            let name = entry.name.clone();
-                            let files = entry
-                                .status
-                                .as_ref()
-                                .map(|s| s.files.clone())
-                                .unwrap_or_default();
-                            self.file_list.set_files(files, &name, idx);
+                            // Always refresh the file list so stale diffs are cleared
+                            // when files are staged/unstaged. Only skip graph reload
+                            // while the user is inspecting commit details.
+                            if self.repo_list.selected_index() == Some(idx) {
+                                let entry = &self.repo_list.repos[idx];
+                                let name = entry.name.clone();
+                                let repo_id = id.clone();
+                                let files = entry
+                                    .status
+                                    .as_ref()
+                                    .map(|s| s.files.clone())
+                                    .unwrap_or_default();
+                                self.file_list.set_files(files, &name, repo_id);
 
-                            if self.git_graph.has_detail() {
-                                self.git_graph.set_needs_reload();
-                            } else {
-                                let path = entry.path.clone();
-                                self.git_graph.load_repo(path, &name);
+                                if self.git_graph.has_detail() {
+                                    self.git_graph.set_needs_reload();
+                                } else {
+                                    let path = entry.path.clone();
+                                    self.git_graph.load_repo(path, &name);
+                                }
                             }
                         }
                         if is_dirty {
-                            self.action_tx.send(Action::RefreshRepo(idx))?;
+                            self.action_tx
+                                .send(Action::RefreshRepo(id.clone()))?;
                         }
                     }
                     Action::RefreshAll => {
                         // User-initiated refresh: fetch from remote + show spinner
                         let ignore_dirty_subs = self.config.submodules.ignore_dirty;
-                        for (idx, entry) in self.repo_list.repos.iter_mut().enumerate() {
+                        for entry in self.repo_list.repos.iter_mut() {
                             entry.git_op = true;
-                            self.pending_status.insert(idx);
+                            let repo_id = RepoId(entry.path.clone());
+                            self.pending_status.insert(repo_id.clone());
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
@@ -364,12 +450,14 @@ impl App {
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
-                                                index: idx,
+                                                id: repo_id.clone(),
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            guard.complete();
+                                            let _ = tx.send(Action::StatusQueryDone(repo_id));
                                             let _ = tx.send(Action::Error(format!(
                                                 "Failed to query: {}",
                                                 e
@@ -384,27 +472,31 @@ impl App {
                     Action::PollLocal => {
                         // Fast local status poll (no network, no spinner)
                         let ignore_dirty_subs = self.config.submodules.ignore_dirty;
-                        for (idx, entry) in self.repo_list.repos.iter().enumerate() {
-                            if entry.git_op || self.pending_status.contains(&idx) {
+                        for entry in self.repo_list.repos.iter() {
+                            let repo_id = RepoId(entry.path.clone());
+                            if entry.git_op || self.pending_status.contains(&repo_id) {
                                 continue;
                             }
-                            self.pending_status.insert(idx);
+                            self.pending_status.insert(repo_id.clone());
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status(&path, ignore_dirty_subs)
                                     {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
-                                                index: idx,
+                                                id: repo_id.clone(),
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            guard.complete();
+                                            let _ = tx.send(Action::StatusQueryDone(repo_id));
                                             tracing::debug!(
                                                 "Local poll failed for {}: {}",
                                                 path.display(),
@@ -420,16 +512,18 @@ impl App {
                     Action::PollFetch => {
                         // Remote fetch poll (updates ahead/behind, no spinner)
                         let ignore_dirty_subs = self.config.submodules.ignore_dirty;
-                        for (idx, entry) in self.repo_list.repos.iter().enumerate() {
-                            if entry.git_op || self.pending_status.contains(&idx) {
+                        for entry in self.repo_list.repos.iter() {
+                            let repo_id = RepoId(entry.path.clone());
+                            if entry.git_op || self.pending_status.contains(&repo_id) {
                                 continue;
                             }
-                            self.pending_status.insert(idx);
+                            self.pending_status.insert(repo_id.clone());
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
@@ -437,12 +531,14 @@ impl App {
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
-                                                index: idx,
+                                                id: repo_id.clone(),
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            guard.complete();
+                                            let _ = tx.send(Action::StatusQueryDone(repo_id));
                                             tracing::debug!(
                                                 "Fetch poll failed for {}: {}",
                                                 path.display(),
@@ -455,35 +551,39 @@ impl App {
                             });
                         }
                     }
-                    Action::RefreshRepo(idx) => {
+                    Action::RefreshRepo(ref id) => {
                         // Watcher-triggered: fast local-only, no spinner
-                        if self.pending_status.contains(&idx) {
-                            self.dirty_repos.insert(idx);
+                        if self.pending_status.contains(id) {
+                            self.dirty_repos.insert(id.clone());
                             tracing::debug!(
                                 "skipping repo {}: already in-flight (marked dirty)",
-                                idx
+                                id
                             );
                             continue;
                         }
                         let ignore_dirty_subs = self.config.submodules.ignore_dirty;
-                        if let Some(entry) = self.repo_list.repos.get_mut(idx) {
-                            self.pending_status.insert(idx);
-                            let path = entry.path.clone();
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let repo_id = id.clone();
+                            self.pending_status.insert(repo_id.clone());
+                            let path = self.repo_list.repos[idx].path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
+                                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status(&path, ignore_dirty_subs)
                                     {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
-                                                index: idx,
+                                                id: repo_id.clone(),
                                                 status: s,
                                             });
+                                            guard.complete();
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::StatusQueryDone(idx));
+                                            guard.complete();
+                                            let _ = tx.send(Action::StatusQueryDone(repo_id));
                                             let _ = tx.send(Action::Error(format!(
                                                 "Failed to query: {}",
                                                 e
@@ -521,22 +621,33 @@ impl App {
                     Action::GraphError(ref msg) => {
                         self.git_graph.set_error(msg.clone());
                     }
-                    Action::ShowContextMenu { index, row, col } => {
-                        let (ahead, behind, has_submodules) = self
-                            .repo_list
-                            .repos
-                            .get(index)
-                            .and_then(|e| e.status.as_ref())
-                            .map(|s| (s.ahead, s.behind, s.has_submodules))
-                            .unwrap_or((0, 0, false));
-                        self.context_menu
-                            .show(index, col, row, ahead, behind, has_submodules);
+                    Action::ShowContextMenu {
+                        ref id,
+                        row,
+                        col,
+                    } => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let (ahead, behind, has_submodules) = self.repo_list.repos[idx]
+                                .status
+                                .as_ref()
+                                .map(|s| (s.ahead, s.behind, s.has_submodules))
+                                .unwrap_or((0, 0, false));
+                            self.context_menu.show(
+                                id.clone(),
+                                col,
+                                row,
+                                ahead,
+                                behind,
+                                has_submodules,
+                            );
+                        }
                     }
                     Action::HideContextMenu => {
                         self.context_menu.hide();
                     }
-                    Action::CopyPath(idx) => {
-                        if let Some(entry) = self.repo_list.repos.get(idx) {
+                    Action::CopyPath(ref id) => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &self.repo_list.repos[idx];
                             let path_str = entry.path.to_string_lossy().to_string();
                             use std::io::Write;
                             let encoded = base64_encode(path_str.as_bytes());
@@ -544,11 +655,12 @@ impl App {
                             let _ = std::io::stdout().flush();
                         }
                     }
-                    Action::GitPush(idx)
-                    | Action::GitPull(idx)
-                    | Action::GitPullRebase(idx)
-                    | Action::GitPullSubmodules(idx) => {
-                        if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                    Action::GitPush(ref id)
+                    | Action::GitPull(ref id)
+                    | Action::GitPullRebase(ref id)
+                    | Action::GitPullSubmodules(ref id) => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &mut self.repo_list.repos[idx];
                             let branch = entry
                                 .status
                                 .as_ref()
@@ -572,8 +684,10 @@ impl App {
                             }
                             entry.git_op = true;
                             let path = entry.path.clone();
+                            let repo_id = id.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
+                                let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
@@ -581,8 +695,9 @@ impl App {
                                     .output();
                                 match output {
                                     Ok(o) if o.status.success() => {
+                                        guard.complete();
                                         let _ = tx.send(Action::GitOpComplete {
-                                            index: idx,
+                                            id: repo_id,
                                             message: format!(
                                                 "git {} succeeded",
                                                 git_args.join(" ")
@@ -590,6 +705,7 @@ impl App {
                                         });
                                     }
                                     Ok(o) => {
+                                        guard.complete();
                                         let stderr = String::from_utf8_lossy(&o.stderr);
                                         let first_line = stderr
                                             .lines()
@@ -601,24 +717,26 @@ impl App {
                                             git_args.join(" "),
                                             first_line
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                        let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                     Err(e) => {
+                                        guard.complete();
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
                                             e
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                        let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                 }
                             });
                         }
                     }
-                    Action::GitSubmoduleUpdate(idx)
-                    | Action::GitSubmoduleSync(idx)
-                    | Action::GitSubmoduleUpdateLatest(idx) => {
-                        if let Some(entry) = self.repo_list.repos.get_mut(idx) {
+                    Action::GitSubmoduleUpdate(ref id)
+                    | Action::GitSubmoduleSync(ref id)
+                    | Action::GitSubmoduleUpdateLatest(ref id) => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &mut self.repo_list.repos[idx];
                             let git_args: Vec<String> = match action {
                                 Action::GitSubmoduleUpdate(_) => {
                                     ["submodule", "update", "--init", "--recursive"]
@@ -640,8 +758,10 @@ impl App {
                             };
                             entry.git_op = true;
                             let path = entry.path.clone();
+                            let repo_id = id.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
+                                let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
@@ -649,8 +769,9 @@ impl App {
                                     .output();
                                 match output {
                                     Ok(o) if o.status.success() => {
+                                        guard.complete();
                                         let _ = tx.send(Action::GitOpComplete {
-                                            index: idx,
+                                            id: repo_id,
                                             message: format!(
                                                 "git {} succeeded",
                                                 git_args.join(" ")
@@ -658,6 +779,7 @@ impl App {
                                         });
                                     }
                                     Ok(o) => {
+                                        guard.complete();
                                         let stderr = String::from_utf8_lossy(&o.stderr);
                                         let first_line = stderr
                                             .lines()
@@ -669,26 +791,33 @@ impl App {
                                             git_args.join(" "),
                                             first_line
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                        let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                     Err(e) => {
+                                        guard.complete();
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
                                             e
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(idx));
+                                        let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                 }
                             });
                         }
                     }
-                    Action::GitOpComplete { index, ref message } => {
+                    Action::GitOpComplete {
+                        ref id,
+                        ref message,
+                    } => {
                         self.success_message = Some((message.clone(), Instant::now()));
-                        self.action_tx.send(Action::RefreshRepo(index))?;
+                        self.action_tx
+                            .send(Action::RefreshRepo(id.clone()))?;
                     }
-                    Action::ShowDiff(repo_idx, ref file_path) => {
-                        if let Some(entry) = self.repo_list.repos.get(repo_idx) {
+                    Action::ShowDiff(ref id, ref file_path) => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &self.repo_list.repos[idx];
+                            let diff_gen = self.file_list.diff_generation();
                             let sub_info = entry
                                 .status
                                 .as_ref()
@@ -769,10 +898,10 @@ impl App {
                                                 format!("Failed to get submodule diff: {}", e)
                                             }
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!(
-                                            "{}{}",
-                                            header, body
-                                        )));
+                                        let _ = tx.send(Action::DiffLoaded {
+                                            generation: diff_gen,
+                                            content: format!("{}{}", header, body),
+                                        });
                                     } else {
                                         // Pointer changed: show commit log between old and new
                                         let header = format!(
@@ -799,10 +928,10 @@ impl App {
                                             }
                                             Err(e) => format!("Failed to get submodule log: {}", e),
                                         };
-                                        let _ = tx.send(Action::DiffLoaded(format!(
-                                            "{}{}",
-                                            header, body
-                                        )));
+                                        let _ = tx.send(Action::DiffLoaded {
+                                            generation: diff_gen,
+                                            content: format!("{}{}", header, body),
+                                        });
                                     }
                                 });
                             } else {
@@ -840,26 +969,35 @@ impl App {
                                             if text.is_empty() {
                                                 text = "(no diff available)".to_string();
                                             }
-                                            let _ = tx.send(Action::DiffLoaded(text));
+                                            let _ = tx.send(Action::DiffLoaded {
+                                                generation: diff_gen,
+                                                content: text,
+                                            });
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(Action::DiffLoaded(format!(
-                                                "Failed to get diff: {}",
-                                                e
-                                            )));
+                                            let _ = tx.send(Action::DiffLoaded {
+                                                generation: diff_gen,
+                                                content: format!("Failed to get diff: {}", e),
+                                            });
                                         }
                                     }
                                 });
                             }
                         }
                     }
-                    Action::DiffLoaded(ref content) => {
-                        self.file_list.set_diff(content.clone());
+                    Action::DiffLoaded {
+                        generation,
+                        ref content,
+                    } => {
+                        if generation == self.file_list.diff_generation() {
+                            self.file_list.set_diff(content.clone());
+                        }
                     }
                     Action::ShowCommitFiles {
                         ref repo_path,
                         ref oid,
                     } => {
+                        let detail_gen = self.git_graph.current_detail_generation();
                         let path = repo_path.clone();
                         let oid = oid.clone();
                         let tx = self.action_tx.clone();
@@ -867,6 +1005,7 @@ impl App {
                             match crate::git::commit_files::list_commit_files(&path, &oid) {
                                 Ok((message, files)) => {
                                     let _ = tx.send(Action::CommitFilesLoaded {
+                                        generation: detail_gen,
                                         oid,
                                         message,
                                         files,
@@ -882,21 +1021,25 @@ impl App {
                         });
                     }
                     Action::CommitFilesLoaded {
+                        generation,
                         ref oid,
                         ref message,
                         ref files,
                     } => {
-                        self.git_graph.set_commit_files(
-                            oid.clone(),
-                            message.clone(),
-                            files.clone(),
-                        );
+                        if generation == self.git_graph.current_detail_generation() {
+                            self.git_graph.set_commit_files(
+                                oid.clone(),
+                                message.clone(),
+                                files.clone(),
+                            );
+                        }
                     }
                     Action::ShowCommitDiff {
                         ref repo_path,
                         ref oid,
                         ref file_path,
                     } => {
+                        let detail_gen = self.git_graph.current_detail_generation();
                         let path = repo_path.clone();
                         let oid = oid.clone();
                         let fp = file_path.clone();
@@ -904,7 +1047,10 @@ impl App {
                         tokio::task::spawn_blocking(move || {
                             match crate::git::commit_files::commit_file_diff(&path, &oid, &fp) {
                                 Ok(diff) => {
-                                    let _ = tx.send(Action::CommitDiffLoaded(diff));
+                                    let _ = tx.send(Action::CommitDiffLoaded {
+                                        generation: detail_gen,
+                                        content: diff,
+                                    });
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::Error(format!(
@@ -915,8 +1061,13 @@ impl App {
                             }
                         });
                     }
-                    Action::CommitDiffLoaded(ref content) => {
-                        self.git_graph.set_commit_diff(content.clone());
+                    Action::CommitDiffLoaded {
+                        generation,
+                        ref content,
+                    } => {
+                        if generation == self.git_graph.current_detail_generation() {
+                            self.git_graph.set_commit_diff(content.clone());
+                        }
                     }
                     Action::OpenAddRepo => {
                         self.path_input.show();
@@ -935,19 +1086,23 @@ impl App {
                             if let Err(e) = self.config.save() {
                                 tracing::error!("Failed to save config: {}", e);
                             }
+                            let repo_id = RepoId(path.clone());
                             self.repo_list.repos.push(RepoEntry {
                                 path,
                                 name,
                                 status: None,
                                 git_op: false,
                             });
-                            let idx = self.repo_list.repos.len() - 1;
-                            self.action_tx.send(Action::RefreshRepo(idx))?;
-                            self.action_tx.send(Action::SelectRepo(idx))?;
+                            self.action_tx
+                                .send(Action::RefreshRepo(repo_id.clone()))?;
+                            self.action_tx.send(Action::SelectRepo(repo_id))?;
                         }
                     }
-                    Action::RemoveRepo(idx) => {
-                        if idx < self.repo_list.repos.len() {
+                    Action::RemoveRepo(ref id) => {
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            // Clean up tracking sets for the removed repo
+                            self.pending_status.remove(id);
+                            self.dirty_repos.remove(id);
                             let entry = &self.repo_list.repos[idx];
                             // Remove from pinned if it was pinned
                             self.config.pinned_repos.retain(|p| *p != entry.path);
@@ -963,11 +1118,14 @@ impl App {
                             // Fix selection
                             if self.repo_list.repos.is_empty() {
                                 self.repo_list.state.select(None);
-                                self.file_list.set_files(Vec::new(), "", 0);
+                                self.file_list
+                                    .set_files(Vec::new(), "", RepoId(std::path::PathBuf::new()));
                             } else {
                                 let new_idx = idx.min(self.repo_list.repos.len() - 1);
                                 self.repo_list.state.select(Some(new_idx));
-                                self.action_tx.send(Action::SelectRepo(new_idx))?;
+                                let new_id =
+                                    RepoId(self.repo_list.repos[new_idx].path.clone());
+                                self.action_tx.send(Action::SelectRepo(new_id))?;
                             }
                         }
                     }
@@ -977,6 +1135,9 @@ impl App {
                         self.sync_selection();
                     }
                     Action::RescanRepos => {
+                        // Clear tracking sets — old paths are stale after rescan
+                        self.pending_status.clear();
+                        self.dirty_repos.clear();
                         // Clear user-added exclusions, save, and re-discover repos
                         self.config.excluded_repos.clear();
                         if let Err(e) = self.config.save() {
@@ -988,6 +1149,7 @@ impl App {
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;
+                        self.action_tx.send(Action::PollLocal)?;
                         self.sort_repos();
                         self.sync_selection();
                     }
@@ -1121,9 +1283,11 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if let Some(idx) = self.repo_list.selected_index() {
-                    let name = &self.repo_list.repos[idx].name;
+                    let entry = &self.repo_list.repos[idx];
+                    let name = entry.name.clone();
+                    let repo_id = RepoId(entry.path.clone());
                     self.confirm_dialog
-                        .show(format!("Remove {}?", name), Action::RemoveRepo(idx));
+                        .show(format!("Remove {}?", name), Action::RemoveRepo(repo_id));
                 }
             }
             KeyCode::Char('s') => {

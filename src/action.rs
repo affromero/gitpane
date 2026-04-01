@@ -1,5 +1,6 @@
 use crate::git::graph::{DiffStat, GraphRow};
 use crate::git::status::RepoStatus;
+use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -10,13 +11,13 @@ pub(crate) enum Action {
     Resize(u16, u16),
     SelectNextRepo,
     SelectPrevRepo,
-    SelectRepo(usize),
+    SelectRepo(RepoId),
     RepoStatusUpdated {
-        index: usize,
+        id: RepoId,
         status: RepoStatus,
     },
     RefreshAll,
-    RefreshRepo(usize),
+    RefreshRepo(RepoId),
     /// Fast local status poll (no spinner, no fetch)
     PollLocal,
     /// Remote fetch poll (no spinner)
@@ -32,31 +33,35 @@ pub(crate) enum Action {
         stats: Vec<(git2::Oid, DiffStat)>,
     },
     ShowContextMenu {
-        index: usize,
+        id: RepoId,
         row: u16,
         col: u16,
     },
     HideContextMenu,
-    CopyPath(usize),
-    GitPush(usize),
-    GitPull(usize),
-    GitPullRebase(usize),
-    GitPullSubmodules(usize),
-    GitSubmoduleUpdate(usize),
-    GitSubmoduleSync(usize),
-    GitSubmoduleUpdateLatest(usize),
+    CopyPath(RepoId),
+    GitPush(RepoId),
+    GitPull(RepoId),
+    GitPullRebase(RepoId),
+    GitPullSubmodules(RepoId),
+    GitSubmoduleUpdate(RepoId),
+    GitSubmoduleSync(RepoId),
+    GitSubmoduleUpdateLatest(RepoId),
     GitOpComplete {
-        index: usize,
+        id: RepoId,
         message: String,
     },
-    ShowDiff(usize, std::path::PathBuf),
-    DiffLoaded(String),
+    ShowDiff(RepoId, std::path::PathBuf),
+    DiffLoaded {
+        generation: u64,
+        content: String,
+    },
     GraphError(String),
     ShowCommitFiles {
         repo_path: std::path::PathBuf,
         oid: String,
     },
     CommitFilesLoaded {
+        generation: u64,
         oid: String,
         message: String,
         files: Vec<(String, String)>,
@@ -66,14 +71,17 @@ pub(crate) enum Action {
         oid: String,
         file_path: String,
     },
-    CommitDiffLoaded(String),
+    CommitDiffLoaded {
+        generation: u64,
+        content: String,
+    },
     OpenAddRepo,
     AddRepo(std::path::PathBuf),
-    RemoveRepo(usize),
+    RemoveRepo(RepoId),
     CycleSortOrder,
     RescanRepos,
     Error(String),
     UpdateAvailable(String),
     /// Clears the pending_status flag for a repo (sent on error paths)
-    StatusQueryDone(usize),
+    StatusQueryDone(RepoId),
 }

@@ -20,23 +20,19 @@ impl RepoWatcher {
         event_tx: UnboundedSender<Event>,
         watch_exclude_dirs: &[String],
     ) -> color_eyre::Result<Self> {
-        let indexed_paths: Vec<(usize, PathBuf)> = repo_paths
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (i, p.clone()))
-            .collect();
+        let owned_paths: Vec<PathBuf> = repo_paths.to_vec();
 
         // Bridge channel: notify callback (OS thread) -> tokio task
         let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<PathBuf>>();
 
-        // Spawn tokio task to route changed paths to repo indices.
+        // Spawn tokio task to route changed paths to repo paths.
         // Filters out .git/ internals to prevent feedback loops (git2 reads
         // trigger watcher events which would re-trigger git2 queries).
-        let paths_for_routing = indexed_paths.clone();
+        let paths_for_routing = owned_paths.clone();
         let exclude_set: HashSet<String> = watch_exclude_dirs.iter().cloned().collect();
         tokio::spawn(async move {
             while let Some(changed_paths) = bridge_rx.recv().await {
-                let mut affected_repos = HashSet::new();
+                let mut affected_repos: HashSet<PathBuf> = HashSet::new();
 
                 for changed_path in &changed_paths {
                     // Skip events from excluded directories (node_modules, target, etc.)
@@ -67,16 +63,16 @@ impl RepoWatcher {
                         }
                     }
 
-                    for (idx, repo_path) in &paths_for_routing {
+                    for repo_path in &paths_for_routing {
                         if changed_path.starts_with(repo_path) {
-                            affected_repos.insert(*idx);
+                            affected_repos.insert(repo_path.clone());
                             break;
                         }
                     }
                 }
 
-                for idx in affected_repos {
-                    let _ = event_tx.send(Event::RepoChanged(idx));
+                for path in affected_repos {
+                    let _ = event_tx.send(Event::RepoChanged(path));
                 }
             }
         });
@@ -100,7 +96,7 @@ impl RepoWatcher {
         )?;
 
         // Watch each repo root recursively
-        for (_idx, path) in &indexed_paths {
+        for path in &owned_paths {
             if path.exists()
                 && let Err(e) = debouncer.watch(path, RecursiveMode::Recursive)
             {
