@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::status::{self, RepoStatus};
+use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
@@ -30,11 +30,10 @@ pub(crate) struct RepoList {
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
-    ignore_dirty_subs: bool,
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>, ignore_dirty_subs: bool) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>, _ignore_dirty_subs: bool) -> Self {
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -62,7 +61,6 @@ impl RepoList {
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
-            ignore_dirty_subs,
         }
     }
 
@@ -108,48 +106,6 @@ impl RepoList {
         }
     }
 
-    fn spawn_status_queries(&self) {
-        let Some(tx) = &self.action_tx else { return };
-        let ignore_dirty_subs = self.ignore_dirty_subs;
-
-        for entry in self.repos.iter() {
-            let repo_id = RepoId(entry.path.clone());
-            let path = entry.path.clone();
-            let tx = tx.clone();
-            tokio::task::spawn_blocking(move || {
-                match status::query_status(&path, ignore_dirty_subs) {
-                    Ok(s) => {
-                        let _ = tx.send(Action::RepoStatusUpdated {
-                            id: repo_id,
-                            status: s,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::Error(format!(
-                            "Failed to query {}: {}",
-                            path.display(),
-                            e
-                        )));
-                        // Send a minimal status so the "..." placeholder clears
-                        let _ = tx.send(Action::RepoStatusUpdated {
-                            id: repo_id,
-                            status: RepoStatus {
-                                branch: "error".to_string(),
-                                files: Vec::new(),
-                                ahead: 0,
-                                behind: 0,
-                                is_dirty: false,
-                                worktrees: 0,
-                                has_submodules: false,
-                                submodules: Vec::new(),
-                                has_dirty_submodules: false,
-                            },
-                        });
-                    }
-                }
-            });
-        }
-    }
 }
 
 impl Component for RepoList {
@@ -159,7 +115,8 @@ impl Component for RepoList {
     }
 
     fn init(&mut self) -> Result<()> {
-        self.spawn_status_queries();
+        // Initial status queries are triggered by App via PollLocal
+        // to ensure they go through the shared semaphore and pending_status.
         Ok(())
     }
 

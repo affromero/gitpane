@@ -245,6 +245,10 @@ impl App {
         // Init components
         self.repo_list.init()?;
 
+        // Trigger immediate status poll so repos don't show "..." until the
+        // first PollLocal timer fires. Goes through the semaphore-controlled path.
+        self.action_tx.send(Action::PollLocal)?;
+
         // Start filesystem watcher
         let repo_paths: Vec<_> = self
             .repo_list
@@ -1106,6 +1110,7 @@ impl App {
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;
+                        self.action_tx.send(Action::PollLocal)?;
                         self.sort_repos();
                         self.sync_selection();
                     }
