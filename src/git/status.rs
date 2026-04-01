@@ -219,18 +219,36 @@ fn query_status_inner(
     })
 }
 
-/// Run `git fetch` in the background to update remote-tracking refs.
+/// Run `git fetch` with a 30-second timeout to update remote-tracking refs.
 /// Uses the CLI because git2 fetch doesn't support SSH agent / credential helpers
-/// out of the box. Silently ignores failures (offline, auth issues, etc.).
-fn fetch_remote_silent(path: &Path) {
-    let _ = std::process::Command::new("git")
+/// out of the box. Returns `true` on success, `false` on failure/timeout.
+fn fetch_remote_silent(path: &Path) -> bool {
+    use wait_timeout::ChildExt;
+
+    let child = std::process::Command::new("git")
         .arg("-C")
         .arg(path)
         .arg("fetch")
         .arg("--quiet")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status();
+        .spawn();
+
+    match child {
+        Ok(mut c) => {
+            match c.wait_timeout(std::time::Duration::from_secs(30)) {
+                Ok(Some(status)) => status.success(),
+                Ok(None) => {
+                    // Timed out — kill the hung process
+                    let _ = c.kill();
+                    let _ = c.wait();
+                    false
+                }
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
 }
 
 fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {

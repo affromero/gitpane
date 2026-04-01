@@ -31,6 +31,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 ureq = "3"
 serde_json = "1"
+wait-timeout = "0.2.1"
 
 [dev-dependencies]
 tempfile = "3"
