@@ -8,7 +8,6 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::repo_id::RepoId;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
@@ -22,6 +21,7 @@ use crate::config::UpdatePosition;
 use crate::event::Event;
 use crate::git::graph::GraphOptions;
 use crate::git::scanner;
+use crate::repo_id::RepoId;
 use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
 
@@ -389,14 +389,10 @@ impl App {
                             self.repo_list.repos[idx].git_op = false;
                         }
                         if self.dirty_repos.remove(id) {
-                            self.action_tx
-                                .send(Action::RefreshRepo(id.clone()))?;
+                            self.action_tx.send(Action::RefreshRepo(id.clone()))?;
                         }
                     }
-                    Action::RepoStatusUpdated {
-                        ref id,
-                        ref status,
-                    } => {
+                    Action::RepoStatusUpdated { ref id, ref status } => {
                         self.pending_status.remove(id);
                         let is_dirty = self.dirty_repos.remove(id);
                         if let Some(idx) = self.repo_list.resolve_index(id) {
@@ -426,8 +422,7 @@ impl App {
                             }
                         }
                         if is_dirty {
-                            self.action_tx
-                                .send(Action::RefreshRepo(id.clone()))?;
+                            self.action_tx.send(Action::RefreshRepo(id.clone()))?;
                         }
                     }
                     Action::RefreshAll => {
@@ -621,11 +616,7 @@ impl App {
                     Action::GraphError(ref msg) => {
                         self.git_graph.set_error(msg.clone());
                     }
-                    Action::ShowContextMenu {
-                        ref id,
-                        row,
-                        col,
-                    } => {
+                    Action::ShowContextMenu { ref id, row, col } => {
                         if let Some(idx) = self.repo_list.resolve_index(id) {
                             let (ahead, behind, has_submodules) = self.repo_list.repos[idx]
                                 .status
@@ -811,8 +802,7 @@ impl App {
                         ref message,
                     } => {
                         self.success_message = Some((message.clone(), Instant::now()));
-                        self.action_tx
-                            .send(Action::RefreshRepo(id.clone()))?;
+                        self.action_tx.send(Action::RefreshRepo(id.clone()))?;
                     }
                     Action::ShowDiff(ref id, ref file_path) => {
                         if let Some(idx) = self.repo_list.resolve_index(id) {
@@ -1093,8 +1083,7 @@ impl App {
                                 status: None,
                                 git_op: false,
                             });
-                            self.action_tx
-                                .send(Action::RefreshRepo(repo_id.clone()))?;
+                            self.action_tx.send(Action::RefreshRepo(repo_id.clone()))?;
                             self.action_tx.send(Action::SelectRepo(repo_id))?;
                         }
                     }
@@ -1118,13 +1107,15 @@ impl App {
                             // Fix selection
                             if self.repo_list.repos.is_empty() {
                                 self.repo_list.state.select(None);
-                                self.file_list
-                                    .set_files(Vec::new(), "", RepoId(std::path::PathBuf::new()));
+                                self.file_list.set_files(
+                                    Vec::new(),
+                                    "",
+                                    RepoId(std::path::PathBuf::new()),
+                                );
                             } else {
                                 let new_idx = idx.min(self.repo_list.repos.len() - 1);
                                 self.repo_list.state.select(Some(new_idx));
-                                let new_id =
-                                    RepoId(self.repo_list.repos[new_idx].path.clone());
+                                let new_id = RepoId(self.repo_list.repos[new_idx].path.clone());
                                 self.action_tx.send(Action::SelectRepo(new_id))?;
                             }
                         }

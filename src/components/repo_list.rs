@@ -105,7 +105,6 @@ impl RepoList {
             entry.git_op = false;
         }
     }
-
 }
 
 impl Component for RepoList {
