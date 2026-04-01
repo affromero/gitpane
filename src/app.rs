@@ -88,6 +88,37 @@ impl Drop for StatusGuard {
     }
 }
 
+/// RAII guard for git operations (push/pull/submodule) that set `git_op = true`.
+/// If the spawned task panics without sending `GitOpComplete` or `RefreshRepo`,
+/// the guard sends `RefreshRepo` to trigger a status query that clears `git_op`.
+struct GitOpGuard {
+    id: RepoId,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl GitOpGuard {
+    fn new(id: RepoId, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            id,
+            tx,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for GitOpGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::RefreshRepo(self.id.clone()));
+        }
+    }
+}
+
 pub(crate) struct App {
     config: Config,
     should_quit: bool,
@@ -656,6 +687,7 @@ impl App {
                             let repo_id = id.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
+                                let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
@@ -663,6 +695,7 @@ impl App {
                                     .output();
                                 match output {
                                     Ok(o) if o.status.success() => {
+                                        guard.complete();
                                         let _ = tx.send(Action::GitOpComplete {
                                             id: repo_id,
                                             message: format!(
@@ -672,6 +705,7 @@ impl App {
                                         });
                                     }
                                     Ok(o) => {
+                                        guard.complete();
                                         let stderr = String::from_utf8_lossy(&o.stderr);
                                         let first_line = stderr
                                             .lines()
@@ -686,6 +720,7 @@ impl App {
                                         let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                     Err(e) => {
+                                        guard.complete();
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
@@ -726,6 +761,7 @@ impl App {
                             let repo_id = id.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
+                                let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
@@ -733,6 +769,7 @@ impl App {
                                     .output();
                                 match output {
                                     Ok(o) if o.status.success() => {
+                                        guard.complete();
                                         let _ = tx.send(Action::GitOpComplete {
                                             id: repo_id,
                                             message: format!(
@@ -742,6 +779,7 @@ impl App {
                                         });
                                     }
                                     Ok(o) => {
+                                        guard.complete();
                                         let stderr = String::from_utf8_lossy(&o.stderr);
                                         let first_line = stderr
                                             .lines()
@@ -756,6 +794,7 @@ impl App {
                                         let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
                                     Err(e) => {
+                                        guard.complete();
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
