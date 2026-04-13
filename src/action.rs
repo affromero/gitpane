@@ -12,6 +12,11 @@ pub(crate) enum Action {
     SelectNextRepo,
     SelectPrevRepo,
     SelectRepo(RepoId),
+    SelectWorktree {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        worktree_branch: String,
+    },
     RepoStatusUpdated {
         id: RepoId,
         status: RepoStatus,

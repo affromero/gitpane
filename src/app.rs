@@ -229,7 +229,7 @@ impl App {
         }
         // Reset selection to first
         if !self.repo_list.repos.is_empty() {
-            self.repo_list.state.select(Some(0));
+            self.repo_list.select_repo_row(0);
         }
     }
 
@@ -378,7 +378,7 @@ impl App {
                                 .unwrap_or_default();
                             self.file_list.set_files(files, &name, repo_id);
                             self.git_graph.load_repo(path, &name);
-                            self.repo_list.state.select(Some(idx));
+                            self.repo_list.select_repo_row(idx);
                         }
                     }
                     Action::StatusQueryDone(ref id) => {
@@ -1114,7 +1114,7 @@ impl App {
                                 );
                             } else {
                                 let new_idx = idx.min(self.repo_list.repos.len() - 1);
-                                self.repo_list.state.select(Some(new_idx));
+                                self.repo_list.select_repo_row(new_idx);
                                 let new_id = RepoId(self.repo_list.repos[new_idx].path.clone());
                                 self.action_tx.send(Action::SelectRepo(new_id))?;
                             }
