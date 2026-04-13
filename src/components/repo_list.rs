@@ -254,9 +254,9 @@ impl Component for RepoList {
                     }
 
                     // Worktree count (linked worktrees, e.g. from agentic AI)
-                    if status.worktrees > 0 {
+                    if !status.worktree_info.is_empty() {
                         spans.push(Span::styled(
-                            format!("⎇{} ", status.worktrees),
+                            format!("⎇{} ", status.worktree_info.len()),
                             Style::default().fg(Color::Magenta),
                         ));
                     }
