@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -24,12 +25,23 @@ pub(crate) struct RepoEntry {
     pub git_op: bool,
 }
 
+/// Maps a visual row in the list to either a repo or one of its worktrees.
+#[derive(Clone, Debug)]
+enum DisplayRow {
+    Repo(usize),
+    Worktree(usize, usize), // (repo_index, worktree_index)
+}
+
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     pub state: ListState,
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
+    /// Which repos have their worktree list expanded
+    expanded_repos: HashSet<RepoId>,
+    /// Computed mapping from visual row → data
+    display_rows: Vec<DisplayRow>,
 }
 
 impl RepoList {
@@ -55,17 +67,42 @@ impl RepoList {
             state.select(Some(0));
         }
 
-        Self {
+        let mut list = Self {
             repos,
             state,
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
+            expanded_repos: HashSet::new(),
+            display_rows: Vec::new(),
+        };
+        list.rebuild_display_rows();
+        list
+    }
+
+    /// Recompute display_rows from repos + expansion state.
+    fn rebuild_display_rows(&mut self) {
+        self.display_rows.clear();
+        for (i, entry) in self.repos.iter().enumerate() {
+            self.display_rows.push(DisplayRow::Repo(i));
+            let id = RepoId(entry.path.clone());
+            if self.expanded_repos.contains(&id)
+                && let Some(status) = &entry.status
+            {
+                for j in 0..status.worktree_info.len() {
+                    self.display_rows.push(DisplayRow::Worktree(i, j));
+                }
+            }
         }
     }
 
+    /// Returns the parent repo index for the current selection.
     pub fn selected_index(&self) -> Option<usize> {
-        self.state.selected()
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(i) => Some(*i),
+            DisplayRow::Worktree(ri, _) => Some(*ri),
+        }
     }
 
     /// Resolve a stable `RepoId` to its current positional index.
@@ -73,23 +110,50 @@ impl RepoList {
         self.repos.iter().position(|e| e.path == id.0)
     }
 
+    /// Returns the parent RepoEntry for the current selection.
     pub fn selected_repo(&self) -> Option<&RepoEntry> {
-        self.state.selected().and_then(|i| self.repos.get(i))
+        self.selected_index().and_then(|i| self.repos.get(i))
+    }
+
+    /// If a worktree row is currently selected, returns the parent repo path
+    /// and the worktree details. Returns None when a repo row is selected.
+    #[allow(dead_code)]
+    pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(_) => None,
+            DisplayRow::Worktree(ri, wi) => {
+                let entry = self.repos.get(*ri)?;
+                let wt = entry.status.as_ref()?.worktree_info.get(*wi)?;
+                Some((RepoId(entry.path.clone()), wt))
+            }
+        }
+    }
+
+    /// Select the display row corresponding to a repo index.
+    /// Used by app.rs when it needs to programmatically select a repo.
+    pub fn select_repo_row(&mut self, repo_idx: usize) {
+        for (di, row) in self.display_rows.iter().enumerate() {
+            if matches!(row, DisplayRow::Repo(i) if *i == repo_idx) {
+                self.state.select(Some(di));
+                return;
+            }
+        }
     }
 
     fn select_next(&mut self) {
-        if self.repos.is_empty() {
+        if self.display_rows.is_empty() {
             return;
         }
         let i = match self.state.selected() {
-            Some(i) => (i + 1).min(self.repos.len() - 1),
+            Some(i) => (i + 1).min(self.display_rows.len() - 1),
             None => 0,
         };
         self.state.select(Some(i));
     }
 
     fn select_prev(&mut self) {
-        if self.repos.is_empty() {
+        if self.display_rows.is_empty() {
             return;
         }
         let i = match self.state.selected() {
@@ -104,6 +168,144 @@ impl RepoList {
             entry.status = Some(repo_status);
             entry.git_op = false;
         }
+        self.rebuild_display_rows();
+    }
+
+    /// Build the action to emit for the current selection.
+    fn emit_selection_action(&self) -> Option<Action> {
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(i) => {
+                let id = RepoId(self.repos[*i].path.clone());
+                Some(Action::SelectRepo(id))
+            }
+            DisplayRow::Worktree(ri, wi) => {
+                let entry = &self.repos[*ri];
+                let wt = entry.status.as_ref()?.worktree_info.get(*wi)?;
+                Some(Action::SelectWorktree {
+                    repo_id: RepoId(entry.path.clone()),
+                    worktree_path: wt.path.clone(),
+                    worktree_branch: wt.branch.clone(),
+                })
+            }
+        }
+    }
+
+    /// Toggle worktree expansion for the repo at the current selection.
+    fn toggle_expand(&mut self) {
+        let Some(di) = self.state.selected() else {
+            return;
+        };
+        let repo_idx = match self.display_rows.get(di) {
+            Some(DisplayRow::Repo(i)) => *i,
+            Some(DisplayRow::Worktree(ri, _)) => *ri,
+            None => return,
+        };
+        let entry = &self.repos[repo_idx];
+        let has_worktrees = entry
+            .status
+            .as_ref()
+            .is_some_and(|s| !s.worktree_info.is_empty());
+        if !has_worktrees {
+            return;
+        }
+        let id = RepoId(entry.path.clone());
+        if self.expanded_repos.contains(&id) {
+            // Collapsing: move selection to the parent repo row
+            self.expanded_repos.remove(&id);
+            self.rebuild_display_rows();
+            self.select_repo_row(repo_idx);
+        } else {
+            self.expanded_repos.insert(id);
+            self.rebuild_display_rows();
+        }
+    }
+
+    fn render_repo_item(&self, entry: &RepoEntry, _repo_idx: usize) -> ListItem<'static> {
+        let mut spans = Vec::new();
+
+        // Dirty / git-op indicator
+        if entry.git_op {
+            spans.push(Span::styled("~ ", Style::default().fg(Color::Cyan)));
+        } else if entry.status.as_ref().map(|s| s.is_dirty).unwrap_or(false) {
+            spans.push(Span::styled("* ", Style::default().fg(Color::Yellow)));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+
+        if let Some(status) = &entry.status {
+            // Branch name
+            spans.push(Span::styled(
+                format!("{:<12} ", status.branch),
+                Style::default().fg(Color::Cyan),
+            ));
+
+            // Ahead/behind
+            if status.ahead > 0 {
+                spans.push(Span::styled(
+                    format!("\u{2191}{} ", status.ahead),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            if status.behind > 0 {
+                spans.push(Span::styled(
+                    format!("\u{2193}{} ", status.behind),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+
+            // Worktree expand/collapse indicator
+            if !status.worktree_info.is_empty() {
+                let id = RepoId(entry.path.clone());
+                let expanded = self.expanded_repos.contains(&id);
+                let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
+                spans.push(Span::styled(
+                    format!("{}{} ", icon, status.worktree_info.len()),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+
+            // Dirty submodule indicator
+            if status.has_dirty_submodules {
+                spans.push(Span::styled(
+                    "\u{25c8} ",
+                    Style::default().fg(Color::LightMagenta),
+                ));
+            }
+
+            // Fetch failure indicator
+            if status.fetch_failed {
+                spans.push(Span::styled(
+                    "\u{26a0} ",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            // Change count
+            if !status.files.is_empty() {
+                spans.push(Span::styled(
+                    format!("[{}] ", status.files.len()),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+        }
+
+        // Repo name
+        spans.push(Span::styled(
+            entry.name.clone(),
+            Style::default().fg(Color::White),
+        ));
+
+        ListItem::new(Line::from(spans))
+    }
+
+    fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
+        let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
+        let spans = vec![
+            Span::styled("    \u{2387} ", Style::default().fg(Color::DarkGray)),
+            Span::styled(wt.branch.clone(), Style::default().fg(Color::Magenta)),
+        ];
+        ListItem::new(Line::from(spans))
     }
 }
 
@@ -114,8 +316,6 @@ impl Component for RepoList {
     }
 
     fn init(&mut self) -> Result<()> {
-        // Initial status queries are triggered by App via PollLocal
-        // to ensure they go through the shared semaphore and pending_status.
         Ok(())
     }
 
@@ -123,15 +323,15 @@ impl Component for RepoList {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.select_prev();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
+            }
+            KeyCode::Char('w') => {
+                self.toggle_expand();
+                Ok(self.emit_selection_action())
             }
             _ => Ok(None),
         }
@@ -147,10 +347,9 @@ impl Component for RepoList {
                 {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
-                    if idx < self.repos.len() {
+                    if idx < self.display_rows.len() {
                         self.state.select(Some(idx));
-                        let id = RepoId(self.repos[idx].path.clone());
-                        return Ok(Some(Action::SelectRepo(id)));
+                        return Ok(self.emit_selection_action());
                     }
                 }
                 Ok(None)
@@ -163,29 +362,28 @@ impl Component for RepoList {
                 {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
-                    if idx < self.repos.len() {
+                    if idx < self.display_rows.len() {
                         self.state.select(Some(idx));
-                        let id = RepoId(self.repos[idx].path.clone());
-                        return Ok(Some(Action::ShowContextMenu {
-                            id,
-                            row: mouse.row,
-                            col: mouse.column,
-                        }));
+                        // Only show context menu for repo rows
+                        if let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx) {
+                            let id = RepoId(self.repos[*i].path.clone());
+                            return Ok(Some(Action::ShowContextMenu {
+                                id,
+                                row: mouse.row,
+                                col: mouse.column,
+                            }));
+                        }
                     }
                 }
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {
                 self.select_prev();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
             }
             MouseEventKind::ScrollDown => {
                 self.select_next();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
             }
             _ => Ok(None),
         }
@@ -195,15 +393,11 @@ impl Component for RepoList {
         match action {
             Action::SelectNextRepo => {
                 self.select_next();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
             }
             Action::SelectPrevRepo => {
                 self.select_prev();
-                let idx = self.state.selected().unwrap_or(0);
-                let id = RepoId(self.repos[idx].path.clone());
-                Ok(Some(Action::SelectRepo(id)))
+                Ok(self.emit_selection_action())
             }
             Action::RepoStatusUpdated { ref id, ref status } => {
                 if let Some(idx) = self.resolve_index(id) {
@@ -217,73 +411,15 @@ impl Component for RepoList {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         self.render_area = area;
+        // Ensure display_rows is fresh
+        self.rebuild_display_rows();
+
         let items: Vec<ListItem> = self
-            .repos
+            .display_rows
             .iter()
-            .map(|entry| {
-                let mut spans = Vec::new();
-
-                // Dirty / git-op indicator
-                if entry.git_op {
-                    spans.push(Span::styled("~ ", Style::default().fg(Color::Cyan)));
-                } else if entry.status.as_ref().map(|s| s.is_dirty).unwrap_or(false) {
-                    spans.push(Span::styled("* ", Style::default().fg(Color::Yellow)));
-                } else {
-                    spans.push(Span::raw("  "));
-                }
-
-                if let Some(status) = &entry.status {
-                    // Branch name
-                    spans.push(Span::styled(
-                        format!("{:<12} ", status.branch),
-                        Style::default().fg(Color::Cyan),
-                    ));
-
-                    // Ahead/behind (VSCode-style ↑↓ arrows)
-                    if status.ahead > 0 {
-                        spans.push(Span::styled(
-                            format!("↑{} ", status.ahead),
-                            Style::default().fg(Color::Green),
-                        ));
-                    }
-                    if status.behind > 0 {
-                        spans.push(Span::styled(
-                            format!("↓{} ", status.behind),
-                            Style::default().fg(Color::Red),
-                        ));
-                    }
-
-                    // Worktree count (linked worktrees, e.g. from agentic AI)
-                    if status.worktrees > 0 {
-                        spans.push(Span::styled(
-                            format!("⎇{} ", status.worktrees),
-                            Style::default().fg(Color::Magenta),
-                        ));
-                    }
-
-                    // Dirty submodule indicator
-                    if status.has_dirty_submodules {
-                        spans.push(Span::styled("◈ ", Style::default().fg(Color::LightMagenta)));
-                    }
-
-                    // Fetch failure indicator
-                    if status.fetch_failed {
-                        spans.push(Span::styled("⚠ ", Style::default().fg(Color::DarkGray)));
-                    }
-
-                    // Change count
-                    if !status.files.is_empty() {
-                        spans.push(Span::styled(
-                            format!("[{}] ", status.files.len()),
-                            Style::default().fg(Color::Yellow),
-                        ));
-                    }
-                }
-
-                // Repo name
-                spans.push(Span::styled(&entry.name, Style::default().fg(Color::White)));
-
-                ListItem::new(Line::from(spans))
+            .map(|row| match row {
+                DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], *i),
+                DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
             })
             .collect();
 

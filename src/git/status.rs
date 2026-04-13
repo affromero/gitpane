@@ -8,8 +8,8 @@ pub(crate) struct RepoStatus {
     pub ahead: usize,
     pub behind: usize,
     pub is_dirty: bool,
-    /// Number of linked worktrees (excludes the main working tree)
-    pub worktrees: usize,
+    /// Linked worktrees (excludes the main working tree)
+    pub worktree_info: Vec<WorktreeEntry>,
     /// True when .gitmodules exists (repo uses submodules)
     pub has_submodules: bool,
     pub submodules: Vec<SubmoduleInfo>,
@@ -41,6 +41,14 @@ pub(crate) enum SubmoduleState {
     Modified,
     Uninitialized,
     Dirty,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct WorktreeEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub branch: String,
 }
 
 #[derive(Clone, Debug)]
@@ -147,8 +155,8 @@ fn query_status_inner(
 
     let is_dirty = !files.is_empty();
 
-    // Count linked worktrees (excludes the main working tree)
-    let worktrees = repo.worktrees().map(|wt| wt.len()).unwrap_or(0);
+    // Collect linked worktree details (excludes the main working tree)
+    let worktree_info = collect_worktree_info(&repo);
 
     // Detect submodules by checking for .gitmodules
     let has_submodules = path.join(".gitmodules").is_file();
@@ -216,12 +224,46 @@ fn query_status_inner(
         ahead,
         behind,
         is_dirty: is_dirty || has_dirty_submodules,
-        worktrees,
+        worktree_info,
         has_submodules,
         submodules,
         has_dirty_submodules,
         fetch_failed,
     })
+}
+
+/// Collect details for each linked worktree using the git2 API.
+/// Mirrors the pattern in `git/graph.rs::collect_worktree_branches`.
+fn collect_worktree_info(repo: &Repository) -> Vec<WorktreeEntry> {
+    let wt_names = match repo.worktrees() {
+        Ok(names) => names,
+        Err(_) => return Vec::new(),
+    };
+    let mut entries = Vec::new();
+    for i in 0..wt_names.len() {
+        let name = match wt_names.get(i) {
+            Some(n) => n,
+            None => continue,
+        };
+        let wt = match repo.find_worktree(name) {
+            Ok(wt) => wt,
+            Err(_) => continue,
+        };
+        let wt_path = wt.path().to_path_buf();
+        let branch = match Repository::open(&wt_path) {
+            Ok(wt_repo) => match wt_repo.head() {
+                Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
+                Err(_) => "(no branch)".to_string(),
+            },
+            Err(_) => continue,
+        };
+        entries.push(WorktreeEntry {
+            name: name.to_string(),
+            path: wt_path,
+            branch,
+        });
+    }
+    entries
 }
 
 /// Run `git fetch` with a 30-second timeout to update remote-tracking refs.
@@ -368,14 +410,14 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_count_zero_for_plain_repo() {
+    fn test_worktree_info_empty_for_plain_repo() {
         let (tmp, _repo) = init_temp_repo();
         let status = query_status(tmp.path(), false).unwrap();
-        assert_eq!(status.worktrees, 0);
+        assert!(status.worktree_info.is_empty());
     }
 
     #[test]
-    fn test_worktree_count_reflects_linked_worktrees() {
+    fn test_worktree_info_reflects_linked_worktrees() {
         let (tmp, _repo) = init_temp_repo();
         // Create a linked worktree via git CLI
         let wt_dir = tmp.path().join("wt1");
@@ -392,7 +434,9 @@ mod tests {
         assert!(output.status.success(), "git worktree add failed");
 
         let status = query_status(tmp.path(), false).unwrap();
-        assert_eq!(status.worktrees, 1);
+        assert_eq!(status.worktree_info.len(), 1);
+        assert_eq!(status.worktree_info[0].branch, "wt-branch");
+        assert_eq!(status.worktree_info[0].name, "wt1");
     }
 
     #[test]

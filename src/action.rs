@@ -12,6 +12,18 @@ pub(crate) enum Action {
     SelectNextRepo,
     SelectPrevRepo,
     SelectRepo(RepoId),
+    SelectWorktree {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        worktree_branch: String,
+    },
+    /// Carries the result of a worktree status query back to the UI.
+    WorktreeFilesLoaded {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        name: String,
+        files: Vec<crate::git::status::FileEntry>,
+    },
     RepoStatusUpdated {
         id: RepoId,
         status: RepoStatus,
