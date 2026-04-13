@@ -2,6 +2,17 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.5.0] - 2026-04-13
+
+### Added
+- Collapsible worktree entries in the repo list: repos with linked worktrees show a `▶N` / `▼N` toggle icon — press `w` to expand and see each worktree branch listed below the parent repo
+- Selecting a worktree entry shows its changed files in the Changes panel with full diff support
+- Git graph loads from the selected worktree path for branch-specific history
+- `gitpane update` self-update subcommand for easy in-place upgrades
+
+### Changed
+- Worktree data now includes full details (name, path, branch) collected via the git2 API, replacing the previous simple count
+
 ## [0.4.1] - 2026-04-01
 
 ### Added
