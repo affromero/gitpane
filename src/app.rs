@@ -464,10 +464,13 @@ impl App {
                             let status_clone = status.clone();
                             self.repo_list.update_status(idx, status_clone);
 
-                            // Always refresh the file list so stale diffs are cleared
-                            // when files are staged/unstaged. Only skip graph reload
-                            // while the user is inspecting commit details.
-                            if self.repo_list.selected_index() == Some(idx) {
+                            // Refresh the file list so stale diffs are cleared
+                            // when files are staged/unstaged. Skip when a worktree
+                            // is being viewed — its files come from WorktreeFilesLoaded,
+                            // not the parent repo's status.
+                            if self.repo_list.selected_index() == Some(idx)
+                                && self.active_worktree.is_none()
+                            {
                                 let entry = &self.repo_list.repos[idx];
                                 let name = entry.name.clone();
                                 let repo_id = id.clone();

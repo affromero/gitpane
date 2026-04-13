@@ -348,6 +348,17 @@ impl Component for RepoList {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
+                        // Click on already-selected repo row toggles worktree expansion
+                        if self.state.selected() == Some(idx)
+                            && let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx)
+                            && self.repos[*i]
+                                .status
+                                .as_ref()
+                                .is_some_and(|s| !s.worktree_info.is_empty())
+                        {
+                            self.toggle_expand();
+                            return Ok(self.emit_selection_action());
+                        }
                         self.state.select(Some(idx));
                         return Ok(self.emit_selection_action());
                     }
