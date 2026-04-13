@@ -398,15 +398,11 @@ impl App {
                             .resolve_index(repo_id)
                             .map(|i| self.repo_list.repos[i].name.clone())
                             .unwrap_or_default();
-                        let display_name =
-                            format!("{}:{}", repo_name, worktree_branch);
+                        let display_name = format!("{}:{}", repo_name, worktree_branch);
 
                         // Clear file list while loading (use parent repo_id for resolve_index)
-                        self.file_list.set_files(
-                            Vec::new(),
-                            &display_name,
-                            repo_id.clone(),
-                        );
+                        self.file_list
+                            .set_files(Vec::new(), &display_name, repo_id.clone());
 
                         // Load graph from worktree path
                         self.git_graph
@@ -418,8 +414,8 @@ impl App {
                         let name = display_name;
                         let tx = self.action_tx.clone();
                         let ignore_dirty_subs = self.config.submodules.ignore_dirty;
-                        tokio::task::spawn_blocking(move || {
-                            match crate::git::status::query_status(
+                        tokio::task::spawn_blocking(
+                            move || match crate::git::status::query_status(
                                 &wt_path,
                                 ignore_dirty_subs,
                             ) {
@@ -432,13 +428,11 @@ impl App {
                                     });
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(Action::Error(format!(
-                                        "Worktree status: {}",
-                                        e
-                                    )));
+                                    let _ =
+                                        tx.send(Action::Error(format!("Worktree status: {}", e)));
                                 }
-                            }
-                        });
+                            },
+                        );
                     }
                     Action::WorktreeFilesLoaded {
                         ref repo_id,
@@ -448,11 +442,8 @@ impl App {
                     } => {
                         // Only apply if this worktree is still selected
                         if self.active_worktree.as_ref() == Some(worktree_path) {
-                            self.file_list.set_files(
-                                files.clone(),
-                                name,
-                                repo_id.clone(),
-                            );
+                            self.file_list
+                                .set_files(files.clone(), name, repo_id.clone());
                         }
                     }
                     Action::StatusQueryDone(ref id) => {
@@ -1729,6 +1720,7 @@ impl App {
                 lines.push(Line::from(vec![key("a"), desc("Add repo")]));
                 lines.push(Line::from(vec![key("d"), desc("Remove repo (confirm)")]));
                 lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
+                lines.push(Line::from(vec![key("w"), desc("Toggle worktrees")]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
                 lines.push(Line::from(vec![key("g"), desc("Open git graph")]));
             }

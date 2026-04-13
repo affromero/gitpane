@@ -44,6 +44,7 @@ pub(crate) enum SubmoduleState {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct WorktreeEntry {
     pub name: String,
     pub path: PathBuf,

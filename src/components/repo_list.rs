@@ -86,11 +86,11 @@ impl RepoList {
         for (i, entry) in self.repos.iter().enumerate() {
             self.display_rows.push(DisplayRow::Repo(i));
             let id = RepoId(entry.path.clone());
-            if self.expanded_repos.contains(&id) {
-                if let Some(status) = &entry.status {
-                    for j in 0..status.worktree_info.len() {
-                        self.display_rows.push(DisplayRow::Worktree(i, j));
-                    }
+            if self.expanded_repos.contains(&id)
+                && let Some(status) = &entry.status
+            {
+                for j in 0..status.worktree_info.len() {
+                    self.display_rows.push(DisplayRow::Worktree(i, j));
                 }
             }
         }
@@ -117,6 +117,7 @@ impl RepoList {
 
     /// If a worktree row is currently selected, returns the parent repo path
     /// and the worktree details. Returns None when a repo row is selected.
+    #[allow(dead_code)]
     pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
@@ -298,18 +299,11 @@ impl RepoList {
         ListItem::new(Line::from(spans))
     }
 
-    fn render_worktree_item(
-        &self,
-        entry: &RepoEntry,
-        wt_idx: usize,
-    ) -> ListItem<'static> {
+    fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
         let spans = vec![
             Span::styled("    \u{2387} ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                wt.branch.clone(),
-                Style::default().fg(Color::Magenta),
-            ),
+            Span::styled(wt.branch.clone(), Style::default().fg(Color::Magenta)),
         ];
         ListItem::new(Line::from(spans))
     }
@@ -425,9 +419,7 @@ impl Component for RepoList {
             .iter()
             .map(|row| match row {
                 DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], *i),
-                DisplayRow::Worktree(ri, wi) => {
-                    self.render_worktree_item(&self.repos[*ri], *wi)
-                }
+                DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
             })
             .collect();
 

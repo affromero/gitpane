@@ -118,6 +118,8 @@ impl Component for StatusBar {
                 Span::raw(" copy  "),
                 key_span("s"),
                 Span::raw(format!(" sort ({})  ", self.sort_order.label())),
+                key_span("w"),
+                Span::raw(" worktrees  "),
                 key_span("q"),
                 Span::raw(" quit"),
             ]
@@ -155,6 +157,8 @@ impl Component for StatusBar {
                 Span::raw(" Copy  "),
                 key_span("s"),
                 Span::raw(format!(" Sort ({})  ", self.sort_order.label())),
+                key_span("w"),
+                Span::raw(" Worktrees  "),
                 key_span("q"),
                 Span::raw(" Quit"),
             ]
