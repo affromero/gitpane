@@ -2,6 +2,12 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.5.1] - 2026-04-13
+
+### Fixed
+- Clicking an already-selected repo row now toggles worktree expansion (previously only the `w` key worked)
+- Worktree changes no longer flash and disappear — repo status polls no longer overwrite the Changes panel while a worktree is being viewed
+
 ## [0.5.0] - 2026-04-13
 
 ### Added
