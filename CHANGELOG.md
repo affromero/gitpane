@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.5.2] - 2026-04-14
+
+### Added
+- Worktree changes now update in real time — `PollLocal` re-queries the active worktree on each tick so file modifications appear automatically in the Changes panel
+
 ## [0.5.1] - 2026-04-13
 
 ### Fixed
