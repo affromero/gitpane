@@ -158,8 +158,16 @@ pub(crate) struct App {
     pending_status: HashSet<RepoId>,
     /// Repos that changed while a status query was in-flight (re-queued on completion)
     dirty_repos: HashSet<RepoId>,
-    /// When a worktree row is selected, stores its path for diff/status routing
-    active_worktree: Option<std::path::PathBuf>,
+    /// When a worktree row is selected, stores context for diff/status routing
+    /// and live-polling the worktree's changes.
+    active_worktree: Option<ActiveWorktree>,
+}
+
+#[derive(Clone)]
+struct ActiveWorktree {
+    path: std::path::PathBuf,
+    repo_id: RepoId,
+    display_name: String,
 }
 
 impl App {
@@ -391,7 +399,6 @@ impl App {
                         ref worktree_branch,
                     } => {
                         self.context_menu.hide();
-                        self.active_worktree = Some(worktree_path.clone());
 
                         let repo_name = self
                             .repo_list
@@ -399,6 +406,12 @@ impl App {
                             .map(|i| self.repo_list.repos[i].name.clone())
                             .unwrap_or_default();
                         let display_name = format!("{}:{}", repo_name, worktree_branch);
+
+                        self.active_worktree = Some(ActiveWorktree {
+                            path: worktree_path.clone(),
+                            repo_id: repo_id.clone(),
+                            display_name: display_name.clone(),
+                        });
 
                         // Clear file list while loading (use parent repo_id for resolve_index)
                         self.file_list
@@ -441,7 +454,11 @@ impl App {
                         ref files,
                     } => {
                         // Only apply if this worktree is still selected
-                        if self.active_worktree.as_ref() == Some(worktree_path) {
+                        if self
+                            .active_worktree
+                            .as_ref()
+                            .is_some_and(|aw| aw.path == *worktree_path)
+                        {
                             self.file_list
                                 .set_files(files.clone(), name, repo_id.clone());
                         }
@@ -569,6 +586,23 @@ impl App {
                                     }
                                 })
                                 .await
+                            });
+                        }
+
+                        // Also re-query the active worktree so its changes update live
+                        if let Some(aw) = self.active_worktree.clone() {
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                if let Ok(s) =
+                                    crate::git::status::query_status(&aw.path, ignore_dirty_subs)
+                                {
+                                    let _ = tx.send(Action::WorktreeFilesLoaded {
+                                        repo_id: aw.repo_id,
+                                        worktree_path: aw.path,
+                                        name: aw.display_name,
+                                        files: s.files,
+                                    });
+                                }
                             });
                         }
                     }
@@ -996,7 +1030,8 @@ impl App {
                                 // Use worktree path for diffs when a worktree is selected
                                 let path = self
                                     .active_worktree
-                                    .clone()
+                                    .as_ref()
+                                    .map(|aw| aw.path.clone())
                                     .unwrap_or_else(|| entry.path.clone());
                                 let fp = file_path.clone();
                                 let tx = self.action_tx.clone();
