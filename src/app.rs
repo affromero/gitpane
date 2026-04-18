@@ -591,6 +591,13 @@ impl App {
 
                         // Also re-query the active worktree so its changes update live
                         if let Some(aw) = self.active_worktree.clone() {
+                            // Refresh the graph from the worktree so new commits appear live
+                            if self.git_graph.has_detail() {
+                                self.git_graph.set_needs_reload();
+                            } else {
+                                self.git_graph.load_repo(aw.path.clone(), &aw.display_name);
+                            }
+
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
                                 if let Ok(s) =
