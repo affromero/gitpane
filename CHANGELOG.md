@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.5.3] - 2026-04-18
+
+### Fixed
+- Git graph now live-reloads while a worktree row is selected — new commits made inside the worktree appear on the next `PollLocal` tick instead of requiring a manual re-select
+
 ## [0.5.2] - 2026-04-14
 
 ### Added
