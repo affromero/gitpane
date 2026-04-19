@@ -224,9 +224,7 @@ impl App {
     fn sort_repos(&mut self) {
         match self.sort_order {
             SortOrder::Alphabetical => {
-                self.repo_list
-                    .repos
-                    .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                self.repo_list.repos.sort_by_key(|r| r.name.to_lowercase());
             }
             SortOrder::DirtyFirst => {
                 self.repo_list.repos.sort_by(|a, b| {
