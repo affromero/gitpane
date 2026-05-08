@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::status::{FileEntry, FileStatus, SubmoduleState};
+use crate::git::status::{FileEntry, FileStatus, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
 
 pub(crate) struct FileList {
@@ -177,15 +177,9 @@ impl FileList {
                 )];
 
                 if entry.is_submodule {
-                    let sub_label = match &entry.submodule_state {
-                        Some(SubmoduleState::Modified) => "[sub: +commit] ",
-                        Some(SubmoduleState::Uninitialized) => "[sub: -uninit] ",
-                        Some(SubmoduleState::Dirty) => "[sub: ~dirty] ",
-                        None => "[submodule] ",
-                    };
-                    spans.push(Span::styled(
-                        sub_label,
-                        Style::default().fg(Color::LightMagenta),
+                    spans.extend(submodule_tag_spans(
+                        &entry.submodule_state,
+                        &entry.submodule_warn,
                     ));
                 }
 
@@ -248,6 +242,63 @@ impl FileList {
 
         frame.render_widget(paragraph, area);
     }
+}
+
+/// Build the `[sub: …]` tag spans for a submodule file row.
+/// `state` is independent from `warn` — both can be present and compose.
+fn submodule_tag_spans(
+    state: &Option<SubmoduleState>,
+    warn: &SubmoduleWarn,
+) -> Vec<Span<'static>> {
+    let bracket_style = Style::default().fg(Color::LightMagenta);
+    let unpushed_style = Style::default().fg(Color::Green);
+    let unreach_style = Style::default().fg(Color::LightRed);
+
+    let mut inner: Vec<Span<'static>> = Vec::new();
+
+    let state_label = match state {
+        Some(SubmoduleState::Modified) => Some("+commit"),
+        Some(SubmoduleState::Uninitialized) => Some("-uninit"),
+        Some(SubmoduleState::Dirty) => Some("~dirty"),
+        None => None,
+    };
+
+    // Uninitialized takes precedence: never compose with warn — `sub.open()`
+    // can't introspect the inner repo, so warn fields are zero anyway.
+    let suppress_warn = matches!(state, Some(SubmoduleState::Uninitialized));
+
+    if let Some(label) = state_label {
+        inner.push(Span::styled(label, bracket_style));
+    }
+
+    if !suppress_warn {
+        if warn.pointer_unreachable {
+            if !inner.is_empty() {
+                inner.push(Span::styled(" ", bracket_style));
+            }
+            inner.push(Span::styled("\u{26a0}unreach", unreach_style));
+        } else if warn.unpushed_commits > 0 {
+            if !inner.is_empty() {
+                inner.push(Span::styled(" ", bracket_style));
+            }
+            inner.push(Span::styled(
+                format!("\u{2191}{}", warn.unpushed_commits),
+                unpushed_style,
+            ));
+        }
+    }
+
+    if inner.is_empty() {
+        // No state and no warn — fall back to a plain "[submodule]" tag
+        // (matches the prior behavior for submodules with no signal).
+        return vec![Span::styled("[submodule] ", bracket_style)];
+    }
+
+    let mut out = Vec::with_capacity(inner.len() + 2);
+    out.push(Span::styled("[sub: ", bracket_style));
+    out.extend(inner);
+    out.push(Span::styled("] ", bracket_style));
+    out
 }
 
 impl Component for FileList {
@@ -373,5 +424,117 @@ impl Component for FileList {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+
+    fn rendered(state: Option<SubmoduleState>, warn: SubmoduleWarn) -> String {
+        submodule_tag_spans(&state, &warn)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn modified_clean() {
+        assert_eq!(
+            rendered(Some(SubmoduleState::Modified), SubmoduleWarn::default()),
+            "[sub: +commit] "
+        );
+    }
+
+    #[test]
+    fn modified_with_unpushed() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 3,
+            pointer_unreachable: false,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Modified), warn),
+            "[sub: +commit \u{2191}3] "
+        );
+    }
+
+    #[test]
+    fn modified_with_unreachable_takes_precedence_over_unpushed() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 5,
+            pointer_unreachable: true,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Modified), warn),
+            "[sub: +commit \u{26a0}unreach] "
+        );
+    }
+
+    #[test]
+    fn dirty_clean() {
+        assert_eq!(
+            rendered(Some(SubmoduleState::Dirty), SubmoduleWarn::default()),
+            "[sub: ~dirty] "
+        );
+    }
+
+    #[test]
+    fn dirty_with_unpushed() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 1,
+            pointer_unreachable: false,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Dirty), warn),
+            "[sub: ~dirty \u{2191}1] "
+        );
+    }
+
+    #[test]
+    fn dirty_with_unreachable() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 0,
+            pointer_unreachable: true,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Dirty), warn),
+            "[sub: ~dirty \u{26a0}unreach] "
+        );
+    }
+
+    #[test]
+    fn uninitialized_skips_warn() {
+        // Even with warn fields set, uninitialized always renders just `-uninit`.
+        let warn = SubmoduleWarn {
+            unpushed_commits: 7,
+            pointer_unreachable: true,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Uninitialized), warn),
+            "[sub: -uninit] "
+        );
+    }
+
+    #[test]
+    fn unreach_only_synthetic_row() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 0,
+            pointer_unreachable: true,
+        };
+        assert_eq!(rendered(None, warn), "[sub: \u{26a0}unreach] ");
+    }
+
+    #[test]
+    fn unpushed_only_synthetic_row() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 4,
+            pointer_unreachable: false,
+        };
+        assert_eq!(rendered(None, warn), "[sub: \u{2191}4] ");
+    }
+
+    #[test]
+    fn no_state_no_warn_falls_back_to_plain_tag() {
+        assert_eq!(rendered(None, SubmoduleWarn::default()), "[submodule] ");
     }
 }

@@ -79,10 +79,25 @@ pub(crate) struct GraphConfig {
     pub show_stats: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SubmoduleConfig {
     #[serde(default)]
     pub ignore_dirty: bool,
+    #[serde(default = "default_warn_unpushed")]
+    pub warn_unpushed: bool,
+}
+
+impl Default for SubmoduleConfig {
+    fn default() -> Self {
+        Self {
+            ignore_dirty: false,
+            warn_unpushed: default_warn_unpushed(),
+        }
+    }
+}
+
+fn default_warn_unpushed() -> bool {
+    true
 }
 
 fn default_show_stats() -> bool {
@@ -368,15 +383,18 @@ mod tests {
     fn test_submodule_config_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(!config.submodules.ignore_dirty);
+        assert!(config.submodules.warn_unpushed);
     }
 
     #[test]
     fn test_submodule_config_roundtrip() {
         let mut config = Config::default();
         config.submodules.ignore_dirty = true;
+        config.submodules.warn_unpushed = false;
         let serialized = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&serialized).unwrap();
         assert!(loaded.submodules.ignore_dirty);
+        assert!(!loaded.submodules.warn_unpushed);
     }
 
     #[test]
@@ -384,9 +402,22 @@ mod tests {
         let toml_str = r#"
             [submodules]
             ignore_dirty = true
+            warn_unpushed = false
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.submodules.ignore_dirty);
+        assert!(!config.submodules.warn_unpushed);
+    }
+
+    #[test]
+    fn test_warn_unpushed_defaults_true_when_only_ignore_dirty_set() {
+        let toml_str = r#"
+            [submodules]
+            ignore_dirty = true
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.submodules.ignore_dirty);
+        assert!(config.submodules.warn_unpushed);
     }
 
     #[test]
