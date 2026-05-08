@@ -1023,4 +1023,183 @@ mod tests {
         }
         assert!(!status.has_unpushed_submodules);
     }
+
+    // ---- Integration tests with a real submodule + remote-tracking ref ----
+
+    /// Adds a new commit on top of the submodule's current HEAD without pushing.
+    /// Updates HEAD (works whether HEAD is detached or on a branch).
+    /// Returns the new commit oid.
+    fn add_unpushed_commit_in_sub(parent_path: &Path, sub_dirname: &str) -> git2::Oid {
+        let sub_repo = Repository::open(parent_path.join(sub_dirname)).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let head_commit = sub_repo.head().unwrap().peel_to_commit().unwrap();
+
+        fs::write(
+            parent_path.join(sub_dirname).join("extra.rs"),
+            "fn extra() {}",
+        )
+        .unwrap();
+        let mut idx = sub_repo.index().unwrap();
+        idx.add_path(Path::new("extra.rs")).unwrap();
+        idx.write().unwrap();
+        let tree_id = idx.write_tree().unwrap();
+        let tree = sub_repo.find_tree(tree_id).unwrap();
+
+        sub_repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "unpushed work",
+                &tree,
+                &[&head_commit],
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_parent_pinning_unpushed_oid_marks_pointer_unreachable() {
+        // Reproduce the footgun: commit in submodule (not on remote), then
+        // `git add my-sub` in parent — staging an oid that no remote can resolve.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let unpushed = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+
+        // Stage the new submodule pointer in the parent's index.
+        let stage = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["add", "my-sub"])
+            .output()
+            .unwrap();
+        assert!(
+            stage.status.success(),
+            "git add my-sub failed: {}",
+            String::from_utf8_lossy(&stage.stderr)
+        );
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_unpushed_submodules);
+
+        let sub_info = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry should exist with warn signal");
+        assert!(
+            sub_info.warn.pointer_unreachable,
+            "expected pointer_unreachable=true for staged oid {}, got {:?}",
+            unpushed, sub_info.warn
+        );
+
+        // The file row should also surface the warn fields.
+        let file_entry = status
+            .files
+            .iter()
+            .find(|f| f.path == Path::new("my-sub"))
+            .expect("file entry for my-sub");
+        assert!(file_entry.is_submodule);
+        assert!(file_entry.submodule_warn.pointer_unreachable);
+    }
+
+    #[test]
+    fn test_warn_unpushed_false_zeros_unreachable_pointer() {
+        // Same setup as the previous test, but with warn_unpushed=false the
+        // warn fields must stay zero even though the pointer is unreachable.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["add", "my-sub"])
+            .output()
+            .unwrap();
+
+        let cfg = SubmoduleConfig {
+            ignore_dirty: false,
+            warn_unpushed: false,
+        };
+        let status = query_status(tmp.path(), &cfg).unwrap();
+        assert!(!status.has_unpushed_submodules);
+        for sub in &status.submodules {
+            assert!(
+                sub.warn.is_clean(),
+                "warn fields must be zero when warn_unpushed=false, got {:?}",
+                sub.warn
+            );
+        }
+    }
+
+    #[test]
+    fn test_unpushed_commits_count_when_branch_ahead_of_upstream() {
+        // The submodule's local branch advances past its upstream remote ref;
+        // the parent's recorded oid is unchanged (still reachable on origin),
+        // so unpushed_commits>0 with pointer_unreachable=false.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        // Find the cloned submodule's default remote branch name. After
+        // `git submodule add`, the inner repo has a `refs/remotes/origin/<branch>`
+        // ref. Use it to set up a local tracking branch.
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+        let mut remote_branch: Option<String> = None;
+        if let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) {
+            for (b, _) in branches.flatten() {
+                if let Ok(Some(name)) = b.name()
+                    && let Some(stripped) = name.strip_prefix("origin/")
+                    && stripped != "HEAD"
+                {
+                    remote_branch = Some(stripped.to_string());
+                    break;
+                }
+            }
+        }
+        let branch = remote_branch.expect("submodule should have an origin/<branch> ref");
+
+        // Create a local tracking branch pointing at HEAD and set its upstream.
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&sub_dir)
+            .args(["checkout", "-B", &branch, &format!("origin/{}", branch)])
+            .output()
+            .unwrap();
+
+        // Add an unpushed commit (local branch advances past origin/<branch>).
+        add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+
+        // The parent has not staged a new pointer, so its recorded oid is
+        // still the prior commit — present on origin.
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_unpushed_submodules);
+
+        let sub_info = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry expected");
+        assert_eq!(
+            sub_info.warn.unpushed_commits, 1,
+            "expected 1 unpushed commit, got {:?}",
+            sub_info.warn
+        );
+        assert!(
+            !sub_info.warn.pointer_unreachable,
+            "parent's pointer is unchanged and on origin — should be reachable"
+        );
+    }
+
+    #[test]
+    fn test_detached_head_at_remote_oid_no_warn() {
+        // A submodule with detached HEAD at an oid present on a remote ref
+        // should produce no warn signal.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        // After `git submodule add`, HEAD is typically already detached at the
+        // initial cloned commit, which is on `refs/remotes/origin/<branch>`.
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(!status.has_unpushed_submodules);
+        for sub in &status.submodules {
+            assert!(sub.warn.is_clean());
+        }
+    }
 }
