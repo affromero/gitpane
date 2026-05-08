@@ -2,6 +2,20 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.6.0] - 2026-05-07
+
+### Added
+- Warn when a submodule pointer or commits are unpushed: surfaces the classic footgun where a parent commit pins a submodule oid no remote can resolve
+- File row tag `[sub: +commit ⚠unreach]` / `[sub: ↑N]` composes orthogonally with the existing dirty/modified/uninitialized states
+- Red `⇡` glyph on the repo row alongside the existing `◈` dirty-submodule marker
+- Status-bar legend entry for `⇡` next to the push/pull symbols
+- Config toggle `[submodules] warn_unpushed = false` to silence the warning (default `true`); independent of `ignore_dirty`
+
+### Changed
+- Detection is local-only: submodule branch ahead-of-upstream count plus reachability of the parent's recorded oid from any of the submodule's `refs/remotes/*` refs — no extra `git fetch` per submodule
+- `SubmoduleInfo.state` is now `Option<SubmoduleState>`; a submodule may appear in the list because of a warn signal even when it has no dirty/modified state
+- Dropped the long-unused `_ignore_dirty_subs` argument from `RepoList::new`
+
 ## [0.5.3] - 2026-04-18
 
 ### Fixed
