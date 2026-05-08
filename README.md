@@ -188,15 +188,22 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 ## Configuration
 
-Config file location is platform specific (resolved via the [`directories`](https://crates.io/crates/directories) crate):
+gitpane resolves its config file in this order (first existing file wins):
+
+1. `$GITPANE_CONFIG` (if set, treated as the full path; this overrides everything below and is also the save target)
+2. `$XDG_CONFIG_HOME/gitpane/config.toml` (if `$XDG_CONFIG_HOME` is set and absolute)
+3. `~/.config/gitpane/config.toml` (the XDG default, on every platform)
+4. The platform-native location:
 
 | Platform | Path |
 |----------|------|
-| Linux    | `~/.config/gitpane/config.toml` |
+| Linux    | `~/.config/gitpane/config.toml` (same as 3) |
 | macOS    | `~/Library/Application Support/gitpane/config.toml` |
-| Windows  | `%APPDATA%\gitpane\config.toml` |
+| Windows  | `%APPDATA%\gitpane\config\config.toml` |
 
-If the file is missing at that exact path, gitpane silently falls back to the built-in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). Place the file at the path for your OS, not the Linux one.
+If no file is found at any candidate path, gitpane uses the built-in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). When saving after loading a file, gitpane writes back to the loaded path. When saving from defaults, it writes to `$GITPANE_CONFIG`, `$XDG_CONFIG_HOME/gitpane/config.toml`, `~/.config/gitpane/config.toml`, or the platform-native location, in that order.
+
+gitpane logs the resolved path at startup (`tracing` info level on stderr).
 
 ```toml
 # Directories to scan for git repositories
@@ -237,20 +244,28 @@ Run through these in order:
 
 **1. Check that gitpane is reading your config file.**
 
-The config path is platform specific (see [Configuration](#configuration)). On macOS in particular, `~/.config/gitpane/config.toml` is *not* the right location. Quick check:
+gitpane prints the resolved config path at startup. Run gitpane with stderr captured:
 
 ```sh
-ls -l "$HOME/.config/gitpane/config.toml" \
-      "$HOME/Library/Application Support/gitpane/config.toml" 2>&1
+RUST_LOG=gitpane=info gitpane 2>/tmp/gitpane.log
+cat /tmp/gitpane.log
 ```
 
-You can also bypass the config entirely to confirm:
+You should see `loaded config path=...` or `no config file found, using defaults`. If gitpane is not loading the file you expected, check the candidate paths in [Configuration](#configuration). On macOS, `~/.config/gitpane/config.toml` works as well as the native `~/Library/Application Support/gitpane/config.toml`.
+
+To force a specific file:
+
+```sh
+GITPANE_CONFIG=/path/to/config.toml gitpane
+```
+
+You can also bypass the config entirely to confirm repo discovery:
 
 ```sh
 gitpane --root "$HOME/src"
 ```
 
-If `--root` finds your repos but the config doesn't, the file is in the wrong place.
+If `--root` finds your repos but the config does not, the file path or config contents are the likely issue.
 
 **2. Check that `scan_depth` is large enough.**
 
