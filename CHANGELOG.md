@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.6.1] - 2026-05-08
+
+### Fixed
+- Config files under `$XDG_CONFIG_HOME/gitpane/config.toml` and `~/.config/gitpane/config.toml` are now discovered on every platform before falling back to the platform-native config path
+- `GITPANE_CONFIG` now works as an exclusive config-file override and save target
+- Config saves now write back to the loaded file, or to the selected override/default path when starting from built-in defaults
+
+### Documentation
+- Documented config lookup order, save behavior, and startup config-path logging
+
 ## [0.6.0] - 2026-05-07
 
 ### Added
