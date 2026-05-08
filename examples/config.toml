@@ -1,5 +1,6 @@
 # gitpane configuration
-# Place this file at ~/.config/gitpane/config.toml
+# gitpane checks (in order): $GITPANE_CONFIG, $XDG_CONFIG_HOME/gitpane/config.toml,
+# ~/.config/gitpane/config.toml, then the OS-native location. See README "Configuration".
 
 # Directories to scan for git repositories
 root_dirs = ["~/Code"]

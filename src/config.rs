@@ -1,7 +1,13 @@
-use color_eyre::Result;
+use color_eyre::{Result, eyre::eyre};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+const APP_NAME: &str = "gitpane";
+const CONFIG_FILE: &str = "config.toml";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Config {
@@ -21,6 +27,10 @@ pub(crate) struct Config {
     pub graph: GraphConfig,
     #[serde(default)]
     pub submodules: SubmoduleConfig,
+    #[serde(skip, default)]
+    pub(crate) loaded_path: Option<PathBuf>,
+    #[serde(skip, default)]
+    pub(crate) write_target_override: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,6 +179,90 @@ fn default_check_for_updates() -> bool {
     true
 }
 
+pub(crate) trait ConfigEnv {
+    fn gitpane_config(&self) -> Option<PathBuf>;
+    fn xdg_config_home(&self) -> Option<PathBuf>;
+    fn home_dir(&self) -> Option<PathBuf>;
+    fn project_config_dir(&self) -> Option<PathBuf>;
+    fn file_exists(&self, path: &Path) -> bool;
+}
+
+struct RealEnv;
+
+impl ConfigEnv for RealEnv {
+    fn gitpane_config(&self) -> Option<PathBuf> {
+        std::env::var_os("GITPANE_CONFIG")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+
+    fn xdg_config_home(&self) -> Option<PathBuf> {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        dirs::home_dir()
+    }
+
+    fn project_config_dir(&self) -> Option<PathBuf> {
+        ProjectDirs::from("", "", APP_NAME).map(|dirs| dirs.config_dir().to_path_buf())
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LoadResolution {
+    EnvOverride(PathBuf),
+    SearchOrder(Vec<PathBuf>),
+}
+
+fn resolve_load(env: &dyn ConfigEnv) -> LoadResolution {
+    if let Some(path) = env.gitpane_config() {
+        return LoadResolution::EnvOverride(path);
+    }
+
+    LoadResolution::SearchOrder(candidate_search_paths(env))
+}
+
+fn xdg_config_path(config_home: PathBuf) -> PathBuf {
+    config_home.join(APP_NAME).join(CONFIG_FILE)
+}
+
+fn dot_config_path(home: PathBuf) -> PathBuf {
+    home.join(".config").join(APP_NAME).join(CONFIG_FILE)
+}
+
+fn candidate_search_paths(env: &dyn ConfigEnv) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Some(xdg) = env.xdg_config_home() {
+        paths.push(xdg_config_path(xdg));
+    }
+    if let Some(home) = env.home_dir() {
+        paths.push(dot_config_path(home));
+    }
+    if let Some(project_dir) = env.project_config_dir() {
+        paths.push(project_dir.join(CONFIG_FILE));
+    }
+
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+    paths
+}
+
+fn default_write_path(env: &dyn ConfigEnv) -> Option<PathBuf> {
+    env.xdg_config_home()
+        .map(xdg_config_path)
+        .or_else(|| env.home_dir().map(dot_config_path))
+        .or_else(|| env.project_config_dir().map(|dir| dir.join(CONFIG_FILE)))
+}
+
 impl Default for WatchConfig {
     fn default() -> Self {
         Self {
@@ -202,31 +296,74 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
+            loaded_path: None,
+            write_target_override: None,
         }
     }
 }
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let config_path = Self::config_path();
-        if config_path.exists() {
-            let contents = std::fs::read_to_string(&config_path)?;
-            let mut config: Config = toml::from_str(&contents)?;
-            config.expand_tildes();
-            Ok(config)
-        } else {
-            Ok(Self::default())
-        }
+        Self::load_with_env(&RealEnv)
     }
 
+    #[allow(dead_code)]
     pub fn config_path() -> PathBuf {
-        ProjectDirs::from("", "", "gitpane")
-            .map(|dirs| dirs.config_dir().join("config.toml"))
-            .unwrap_or_else(|| PathBuf::from("config.toml"))
+        default_write_path(&RealEnv).unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
     pub fn save(&self) -> Result<()> {
-        let config_path = Self::config_path();
+        self.save_with_env(&RealEnv)
+    }
+
+    pub(crate) fn load_with_env(env: &dyn ConfigEnv) -> Result<Self> {
+        match resolve_load(env) {
+            LoadResolution::EnvOverride(path) => {
+                let exists = env.file_exists(&path);
+                let mut config = if exists {
+                    let contents = std::fs::read_to_string(&path)?;
+                    let mut config: Config = toml::from_str(&contents)?;
+                    config.expand_tildes();
+                    tracing::info!(path = %path.display(), "loaded config (GITPANE_CONFIG)");
+                    config
+                } else {
+                    tracing::info!(
+                        path = %path.display(),
+                        "GITPANE_CONFIG points to missing file, using defaults"
+                    );
+                    Config::default()
+                };
+
+                config.loaded_path = exists.then(|| path.clone());
+                config.write_target_override = Some(path);
+                Ok(config)
+            }
+            LoadResolution::SearchOrder(paths) => {
+                for path in &paths {
+                    if env.file_exists(path) {
+                        let contents = std::fs::read_to_string(path)?;
+                        let mut config: Config = toml::from_str(&contents)?;
+                        config.expand_tildes();
+                        config.loaded_path = Some(path.clone());
+                        tracing::info!(path = %path.display(), "loaded config");
+                        return Ok(config);
+                    }
+                }
+
+                tracing::info!(candidates = ?paths, "no config file found, using defaults");
+                Ok(Config::default())
+            }
+        }
+    }
+
+    pub(crate) fn save_with_env(&self, env: &dyn ConfigEnv) -> Result<()> {
+        let config_path = self
+            .write_target_override
+            .clone()
+            .or_else(|| self.loaded_path.clone())
+            .or_else(|| default_write_path(env))
+            .ok_or_else(|| eyre!("no writable config path available"))?;
+
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -264,6 +401,336 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    #[derive(Clone, Debug, Default)]
+    struct MockEnv {
+        gitpane_config: Option<PathBuf>,
+        xdg_config_home: Option<PathBuf>,
+        home_dir: Option<PathBuf>,
+        project_config_dir: Option<PathBuf>,
+        existing: HashSet<PathBuf>,
+    }
+
+    impl ConfigEnv for MockEnv {
+        fn gitpane_config(&self) -> Option<PathBuf> {
+            self.gitpane_config
+                .clone()
+                .filter(|path| !path.as_os_str().is_empty())
+        }
+
+        fn xdg_config_home(&self) -> Option<PathBuf> {
+            self.xdg_config_home
+                .clone()
+                .filter(|path| !path.as_os_str().is_empty() && path.is_absolute())
+        }
+
+        fn home_dir(&self) -> Option<PathBuf> {
+            self.home_dir.clone()
+        }
+
+        fn project_config_dir(&self) -> Option<PathBuf> {
+            self.project_config_dir.clone()
+        }
+
+        fn file_exists(&self, path: &Path) -> bool {
+            self.existing.contains(path)
+        }
+    }
+
+    fn path(value: &str) -> PathBuf {
+        let path = PathBuf::from(value);
+        if path.is_absolute() || !value.starts_with('/') {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap()
+                .join("mock-root")
+                .join(value.trim_start_matches('/'))
+        }
+    }
+
+    #[test]
+    fn test_resolution_prefers_gitpane_config() {
+        let env = MockEnv {
+            gitpane_config: Some(path("/override/config.toml")),
+            xdg_config_home: Some(path("/xdg")),
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            existing: HashSet::new(),
+        };
+
+        assert_eq!(
+            resolve_load(&env),
+            LoadResolution::EnvOverride(path("/override/config.toml"))
+        );
+    }
+
+    #[test]
+    fn test_resolution_uses_xdg_config_home() {
+        let env = MockEnv {
+            xdg_config_home: Some(path("/xdg")),
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![
+                path("/xdg/gitpane/config.toml"),
+                path("/home/alice/.config/gitpane/config.toml"),
+                path("/native/gitpane/config.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolution_falls_back_to_dot_config() {
+        let env = MockEnv {
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![
+                path("/home/alice/.config/gitpane/config.toml"),
+                path("/native/gitpane/config.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolution_falls_back_to_native() {
+        let env = MockEnv {
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![path("/native/gitpane/config.toml")]
+        );
+    }
+
+    #[test]
+    fn test_resolution_returns_default_when_nothing_exists() {
+        let env = MockEnv {
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(config.loaded_path, None);
+        assert_eq!(config.write_target_override, None);
+        assert_eq!(config.scan_depth, default_scan_depth());
+    }
+
+    #[test]
+    fn test_dedupe_collapses_xdg_dot_config_and_native_on_linux() {
+        let env = MockEnv {
+            xdg_config_home: Some(path("/home/alice/.config")),
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/home/alice/.config/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![path("/home/alice/.config/gitpane/config.toml")]
+        );
+    }
+
+    #[test]
+    fn test_xdg_config_home_relative_is_ignored() {
+        let env = MockEnv {
+            xdg_config_home: Some(path("relative/xdg")),
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![
+                path("/home/alice/.config/gitpane/config.toml"),
+                path("/native/gitpane/config.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_empty_gitpane_config_is_ignored() {
+        let env = MockEnv {
+            gitpane_config: Some(PathBuf::new()),
+            home_dir: Some(path("/home/alice")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            resolve_load(&env),
+            LoadResolution::SearchOrder(vec![path("/home/alice/.config/gitpane/config.toml")])
+        );
+    }
+
+    #[test]
+    fn test_empty_xdg_config_home_is_ignored() {
+        let env = MockEnv {
+            xdg_config_home: Some(PathBuf::new()),
+            home_dir: Some(path("/home/alice")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            candidate_search_paths(&env),
+            vec![path("/home/alice/.config/gitpane/config.toml")]
+        );
+    }
+
+    #[test]
+    fn test_default_write_path_prefers_xdg_when_set() {
+        let env = MockEnv {
+            xdg_config_home: Some(path("/xdg")),
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            default_write_path(&env),
+            Some(path("/xdg/gitpane/config.toml"))
+        );
+    }
+
+    #[test]
+    fn test_default_write_path_uses_dot_config_before_native() {
+        let env = MockEnv {
+            home_dir: Some(path("/home/alice")),
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            default_write_path(&env),
+            Some(path("/home/alice/.config/gitpane/config.toml"))
+        );
+    }
+
+    #[test]
+    fn test_default_write_path_uses_native_without_xdg_or_home() {
+        let env = MockEnv {
+            project_config_dir: Some(path("/native/gitpane")),
+            ..MockEnv::default()
+        };
+
+        assert_eq!(
+            default_write_path(&env),
+            Some(path("/native/gitpane/config.toml"))
+        );
+    }
+
+    #[test]
+    fn test_default_write_path_returns_none_when_no_path_is_available() {
+        let env = MockEnv::default();
+        assert_eq!(default_write_path(&env), None);
+    }
+
+    #[test]
+    fn test_gitpane_config_writes_to_env_path_even_when_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let override_path = tmp.path().join("missing").join("config.toml");
+        let env = MockEnv {
+            gitpane_config: Some(override_path.clone()),
+            home_dir: Some(tmp.path().join("home")),
+            project_config_dir: Some(tmp.path().join("native")),
+            ..MockEnv::default()
+        };
+
+        let mut config = Config::load_with_env(&env).unwrap();
+        assert_eq!(config.loaded_path, None);
+        assert_eq!(config.write_target_override, Some(override_path.clone()));
+
+        config.pinned_repos.push(path("/tmp/pinned"));
+        config.save_with_env(&env).unwrap();
+
+        assert!(override_path.exists());
+        let saved: Config = toml::from_str(&fs::read_to_string(&override_path).unwrap()).unwrap();
+        assert_eq!(saved.pinned_repos, vec![path("/tmp/pinned")]);
+    }
+
+    #[test]
+    fn test_gitpane_config_exclusive_does_not_fall_through() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let lower_priority_path = tmp
+            .path()
+            .join("home")
+            .join(".config")
+            .join("gitpane")
+            .join("config.toml");
+        fs::create_dir_all(lower_priority_path.parent().unwrap()).unwrap();
+        fs::write(&lower_priority_path, "scan_depth = 9\n").unwrap();
+
+        let env = MockEnv {
+            gitpane_config: Some(tmp.path().join("missing.toml")),
+            home_dir: Some(tmp.path().join("home")),
+            existing: HashSet::from([lower_priority_path]),
+            ..MockEnv::default()
+        };
+
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(config.scan_depth, default_scan_depth());
+        assert_eq!(config.loaded_path, None);
+    }
+
+    #[test]
+    fn test_save_writes_back_to_loaded_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_path = tmp.path().join("native").join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&config_path, "scan_depth = 3\npinned_repos = []\n").unwrap();
+
+        let env = MockEnv {
+            project_config_dir: Some(config_path.parent().unwrap().to_path_buf()),
+            existing: HashSet::from([config_path.clone()]),
+            ..MockEnv::default()
+        };
+
+        let mut config = Config::load_with_env(&env).unwrap();
+        assert_eq!(config.scan_depth, 3);
+        assert_eq!(config.loaded_path, Some(config_path.clone()));
+
+        config.pinned_repos.push(path("/tmp/test-repo"));
+        config.save_with_env(&env).unwrap();
+
+        let saved: Config = toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(saved.pinned_repos, vec![path("/tmp/test-repo")]);
+    }
+
+    #[test]
+    fn test_save_writes_to_xdg_default_when_not_loaded() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let xdg_home = tmp.path().join("xdg");
+        let expected_path = xdg_home.join("gitpane").join("config.toml");
+        let env = MockEnv {
+            xdg_config_home: Some(xdg_home),
+            home_dir: Some(tmp.path().join("home")),
+            project_config_dir: Some(tmp.path().join("native")),
+            ..MockEnv::default()
+        };
+
+        let mut config = Config::load_with_env(&env).unwrap();
+        assert_eq!(config.loaded_path, None);
+
+        config.pinned_repos.push(path("/tmp/xdg-repo"));
+        config.save_with_env(&env).unwrap();
+
+        assert!(expected_path.exists());
+        let saved: Config = toml::from_str(&fs::read_to_string(&expected_path).unwrap()).unwrap();
+        assert_eq!(saved.pinned_repos, vec![path("/tmp/xdg-repo")]);
+    }
 
     #[test]
     fn test_default_config_has_code_root() {
