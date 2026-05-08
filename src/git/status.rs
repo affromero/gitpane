@@ -227,9 +227,7 @@ fn query_status_inner(
 
             // Warn-state computation (gated on warn_unpushed). Skipped for
             // uninitialized submodules — `sub.open()` would fail anyway.
-            let warn = if sub_cfg.warn_unpushed
-                && state != Some(SubmoduleState::Uninitialized)
-            {
+            let warn = if sub_cfg.warn_unpushed && state != Some(SubmoduleState::Uninitialized) {
                 compute_submodule_warn(sub)
             } else {
                 SubmoduleWarn::default()
@@ -322,8 +320,7 @@ fn compute_submodule_warn(sub: &git2::Submodule) -> SubmoduleWarn {
     if let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) {
         for (b, _) in branches.flatten() {
             if let Some(tip) = b.get().target()
-                && (tip == recorded
-                    || inner.graph_descendant_of(tip, recorded).unwrap_or(false))
+                && (tip == recorded || inner.graph_descendant_of(tip, recorded).unwrap_or(false))
             {
                 return SubmoduleWarn {
                     unpushed_commits,
@@ -631,7 +628,8 @@ mod tests {
                 ignore_dirty: true,
                 warn_unpushed: false,
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!status.is_dirty);
         assert!(status.files.is_empty());
         assert!(status.submodules.is_empty());
@@ -649,7 +647,8 @@ mod tests {
                 ignore_dirty: true,
                 warn_unpushed: false,
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(status.is_dirty);
         assert!(
             status
@@ -793,7 +792,8 @@ mod tests {
                 ignore_dirty: true,
                 warn_unpushed: false,
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(status.has_submodules); // .gitmodules still exists
         assert!(!status.has_dirty_submodules);
         assert!(status.submodules.is_empty());

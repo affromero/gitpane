@@ -425,10 +425,7 @@ impl App {
                         let tx = self.action_tx.clone();
                         let sub_cfg = self.config.submodules.clone();
                         tokio::task::spawn_blocking(
-                            move || match crate::git::status::query_status(
-                                &wt_path,
-                                &sub_cfg,
-                            ) {
+                            move || match crate::git::status::query_status(&wt_path, &sub_cfg) {
                                 Ok(s) => {
                                     let _ = tx.send(Action::WorktreeFilesLoaded {
                                         repo_id: parent_id,
@@ -523,8 +520,7 @@ impl App {
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
-                                        &path,
-                                        &sub_cfg,
+                                        &path, &sub_cfg,
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -564,8 +560,7 @@ impl App {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, &sub_cfg)
-                                    {
+                                    match crate::git::status::query_status(&path, &sub_cfg) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 id: repo_id.clone(),
@@ -600,8 +595,7 @@ impl App {
                             let tx = self.action_tx.clone();
                             let sub_cfg = sub_cfg.clone();
                             tokio::task::spawn_blocking(move || {
-                                if let Ok(s) =
-                                    crate::git::status::query_status(&aw.path, &sub_cfg)
+                                if let Ok(s) = crate::git::status::query_status(&aw.path, &sub_cfg)
                                 {
                                     let _ = tx.send(Action::WorktreeFilesLoaded {
                                         repo_id: aw.repo_id,
@@ -631,8 +625,7 @@ impl App {
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
-                                        &path,
-                                        &sub_cfg,
+                                        &path, &sub_cfg,
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -677,8 +670,7 @@ impl App {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, &sub_cfg)
-                                    {
+                                    match crate::git::status::query_status(&path, &sub_cfg) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
                                                 id: repo_id.clone(),

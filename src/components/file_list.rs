@@ -246,10 +246,7 @@ impl FileList {
 
 /// Build the `[sub: …]` tag spans for a submodule file row.
 /// `state` is independent from `warn` — both can be present and compose.
-fn submodule_tag_spans(
-    state: &Option<SubmoduleState>,
-    warn: &SubmoduleWarn,
-) -> Vec<Span<'static>> {
+fn submodule_tag_spans(state: &Option<SubmoduleState>, warn: &SubmoduleWarn) -> Vec<Span<'static>> {
     let bracket_style = Style::default().fg(Color::LightMagenta);
     let unpushed_style = Style::default().fg(Color::Green);
     let unreach_style = Style::default().fg(Color::LightRed);
