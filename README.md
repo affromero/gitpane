@@ -188,7 +188,15 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 ## Configuration
 
-Config file location: `~/.config/gitpane/config.toml`
+Config file location is platform specific (resolved via the [`directories`](https://crates.io/crates/directories) crate):
+
+| Platform | Path |
+|----------|------|
+| Linux    | `~/.config/gitpane/config.toml` |
+| macOS    | `~/Library/Application Support/gitpane/config.toml` |
+| Windows  | `%APPDATA%\gitpane\config.toml` |
+
+If the file is missing at that exact path, gitpane silently falls back to the built-in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). Place the file at the path for your OS, not the Linux one.
 
 ```toml
 # Directories to scan for git repositories
@@ -220,6 +228,72 @@ show_stats = true        # Show +N/-M diff stats per commit
 ```
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.
+
+## Troubleshooting
+
+### gitpane shows no repositories
+
+Run through these in order:
+
+**1. Check that gitpane is reading your config file.**
+
+The config path is platform specific (see [Configuration](#configuration)). On macOS in particular, `~/.config/gitpane/config.toml` is *not* the right location. Quick check:
+
+```sh
+ls -l "$HOME/.config/gitpane/config.toml" \
+      "$HOME/Library/Application Support/gitpane/config.toml" 2>&1
+```
+
+You can also bypass the config entirely to confirm:
+
+```sh
+gitpane --root "$HOME/src"
+```
+
+If `--root` finds your repos but the config doesn't, the file is in the wrong place.
+
+**2. Check that `scan_depth` is large enough.**
+
+`scan_depth` is the maximum directory depth from each entry in `root_dirs` at which gitpane will look for a `.git` directory. For a layout like `~/src/github.com/<owner>/<repo>/.git`, the `.git` lives at depth 4, so you need `scan_depth = 4` (or higher). Counting from the root:
+
+```
+~/src                                       depth 0
+~/src/github.com                            depth 1
+~/src/github.com/<owner>                    depth 2
+~/src/github.com/<owner>/<repo>             depth 3
+~/src/github.com/<owner>/<repo>/.git        depth 4
+```
+
+**3. Check for symlinks in your tree.**
+
+The scanner does not follow symlinks. If any directory along the path to a repo is a symlink (for example `~/src/github.com` pointing at `/mnt/code/github.com`), repos under it will be skipped.
+
+```sh
+find    "$HOME/src" -maxdepth 4 -name .git -type d -print
+echo '... with -L (follows symlinks):'
+find -L "$HOME/src" -maxdepth 4 -name .git -type d -print
+```
+
+If the second command finds repos and the first doesn't, that's the cause. Workarounds: point `root_dirs` at the symlink target directly, or list specific repos in `pinned_repos`.
+
+**4. Check whether `.git` is a directory or a file.**
+
+Linked git worktrees and some submodule layouts store `.git` as a *file* containing a `gitdir:` pointer, not a directory. The scanner only matches `.git` directories. To check one repo:
+
+```sh
+test -d "$HOME/src/github.com/affromero/gitpane/.git" && echo dir \
+ || test -f "$HOME/src/github.com/affromero/gitpane/.git" && echo file
+```
+
+If it prints `file`, add the repo via `pinned_repos` instead, or open it explicitly with `gitpane --root /path/to/parent`.
+
+**5. Verbose logging.**
+
+```sh
+RUST_LOG=gitpane=debug gitpane 2>/tmp/gitpane.log
+```
+
+Then inspect `/tmp/gitpane.log` for any errors during config load or repo scanning.
 
 ## Architecture
 
