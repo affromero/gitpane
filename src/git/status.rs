@@ -1,3 +1,4 @@
+use crate::config::SubmoduleConfig;
 use git2::{Repository, StatusOptions, SubmoduleStatus};
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,8 @@ pub(crate) struct RepoStatus {
     pub has_submodules: bool,
     pub submodules: Vec<SubmoduleInfo>,
     pub has_dirty_submodules: bool,
+    /// Any submodule has unpushed_commits>0 OR pointer_unreachable
+    pub has_unpushed_submodules: bool,
     /// True when the last `git fetch` failed (auth, network, timeout)
     pub fetch_failed: bool,
 }
@@ -24,6 +27,7 @@ pub(crate) struct FileEntry {
     pub status: FileStatus,
     pub is_submodule: bool,
     pub submodule_state: Option<SubmoduleState>,
+    pub submodule_warn: SubmoduleWarn,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +47,23 @@ pub(crate) enum SubmoduleState {
     Dirty,
 }
 
+/// "You owe a push" warnings for a submodule. Orthogonal to `SubmoduleState`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SubmoduleWarn {
+    /// Submodule HEAD branch ahead of its upstream (0 if no upstream).
+    pub unpushed_commits: usize,
+    /// Parent's recorded oid is not reachable from any of the submodule's
+    /// `refs/remotes/*` refs — committing the parent would pin a sha nobody
+    /// else can fetch.
+    pub pointer_unreachable: bool,
+}
+
+impl SubmoduleWarn {
+    pub fn is_clean(&self) -> bool {
+        self.unpushed_commits == 0 && !self.pointer_unreachable
+    }
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub(crate) struct WorktreeEntry {
@@ -56,9 +77,10 @@ pub(crate) struct WorktreeEntry {
 pub(crate) struct SubmoduleInfo {
     pub name: String,
     pub path: PathBuf,
-    pub state: SubmoduleState,
+    pub state: Option<SubmoduleState>,
     pub head_oid: Option<String>,
     pub workdir_oid: Option<String>,
+    pub warn: SubmoduleWarn,
 }
 
 impl FileStatus {
@@ -75,22 +97,25 @@ impl FileStatus {
 }
 
 /// Fast local-only status query (no network). Used by filesystem watcher refreshes.
-pub(crate) fn query_status(path: &Path, ignore_dirty_subs: bool) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, false, ignore_dirty_subs)
+pub(crate) fn query_status(
+    path: &Path,
+    sub_cfg: &SubmoduleConfig,
+) -> color_eyre::Result<RepoStatus> {
+    query_status_inner(path, false, sub_cfg)
 }
 
 /// Status query with `git fetch` first. Used by explicit user refresh (`r` key).
 pub(crate) fn query_status_with_fetch(
     path: &Path,
-    ignore_dirty_subs: bool,
+    sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, true, ignore_dirty_subs)
+    query_status_inner(path, true, sub_cfg)
 }
 
 fn query_status_inner(
     path: &Path,
     fetch: bool,
-    ignore_dirty_subs: bool,
+    sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
     let repo = Repository::open(path)?;
 
@@ -116,7 +141,7 @@ fn query_status_inner(
         .recurse_untracked_dirs(true)
         .renames_head_to_index(true);
 
-    if ignore_dirty_subs {
+    if sub_cfg.ignore_dirty {
         opts.exclude_submodules(true);
     }
 
@@ -150,6 +175,7 @@ fn query_status_inner(
             status: file_status,
             is_submodule: false,
             submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
         });
     }
 
@@ -164,56 +190,93 @@ fn query_status_inner(
     // Submodule enumeration
     let mut submodules = Vec::new();
     let mut has_dirty_submodules = false;
+    let mut has_unpushed_submodules = false;
 
+    // Iterate when *any* submodule signal is requested. `ignore_dirty` and
+    // `warn_unpushed` are independent: even with dirty hidden, we may still
+    // need to surface unpushed-pointer warnings.
     if has_submodules
-        && !ignore_dirty_subs
+        && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed)
         && let Ok(subs) = repo.submodules()
     {
         for sub in &subs {
             let name = sub.name().unwrap_or("").to_string();
             let sub_path = PathBuf::from(sub.path());
-            let status = repo
-                .submodule_status(&name, git2::SubmoduleIgnore::Unspecified)
-                .unwrap_or(SubmoduleStatus::empty());
 
-            let state = if status.is_wd_uninitialized() {
-                Some(SubmoduleState::Uninitialized)
-            } else if status.is_wd_wd_modified() || status.contains(SubmoduleStatus::WD_UNTRACKED) {
-                Some(SubmoduleState::Dirty)
-            } else if status.is_wd_modified() || status.contains(SubmoduleStatus::WD_INDEX_MODIFIED)
-            {
-                Some(SubmoduleState::Modified)
-            } else {
+            // Dirty-state mapping (gated on !ignore_dirty).
+            let state = if sub_cfg.ignore_dirty {
                 None
+            } else {
+                let status = repo
+                    .submodule_status(&name, git2::SubmoduleIgnore::Unspecified)
+                    .unwrap_or(SubmoduleStatus::empty());
+                if status.is_wd_uninitialized() {
+                    Some(SubmoduleState::Uninitialized)
+                } else if status.is_wd_wd_modified()
+                    || status.contains(SubmoduleStatus::WD_UNTRACKED)
+                {
+                    Some(SubmoduleState::Dirty)
+                } else if status.is_wd_modified()
+                    || status.contains(SubmoduleStatus::WD_INDEX_MODIFIED)
+                {
+                    Some(SubmoduleState::Modified)
+                } else {
+                    None
+                }
             };
 
-            if let Some(state) = state {
-                let head_oid = sub.head_id().map(|id| id.to_string());
-                let workdir_oid = sub.workdir_id().map(|id| id.to_string());
+            // Warn-state computation (gated on warn_unpushed). Skipped for
+            // uninitialized submodules — `sub.open()` would fail anyway.
+            let warn = if sub_cfg.warn_unpushed
+                && state != Some(SubmoduleState::Uninitialized)
+            {
+                compute_submodule_warn(sub)
+            } else {
+                SubmoduleWarn::default()
+            };
 
-                submodules.push(SubmoduleInfo {
-                    name: name.clone(),
-                    path: sub_path.clone(),
-                    state: state.clone(),
-                    head_oid,
-                    workdir_oid,
+            let has_dirty_signal = state.is_some();
+            let has_warn_signal = !warn.is_clean();
+
+            if !has_dirty_signal && !has_warn_signal {
+                continue;
+            }
+
+            let head_oid = sub.head_id().map(|id| id.to_string());
+            let workdir_oid = sub.workdir_id().map(|id| id.to_string());
+
+            submodules.push(SubmoduleInfo {
+                name: name.clone(),
+                path: sub_path.clone(),
+                state: state.clone(),
+                head_oid,
+                workdir_oid,
+                warn,
+            });
+
+            // Cross-reference with files vec
+            if let Some(file_entry) = files.iter_mut().find(|f| f.path == sub_path) {
+                file_entry.is_submodule = true;
+                file_entry.submodule_state = state.clone();
+                file_entry.submodule_warn = warn;
+            } else {
+                // Synthetic FileEntry for any submodule with a dirty or warn signal.
+                // FileStatus::Modified keeps the leading `M` "needs attention" cue;
+                // the [sub: ...] tag carries the actual semantics.
+                files.push(FileEntry {
+                    path: sub_path,
+                    status: FileStatus::Modified,
+                    is_submodule: true,
+                    submodule_state: state,
+                    submodule_warn: warn,
                 });
+            }
 
-                // Cross-reference with files vec
-                if let Some(file_entry) = files.iter_mut().find(|f| f.path == sub_path) {
-                    file_entry.is_submodule = true;
-                    file_entry.submodule_state = Some(state.clone());
-                } else {
-                    // Add synthetic FileEntry for dirty submodules not already in files
-                    files.push(FileEntry {
-                        path: sub_path,
-                        status: FileStatus::Modified,
-                        is_submodule: true,
-                        submodule_state: Some(state),
-                    });
-                }
-
+            if has_dirty_signal {
                 has_dirty_submodules = true;
+            }
+            if has_warn_signal {
+                has_unpushed_submodules = true;
             }
         }
     }
@@ -228,8 +291,53 @@ fn query_status_inner(
         has_submodules,
         submodules,
         has_dirty_submodules,
+        has_unpushed_submodules,
         fetch_failed,
     })
+}
+
+/// Compute "you owe a push" warnings for a submodule.
+/// Uses `index_id()` (parent's *staged* pointer, not committed) so the warning
+/// fires *before* the parent commit ships, while the user can still amend or reset.
+fn compute_submodule_warn(sub: &git2::Submodule) -> SubmoduleWarn {
+    let recorded = match sub.index_id() {
+        Some(o) => o,
+        None => return SubmoduleWarn::default(),
+    };
+    let inner = match sub.open() {
+        Ok(r) => r,
+        Err(_) => return SubmoduleWarn::default(),
+    };
+
+    let unpushed_commits = compute_ahead_behind(&inner).0;
+
+    // If the recorded oid isn't even in local objects, no remote can possibly hold it.
+    if inner.find_object(recorded, None).is_err() {
+        return SubmoduleWarn {
+            unpushed_commits,
+            pointer_unreachable: true,
+        };
+    }
+
+    if let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) {
+        for (b, _) in branches.flatten() {
+            if let Some(tip) = b.get().target()
+                && (tip == recorded
+                    || inner.graph_descendant_of(tip, recorded).unwrap_or(false))
+            {
+                return SubmoduleWarn {
+                    unpushed_commits,
+                    pointer_unreachable: false,
+                };
+            }
+        }
+    }
+
+    // No remote tip reaches `recorded` (or no remotes configured) → unreachable.
+    SubmoduleWarn {
+        unpushed_commits,
+        pointer_unreachable: true,
+    }
 }
 
 /// Collect details for each linked worktree using the git2 API.
@@ -359,7 +467,7 @@ mod tests {
     #[test]
     fn test_clean_repo_reports_no_changes() {
         let (tmp, _repo) = init_temp_repo();
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(!status.is_dirty);
         assert!(status.files.is_empty());
     }
@@ -384,7 +492,7 @@ mod tests {
         // Modify it
         fs::write(&file_path, "world").unwrap();
 
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.is_dirty);
         assert!(
             status
@@ -399,7 +507,7 @@ mod tests {
         let (tmp, _repo) = init_temp_repo();
         fs::write(tmp.path().join("new.txt"), "new").unwrap();
 
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.is_dirty);
         assert!(
             status
@@ -412,7 +520,7 @@ mod tests {
     #[test]
     fn test_worktree_info_empty_for_plain_repo() {
         let (tmp, _repo) = init_temp_repo();
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.worktree_info.is_empty());
     }
 
@@ -433,7 +541,7 @@ mod tests {
             .unwrap();
         assert!(output.status.success(), "git worktree add failed");
 
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert_eq!(status.worktree_info.len(), 1);
         assert_eq!(status.worktree_info[0].branch, "wt-branch");
         assert_eq!(status.worktree_info[0].name, "wt1");
@@ -461,7 +569,7 @@ mod tests {
     #[test]
     fn test_clean_repo_no_dirty_submodules() {
         let (tmp, _repo) = init_temp_repo();
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(!status.has_dirty_submodules);
         assert!(status.submodules.is_empty());
     }
@@ -483,15 +591,18 @@ mod tests {
             status: FileStatus::Modified,
             is_submodule: true,
             submodule_state: Some(SubmoduleState::Modified),
+            submodule_warn: SubmoduleWarn::default(),
         };
         assert!(entry.is_submodule);
         assert_eq!(entry.submodule_state, Some(SubmoduleState::Modified));
+        assert!(entry.submodule_warn.is_clean());
 
         let plain = FileEntry {
             path: PathBuf::from("src/main.rs"),
             status: FileStatus::Modified,
             is_submodule: false,
             submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
         };
         assert!(!plain.is_submodule);
         assert_eq!(plain.submodule_state, None);
@@ -514,7 +625,13 @@ mod tests {
     fn test_ignore_dirty_subs_on_clean_repo() {
         // ignore_dirty_subs = true should work fine on repos without submodules
         let (tmp, _repo) = init_temp_repo();
-        let status = query_status(tmp.path(), true).unwrap();
+        let status = query_status(
+            tmp.path(),
+            &SubmoduleConfig {
+                ignore_dirty: true,
+                warn_unpushed: false,
+            },
+        ).unwrap();
         assert!(!status.is_dirty);
         assert!(status.files.is_empty());
         assert!(status.submodules.is_empty());
@@ -526,7 +643,13 @@ mod tests {
         let (tmp, _repo) = init_temp_repo();
         fs::write(tmp.path().join("new.txt"), "new").unwrap();
 
-        let status = query_status(tmp.path(), true).unwrap();
+        let status = query_status(
+            tmp.path(),
+            &SubmoduleConfig {
+                ignore_dirty: true,
+                warn_unpushed: false,
+            },
+        ).unwrap();
         assert!(status.is_dirty);
         assert!(
             status
@@ -630,7 +753,7 @@ mod tests {
         let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
         // Verify: clean state should show has_submodules but no dirty submodules
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_submodules);
         assert!(!status.has_dirty_submodules);
         assert!(status.submodules.is_empty());
@@ -639,14 +762,14 @@ mod tests {
         let sub_workdir = tmp.path().join("my-sub");
         fs::write(sub_workdir.join("lib.rs"), "fn hello() { /* changed */ }").unwrap();
 
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_submodules);
         assert!(status.has_dirty_submodules);
         assert!(!status.submodules.is_empty());
 
         let sub_info = &status.submodules[0];
         assert_eq!(sub_info.path, Path::new("my-sub"));
-        assert_eq!(sub_info.state, SubmoduleState::Dirty);
+        assert_eq!(sub_info.state, Some(SubmoduleState::Dirty));
 
         // Verify the file entry is annotated
         let file_entry = status.files.iter().find(|f| f.path == Path::new("my-sub"));
@@ -664,7 +787,13 @@ mod tests {
         fs::write(tmp.path().join("my-sub/lib.rs"), "fn changed() {}").unwrap();
 
         // With ignore_dirty_subs = true, submodule state should be hidden
-        let status = query_status(tmp.path(), true).unwrap();
+        let status = query_status(
+            tmp.path(),
+            &SubmoduleConfig {
+                ignore_dirty: true,
+                warn_unpushed: false,
+            },
+        ).unwrap();
         assert!(status.has_submodules); // .gitmodules still exists
         assert!(!status.has_dirty_submodules);
         assert!(status.submodules.is_empty());
@@ -714,7 +843,7 @@ mod tests {
         }
 
         // Now the submodule pointer has changed (HEAD in submodule != recorded in parent)
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_submodules);
         assert!(status.has_dirty_submodules);
         assert!(!status.submodules.is_empty());
@@ -723,7 +852,8 @@ mod tests {
         assert_eq!(sub_info.path, Path::new("my-sub"));
         // Could be Modified or Dirty depending on exact git state
         assert!(
-            sub_info.state == SubmoduleState::Modified || sub_info.state == SubmoduleState::Dirty,
+            sub_info.state == Some(SubmoduleState::Modified)
+                || sub_info.state == Some(SubmoduleState::Dirty),
             "expected Modified or Dirty, got {:?}",
             sub_info.state
         );
@@ -739,7 +869,7 @@ mod tests {
         let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
         // Without any modifications, the submodule should be clean
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_submodules);
         assert!(!status.has_dirty_submodules);
         assert!(status.submodules.is_empty());
@@ -751,14 +881,325 @@ mod tests {
         let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
         // Start clean
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(!status.is_dirty);
 
         // Make submodule dirty
         fs::write(tmp.path().join("my-sub/lib.rs"), "dirty").unwrap();
 
         // Now repo should be dirty
-        let status = query_status(tmp.path(), false).unwrap();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.is_dirty);
+    }
+
+    #[test]
+    fn test_submodule_warn_default_is_clean() {
+        let warn = SubmoduleWarn::default();
+        assert!(warn.is_clean());
+        assert_eq!(warn.unpushed_commits, 0);
+        assert!(!warn.pointer_unreachable);
+    }
+
+    #[test]
+    fn test_submodule_warn_is_clean_predicate() {
+        assert!(SubmoduleWarn::default().is_clean());
+        assert!(
+            !SubmoduleWarn {
+                unpushed_commits: 1,
+                pointer_unreachable: false,
+            }
+            .is_clean()
+        );
+        assert!(
+            !SubmoduleWarn {
+                unpushed_commits: 0,
+                pointer_unreachable: true,
+            }
+            .is_clean()
+        );
+    }
+
+    #[test]
+    fn test_clean_submodule_warn_fields_clean() {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        // Freshly cloned via `git submodule add` — recorded oid is on origin.
+        assert!(!status.has_unpushed_submodules);
+    }
+
+    #[test]
+    fn test_dirty_submodule_warn_fields_stay_clean() {
+        // A workdir-dirty submodule should not trigger warn fields — only
+        // pointer changes / unpushed commits matter for "you owe a push".
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        fs::write(tmp.path().join("my-sub/lib.rs"), "dirty").unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_dirty_submodules);
+        assert!(!status.has_unpushed_submodules);
+        let sub_info = &status.submodules[0];
+        assert!(sub_info.warn.is_clean());
+
+        let file_entry = status
+            .files
+            .iter()
+            .find(|f| f.path == Path::new("my-sub"))
+            .unwrap();
+        assert!(file_entry.submodule_warn.is_clean());
+    }
+
+    #[test]
+    fn test_warn_unpushed_false_zeros_warn_fields_even_when_dirty() {
+        // With warn_unpushed=false, dirty subs still surface but warn fields stay zero.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        fs::write(tmp.path().join("my-sub/lib.rs"), "dirty").unwrap();
+
+        let cfg = SubmoduleConfig {
+            ignore_dirty: false,
+            warn_unpushed: false,
+        };
+        let status = query_status(tmp.path(), &cfg).unwrap();
+        assert!(status.has_dirty_submodules);
+        assert!(!status.has_unpushed_submodules);
+        assert!(status.submodules[0].warn.is_clean());
+    }
+
+    #[test]
+    fn test_ignore_dirty_with_warn_unpushed_iterates_subs() {
+        // When ignore_dirty=true but warn_unpushed=true, the loop must still
+        // iterate submodules to compute warn fields. Dirty state itself is hidden.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        fs::write(tmp.path().join("my-sub/lib.rs"), "dirty").unwrap();
+
+        let cfg = SubmoduleConfig {
+            ignore_dirty: true,
+            warn_unpushed: true,
+        };
+        let status = query_status(tmp.path(), &cfg).unwrap();
+        // Dirty signal hidden
+        assert!(!status.has_dirty_submodules);
+        // Warn signal also clean for this freshly-added submodule
+        assert!(!status.has_unpushed_submodules);
+        // No submodule entries (nothing to warn about; dirty hidden)
+        assert!(status.submodules.is_empty());
+    }
+
+    #[test]
+    fn test_both_flags_off_skips_submodule_loop_entirely() {
+        // When both flags are off, the loop body is skipped — fast path.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        fs::write(tmp.path().join("my-sub/lib.rs"), "dirty").unwrap();
+
+        let cfg = SubmoduleConfig {
+            ignore_dirty: true,
+            warn_unpushed: false,
+        };
+        let status = query_status(tmp.path(), &cfg).unwrap();
+        assert!(status.has_submodules); // .gitmodules still exists
+        assert!(!status.has_dirty_submodules);
+        assert!(!status.has_unpushed_submodules);
+        assert!(status.submodules.is_empty());
+    }
+
+    #[test]
+    fn test_uninitialized_submodule_does_not_panic_on_warn_check() {
+        // De-init the submodule so .git is absent — `sub.open()` should fail
+        // gracefully and `compute_submodule_warn` returns default.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["submodule", "deinit", "-f", "my-sub"])
+            .output()
+            .unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_submodules);
+        // No panic. The submodule may or may not appear in `submodules` (the
+        // dirty-state check still classifies it as Uninitialized) — the key
+        // invariant is that warn fields stay clean.
+        for sub in &status.submodules {
+            assert!(sub.warn.is_clean());
+        }
+        assert!(!status.has_unpushed_submodules);
+    }
+
+    // ---- Integration tests with a real submodule + remote-tracking ref ----
+
+    /// Adds a new commit on top of the submodule's current HEAD without pushing.
+    /// Updates HEAD (works whether HEAD is detached or on a branch).
+    /// Returns the new commit oid.
+    fn add_unpushed_commit_in_sub(parent_path: &Path, sub_dirname: &str) -> git2::Oid {
+        let sub_repo = Repository::open(parent_path.join(sub_dirname)).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let head_commit = sub_repo.head().unwrap().peel_to_commit().unwrap();
+
+        fs::write(
+            parent_path.join(sub_dirname).join("extra.rs"),
+            "fn extra() {}",
+        )
+        .unwrap();
+        let mut idx = sub_repo.index().unwrap();
+        idx.add_path(Path::new("extra.rs")).unwrap();
+        idx.write().unwrap();
+        let tree_id = idx.write_tree().unwrap();
+        let tree = sub_repo.find_tree(tree_id).unwrap();
+
+        sub_repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "unpushed work",
+                &tree,
+                &[&head_commit],
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_parent_pinning_unpushed_oid_marks_pointer_unreachable() {
+        // Reproduce the footgun: commit in submodule (not on remote), then
+        // `git add my-sub` in parent — staging an oid that no remote can resolve.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let unpushed = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+
+        // Stage the new submodule pointer in the parent's index.
+        let stage = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["add", "my-sub"])
+            .output()
+            .unwrap();
+        assert!(
+            stage.status.success(),
+            "git add my-sub failed: {}",
+            String::from_utf8_lossy(&stage.stderr)
+        );
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_unpushed_submodules);
+
+        let sub_info = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry should exist with warn signal");
+        assert!(
+            sub_info.warn.pointer_unreachable,
+            "expected pointer_unreachable=true for staged oid {}, got {:?}",
+            unpushed, sub_info.warn
+        );
+
+        // The file row should also surface the warn fields.
+        let file_entry = status
+            .files
+            .iter()
+            .find(|f| f.path == Path::new("my-sub"))
+            .expect("file entry for my-sub");
+        assert!(file_entry.is_submodule);
+        assert!(file_entry.submodule_warn.pointer_unreachable);
+    }
+
+    #[test]
+    fn test_warn_unpushed_false_zeros_unreachable_pointer() {
+        // Same setup as the previous test, but with warn_unpushed=false the
+        // warn fields must stay zero even though the pointer is unreachable.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["add", "my-sub"])
+            .output()
+            .unwrap();
+
+        let cfg = SubmoduleConfig {
+            ignore_dirty: false,
+            warn_unpushed: false,
+        };
+        let status = query_status(tmp.path(), &cfg).unwrap();
+        assert!(!status.has_unpushed_submodules);
+        for sub in &status.submodules {
+            assert!(
+                sub.warn.is_clean(),
+                "warn fields must be zero when warn_unpushed=false, got {:?}",
+                sub.warn
+            );
+        }
+    }
+
+    #[test]
+    fn test_unpushed_commits_count_when_branch_ahead_of_upstream() {
+        // The submodule's local branch advances past its upstream remote ref;
+        // the parent's recorded oid is unchanged (still reachable on origin),
+        // so unpushed_commits>0 with pointer_unreachable=false.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        // Find the cloned submodule's default remote branch name. After
+        // `git submodule add`, the inner repo has a `refs/remotes/origin/<branch>`
+        // ref. Use it to set up a local tracking branch.
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+        let mut remote_branch: Option<String> = None;
+        if let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) {
+            for (b, _) in branches.flatten() {
+                if let Ok(Some(name)) = b.name()
+                    && let Some(stripped) = name.strip_prefix("origin/")
+                    && stripped != "HEAD"
+                {
+                    remote_branch = Some(stripped.to_string());
+                    break;
+                }
+            }
+        }
+        let branch = remote_branch.expect("submodule should have an origin/<branch> ref");
+
+        // Create a local tracking branch pointing at HEAD and set its upstream.
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&sub_dir)
+            .args(["checkout", "-B", &branch, &format!("origin/{}", branch)])
+            .output()
+            .unwrap();
+
+        // Add an unpushed commit (local branch advances past origin/<branch>).
+        add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+
+        // The parent has not staged a new pointer, so its recorded oid is
+        // still the prior commit — present on origin.
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.has_unpushed_submodules);
+
+        let sub_info = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry expected");
+        assert_eq!(
+            sub_info.warn.unpushed_commits, 1,
+            "expected 1 unpushed commit, got {:?}",
+            sub_info.warn
+        );
+        assert!(
+            !sub_info.warn.pointer_unreachable,
+            "parent's pointer is unchanged and on origin — should be reachable"
+        );
+    }
+
+    #[test]
+    fn test_detached_head_at_remote_oid_no_warn() {
+        // A submodule with detached HEAD at an oid present on a remote ref
+        // should produce no warn signal.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        // After `git submodule add`, HEAD is typically already detached at the
+        // initial cloned commit, which is on `refs/remotes/origin/<branch>`.
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(!status.has_unpushed_submodules);
+        for sub in &status.submodules {
+            assert!(sub.warn.is_clean());
+        }
     }
 }

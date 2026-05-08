@@ -87,7 +87,7 @@ If you work across multiple repositories — microservices, monorepos with submo
 ## Screenshots
 
 ### Three-panel overview
-Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), and file count. Changes in the middle. Commit graph on the right.
+Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodules (`◈`), unpushed submodule pointer (`⇡`), and file count. Changes in the middle. Commit graph on the right.
 
 <img src="assets/screenshot-main.png" alt="Three-panel overview" width="800">
 
@@ -103,7 +103,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 ## Features
 
-- **Multi-repo overview** — Scans `~/Code` (configurable) for git repos; shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), and change count
+- **Multi-repo overview** — Scans `~/Code` (configurable) for git repos; shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), and change count
 - **Worktree awareness** — Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development — gitpane lets you see at a glance which repos have active parallel work
 - **Real-time filesystem watching** — Status updates within ~500ms of any file change via `notify`
 - **Commit graph** — Lane-based graph with colored box-drawing characters, up to 200 commits

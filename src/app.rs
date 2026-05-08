@@ -184,7 +184,6 @@ impl App {
         };
 
         let update_position = config.ui.update_position;
-        let ignore_dirty_subs = config.submodules.ignore_dirty;
         let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(
             config.watch.max_concurrent_polls,
         ));
@@ -192,7 +191,7 @@ impl App {
         Self {
             config,
             should_quit: false,
-            repo_list: RepoList::new(repo_paths, ignore_dirty_subs),
+            repo_list: RepoList::new(repo_paths),
             file_list: FileList::new(),
             git_graph,
             confirm_dialog: ConfirmDialog::new(),
@@ -424,11 +423,11 @@ impl App {
                         let parent_id = repo_id.clone();
                         let name = display_name;
                         let tx = self.action_tx.clone();
-                        let ignore_dirty_subs = self.config.submodules.ignore_dirty;
+                        let sub_cfg = self.config.submodules.clone();
                         tokio::task::spawn_blocking(
                             move || match crate::git::status::query_status(
                                 &wt_path,
-                                ignore_dirty_subs,
+                                &sub_cfg,
                             ) {
                                 Ok(s) => {
                                     let _ = tx.send(Action::WorktreeFilesLoaded {
@@ -510,7 +509,7 @@ impl App {
                     }
                     Action::RefreshAll => {
                         // User-initiated refresh: fetch from remote + show spinner
-                        let ignore_dirty_subs = self.config.submodules.ignore_dirty;
+                        let sub_cfg = self.config.submodules.clone();
                         for entry in self.repo_list.repos.iter_mut() {
                             entry.git_op = true;
                             let repo_id = RepoId(entry.path.clone());
@@ -518,13 +517,14 @@ impl App {
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
+                            let sub_cfg = sub_cfg.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
-                                        ignore_dirty_subs,
+                                        &sub_cfg,
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -549,7 +549,7 @@ impl App {
                     }
                     Action::PollLocal => {
                         // Fast local status poll (no network, no spinner)
-                        let ignore_dirty_subs = self.config.submodules.ignore_dirty;
+                        let sub_cfg = self.config.submodules.clone();
                         for entry in self.repo_list.repos.iter() {
                             let repo_id = RepoId(entry.path.clone());
                             if entry.git_op || self.pending_status.contains(&repo_id) {
@@ -559,11 +559,12 @@ impl App {
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
+                            let sub_cfg = sub_cfg.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, ignore_dirty_subs)
+                                    match crate::git::status::query_status(&path, &sub_cfg)
                                     {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -597,9 +598,10 @@ impl App {
                             }
 
                             let tx = self.action_tx.clone();
+                            let sub_cfg = sub_cfg.clone();
                             tokio::task::spawn_blocking(move || {
                                 if let Ok(s) =
-                                    crate::git::status::query_status(&aw.path, ignore_dirty_subs)
+                                    crate::git::status::query_status(&aw.path, &sub_cfg)
                                 {
                                     let _ = tx.send(Action::WorktreeFilesLoaded {
                                         repo_id: aw.repo_id,
@@ -613,7 +615,7 @@ impl App {
                     }
                     Action::PollFetch => {
                         // Remote fetch poll (updates ahead/behind, no spinner)
-                        let ignore_dirty_subs = self.config.submodules.ignore_dirty;
+                        let sub_cfg = self.config.submodules.clone();
                         for entry in self.repo_list.repos.iter() {
                             let repo_id = RepoId(entry.path.clone());
                             if entry.git_op || self.pending_status.contains(&repo_id) {
@@ -623,13 +625,14 @@ impl App {
                             let path = entry.path.clone();
                             let tx = self.action_tx.clone();
                             let sem = self.poll_semaphore.clone();
+                            let sub_cfg = sub_cfg.clone();
                             tokio::spawn(async move {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     match crate::git::status::query_status_with_fetch(
                                         &path,
-                                        ignore_dirty_subs,
+                                        &sub_cfg,
                                     ) {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -663,7 +666,7 @@ impl App {
                             );
                             continue;
                         }
-                        let ignore_dirty_subs = self.config.submodules.ignore_dirty;
+                        let sub_cfg = self.config.submodules.clone();
                         if let Some(idx) = self.repo_list.resolve_index(id) {
                             let repo_id = id.clone();
                             self.pending_status.insert(repo_id.clone());
@@ -674,7 +677,7 @@ impl App {
                                 let _permit = sem.acquire().await;
                                 let guard = StatusGuard::new(repo_id.clone(), tx.clone());
                                 tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, ignore_dirty_subs)
+                                    match crate::git::status::query_status(&path, &sub_cfg)
                                     {
                                         Ok(s) => {
                                             let _ = tx.send(Action::RepoStatusUpdated {
@@ -946,18 +949,26 @@ impl App {
                                         && !new_oid.is_empty()
                                         && old_oid != new_oid;
                                     let use_diff = sub_state
-                                        == crate::git::status::SubmoduleState::Dirty
+                                        == Some(crate::git::status::SubmoduleState::Dirty)
                                         || !pointer_changed;
 
                                     if use_diff {
+                                        let label = match sub_state {
+                                            Some(crate::git::status::SubmoduleState::Dirty) => {
+                                                "uncommitted changes"
+                                            }
+                                            Some(
+                                                crate::git::status::SubmoduleState::Uninitialized,
+                                            ) => "not initialized",
+                                            Some(crate::git::status::SubmoduleState::Modified) => {
+                                                "modified"
+                                            }
+                                            None => "unpushed",
+                                        };
                                         let header = format!(
                                             "Submodule {} ({})\n{}\n",
                                             sub_path.display(),
-                                            match sub_state {
-                                                crate::git::status::SubmoduleState::Dirty => "uncommitted changes",
-                                                crate::git::status::SubmoduleState::Uninitialized => "not initialized",
-                                                crate::git::status::SubmoduleState::Modified => "modified",
-                                            },
+                                            label,
                                             "─".repeat(40),
                                         );
                                         let output = std::process::Command::new("git")
@@ -1247,8 +1258,7 @@ impl App {
                             tracing::error!("Failed to save config: {}", e);
                         }
                         let repo_paths = scanner::discover_repos(&self.config);
-                        self.repo_list =
-                            RepoList::new(repo_paths, self.config.submodules.ignore_dirty);
+                        self.repo_list = RepoList::new(repo_paths);
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;

@@ -97,6 +97,8 @@ impl Component for StatusBar {
                 Span::styled("push ", Style::default().fg(Color::DarkGray)),
                 Span::styled("↓", Style::default().fg(Color::Red)),
                 Span::styled("pull ", Style::default().fg(Color::DarkGray)),
+                Span::styled("\u{21e1}", Style::default().fg(Color::LightRed)),
+                Span::styled(" subs unpushed ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[n]", Style::default().fg(Color::Yellow)),
                 Span::styled(" files  ", Style::default().fg(Color::DarkGray)),
                 dim_sep(),

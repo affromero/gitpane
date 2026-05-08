@@ -45,7 +45,7 @@ pub(crate) struct RepoList {
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>, _ignore_dirty_subs: bool) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>) -> Self {
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -270,6 +270,14 @@ impl RepoList {
                 spans.push(Span::styled(
                     "\u{25c8} ",
                     Style::default().fg(Color::LightMagenta),
+                ));
+            }
+
+            // Unpushed-submodule indicator (committed pointer or local commits not on remote)
+            if status.has_unpushed_submodules {
+                spans.push(Span::styled(
+                    "\u{21e1} ",
+                    Style::default().fg(Color::LightRed),
                 ));
             }
 
