@@ -445,18 +445,25 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn commit_index(repo: &Repository, message: &str) -> git2::Oid {
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit<'_>> = head.iter().collect();
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap()
+    }
+
     fn init_temp_repo() -> (TempDir, Repository) {
         let tmp = TempDir::new().unwrap();
         let repo = Repository::init(tmp.path()).unwrap();
 
         // Create initial commit so HEAD exists
-        {
-            let sig = git2::Signature::now("Test", "test@test.com").unwrap();
-            let tree_id = repo.index().unwrap().write_tree().unwrap();
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .unwrap();
-        }
+        commit_index(&repo, "Initial commit");
 
         (tmp, repo)
     }
@@ -523,20 +530,15 @@ mod tests {
 
     #[test]
     fn test_worktree_info_reflects_linked_worktrees() {
-        let (tmp, _repo) = init_temp_repo();
-        // Create a linked worktree via git CLI
+        let (tmp, repo) = init_temp_repo();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("wt-branch", &head, false).unwrap();
+        let reference = branch.into_reference();
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+
         let wt_dir = tmp.path().join("wt1");
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .arg("worktree")
-            .arg("add")
-            .arg(&wt_dir)
-            .arg("-b")
-            .arg("wt-branch")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git worktree add failed");
+        repo.worktree("wt1", &wt_dir, Some(&opts)).unwrap();
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert_eq!(status.worktree_info.len(), 1);
@@ -679,7 +681,7 @@ mod tests {
 
     /// Helper: creates a temp repo with a submodule, returns (parent_tmp, sub_source_tmp, sub_repo)
     fn init_repo_with_submodule() -> (TempDir, TempDir, Repository) {
-        let (tmp, _repo) = init_temp_repo();
+        let (tmp, repo) = init_temp_repo();
 
         let sub_source = TempDir::new().unwrap();
         let sub_repo = Repository::init(sub_source.path()).unwrap();
@@ -696,55 +698,25 @@ mod tests {
                 .unwrap();
         }
 
-        // Add submodule (requires protocol.file.allow for local paths)
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args([
-                "-c",
-                "protocol.file.allow=always",
-                "submodule",
-                "add",
+        let mut submodule = repo
+            .submodule(
                 sub_source.path().to_str().unwrap(),
-                "my-sub",
-            ])
-            .output()
+                Path::new("my-sub"),
+                true,
+            )
             .unwrap();
-        assert!(
-            output.status.success(),
-            "git submodule add failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        // Commit the submodule addition (use -c user.* for CI environments without global git config)
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args(["add", "."])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args([
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@test.com",
-                "commit",
-                "-m",
-                "add submodule",
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git commit failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        submodule.clone(None).unwrap();
+        submodule.add_finalize().unwrap();
+        commit_index(&repo, "add submodule");
 
         (tmp, sub_source, sub_repo)
+    }
+
+    fn stage_submodule_pointer(parent_path: &Path, sub_dirname: &str) {
+        let repo = Repository::open(parent_path).unwrap();
+        let mut submodule = repo.find_submodule(sub_dirname).unwrap();
+        submodule.reload(true).unwrap();
+        submodule.add_to_index(true).unwrap();
     }
 
     #[test]
@@ -803,44 +775,9 @@ mod tests {
 
     #[test]
     fn test_submodule_modified_pointer() {
-        let (tmp, _sub_source, sub_repo) = init_repo_with_submodule();
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
-        // Add a new commit to the submodule source
-        {
-            let sig = git2::Signature::now("Test", "test@test.com").unwrap();
-            fs::write(_sub_source.path().join("lib.rs"), "v2").unwrap();
-            let mut idx = sub_repo.index().unwrap();
-            idx.add_path(Path::new("lib.rs")).unwrap();
-            idx.write().unwrap();
-            let tree_id = idx.write_tree().unwrap();
-            let tree = sub_repo.find_tree(tree_id).unwrap();
-            let head = sub_repo.head().unwrap().peel_to_commit().unwrap();
-            sub_repo
-                .commit(Some("HEAD"), &sig, &sig, "v2", &tree, &[&head])
-                .unwrap();
-        }
-
-        // Pull the new commit inside the submodule workdir
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path().join("my-sub"))
-            .args([
-                "-c",
-                "protocol.file.allow=always",
-                "pull",
-                "origin",
-                "master",
-            ])
-            .output()
-            .unwrap();
-        // Try main if master fails
-        if !output.status.success() {
-            let _ = std::process::Command::new("git")
-                .arg("-C")
-                .arg(tmp.path().join("my-sub"))
-                .args(["-c", "protocol.file.allow=always", "pull", "origin", "main"])
-                .output();
-        }
+        add_unpushed_commit_in_sub(tmp.path(), "my-sub");
 
         // Now the submodule pointer has changed (HEAD in submodule != recorded in parent)
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
@@ -1006,12 +943,7 @@ mod tests {
         // De-init the submodule so .git is absent — `sub.open()` should fail
         // gracefully and `compute_submodule_warn` returns default.
         let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
-        let _ = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args(["submodule", "deinit", "-f", "my-sub"])
-            .output()
-            .unwrap();
+        fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_submodules);
@@ -1066,17 +998,7 @@ mod tests {
         let unpushed = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
 
         // Stage the new submodule pointer in the parent's index.
-        let stage = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args(["add", "my-sub"])
-            .output()
-            .unwrap();
-        assert!(
-            stage.status.success(),
-            "git add my-sub failed: {}",
-            String::from_utf8_lossy(&stage.stderr)
-        );
+        stage_submodule_pointer(tmp.path(), "my-sub");
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert!(status.has_unpushed_submodules);
@@ -1108,12 +1030,7 @@ mod tests {
         // warn fields must stay zero even though the pointer is unreachable.
         let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
         add_unpushed_commit_in_sub(tmp.path(), "my-sub");
-        let _ = std::process::Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
-            .args(["add", "my-sub"])
-            .output()
-            .unwrap();
+        stage_submodule_pointer(tmp.path(), "my-sub");
 
         let cfg = SubmoduleConfig {
             ignore_dirty: false,
@@ -1157,12 +1074,22 @@ mod tests {
         let branch = remote_branch.expect("submodule should have an origin/<branch> ref");
 
         // Create a local tracking branch pointing at HEAD and set its upstream.
-        let _ = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&sub_dir)
-            .args(["checkout", "-B", &branch, &format!("origin/{}", branch)])
-            .output()
+        let remote_ref = inner
+            .find_reference(&format!("refs/remotes/origin/{}", branch))
             .unwrap();
+        let remote_oid = remote_ref.target().unwrap();
+        let remote_commit = inner.find_commit(remote_oid).unwrap();
+        let mut local_branch = inner
+            .find_branch(&branch, git2::BranchType::Local)
+            .or_else(|_| inner.branch(&branch, &remote_commit, false))
+            .unwrap();
+        local_branch
+            .set_upstream(Some(&format!("origin/{}", branch)))
+            .unwrap();
+        inner.set_head(&format!("refs/heads/{}", branch)).unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        inner.checkout_head(Some(&mut checkout)).unwrap();
 
         // Add an unpushed commit (local branch advances past origin/<branch>).
         add_unpushed_commit_in_sub(tmp.path(), "my-sub");
