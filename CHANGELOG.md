@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.6.2] - 2026-05-09
+
+### Fixed
+- Submodule status tests no longer depend on the host's git config or default branch name — they now run reliably in pure CI environments
+
 ## [0.6.1] - 2026-05-08
 
 ### Fixed
