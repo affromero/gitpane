@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Update) => return self_update(),
-        Some(Command::Themes) => return list_themes(),
+        Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
         None => {}
     }
 
@@ -81,14 +81,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn list_themes() -> Result<()> {
+fn list_themes(cli_override: Option<&str>) -> Result<()> {
     let env = config::RealEnv;
-    let config = config::Config::load()?;
+    let mut config = config::Config::load()?;
+    if let Some(name) = cli_override {
+        config.runtime_theme_override = Some(name.to_string());
+    }
     // Use the loaded config's full search list so $GITPANE_CONFIG-adjacent
     // custom themes show up even though they live outside XDG.
     let dirs = config.theme_dirs(&env);
+    let current = config.effective_theme_name();
     for name in theme::discover_all_theme_names(&dirs) {
-        let marker = if name == config.theme_name { "*" } else { " " };
+        let marker = if name == current { "*" } else { " " };
         println!("{marker} {name}");
     }
     Ok(())
