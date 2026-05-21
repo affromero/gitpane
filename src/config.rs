@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::theme::Theme;
+use crate::theme::{LoadThemeError, Theme, load_theme};
 
 const APP_NAME: &str = "gitpane";
 const CONFIG_FILE: &str = "config.toml";
@@ -29,7 +29,11 @@ pub(crate) struct Config {
     pub graph: GraphConfig,
     #[serde(default)]
     pub submodules: SubmoduleConfig,
-    #[serde(default)]
+    /// Name of the active theme. Built-in: "default" or "muted". Any other
+    /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
+    #[serde(default = "default_theme_name", rename = "theme")]
+    pub theme_name: String,
+    #[serde(skip, default)]
     pub theme: Theme,
     #[serde(skip, default)]
     pub(crate) loaded_path: Option<PathBuf>,
@@ -140,6 +144,10 @@ fn default_root_dirs() -> Vec<PathBuf> {
 
 fn default_scan_depth() -> usize {
     2
+}
+
+fn default_theme_name() -> String {
+    "default".into()
 }
 
 fn default_debounce_ms() -> u64 {
@@ -267,6 +275,24 @@ fn default_write_path(env: &dyn ConfigEnv) -> Option<PathBuf> {
         .or_else(|| env.project_config_dir().map(|dir| dir.join(CONFIG_FILE)))
 }
 
+/// Directories that may host a `themes/<name>.toml` file. Mirrors
+/// `candidate_search_paths` but strips the trailing `config.toml`.
+fn candidate_theme_dirs(env: &dyn ConfigEnv) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(xdg) = env.xdg_config_home() {
+        dirs.push(xdg.join(APP_NAME));
+    }
+    if let Some(home) = env.home_dir() {
+        dirs.push(home.join(".config").join(APP_NAME));
+    }
+    if let Some(project_dir) = env.project_config_dir() {
+        dirs.push(project_dir);
+    }
+    let mut seen = HashSet::new();
+    dirs.retain(|p| seen.insert(p.clone()));
+    dirs
+}
+
 impl Default for WatchConfig {
     fn default() -> Self {
         Self {
@@ -300,6 +326,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
+            theme_name: default_theme_name(),
             theme: Theme::default(),
             loaded_path: None,
             write_target_override: None,
@@ -322,7 +349,7 @@ impl Config {
     }
 
     pub(crate) fn load_with_env(env: &dyn ConfigEnv) -> Result<Self> {
-        match resolve_load(env) {
+        let mut config = match resolve_load(env) {
             LoadResolution::EnvOverride(path) => {
                 let exists = env.file_exists(&path);
                 let mut config = if exists {
@@ -341,9 +368,10 @@ impl Config {
 
                 config.loaded_path = exists.then(|| path.clone());
                 config.write_target_override = Some(path);
-                Ok(config)
+                config
             }
             LoadResolution::SearchOrder(paths) => {
+                let mut loaded = None;
                 for path in &paths {
                     if env.file_exists(path) {
                         let contents = std::fs::read_to_string(path)?;
@@ -351,12 +379,32 @@ impl Config {
                         config.expand_tildes();
                         config.loaded_path = Some(path.clone());
                         tracing::info!(path = %path.display(), "loaded config");
-                        return Ok(config);
+                        loaded = Some(config);
+                        break;
                     }
                 }
+                loaded.unwrap_or_else(|| {
+                    tracing::info!(candidates = ?paths, "no config file found, using defaults");
+                    Config::default()
+                })
+            }
+        };
 
-                tracing::info!(candidates = ?paths, "no config file found, using defaults");
-                Ok(Config::default())
+        config.resolve_theme(env);
+        Ok(config)
+    }
+
+    fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+        let dirs = candidate_theme_dirs(env);
+        match load_theme(&self.theme_name, &dirs) {
+            Ok(theme) => self.theme = theme,
+            Err(e @ LoadThemeError::Unknown { .. }) => {
+                tracing::warn!("{e}; falling back to default theme");
+                self.theme = Theme::default();
+            }
+            Err(e @ LoadThemeError::InvalidFile { .. }) => {
+                tracing::warn!("{e}; falling back to default theme");
+                self.theme = Theme::default();
             }
         }
     }
@@ -918,6 +966,102 @@ mod tests {
                 .watch
                 .watch_exclude_dirs
                 .contains(&".next".to_string())
+        );
+    }
+
+    #[test]
+    fn test_theme_defaults_to_default_name() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.theme_name, "default");
+    }
+
+    #[test]
+    fn test_theme_field_in_toml_populates_theme_name() {
+        let config: Config = toml::from_str("theme = \"muted\"").unwrap();
+        assert_eq!(config.theme_name, "muted");
+    }
+
+    #[test]
+    fn test_load_with_env_resolves_default_theme() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path().join("gitpane");
+        fs::create_dir_all(&config_dir).unwrap();
+        let cfg_path = config_dir.join(CONFIG_FILE);
+        fs::write(&cfg_path, "").unwrap();
+
+        let env = MockEnv {
+            xdg_config_home: Some(tmp.path().to_path_buf()),
+            existing: HashSet::from([cfg_path.clone()]),
+            ..Default::default()
+        };
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(
+            config.theme.repo_list.dirty_marker,
+            ratatui::style::Color::Yellow
+        );
+    }
+
+    #[test]
+    fn test_load_with_env_resolves_muted_preset() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path().join("gitpane");
+        fs::create_dir_all(&config_dir).unwrap();
+        let cfg_path = config_dir.join(CONFIG_FILE);
+        fs::write(&cfg_path, "theme = \"muted\"").unwrap();
+
+        let env = MockEnv {
+            xdg_config_home: Some(tmp.path().to_path_buf()),
+            existing: HashSet::from([cfg_path.clone()]),
+            ..Default::default()
+        };
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(
+            config.theme.repo_list.dirty_marker,
+            ratatui::style::Color::Indexed(178)
+        );
+    }
+
+    #[test]
+    fn test_load_with_env_falls_back_to_default_for_unknown_theme() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path().join("gitpane");
+        fs::create_dir_all(&config_dir).unwrap();
+        let cfg_path = config_dir.join(CONFIG_FILE);
+        fs::write(&cfg_path, "theme = \"nope\"").unwrap();
+
+        let env = MockEnv {
+            xdg_config_home: Some(tmp.path().to_path_buf()),
+            existing: HashSet::from([cfg_path.clone()]),
+            ..Default::default()
+        };
+        let config = Config::load_with_env(&env).unwrap();
+        // Falls back to default; warn is logged but load does not error.
+        assert_eq!(
+            config.theme.repo_list.dirty_marker,
+            ratatui::style::Color::Yellow
+        );
+    }
+
+    #[test]
+    fn test_load_with_env_loads_custom_theme_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path().join("gitpane");
+        fs::create_dir_all(&config_dir).unwrap();
+        let cfg_path = config_dir.join(CONFIG_FILE);
+        fs::write(&cfg_path, "theme = \"mine\"").unwrap();
+        let themes_dir = config_dir.join("themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("mine.toml"), "[repo_list]\nstash = \"Magenta\"\n").unwrap();
+
+        let env = MockEnv {
+            xdg_config_home: Some(tmp.path().to_path_buf()),
+            existing: HashSet::from([cfg_path.clone()]),
+            ..Default::default()
+        };
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(
+            config.theme.repo_list.stash,
+            ratatui::style::Color::Magenta
         );
     }
 }

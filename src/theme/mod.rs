@@ -3,7 +3,13 @@
 //! All color choices live here. Components read `&Theme` from `App` and
 //! reference semantic slots, never hardcoded `Color::X` literals. The
 //! `Default` impl reproduces the colors the codebase shipped before themes
-//! existed, so a config with no `theme` section renders identically.
+//! existed, so a config with no `theme` setting renders identically.
+
+mod loader;
+mod presets;
+
+pub(crate) use loader::{LoadThemeError, load_theme};
+pub(crate) use presets::muted;
 
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
