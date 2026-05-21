@@ -12,6 +12,9 @@ pub(crate) enum Action {
     SelectNextRepo,
     SelectPrevRepo,
     SelectRepo(RepoId),
+    /// Update the file list and graph to a repo's data without moving the
+    /// list-row selection. Used when a child row (stash entry) is highlighted.
+    FocusRepoDetails(RepoId),
     SelectWorktree {
         repo_id: RepoId,
         worktree_path: std::path::PathBuf,
@@ -96,4 +99,12 @@ pub(crate) enum Action {
     UpdateAvailable(String),
     /// Clears the pending_status flag for a repo (sent on error paths)
     StatusQueryDone(RepoId),
+    /// Open the in-app theme picker overlay.
+    OpenThemePicker,
+    /// Apply a theme transiently (live preview), no persistence.
+    PreviewTheme(String),
+    /// Apply a theme and write `theme = "<name>"` to the active config file.
+    CommitTheme(String),
+    /// Re-apply the theme that was active when the picker opened, then close.
+    CancelThemePreview,
 }

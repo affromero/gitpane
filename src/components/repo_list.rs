@@ -27,11 +27,13 @@ pub(crate) struct RepoEntry {
     pub git_op: bool,
 }
 
-/// Maps a visual row in the list to either a repo or one of its worktrees.
-#[derive(Clone, Debug)]
+/// Maps a visual row in the list to either a repo, one of its worktrees,
+/// or one of its stash entries.
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum DisplayRow {
     Repo(usize),
     Worktree(usize, usize), // (repo_index, worktree_index)
+    Stash(usize, usize),    // (repo_index, stash_index_in_status.stashes)
 }
 
 pub(crate) struct RepoList {
@@ -42,6 +44,8 @@ pub(crate) struct RepoList {
     action_tx: Option<UnboundedSender<Action>>,
     /// Which repos have their worktree list expanded
     expanded_repos: HashSet<RepoId>,
+    /// Which repos have their stash list expanded
+    expanded_stashes: HashSet<RepoId>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
     theme: Arc<Theme>,
@@ -77,11 +81,16 @@ impl RepoList {
             focused: true,
             action_tx: None,
             expanded_repos: HashSet::new(),
+            expanded_stashes: HashSet::new(),
             display_rows: Vec::new(),
             theme,
         };
         list.rebuild_display_rows();
         list
+    }
+
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
     }
 
     /// Recompute display_rows from repos + expansion state.
@@ -90,11 +99,16 @@ impl RepoList {
         for (i, entry) in self.repos.iter().enumerate() {
             self.display_rows.push(DisplayRow::Repo(i));
             let id = RepoId(entry.path.clone());
-            if self.expanded_repos.contains(&id)
-                && let Some(status) = &entry.status
-            {
-                for j in 0..status.worktree_info.len() {
-                    self.display_rows.push(DisplayRow::Worktree(i, j));
+            if let Some(status) = &entry.status {
+                if self.expanded_repos.contains(&id) {
+                    for j in 0..status.worktree_info.len() {
+                        self.display_rows.push(DisplayRow::Worktree(i, j));
+                    }
+                }
+                if self.expanded_stashes.contains(&id) {
+                    for j in 0..status.stashes.len() {
+                        self.display_rows.push(DisplayRow::Stash(i, j));
+                    }
                 }
             }
         }
@@ -106,6 +120,7 @@ impl RepoList {
         match self.display_rows.get(di)? {
             DisplayRow::Repo(i) => Some(*i),
             DisplayRow::Worktree(ri, _) => Some(*ri),
+            DisplayRow::Stash(ri, _) => Some(*ri),
         }
     }
 
@@ -125,7 +140,7 @@ impl RepoList {
     pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
-            DisplayRow::Repo(_) => None,
+            DisplayRow::Repo(_) | DisplayRow::Stash(_, _) => None,
             DisplayRow::Worktree(ri, wi) => {
                 let entry = self.repos.get(*ri)?;
                 let wt = entry.status.as_ref()?.worktree_info.get(*wi)?;
@@ -192,6 +207,71 @@ impl RepoList {
                     worktree_branch: wt.branch.clone(),
                 })
             }
+            DisplayRow::Stash(ri, _) => {
+                // Re-target the file list / graph to the stash's parent repo
+                // (so a stash row click from another repo updates the right
+                // details), but do NOT call select_repo_row — that would
+                // snap the cursor off the stash and back onto the Repo row.
+                let id = RepoId(self.repos[*ri].path.clone());
+                Some(Action::FocusRepoDetails(id))
+            }
+        }
+    }
+
+    /// Selection's parent repo index, ignoring stash/worktree depth.
+    fn current_parent_repo(&self) -> Option<usize> {
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(i) => Some(*i),
+            DisplayRow::Worktree(ri, _) => Some(*ri),
+            DisplayRow::Stash(ri, _) => Some(*ri),
+        }
+    }
+
+    /// Snapshot the currently-selected DisplayRow before a rebuild that may
+    /// reshuffle indices (subtree expand/collapse).
+    fn snapshot_selection(&self) -> Option<DisplayRow> {
+        let di = self.state.selected()?;
+        self.display_rows.get(di).cloned()
+    }
+
+    /// Re-select the same logical row after rebuild_display_rows runs.
+    /// Falls back to the parent Repo row if the previous row is gone (e.g.
+    /// its subtree was collapsed).
+    fn restore_selection(&mut self, prev: Option<DisplayRow>) {
+        let Some(prev) = prev else { return };
+        let parent_idx = match &prev {
+            DisplayRow::Repo(i) => *i,
+            DisplayRow::Worktree(ri, _) => *ri,
+            DisplayRow::Stash(ri, _) => *ri,
+        };
+        if let Some(new_idx) = self.display_rows.iter().position(|r| *r == prev) {
+            self.state.select(Some(new_idx));
+        } else {
+            self.select_repo_row(parent_idx);
+        }
+    }
+
+    /// Toggle stash expansion for the repo at the current selection.
+    fn toggle_stash_expand(&mut self) {
+        let Some(repo_idx) = self.current_parent_repo() else {
+            return;
+        };
+        let entry = &self.repos[repo_idx];
+        let has_stashes = entry.status.as_ref().is_some_and(|s| !s.stashes.is_empty());
+        if !has_stashes {
+            return;
+        }
+        let id = RepoId(entry.path.clone());
+        let prev = self.snapshot_selection();
+        if self.expanded_stashes.contains(&id) {
+            self.expanded_stashes.remove(&id);
+            self.rebuild_display_rows();
+            self.select_repo_row(repo_idx);
+        } else {
+            self.expanded_stashes.insert(id);
+            self.rebuild_display_rows();
+            self.restore_selection(prev);
         }
     }
 
@@ -203,6 +283,7 @@ impl RepoList {
         let repo_idx = match self.display_rows.get(di) {
             Some(DisplayRow::Repo(i)) => *i,
             Some(DisplayRow::Worktree(ri, _)) => *ri,
+            Some(DisplayRow::Stash(ri, _)) => *ri,
             None => return,
         };
         let entry = &self.repos[repo_idx];
@@ -214,6 +295,7 @@ impl RepoList {
             return;
         }
         let id = RepoId(entry.path.clone());
+        let prev = self.snapshot_selection();
         if self.expanded_repos.contains(&id) {
             // Collapsing: move selection to the parent repo row
             self.expanded_repos.remove(&id);
@@ -222,6 +304,7 @@ impl RepoList {
         } else {
             self.expanded_repos.insert(id);
             self.rebuild_display_rows();
+            self.restore_selection(prev);
         }
     }
 
@@ -256,9 +339,12 @@ impl RepoList {
                 ));
             }
 
-            if status.stash_count > 0 {
+            if !status.stashes.is_empty() {
+                let id = RepoId(entry.path.clone());
+                let expanded = self.expanded_stashes.contains(&id);
+                let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
                 spans.push(Span::styled(
-                    format!("${} ", status.stash_count),
+                    format!("{}${} ", icon, status.stash_count()),
                     Style::default().fg(t.stash),
                 ));
             }
@@ -325,6 +411,20 @@ impl RepoList {
         ];
         ListItem::new(Line::from(spans))
     }
+
+    fn render_stash_item(&self, entry: &RepoEntry, stash_idx: usize) -> ListItem<'static> {
+        let t = &self.theme.repo_list;
+        let stash = &entry.status.as_ref().unwrap().stashes[stash_idx];
+        let label = format!("    $ stash@{{{}}} ", stash.index);
+        let spans = vec![
+            Span::styled(label, Style::default().fg(t.stash)),
+            Span::styled(
+                stash.message.clone(),
+                Style::default().fg(t.worktree_subtree_icon),
+            ),
+        ];
+        ListItem::new(Line::from(spans))
+    }
 }
 
 impl Component for RepoList {
@@ -351,6 +451,10 @@ impl Component for RepoList {
                 self.toggle_expand();
                 Ok(self.emit_selection_action())
             }
+            KeyCode::Char('S') => {
+                self.toggle_stash_expand();
+                Ok(self.emit_selection_action())
+            }
             _ => Ok(None),
         }
     }
@@ -366,16 +470,21 @@ impl Component for RepoList {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
-                        // Click on already-selected repo row toggles worktree expansion
+                        // Click on already-selected repo row toggles a subtree. Worktrees
+                        // take priority when both are present; stash falls through when
+                        // the repo has no worktrees but does have stashes.
                         if self.state.selected() == Some(idx)
                             && let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx)
-                            && self.repos[*i]
-                                .status
-                                .as_ref()
-                                .is_some_and(|s| !s.worktree_info.is_empty())
+                            && let Some(status) = self.repos[*i].status.as_ref()
                         {
-                            self.toggle_expand();
-                            return Ok(self.emit_selection_action());
+                            if !status.worktree_info.is_empty() {
+                                self.toggle_expand();
+                                return Ok(self.emit_selection_action());
+                            }
+                            if !status.stashes.is_empty() {
+                                self.toggle_stash_expand();
+                                return Ok(self.emit_selection_action());
+                            }
                         }
                         self.state.select(Some(idx));
                         return Ok(self.emit_selection_action());
@@ -449,6 +558,7 @@ impl Component for RepoList {
             .map(|row| match row {
                 DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], *i),
                 DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
+                DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
             })
             .collect();
 

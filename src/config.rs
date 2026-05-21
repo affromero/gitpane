@@ -35,6 +35,11 @@ pub(crate) struct Config {
     pub theme_name: String,
     #[serde(skip, default)]
     pub theme: Theme,
+    /// Session-only theme override (set by `--theme`). Not serialized; the
+    /// `theme_name` field on disk is preserved across saves while this is
+    /// active. The picker reads this via `effective_theme_name()`.
+    #[serde(skip, default)]
+    pub runtime_theme_override: Option<String>,
     #[serde(skip, default)]
     pub(crate) loaded_path: Option<PathBuf>,
     #[serde(skip, default)]
@@ -199,7 +204,7 @@ pub(crate) trait ConfigEnv {
     fn file_exists(&self, path: &Path) -> bool;
 }
 
-struct RealEnv;
+pub(crate) struct RealEnv;
 
 impl ConfigEnv for RealEnv {
     fn gitpane_config(&self) -> Option<PathBuf> {
@@ -277,7 +282,7 @@ fn default_write_path(env: &dyn ConfigEnv) -> Option<PathBuf> {
 
 /// Directories that may host a `themes/<name>.toml` file. Mirrors
 /// `candidate_search_paths` but strips the trailing `config.toml`.
-fn candidate_theme_dirs(env: &dyn ConfigEnv) -> Vec<PathBuf> {
+pub(crate) fn candidate_theme_dirs(env: &dyn ConfigEnv) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(xdg) = env.xdg_config_home() {
         dirs.push(xdg.join(APP_NAME));
@@ -328,6 +333,7 @@ impl Default for Config {
             submodules: SubmoduleConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
+            runtime_theme_override: None,
             loaded_path: None,
             write_target_override: None,
         }
@@ -394,11 +400,24 @@ impl Config {
         Ok(config)
     }
 
-    fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+    pub(crate) fn resolve_theme_with_env(&mut self, env: &dyn ConfigEnv) {
+        self.resolve_theme(env);
+    }
+
+    /// The theme name actually in effect right now: a CLI `--theme` override
+    /// takes precedence over the value persisted in `theme_name`.
+    pub fn effective_theme_name(&self) -> &str {
+        self.runtime_theme_override
+            .as_deref()
+            .unwrap_or(&self.theme_name)
+    }
+
+    /// Full theme-search list including any dir beside the active config
+    /// (`loaded_path` / `write_target_override`). Use this for the in-app
+    /// picker and any other code that needs to mirror `resolve_theme`'s
+    /// lookup semantics.
+    pub(crate) fn theme_dirs(&self, env: &dyn ConfigEnv) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        // Look beside the active config first, so `$GITPANE_CONFIG` overrides
-        // and any non-standard config location can ship their own themes
-        // dir without depending on XDG.
         for source in [
             self.loaded_path.as_deref(),
             self.write_target_override.as_deref(),
@@ -420,8 +439,14 @@ impl Config {
                 dirs.push(dir);
             }
         }
+        dirs
+    }
 
-        match load_theme(&self.theme_name, &dirs) {
+    fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+        let name = self.effective_theme_name().to_string();
+        let dirs = self.theme_dirs(env);
+
+        match load_theme(&name, &dirs) {
             Ok(theme) => self.theme = theme,
             Err(e @ LoadThemeError::Unknown { .. }) => {
                 tracing::warn!("{e}; falling back to default theme");

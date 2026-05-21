@@ -124,6 +124,10 @@ impl GitGraph {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
+
     pub fn load_repo(&mut self, path: PathBuf, repo_name: &str) {
         let is_same_repo = self.repo_path.as_deref() == Some(path.as_path());
 

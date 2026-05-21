@@ -90,10 +90,35 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Extract CHANGELOG for this tag
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag=1; print; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section for $VERSION; falling back to a stub." >&2
+            echo "## ${VERSION}" > release-notes.md
+            echo "" >> release-notes.md
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) for details." >> release-notes.md
+          else
+            echo "" >> release-notes.md
+            echo "---" >> release-notes.md
+            echo "" >> release-notes.md
+            echo "Full changelog: https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md" >> release-notes.md
+          fi
+          echo "----- release body -----"
+          cat release-notes.md
+          echo "------------------------"
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+          body_path: release-notes.md
 
   publish:
     name: Publish to crates.io

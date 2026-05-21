@@ -19,8 +19,25 @@ pub(crate) struct RepoStatus {
     pub has_unpushed_submodules: bool,
     /// True when the last `git fetch` failed (auth, network, timeout)
     pub fetch_failed: bool,
-    /// Number of entries in the local stash (`git stash list` count).
-    pub stash_count: usize,
+    /// Local stash entries (oldest at index 0; `stash@{n}` matches by index).
+    pub stashes: Vec<StashEntry>,
+}
+
+impl RepoStatus {
+    pub fn stash_count(&self) -> usize {
+        self.stashes.len()
+    }
+}
+
+/// One entry in a repo's stash list, mirroring `git stash list`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StashEntry {
+    /// Position in the stash list (matches `stash@{index}`).
+    pub index: usize,
+    /// Stash message, e.g. `"WIP on main: 1234abcd Initial"`.
+    pub message: String,
+    /// Hex oid of the stash commit, for downstream diff/show.
+    pub oid: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,10 +138,14 @@ fn query_status_inner(
 ) -> color_eyre::Result<RepoStatus> {
     let mut repo = Repository::open(path)?;
 
-    // Stash count: requires &mut, so do this before any immutable borrow of `repo`.
-    let mut stash_count = 0usize;
-    let _ = repo.stash_foreach(|_, _, _| {
-        stash_count += 1;
+    // Stash entries: requires &mut, so do this before any immutable borrow of `repo`.
+    let mut stashes: Vec<StashEntry> = Vec::new();
+    let _ = repo.stash_foreach(|index, message, oid| {
+        stashes.push(StashEntry {
+            index,
+            message: message.to_string(),
+            oid: oid.to_string(),
+        });
         true
     });
 
@@ -300,7 +321,7 @@ fn query_status_inner(
         has_dirty_submodules,
         has_unpushed_submodules,
         fetch_failed,
-        stash_count,
+        stashes,
     })
 }
 
@@ -1231,7 +1252,8 @@ mod tests {
     fn test_stash_count_zero_when_no_stash() {
         let (tmp, _repo) = init_temp_repo();
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
-        assert_eq!(status.stash_count, 0);
+        assert!(status.stashes.is_empty());
+        assert_eq!(status.stash_count(), 0);
     }
 
     #[test]
@@ -1246,14 +1268,18 @@ mod tests {
         repo.stash_save2(&sig, None, None).unwrap();
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
-        assert_eq!(status.stash_count, 1);
+        assert_eq!(status.stash_count(), 1);
+        assert!(!status.stashes[0].oid.is_empty());
 
         // Stash again.
         fs::write(tmp.path().join("tracked.txt"), "v3").unwrap();
         repo.stash_save2(&sig, None, None).unwrap();
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
-        assert_eq!(status.stash_count, 2);
+        assert_eq!(status.stash_count(), 2);
+        // Indices increase with insertion order so older stash is at higher index in libgit2.
+        assert!(status.stashes.iter().any(|s| s.index == 0));
+        assert!(status.stashes.iter().any(|s| s.index == 1));
     }
 
     #[test]

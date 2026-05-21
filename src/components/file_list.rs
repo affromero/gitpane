@@ -55,6 +55,10 @@ impl FileList {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
+
     pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_id: RepoId) {
         let is_same_repo = self.repo_id.as_ref() == Some(&repo_id);
         let prev_selected = self.state.selected();

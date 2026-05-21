@@ -65,7 +65,20 @@ impl std::fmt::Display for LoadThemeError {
 
 impl std::error::Error for LoadThemeError {}
 
-const BUILT_IN_THEMES: &[&str] = &["default", "muted"];
+pub(crate) const BUILT_IN_THEMES: &[&str] = &["default", "muted"];
+
+/// All theme names available: built-ins followed by custom files
+/// discovered under each `<dir>/themes/`. Built-ins keep their declared
+/// order; customs are sorted alphabetically and de-duplicated.
+pub(crate) fn discover_all_theme_names(dirs: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = BUILT_IN_THEMES.iter().map(|s| s.to_string()).collect();
+    for custom in discover_custom_theme_names(dirs) {
+        if !names.contains(&custom) {
+            names.push(custom);
+        }
+    }
+    names
+}
 
 /// Resolve a theme by name. Built-ins (`default`, `muted`) are returned
 /// directly; any other name is treated as a custom theme file living at
@@ -203,5 +216,29 @@ mod tests {
 
         let names = discover_custom_theme_names(&[dir.path().to_path_buf()]);
         assert_eq!(names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn discover_all_includes_builtins_then_customs() {
+        let dir = TempDir::new().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        std::fs::write(themes_dir.join("zeta.toml"), "").unwrap();
+        std::fs::write(themes_dir.join("alpha.toml"), "").unwrap();
+
+        let names = discover_all_theme_names(&[dir.path().to_path_buf()]);
+        assert_eq!(names, vec!["default", "muted", "alpha", "zeta"]);
+    }
+
+    #[test]
+    fn discover_all_dedupes_custom_named_like_builtin() {
+        let dir = TempDir::new().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        // A custom named "muted" should not appear twice; the built-in wins
+        // for positioning, the file is ignored.
+        std::fs::write(themes_dir.join("muted.toml"), "").unwrap();
+        let names = discover_all_theme_names(&[dir.path().to_path_buf()]);
+        assert_eq!(names.iter().filter(|n| *n == "muted").count(), 1);
     }
 }

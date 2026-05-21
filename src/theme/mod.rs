@@ -8,7 +8,7 @@
 mod loader;
 mod presets;
 
-pub(crate) use loader::{LoadThemeError, load_theme};
+pub(crate) use loader::{LoadThemeError, discover_all_theme_names, load_theme};
 pub(crate) use presets::muted;
 
 use ratatui::style::Color;
@@ -54,15 +54,15 @@ impl Default for RepoListTheme {
             branch: Color::Cyan,
             ahead: Color::Green,
             behind: Color::Red,
-            worktree_count: Color::Magenta,
+            worktree_count: Color::Indexed(214),
             dirty_submodule: Color::LightMagenta,
             unpushed_submodule: Color::LightRed,
             fetch_failed: Color::DarkGray,
-            stash: Color::Indexed(67),
+            stash: Color::Indexed(127),
             file_count: Color::Yellow,
             repo_name: Color::White,
             worktree_subtree_icon: Color::DarkGray,
-            worktree_subtree_branch: Color::Magenta,
+            worktree_subtree_branch: Color::Indexed(214),
             border_focused: Color::Cyan,
             border_unfocused: Color::DarkGray,
             selection_bg: Color::DarkGray,
@@ -344,7 +344,7 @@ mod tests {
         );
         assert_eq!(
             restored.repo_list.stash,
-            Color::Indexed(67),
+            Color::Indexed(127),
             "round-trip should preserve indexed colors"
         );
         assert_eq!(
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn empty_toml_yields_default_theme() {
         let theme: Theme = toml::from_str("").unwrap();
-        assert_eq!(theme.repo_list.stash, Color::Indexed(67));
+        assert_eq!(theme.repo_list.stash, Color::Indexed(127));
         assert_eq!(theme.graph.lane_palette[0], Color::Red);
     }
 }
