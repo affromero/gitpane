@@ -34,6 +34,10 @@ impl PathInput {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
+
     pub fn show(&mut self) {
         self.visible = true;
         self.input.clear();

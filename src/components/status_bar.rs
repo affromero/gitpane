@@ -33,6 +33,10 @@ impl StatusBar {
             theme,
         }
     }
+
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
 }
 
 impl Component for StatusBar {
@@ -128,6 +132,8 @@ impl Component for StatusBar {
                 Span::raw(" worktrees  "),
                 key_span("S", s),
                 Span::raw(" stash list  "),
+                key_span("t", s),
+                Span::raw(" theme  "),
                 key_span("q", s),
                 Span::raw(" quit"),
             ]
@@ -168,6 +174,8 @@ impl Component for StatusBar {
                 Span::raw(" Worktrees  "),
                 key_span("S", s),
                 Span::raw(" Stash  "),
+                key_span("t", s),
+                Span::raw(" Theme  "),
                 key_span("q", s),
                 Span::raw(" Quit"),
             ]

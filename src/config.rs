@@ -199,7 +199,7 @@ pub(crate) trait ConfigEnv {
     fn file_exists(&self, path: &Path) -> bool;
 }
 
-struct RealEnv;
+pub(crate) struct RealEnv;
 
 impl ConfigEnv for RealEnv {
     fn gitpane_config(&self) -> Option<PathBuf> {
@@ -277,7 +277,7 @@ fn default_write_path(env: &dyn ConfigEnv) -> Option<PathBuf> {
 
 /// Directories that may host a `themes/<name>.toml` file. Mirrors
 /// `candidate_search_paths` but strips the trailing `config.toml`.
-fn candidate_theme_dirs(env: &dyn ConfigEnv) -> Vec<PathBuf> {
+pub(crate) fn candidate_theme_dirs(env: &dyn ConfigEnv) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(xdg) = env.xdg_config_home() {
         dirs.push(xdg.join(APP_NAME));

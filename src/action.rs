@@ -96,4 +96,12 @@ pub(crate) enum Action {
     UpdateAvailable(String),
     /// Clears the pending_status flag for a repo (sent on error paths)
     StatusQueryDone(RepoId),
+    /// Open the in-app theme picker overlay.
+    OpenThemePicker,
+    /// Apply a theme transiently (live preview), no persistence.
+    PreviewTheme(String),
+    /// Apply a theme and write `theme = "<name>"` to the active config file.
+    CommitTheme(String),
+    /// Re-apply the theme that was active when the picker opened, then close.
+    CancelThemePreview,
 }

@@ -16,12 +16,14 @@ use crate::components::path_input::PathInput;
 use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
+use crate::components::theme_picker::ThemePicker;
 use crate::config::Config;
 use crate::config::UpdatePosition;
 use crate::event::Event;
 use crate::git::graph::GraphOptions;
 use crate::git::scanner;
 use crate::repo_id::RepoId;
+use crate::theme::{Theme, discover_all_theme_names, load_theme};
 use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
 
@@ -129,6 +131,7 @@ pub(crate) struct App {
     context_menu: ContextMenu,
     path_input: PathInput,
     status_bar: StatusBar,
+    theme_picker: ThemePicker,
     focus: FocusPanel,
     sort_order: SortOrder,
     action_tx: UnboundedSender<Action>,
@@ -200,6 +203,7 @@ impl App {
             context_menu: ContextMenu::new(theme.clone()),
             path_input: PathInput::new(theme.clone()),
             status_bar: StatusBar::new(theme.clone()),
+            theme_picker: ThemePicker::new(theme.clone()),
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
             action_tx,
@@ -263,6 +267,19 @@ impl App {
         }
     }
 
+    /// Replace the live theme on App and every component.
+    fn apply_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme.clone();
+        self.repo_list.set_theme(theme.clone());
+        self.file_list.set_theme(theme.clone());
+        self.git_graph.set_theme(theme.clone());
+        self.confirm_dialog.set_theme(theme.clone());
+        self.context_menu.set_theme(theme.clone());
+        self.path_input.set_theme(theme.clone());
+        self.status_bar.set_theme(theme.clone());
+        self.theme_picker.set_theme(theme);
+    }
+
     pub async fn run(&mut self) -> Result<()> {
         let mut tui = Tui::new()?
             .mouse(true)
@@ -283,6 +300,8 @@ impl App {
             .register_action_handler(self.action_tx.clone())?;
         self.context_menu
             .register_action_handler(self.action_tx.clone())?;
+        self.theme_picker
+            .register_action_handler(self.action_tx.clone());
 
         // Init components
         self.repo_list.init()?;
@@ -1278,6 +1297,61 @@ impl App {
                         };
                         self.error_message = Some((truncated, Instant::now()));
                     }
+                    Action::OpenThemePicker => {
+                        let env = crate::config::RealEnv;
+                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        let themes = discover_all_theme_names(&dirs);
+                        self.theme_picker.show(themes, &self.config.theme_name);
+                    }
+                    Action::PreviewTheme(name) => {
+                        let env = crate::config::RealEnv;
+                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        match load_theme(&name, &dirs) {
+                            Ok(t) => {
+                                self.apply_theme(Arc::new(t));
+                                self.config.theme_name = name;
+                            }
+                            Err(e) => {
+                                tracing::warn!("theme preview failed: {e}");
+                            }
+                        }
+                    }
+                    Action::CommitTheme(name) => {
+                        let env = crate::config::RealEnv;
+                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        match load_theme(&name, &dirs) {
+                            Ok(t) => {
+                                self.apply_theme(Arc::new(t));
+                                self.config.theme_name = name.clone();
+                                if let Err(e) = self.config.save() {
+                                    tracing::warn!("failed to persist theme: {e}");
+                                    self.error_message =
+                                        Some((format!("save failed: {e}"), Instant::now()));
+                                } else {
+                                    self.success_message =
+                                        Some((format!("theme: {name}"), Instant::now()));
+                                }
+                            }
+                            Err(e) => {
+                                self.error_message =
+                                    Some((format!("theme commit failed: {e}"), Instant::now()));
+                            }
+                        }
+                        self.theme_picker.hide();
+                    }
+                    Action::CancelThemePreview => {
+                        let original = self
+                            .theme_picker
+                            .original_name()
+                            .unwrap_or_else(|| self.config.theme_name.clone());
+                        let env = crate::config::RealEnv;
+                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        if let Ok(t) = load_theme(&original, &dirs) {
+                            self.apply_theme(Arc::new(t));
+                            self.config.theme_name = original;
+                        }
+                        self.theme_picker.hide();
+                    }
                     _ => {
                         let _ = self.repo_list.update(action)?;
                     }
@@ -1304,6 +1378,15 @@ impl App {
         // Path input gets priority
         if self.path_input.visible {
             if let Some(action) = self.path_input.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
+        // Theme picker gets priority once visible; blocks the global `t` /
+        // help / focus-routed keys until the user commits or cancels.
+        if self.theme_picker.visible {
+            if let Some(action) = self.theme_picker.handle_key_event(key)? {
                 self.action_tx.send(action)?;
             }
             return Ok(());
@@ -1379,6 +1462,9 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.action_tx.send(Action::RefreshAll)?;
+            }
+            KeyCode::Char('t') => {
+                self.action_tx.send(Action::OpenThemePicker)?;
             }
             KeyCode::Char('R') => {
                 self.action_tx.send(Action::RescanRepos)?;
@@ -1677,6 +1763,7 @@ impl App {
         self.context_menu.draw(frame, area)?;
         self.path_input.draw(frame, area);
         self.confirm_dialog.draw(frame, area);
+        self.theme_picker.draw(frame, area);
 
         // Update notification overlay
         if let Some(ref version) = self.update_version {

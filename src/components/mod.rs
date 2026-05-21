@@ -5,6 +5,7 @@ pub(crate) mod git_graph;
 pub(crate) mod path_input;
 pub(crate) mod repo_list;
 pub(crate) mod status_bar;
+pub(crate) mod theme_picker;
 
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};

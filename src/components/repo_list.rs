@@ -89,6 +89,10 @@ impl RepoList {
         list
     }
 
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
+
     /// Recompute display_rows from repos + expansion state.
     fn rebuild_display_rows(&mut self) {
         self.display_rows.clear();

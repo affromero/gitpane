@@ -29,6 +29,10 @@ impl ConfirmDialog {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.theme = theme;
+    }
+
     pub fn show(&mut self, message: String, action: Action) {
         self.visible = true;
         self.message = message;
