@@ -236,6 +236,32 @@ show_stats = true        # Show +N/-M diff stats per commit
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.
 
+### Theming
+
+gitpane ships two built-in themes:
+
+- `default`, the original palette (used when `theme` is unset).
+- `muted`, softer 256-color indices for dark terminals where the default `Light*` colors feel too bright.
+
+```toml
+# In config.toml
+theme = "muted"
+```
+
+To define a custom theme, drop a TOML file at `<config_dir>/gitpane/themes/<name>.toml` and set `theme = "<name>"`. Any field you don't list falls back to the corresponding `default` slot, so a custom theme can be as small as one override:
+
+```toml
+# ~/.config/gitpane/themes/mine.toml
+[repo_list]
+stash = "Magenta"
+
+[graph]
+tag_label = "143"        # 256-color index
+lane_palette = ["Red", "#5fafd7", "Cyan", "67", "Magenta", "Yellow"]
+```
+
+Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...), 8-bit indices as bare integers (`"67"`), or 24-bit hex (`"#5fafd7"`). If `$GITPANE_CONFIG` points to a non-XDG location, the `themes/` directory next to that file is searched first.
+
 ## Troubleshooting
 
 ### gitpane shows no repositories
