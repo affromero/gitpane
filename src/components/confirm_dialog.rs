@@ -3,25 +3,29 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use std::sync::Arc;
 
 use crate::action::Action;
+use crate::theme::Theme;
 
 pub(crate) struct ConfirmDialog {
     pub visible: bool,
     message: String,
     pending_action: Option<Action>,
+    theme: Arc<Theme>,
 }
 
 impl ConfirmDialog {
-    pub fn new() -> Self {
+    pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             visible: false,
             message: String::new(),
             pending_action: None,
+            theme,
         }
     }
 
@@ -57,6 +61,7 @@ impl ConfirmDialog {
             return;
         }
 
+        let t = &self.theme.overlay;
         let width = 40u16.min(area.width.saturating_sub(4));
         let height = 5u16;
 
@@ -79,25 +84,27 @@ impl ConfirmDialog {
                 Span::styled(
                     " y",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(t.confirm_accept)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("/"),
-                Span::styled("Enter ", Style::default().fg(Color::Green)),
+                Span::styled("Enter ", Style::default().fg(t.confirm_accept)),
                 Span::raw("confirm   "),
                 Span::styled(
                     "n",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(t.confirm_cancel)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("/"),
-                Span::styled("Esc ", Style::default().fg(Color::Red)),
+                Span::styled("Esc ", Style::default().fg(t.confirm_cancel)),
                 Span::raw("cancel"),
             ]),
         ];
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(t.confirm_border))
             .title(" Confirm ");
 
         let paragraph = Paragraph::new(lines).centered().block(block);

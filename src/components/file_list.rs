@@ -3,16 +3,18 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::status::{FileEntry, FileStatus, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
+use crate::theme::{FileListTheme, Theme};
 
 pub(crate) struct FileList {
     files: Vec<FileEntry>,
@@ -30,10 +32,11 @@ pub(crate) struct FileList {
     pub horizontal_layout: bool,
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
+    theme: Arc<Theme>,
 }
 
 impl FileList {
-    pub fn new() -> Self {
+    pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             files: Vec::new(),
             state: ListState::default(),
@@ -48,6 +51,7 @@ impl FileList {
             diff_scroll: 0,
             horizontal_layout: false,
             diff_generation: 0,
+            theme,
         }
     }
 
@@ -128,10 +132,11 @@ impl FileList {
     }
 
     fn draw_file_list(&mut self, frame: &mut Frame, area: Rect) {
+        let t = &self.theme.file_list;
         let border_color = if self.focused && !self.viewing_diff() {
-            Color::Cyan
+            t.border_focused
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
 
         let title = if self.repo_name.is_empty() {
@@ -152,7 +157,7 @@ impl FileList {
                 "No changes"
             };
             let paragraph = Paragraph::new(msg)
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(t.empty_text))
                 .block(block);
             frame.render_widget(paragraph, area);
             return;
@@ -163,12 +168,12 @@ impl FileList {
             .iter()
             .map(|entry| {
                 let color = match entry.status {
-                    FileStatus::Modified => Color::Yellow,
-                    FileStatus::Added => Color::Green,
-                    FileStatus::Deleted => Color::Red,
-                    FileStatus::Renamed => Color::Blue,
-                    FileStatus::Untracked => Color::DarkGray,
-                    FileStatus::Conflicted => Color::LightRed,
+                    FileStatus::Modified => t.status_modified,
+                    FileStatus::Added => t.status_added,
+                    FileStatus::Deleted => t.status_deleted,
+                    FileStatus::Renamed => t.status_renamed,
+                    FileStatus::Untracked => t.status_untracked,
+                    FileStatus::Conflicted => t.status_conflicted,
                 };
 
                 let mut spans = vec![Span::styled(
@@ -180,13 +185,14 @@ impl FileList {
                     spans.extend(submodule_tag_spans(
                         &entry.submodule_state,
                         &entry.submodule_warn,
+                        t,
                     ));
                 }
 
                 let path_color = if entry.is_submodule {
-                    Color::LightMagenta
+                    t.submodule_path
                 } else {
-                    Color::White
+                    t.regular_path
                 };
                 spans.push(Span::styled(
                     entry.path.to_string_lossy().to_string(),
@@ -199,7 +205,7 @@ impl FileList {
 
         let list = List::new(items).block(block).highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(t.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -211,25 +217,26 @@ impl FileList {
             return;
         };
 
+        let t = &self.theme.file_list;
         let title = format!(" Diff — {} (Esc/h to close) ", self.repo_name);
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(t.diff_border));
 
         let lines: Vec<Line> = content
             .lines()
             .map(|line| {
                 let style = if line.starts_with('+') && !line.starts_with("+++") {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(t.diff_added)
                 } else if line.starts_with('-') && !line.starts_with("---") {
-                    Style::default().fg(Color::Red)
+                    Style::default().fg(t.diff_removed)
                 } else if line.starts_with("@@") {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(t.diff_hunk)
                 } else if line.starts_with("diff ") || line.starts_with("index ") {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(t.diff_meta)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(t.diff_context)
                 };
                 Line::from(Span::styled(line, style))
             })
@@ -246,10 +253,14 @@ impl FileList {
 
 /// Build the `[sub: …]` tag spans for a submodule file row.
 /// `state` is independent from `warn` — both can be present and compose.
-fn submodule_tag_spans(state: &Option<SubmoduleState>, warn: &SubmoduleWarn) -> Vec<Span<'static>> {
-    let bracket_style = Style::default().fg(Color::LightMagenta);
-    let unpushed_style = Style::default().fg(Color::Green);
-    let unreach_style = Style::default().fg(Color::LightRed);
+fn submodule_tag_spans(
+    state: &Option<SubmoduleState>,
+    warn: &SubmoduleWarn,
+    theme: &FileListTheme,
+) -> Vec<Span<'static>> {
+    let bracket_style = Style::default().fg(theme.submodule_bracket);
+    let unpushed_style = Style::default().fg(theme.submodule_unpushed);
+    let unreach_style = Style::default().fg(theme.submodule_unreachable);
 
     let mut inner: Vec<Span<'static>> = Vec::new();
 
@@ -429,7 +440,8 @@ mod tag_tests {
     use super::*;
 
     fn rendered(state: Option<SubmoduleState>, warn: SubmoduleWarn) -> String {
-        submodule_tag_spans(&state, &warn)
+        let theme = FileListTheme::default();
+        submodule_tag_spans(&state, &warn, &theme)
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>()

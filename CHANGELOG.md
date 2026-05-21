@@ -2,6 +2,17 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.0] - 2026-05-21
+
+### Added
+- Stash indicator on the repo row (`$N`) when a repo has stashed work; legend entry next to the existing markers
+- Themeable colors: every UI color now reads from a centralized `Theme`. Pick a built-in via `theme = "default"` or `theme = "muted"` in `config.toml`, or set `theme = "<name>"` to load a custom file from `<config_dir>/gitpane/themes/<name>.toml`
+- `muted` preset built for dark terminals where the default `Light*` colors feel too bright
+
+### Fixed
+- Repo list now counts ahead commits for branches without an upstream (freshly-created local branches with remote refs present), matching `git log HEAD --not --remotes` semantics
+- Submodule unpushed-commit counts also benefit from the new no-upstream walk
+
 ## [0.6.2] - 2026-05-09
 
 ### Fixed

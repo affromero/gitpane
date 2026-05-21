@@ -3,13 +3,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::action::Action;
+use crate::theme::Theme;
 
 pub(crate) struct PathInput {
     pub visible: bool,
@@ -17,16 +19,18 @@ pub(crate) struct PathInput {
     cursor: usize,
     completions: Vec<String>,
     completion_index: Option<usize>,
+    theme: Arc<Theme>,
 }
 
 impl PathInput {
-    pub fn new() -> Self {
+    pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             visible: false,
             input: String::new(),
             cursor: 0,
             completions: Vec::new(),
             completion_index: None,
+            theme,
         }
     }
 
@@ -207,17 +211,20 @@ impl PathInput {
             ""
         };
 
+        let t = &self.theme.overlay;
         let mut spans = vec![
             Span::styled(
                 " Add repo: ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(t.path_input_prompt)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(before_cursor),
             Span::styled(
                 cursor_char,
-                Style::default().bg(Color::White).fg(Color::Black),
+                Style::default()
+                    .bg(t.path_input_caret_bg)
+                    .fg(t.path_input_caret_fg),
             ),
             Span::raw(after_cursor),
         ];
@@ -225,13 +232,13 @@ impl PathInput {
         if let Some(idx) = self.completion_index {
             spans.push(Span::styled(
                 format!("  ({}/{})", idx + 1, self.completions.len()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.path_input_hint),
             ));
         }
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(t.path_input_border))
             .title(" Path (Tab: complete, Enter: add, Esc: cancel) ");
 
         let paragraph = Paragraph::new(Line::from(spans)).block(block);

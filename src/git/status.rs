@@ -19,6 +19,8 @@ pub(crate) struct RepoStatus {
     pub has_unpushed_submodules: bool,
     /// True when the last `git fetch` failed (auth, network, timeout)
     pub fetch_failed: bool,
+    /// Number of entries in the local stash (`git stash list` count).
+    pub stash_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,7 +119,14 @@ fn query_status_inner(
     fetch: bool,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    let repo = Repository::open(path)?;
+    let mut repo = Repository::open(path)?;
+
+    // Stash count: requires &mut, so do this before any immutable borrow of `repo`.
+    let mut stash_count = 0usize;
+    let _ = repo.stash_foreach(|_, _, _| {
+        stash_count += 1;
+        true
+    });
 
     // Branch name
     let branch = match repo.head() {
@@ -291,6 +300,7 @@ fn query_status_inner(
         has_dirty_submodules,
         has_unpushed_submodules,
         fetch_failed,
+        stash_count,
     })
 }
 
@@ -403,6 +413,17 @@ fn fetch_remote_silent(path: &Path) -> bool {
     }
 }
 
+/// Returns (ahead, behind) for HEAD relative to its publishing target.
+///
+/// Fast path: if HEAD's branch has a configured upstream, use git2's
+/// `graph_ahead_behind` against that upstream's tip.
+///
+/// Fallback (no upstream, e.g. a freshly-created local branch): walk HEAD
+/// hiding every `refs/remotes/*` tip, count what remains. Semantics match
+/// `git log HEAD --not --remotes`. `behind` is always 0 in this case (there
+/// is no single ref to be behind of). If the repo has no remote-tracking
+/// refs at all, returns (0, 0) since "unpushed" needs a remote to mean
+/// anything.
 fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {
     let head = match repo.head() {
         Ok(h) => h,
@@ -419,24 +440,49 @@ fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {
         None => return (0, 0),
     };
 
-    // Use git2's branch upstream tracking instead of hardcoding "origin"
     let branch = match repo.find_branch(&branch_name, git2::BranchType::Local) {
         Ok(b) => b,
         Err(_) => return (0, 0),
     };
 
-    let upstream = match branch.upstream() {
-        Ok(u) => u,
+    if let Ok(upstream) = branch.upstream()
+        && let Some(upstream_oid) = upstream.get().target()
+    {
+        return repo
+            .graph_ahead_behind(local_oid, upstream_oid)
+            .unwrap_or((0, 0));
+    }
+
+    ahead_against_remote_tips(repo, local_oid)
+}
+
+/// Count commits reachable from `local_oid` but not from any
+/// `refs/remotes/*` tip. Used when the branch has no configured upstream.
+fn ahead_against_remote_tips(repo: &Repository, local_oid: git2::Oid) -> (usize, usize) {
+    let mut walk = match repo.revwalk() {
+        Ok(w) => w,
         Err(_) => return (0, 0),
     };
+    if walk.push(local_oid).is_err() {
+        return (0, 0);
+    }
 
-    let upstream_oid = match upstream.get().target() {
-        Some(oid) => oid,
-        None => return (0, 0),
-    };
+    let mut any_remote = false;
+    if let Ok(branches) = repo.branches(Some(git2::BranchType::Remote)) {
+        for (branch, _) in branches.flatten() {
+            if let Some(tip) = branch.get().target() {
+                any_remote = true;
+                let _ = walk.hide(tip);
+            }
+        }
+    }
 
-    repo.graph_ahead_behind(local_oid, upstream_oid)
-        .unwrap_or((0, 0))
+    if !any_remote {
+        return (0, 0);
+    }
+
+    let count = walk.filter_map(Result::ok).count();
+    (count, 0)
 }
 
 #[cfg(test)]
@@ -1128,5 +1174,123 @@ mod tests {
         for sub in &status.submodules {
             assert!(sub.warn.is_clean());
         }
+    }
+
+    fn add_commit_on_head(repo: &Repository, file: &str, contents: &str) -> git2::Oid {
+        let workdir = repo.workdir().unwrap().to_path_buf();
+        fs::write(workdir.join(file), contents).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(file)).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &format!("Add {}", file),
+            &tree,
+            &[&parent],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_ahead_count_when_no_upstream_with_remote_ref() {
+        // Local branch with no configured upstream but with a remote-tracking
+        // ref at commit A. After two new local commits B, C, ahead == 2.
+        let (tmp, repo) = init_temp_repo();
+        let a = repo.head().unwrap().target().unwrap();
+        repo.reference("refs/remotes/origin/main", a, true, "test setup")
+            .unwrap();
+        add_commit_on_head(&repo, "b.txt", "b");
+        add_commit_on_head(&repo, "c.txt", "c");
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.ahead, 2);
+        assert_eq!(status.behind, 0);
+    }
+
+    #[test]
+    fn test_no_remotes_keeps_zero_ahead() {
+        // Repo with no remote-tracking refs at all. Two commits beyond the
+        // initial one should report ahead == 0 because "unpushed" needs a
+        // remote to mean anything.
+        let (tmp, repo) = init_temp_repo();
+        add_commit_on_head(&repo, "b.txt", "b");
+        add_commit_on_head(&repo, "c.txt", "c");
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.ahead, 0);
+        assert_eq!(status.behind, 0);
+    }
+
+    #[test]
+    fn test_stash_count_zero_when_no_stash() {
+        let (tmp, _repo) = init_temp_repo();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 0);
+    }
+
+    #[test]
+    fn test_stash_count_reflects_stash_save() {
+        let (tmp, mut repo) = init_temp_repo();
+        // Add a tracked file in an initial commit so stash has a baseline.
+        add_commit_on_head(&repo, "tracked.txt", "v1");
+
+        // Modify it and stash.
+        fs::write(tmp.path().join("tracked.txt"), "v2").unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        repo.stash_save2(&sig, None, None).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 1);
+
+        // Stash again.
+        fs::write(tmp.path().join("tracked.txt"), "v3").unwrap();
+        repo.stash_save2(&sig, None, None).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 2);
+    }
+
+    #[test]
+    fn test_ahead_count_when_head_shares_only_root_with_unrelated_remote() {
+        // HEAD chain: A -> B -> C. Remote tip: D (a sibling of B, off A).
+        // The merge-base of HEAD and the remote tip is A. Walking C and
+        // hiding D hides D and A; C and B remain. Expect ahead == 2.
+        let (tmp, repo) = init_temp_repo();
+        let a = repo.head().unwrap().target().unwrap();
+
+        // Build an unrelated sibling commit D off A on a detached state.
+        let a_commit = repo.find_commit(a).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let workdir = repo.workdir().unwrap().to_path_buf();
+        fs::write(workdir.join("d.txt"), "d").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("d.txt")).unwrap();
+        let d_tree_id = index.write_tree().unwrap();
+        let d_tree = repo.find_tree(d_tree_id).unwrap();
+        let d = repo
+            .commit(None, &sig, &sig, "D", &d_tree, &[&a_commit])
+            .unwrap();
+        // Reset the index so the next HEAD commits don't carry d.txt.
+        index.remove_path(Path::new("d.txt")).unwrap();
+        index.write().unwrap();
+        fs::remove_file(workdir.join("d.txt")).unwrap();
+
+        // Publish D as a remote tip.
+        repo.reference("refs/remotes/origin/other", d, true, "test setup")
+            .unwrap();
+
+        // Advance HEAD with B and C off A.
+        add_commit_on_head(&repo, "b.txt", "b");
+        add_commit_on_head(&repo, "c.txt", "c");
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.ahead, 2);
+        assert_eq!(status.behind, 0);
     }
 }

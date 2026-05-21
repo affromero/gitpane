@@ -3,18 +3,20 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
+use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RepoEntry {
@@ -42,10 +44,11 @@ pub(crate) struct RepoList {
     expanded_repos: HashSet<RepoId>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
+    theme: Arc<Theme>,
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -75,6 +78,7 @@ impl RepoList {
             action_tx: None,
             expanded_repos: HashSet::new(),
             display_rows: Vec::new(),
+            theme,
         };
         list.rebuild_display_rows();
         list
@@ -222,96 +226,99 @@ impl RepoList {
     }
 
     fn render_repo_item(&self, entry: &RepoEntry, _repo_idx: usize) -> ListItem<'static> {
+        let t = &self.theme.repo_list;
         let mut spans = Vec::new();
 
-        // Dirty / git-op indicator
         if entry.git_op {
-            spans.push(Span::styled("~ ", Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled("~ ", Style::default().fg(t.git_op_marker)));
         } else if entry.status.as_ref().map(|s| s.is_dirty).unwrap_or(false) {
-            spans.push(Span::styled("* ", Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
         } else {
             spans.push(Span::raw("  "));
         }
 
         if let Some(status) = &entry.status {
-            // Branch name
             spans.push(Span::styled(
                 format!("{:<12} ", status.branch),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(t.branch),
             ));
 
-            // Ahead/behind
             if status.ahead > 0 {
                 spans.push(Span::styled(
                     format!("\u{2191}{} ", status.ahead),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(t.ahead),
                 ));
             }
             if status.behind > 0 {
                 spans.push(Span::styled(
                     format!("\u{2193}{} ", status.behind),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(t.behind),
                 ));
             }
 
-            // Worktree expand/collapse indicator
+            if status.stash_count > 0 {
+                spans.push(Span::styled(
+                    format!("${} ", status.stash_count),
+                    Style::default().fg(t.stash),
+                ));
+            }
+
             if !status.worktree_info.is_empty() {
                 let id = RepoId(entry.path.clone());
                 let expanded = self.expanded_repos.contains(&id);
                 let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
                 spans.push(Span::styled(
                     format!("{}{} ", icon, status.worktree_info.len()),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(t.worktree_count),
                 ));
             }
 
-            // Dirty submodule indicator
             if status.has_dirty_submodules {
                 spans.push(Span::styled(
                     "\u{25c8} ",
-                    Style::default().fg(Color::LightMagenta),
+                    Style::default().fg(t.dirty_submodule),
                 ));
             }
 
-            // Unpushed-submodule indicator (committed pointer or local commits not on remote)
             if status.has_unpushed_submodules {
                 spans.push(Span::styled(
                     "\u{21e1} ",
-                    Style::default().fg(Color::LightRed),
+                    Style::default().fg(t.unpushed_submodule),
                 ));
             }
 
-            // Fetch failure indicator
             if status.fetch_failed {
                 spans.push(Span::styled(
                     "\u{26a0} ",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.fetch_failed),
                 ));
             }
 
-            // Change count
             if !status.files.is_empty() {
                 spans.push(Span::styled(
                     format!("[{}] ", status.files.len()),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(t.file_count),
                 ));
             }
         }
 
-        // Repo name
         spans.push(Span::styled(
             entry.name.clone(),
-            Style::default().fg(Color::White),
+            Style::default().fg(t.repo_name),
         ));
 
         ListItem::new(Line::from(spans))
     }
 
     fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
+        let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
         let spans = vec![
-            Span::styled("    \u{2387} ", Style::default().fg(Color::DarkGray)),
-            Span::styled(wt.branch.clone(), Style::default().fg(Color::Magenta)),
+            Span::styled("    \u{2387} ", Style::default().fg(t.worktree_subtree_icon)),
+            Span::styled(
+                wt.branch.clone(),
+                Style::default().fg(t.worktree_subtree_branch),
+            ),
         ];
         ListItem::new(Line::from(spans))
     }
@@ -442,10 +449,11 @@ impl Component for RepoList {
             })
             .collect();
 
+        let t = &self.theme.repo_list;
         let border_color = if self.focused {
-            Color::Cyan
+            t.border_focused
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
 
         let list = List::new(items)
@@ -457,7 +465,7 @@ impl Component for RepoList {
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(t.selection_bg)
                     .add_modifier(Modifier::BOLD),
             );
 
