@@ -5,6 +5,7 @@ mod config;
 mod event;
 mod git;
 mod repo_id;
+mod theme;
 mod tui;
 mod update_checker;
 mod watcher;

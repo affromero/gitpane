@@ -6,6 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::theme::Theme;
+
 const APP_NAME: &str = "gitpane";
 const CONFIG_FILE: &str = "config.toml";
 
@@ -27,6 +29,8 @@ pub(crate) struct Config {
     pub graph: GraphConfig,
     #[serde(default)]
     pub submodules: SubmoduleConfig,
+    #[serde(default)]
+    pub theme: Theme,
     #[serde(skip, default)]
     pub(crate) loaded_path: Option<PathBuf>,
     #[serde(skip, default)]
@@ -296,6 +300,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
+            theme: Theme::default(),
             loaded_path: None,
             write_target_override: None,
         }
