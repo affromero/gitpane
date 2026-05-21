@@ -395,7 +395,32 @@ impl Config {
     }
 
     fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
-        let dirs = candidate_theme_dirs(env);
+        let mut dirs = Vec::new();
+        // Look beside the active config first, so `$GITPANE_CONFIG` overrides
+        // and any non-standard config location can ship their own themes
+        // dir without depending on XDG.
+        for source in [
+            self.loaded_path.as_deref(),
+            self.write_target_override.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(parent) = source.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                let parent = parent.to_path_buf();
+                if !dirs.contains(&parent) {
+                    dirs.push(parent);
+                }
+            }
+        }
+        for dir in candidate_theme_dirs(env) {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+
         match load_theme(&self.theme_name, &dirs) {
             Ok(theme) => self.theme = theme,
             Err(e @ LoadThemeError::Unknown { .. }) => {
@@ -1039,6 +1064,31 @@ mod tests {
         assert_eq!(
             config.theme.repo_list.dirty_marker,
             ratatui::style::Color::Yellow
+        );
+    }
+
+    #[test]
+    fn test_load_with_env_loads_custom_theme_next_to_gitpane_config_override() {
+        // $GITPANE_CONFIG points to a config file in a non-XDG location.
+        // A themes/ dir next to that file must be searched, otherwise
+        // custom themes shipped alongside the override silently fall back
+        // to the default.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("custom-config.toml");
+        fs::write(&cfg_path, "theme = \"mine\"").unwrap();
+        let themes_dir = tmp.path().join("themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("mine.toml"), "[repo_list]\nstash = \"Magenta\"\n").unwrap();
+
+        let env = MockEnv {
+            gitpane_config: Some(cfg_path.clone()),
+            existing: HashSet::from([cfg_path.clone()]),
+            ..Default::default()
+        };
+        let config = Config::load_with_env(&env).unwrap();
+        assert_eq!(
+            config.theme.repo_list.stash,
+            ratatui::style::Color::Magenta
         );
     }
 
