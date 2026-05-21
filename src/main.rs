@@ -80,10 +80,12 @@ async fn main() -> Result<()> {
 
 fn list_themes() -> Result<()> {
     let env = config::RealEnv;
-    let dirs = config::candidate_theme_dirs(&env);
-    let current = config::Config::load()?.theme_name;
+    let config = config::Config::load()?;
+    // Use the loaded config's full search list so $GITPANE_CONFIG-adjacent
+    // custom themes show up even though they live outside XDG.
+    let dirs = config.theme_dirs(&env);
     for name in theme::discover_all_theme_names(&dirs) {
-        let marker = if name == current { "*" } else { " " };
+        let marker = if name == config.theme_name { "*" } else { " " };
         println!("{marker} {name}");
     }
     Ok(())

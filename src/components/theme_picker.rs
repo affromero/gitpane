@@ -18,6 +18,11 @@ pub(crate) struct ThemePicker {
     themes: Vec<String>,
     state: ListState,
     original_name: Option<String>,
+    /// Theme snapshot captured when the picker opened. Used by cancel so we
+    /// restore the actual colors that were live, even if `original_name`
+    /// no longer resolves (e.g. the custom file was deleted while the
+    /// picker was open).
+    original_theme: Option<Arc<Theme>>,
     action_tx: Option<UnboundedSender<Action>>,
     theme: Arc<Theme>,
 }
@@ -29,6 +34,7 @@ impl ThemePicker {
             themes: Vec::new(),
             state: ListState::default(),
             original_name: None,
+            original_theme: None,
             action_tx: None,
             theme,
         }
@@ -43,10 +49,12 @@ impl ThemePicker {
     }
 
     /// Open the picker with the given list of theme names, centering selection
-    /// on `current` if present.
-    pub fn show(&mut self, themes: Vec<String>, current: &str) {
+    /// on `current` if present. The currently-active `Arc<Theme>` is captured
+    /// so cancel can restore it byte-for-byte.
+    pub fn show(&mut self, themes: Vec<String>, current: &str, current_theme: Arc<Theme>) {
         self.themes = themes;
         self.original_name = Some(current.to_string());
+        self.original_theme = Some(current_theme);
         let initial = self.themes.iter().position(|n| n == current).unwrap_or(0);
         self.state.select(Some(initial));
         self.visible = true;
@@ -56,11 +64,16 @@ impl ThemePicker {
         self.visible = false;
         self.themes.clear();
         self.original_name = None;
+        self.original_theme = None;
         self.state.select(None);
     }
 
     pub fn original_name(&self) -> Option<String> {
         self.original_name.clone()
+    }
+
+    pub fn original_theme(&self) -> Option<Arc<Theme>> {
+        self.original_theme.clone()
     }
 
     fn select_next(&mut self) -> Option<&String> {

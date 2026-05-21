@@ -207,13 +207,13 @@ impl RepoList {
                     worktree_branch: wt.branch.clone(),
                 })
             }
-            DisplayRow::Stash(_, _) => {
-                // Stash rows are navigation-only markers for now: returning
-                // SelectRepo would snap the highlight back to the parent row
-                // (Action::SelectRepo calls select_repo_row), trapping
-                // navigation through the subtree. Emit nothing; the file
-                // list / graph stay showing the parent repo's data.
-                None
+            DisplayRow::Stash(ri, _) => {
+                // Re-target the file list / graph to the stash's parent repo
+                // (so a stash row click from another repo updates the right
+                // details), but do NOT call select_repo_row — that would
+                // snap the cursor off the stash and back onto the Repo row.
+                let id = RepoId(self.repos[*ri].path.clone());
+                Some(Action::FocusRepoDetails(id))
             }
         }
     }

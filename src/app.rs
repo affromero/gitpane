@@ -412,6 +412,28 @@ impl App {
                             self.repo_list.select_repo_row(idx);
                         }
                     }
+                    Action::FocusRepoDetails(ref id) => {
+                        // Same panel refresh as SelectRepo but without
+                        // moving the list selection — used by child rows
+                        // (currently stash entries) so the cursor can
+                        // remain on the child while the details panels
+                        // re-target onto that child's parent repo.
+                        self.context_menu.hide();
+                        self.active_worktree = None;
+                        if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let entry = &self.repo_list.repos[idx];
+                            let name = entry.name.clone();
+                            let path = entry.path.clone();
+                            let repo_id = id.clone();
+                            let files = entry
+                                .status
+                                .as_ref()
+                                .map(|s| s.files.clone())
+                                .unwrap_or_default();
+                            self.file_list.set_files(files, &name, repo_id);
+                            self.git_graph.load_repo(path, &name);
+                        }
+                    }
                     Action::SelectWorktree {
                         ref repo_id,
                         ref worktree_path,
@@ -1301,7 +1323,9 @@ impl App {
                         let env = crate::config::RealEnv;
                         let dirs = self.config.theme_dirs(&env);
                         let themes = discover_all_theme_names(&dirs);
-                        self.theme_picker.show(themes, &self.config.theme_name);
+                        let current_name = self.config.theme_name.clone();
+                        let current_theme = self.theme.clone();
+                        self.theme_picker.show(themes, &current_name, current_theme);
                     }
                     Action::PreviewTheme(name) => {
                         let env = crate::config::RealEnv;
@@ -1340,14 +1364,14 @@ impl App {
                         self.theme_picker.hide();
                     }
                     Action::CancelThemePreview => {
-                        let original = self
-                            .theme_picker
-                            .original_name()
-                            .unwrap_or_else(|| self.config.theme_name.clone());
-                        let env = crate::config::RealEnv;
-                        let dirs = self.config.theme_dirs(&env);
-                        if let Ok(t) = load_theme(&original, &dirs) {
-                            self.apply_theme(Arc::new(t));
+                        // Prefer the captured Arc<Theme> snapshot so cancel
+                        // restores the exact colors that were live when the
+                        // picker opened, even if the original theme name no
+                        // longer loads (deleted custom file, etc.).
+                        if let Some(theme_snapshot) = self.theme_picker.original_theme() {
+                            self.apply_theme(theme_snapshot);
+                        }
+                        if let Some(original) = self.theme_picker.original_name() {
                             self.config.theme_name = original;
                         }
                         self.theme_picker.hide();

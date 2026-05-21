@@ -12,6 +12,9 @@ pub(crate) enum Action {
     SelectNextRepo,
     SelectPrevRepo,
     SelectRepo(RepoId),
+    /// Update the file list and graph to a repo's data without moving the
+    /// list-row selection. Used when a child row (stash entry) is highlighted.
+    FocusRepoDetails(RepoId),
     SelectWorktree {
         repo_id: RepoId,
         worktree_path: std::path::PathBuf,
