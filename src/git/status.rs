@@ -19,6 +19,8 @@ pub(crate) struct RepoStatus {
     pub has_unpushed_submodules: bool,
     /// True when the last `git fetch` failed (auth, network, timeout)
     pub fetch_failed: bool,
+    /// Number of entries in the local stash (`git stash list` count).
+    pub stash_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,7 +119,14 @@ fn query_status_inner(
     fetch: bool,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    let repo = Repository::open(path)?;
+    let mut repo = Repository::open(path)?;
+
+    // Stash count: requires &mut, so do this before any immutable borrow of `repo`.
+    let mut stash_count = 0usize;
+    let _ = repo.stash_foreach(|_, _, _| {
+        stash_count += 1;
+        true
+    });
 
     // Branch name
     let branch = match repo.head() {
@@ -291,6 +300,7 @@ fn query_status_inner(
         has_dirty_submodules,
         has_unpushed_submodules,
         fetch_failed,
+        stash_count,
     })
 }
 
@@ -1215,6 +1225,35 @@ mod tests {
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert_eq!(status.ahead, 0);
         assert_eq!(status.behind, 0);
+    }
+
+    #[test]
+    fn test_stash_count_zero_when_no_stash() {
+        let (tmp, _repo) = init_temp_repo();
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 0);
+    }
+
+    #[test]
+    fn test_stash_count_reflects_stash_save() {
+        let (tmp, mut repo) = init_temp_repo();
+        // Add a tracked file in an initial commit so stash has a baseline.
+        add_commit_on_head(&repo, "tracked.txt", "v1");
+
+        // Modify it and stash.
+        fs::write(tmp.path().join("tracked.txt"), "v2").unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        repo.stash_save2(&sig, None, None).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 1);
+
+        // Stash again.
+        fs::write(tmp.path().join("tracked.txt"), "v3").unwrap();
+        repo.stash_save2(&sig, None, None).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(status.stash_count, 2);
     }
 
     #[test]

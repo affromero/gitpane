@@ -101,6 +101,8 @@ impl Component for StatusBar {
                 Span::styled("pull ", Style::default().fg(s.legend_text)),
                 Span::styled("\u{21e1}", Style::default().fg(r.unpushed_submodule)),
                 Span::styled(" subs unpushed ", Style::default().fg(s.legend_text)),
+                Span::styled("$", Style::default().fg(r.stash)),
+                Span::styled(" stash ", Style::default().fg(s.legend_text)),
                 Span::styled("[n]", Style::default().fg(r.file_count)),
                 Span::styled(" files  ", Style::default().fg(s.legend_text)),
                 dim_sep(s),

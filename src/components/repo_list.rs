@@ -256,6 +256,13 @@ impl RepoList {
                 ));
             }
 
+            if status.stash_count > 0 {
+                spans.push(Span::styled(
+                    format!("${} ", status.stash_count),
+                    Style::default().fg(t.stash),
+                ));
+            }
+
             if !status.worktree_info.is_empty() {
                 let id = RepoId(entry.path.clone());
                 let expanded = self.expanded_repos.contains(&id);
