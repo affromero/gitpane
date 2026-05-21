@@ -1078,7 +1078,11 @@ mod tests {
         fs::write(&cfg_path, "theme = \"mine\"").unwrap();
         let themes_dir = tmp.path().join("themes");
         fs::create_dir_all(&themes_dir).unwrap();
-        fs::write(themes_dir.join("mine.toml"), "[repo_list]\nstash = \"Magenta\"\n").unwrap();
+        fs::write(
+            themes_dir.join("mine.toml"),
+            "[repo_list]\nstash = \"Magenta\"\n",
+        )
+        .unwrap();
 
         let env = MockEnv {
             gitpane_config: Some(cfg_path.clone()),
@@ -1086,10 +1090,7 @@ mod tests {
             ..Default::default()
         };
         let config = Config::load_with_env(&env).unwrap();
-        assert_eq!(
-            config.theme.repo_list.stash,
-            ratatui::style::Color::Magenta
-        );
+        assert_eq!(config.theme.repo_list.stash, ratatui::style::Color::Magenta);
     }
 
     #[test]
@@ -1101,7 +1102,11 @@ mod tests {
         fs::write(&cfg_path, "theme = \"mine\"").unwrap();
         let themes_dir = config_dir.join("themes");
         fs::create_dir_all(&themes_dir).unwrap();
-        fs::write(themes_dir.join("mine.toml"), "[repo_list]\nstash = \"Magenta\"\n").unwrap();
+        fs::write(
+            themes_dir.join("mine.toml"),
+            "[repo_list]\nstash = \"Magenta\"\n",
+        )
+        .unwrap();
 
         let env = MockEnv {
             xdg_config_home: Some(tmp.path().to_path_buf()),
@@ -1109,9 +1114,6 @@ mod tests {
             ..Default::default()
         };
         let config = Config::load_with_env(&env).unwrap();
-        assert_eq!(
-            config.theme.repo_list.stash,
-            ratatui::style::Color::Magenta
-        );
+        assert_eq!(config.theme.repo_list.stash, ratatui::style::Color::Magenta);
     }
 }

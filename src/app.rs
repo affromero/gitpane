@@ -1717,7 +1717,10 @@ impl App {
 
         let line = Line::from(vec![
             Span::styled(" \u{2191} ", Style::default().fg(t.update_toast_arrow)),
-            Span::styled(format!("v{version}"), Style::default().fg(t.update_toast_version)),
+            Span::styled(
+                format!("v{version}"),
+                Style::default().fg(t.update_toast_version),
+            ),
             Span::styled(
                 " \u{00b7} cargo install gitpane ",
                 Style::default().fg(t.update_toast_install),

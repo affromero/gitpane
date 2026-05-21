@@ -27,14 +27,32 @@ impl std::fmt::Display for LoadThemeError {
                 searched,
                 custom,
             } => {
-                write!(f, "unknown theme '{name}'. Built-in: {}", builtins.join(", "))?;
+                write!(
+                    f,
+                    "unknown theme '{name}'. Built-in: {}",
+                    builtins.join(", ")
+                )?;
                 if !custom.is_empty() {
-                    write!(f, ". Custom (in {}): {}",
-                        searched.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "),
-                        custom.join(", "))?;
+                    write!(
+                        f,
+                        ". Custom (in {}): {}",
+                        searched
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        custom.join(", ")
+                    )?;
                 } else if !searched.is_empty() {
-                    write!(f, ". Searched: {}",
-                        searched.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))?;
+                    write!(
+                        f,
+                        ". Searched: {}",
+                        searched
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
                 }
                 Ok(())
             }
@@ -52,10 +70,7 @@ const BUILT_IN_THEMES: &[&str] = &["default", "muted"];
 /// Resolve a theme by name. Built-ins (`default`, `muted`) are returned
 /// directly; any other name is treated as a custom theme file living at
 /// `<dir>/gitpane/themes/<name>.toml` for each candidate `<dir>`.
-pub(crate) fn load_theme(
-    name: &str,
-    candidate_dirs: &[PathBuf],
-) -> Result<Theme, LoadThemeError> {
+pub(crate) fn load_theme(name: &str, candidate_dirs: &[PathBuf]) -> Result<Theme, LoadThemeError> {
     match name {
         "default" => return Ok(Theme::default()),
         "muted" => return Ok(muted()),
@@ -125,10 +140,7 @@ mod tests {
     #[test]
     fn load_default_returns_default_theme() {
         let theme = load_theme("default", &[]).unwrap();
-        assert_eq!(
-            theme.repo_list.dirty_marker,
-            ratatui::style::Color::Yellow
-        );
+        assert_eq!(theme.repo_list.dirty_marker, ratatui::style::Color::Yellow);
     }
 
     #[test]
@@ -147,7 +159,10 @@ mod tests {
         let err = load_theme("nope", &candidates).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unknown theme 'nope'"), "got: {msg}");
-        assert!(msg.contains("default"), "expected built-ins in error: {msg}");
+        assert!(
+            msg.contains("default"),
+            "expected built-ins in error: {msg}"
+        );
         assert!(msg.contains("muted"), "expected built-ins in error: {msg}");
     }
 

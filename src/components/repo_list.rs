@@ -314,7 +314,10 @@ impl RepoList {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
         let spans = vec![
-            Span::styled("    \u{2387} ", Style::default().fg(t.worktree_subtree_icon)),
+            Span::styled(
+                "    \u{2387} ",
+                Style::default().fg(t.worktree_subtree_icon),
+            ),
             Span::styled(
                 wt.branch.clone(),
                 Style::default().fg(t.worktree_subtree_branch),
