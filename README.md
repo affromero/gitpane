@@ -131,6 +131,9 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty-first) |
+| `w` | Toggle worktree subtree for the selected repo |
+| `S` | Toggle stash subtree for the selected repo |
+| `t` | Open the theme picker (live preview, Enter to persist) |
 | `y` | Copy selected item to clipboard |
 | `q` | Quit (or close diff if one is open) |
 | `Esc` | Navigate back through panels, then quit |
@@ -261,6 +264,12 @@ lane_palette = ["Red", "#5fafd7", "Cyan", "67", "Magenta", "Yellow"]
 ```
 
 Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...), 8-bit indices as bare integers (`"67"`), or 24-bit hex (`"#5fafd7"`). If `$GITPANE_CONFIG` points to a non-XDG location, the `themes/` directory next to that file is searched first.
+
+**Switching themes:**
+
+- **From inside the app**: press `t` to open the picker. Up/Down (or `j`/`k`) cycles through themes with live preview, `Enter` saves the choice to `config.toml`, `Esc` cancels and restores.
+- **From the shell**: `gitpane --theme muted` overrides the active theme for one run without modifying `config.toml`.
+- **List available themes**: `gitpane themes` prints every built-in and custom theme, with a marker on the currently-resolved one.
 
 ## Troubleshooting
 

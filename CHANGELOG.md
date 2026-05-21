@@ -2,6 +2,23 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.1] - 2026-05-21
+
+### Added
+- In-app theme picker: press `t` from any panel to open a modal list of every available theme (built-in + custom), preview live as you cycle, Enter to persist, Esc to revert
+- `gitpane --theme <name>` CLI flag to override the active theme for a single run without touching `config.toml`
+- `gitpane themes` subcommand prints all available themes with a marker on the currently-resolved one
+- Expandable stash subtree on the repo row: press `S` to toggle a `▶/▼ $N` chevron and list each `stash@{n}` underneath, mirroring the existing worktree UX. Click on an already-selected repo with stashes (and no worktrees) also toggles
+- Worktree subtree rows now show their own `$N` stash count, since linked worktrees keep stashes under `.git/worktrees/<name>/refs/stash`
+
+### Changed
+- Default-theme color split: worktree indicators move from `Magenta` to `Color::Indexed(214)` amber/gold; stash moves from `Color::Indexed(67)` steel blue (too close to the Cyan branch) to `Color::Indexed(127)` dark magenta
+- `muted` preset tracks the new color split (Orange3 for worktree, Plum4 for stash)
+- Release workflow now extracts the per-version `CHANGELOG.md` section and passes it to GitHub Release as the body, so future releases never ship with an empty body
+
+### Fixed
+- Stash indicator now visible on linked worktree rows; previously only the main repo row reported its stash count
+
 ## [0.7.0] - 2026-05-21
 
 ### Added
