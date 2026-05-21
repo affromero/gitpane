@@ -35,6 +35,11 @@ pub(crate) struct Config {
     pub theme_name: String,
     #[serde(skip, default)]
     pub theme: Theme,
+    /// Session-only theme override (set by `--theme`). Not serialized; the
+    /// `theme_name` field on disk is preserved across saves while this is
+    /// active. The picker reads this via `effective_theme_name()`.
+    #[serde(skip, default)]
+    pub runtime_theme_override: Option<String>,
     #[serde(skip, default)]
     pub(crate) loaded_path: Option<PathBuf>,
     #[serde(skip, default)]
@@ -328,6 +333,7 @@ impl Default for Config {
             submodules: SubmoduleConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
+            runtime_theme_override: None,
             loaded_path: None,
             write_target_override: None,
         }
@@ -398,6 +404,14 @@ impl Config {
         self.resolve_theme(env);
     }
 
+    /// The theme name actually in effect right now: a CLI `--theme` override
+    /// takes precedence over the value persisted in `theme_name`.
+    pub fn effective_theme_name(&self) -> &str {
+        self.runtime_theme_override
+            .as_deref()
+            .unwrap_or(&self.theme_name)
+    }
+
     /// Full theme-search list including any dir beside the active config
     /// (`loaded_path` / `write_target_override`). Use this for the in-app
     /// picker and any other code that needs to mirror `resolve_theme`'s
@@ -429,9 +443,10 @@ impl Config {
     }
 
     fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+        let name = self.effective_theme_name().to_string();
         let dirs = self.theme_dirs(env);
 
-        match load_theme(&self.theme_name, &dirs) {
+        match load_theme(&name, &dirs) {
             Ok(theme) => self.theme = theme,
             Err(e @ LoadThemeError::Unknown { .. }) => {
                 tracing::warn!("{e}; falling back to default theme");

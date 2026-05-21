@@ -67,7 +67,10 @@ async fn main() -> Result<()> {
         config.override_root(root);
     }
     if let Some(theme_name) = cli.theme {
-        config.theme_name = theme_name;
+        // Apply as a session-only override so `config.save()` (triggered by
+        // unrelated TUI actions: add repo, rescan, ...) does not persist
+        // the CLI choice.
+        config.runtime_theme_override = Some(theme_name);
         config.resolve_theme_with_env(&config::RealEnv);
     }
     config.ui.frame_rate = cli.frame_rate;

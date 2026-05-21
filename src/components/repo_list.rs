@@ -29,7 +29,7 @@ pub(crate) struct RepoEntry {
 
 /// Maps a visual row in the list to either a repo, one of its worktrees,
 /// or one of its stash entries.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum DisplayRow {
     Repo(usize),
     Worktree(usize, usize), // (repo_index, worktree_index)
@@ -228,6 +228,30 @@ impl RepoList {
         }
     }
 
+    /// Snapshot the currently-selected DisplayRow before a rebuild that may
+    /// reshuffle indices (subtree expand/collapse).
+    fn snapshot_selection(&self) -> Option<DisplayRow> {
+        let di = self.state.selected()?;
+        self.display_rows.get(di).cloned()
+    }
+
+    /// Re-select the same logical row after rebuild_display_rows runs.
+    /// Falls back to the parent Repo row if the previous row is gone (e.g.
+    /// its subtree was collapsed).
+    fn restore_selection(&mut self, prev: Option<DisplayRow>) {
+        let Some(prev) = prev else { return };
+        let parent_idx = match &prev {
+            DisplayRow::Repo(i) => *i,
+            DisplayRow::Worktree(ri, _) => *ri,
+            DisplayRow::Stash(ri, _) => *ri,
+        };
+        if let Some(new_idx) = self.display_rows.iter().position(|r| *r == prev) {
+            self.state.select(Some(new_idx));
+        } else {
+            self.select_repo_row(parent_idx);
+        }
+    }
+
     /// Toggle stash expansion for the repo at the current selection.
     fn toggle_stash_expand(&mut self) {
         let Some(repo_idx) = self.current_parent_repo() else {
@@ -239,6 +263,7 @@ impl RepoList {
             return;
         }
         let id = RepoId(entry.path.clone());
+        let prev = self.snapshot_selection();
         if self.expanded_stashes.contains(&id) {
             self.expanded_stashes.remove(&id);
             self.rebuild_display_rows();
@@ -246,6 +271,7 @@ impl RepoList {
         } else {
             self.expanded_stashes.insert(id);
             self.rebuild_display_rows();
+            self.restore_selection(prev);
         }
     }
 
@@ -269,6 +295,7 @@ impl RepoList {
             return;
         }
         let id = RepoId(entry.path.clone());
+        let prev = self.snapshot_selection();
         if self.expanded_repos.contains(&id) {
             // Collapsing: move selection to the parent repo row
             self.expanded_repos.remove(&id);
@@ -277,6 +304,7 @@ impl RepoList {
         } else {
             self.expanded_repos.insert(id);
             self.rebuild_display_rows();
+            self.restore_selection(prev);
         }
     }
 

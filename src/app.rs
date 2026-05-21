@@ -1323,7 +1323,7 @@ impl App {
                         let env = crate::config::RealEnv;
                         let dirs = self.config.theme_dirs(&env);
                         let themes = discover_all_theme_names(&dirs);
-                        let current_name = self.config.theme_name.clone();
+                        let current_name = self.config.effective_theme_name().to_string();
                         let current_theme = self.theme.clone();
                         self.theme_picker.show(themes, &current_name, current_theme);
                     }
@@ -1333,7 +1333,10 @@ impl App {
                         match load_theme(&name, &dirs) {
                             Ok(t) => {
                                 self.apply_theme(Arc::new(t));
-                                self.config.theme_name = name;
+                                // Preview routes through the session
+                                // override so unrelated saves do not pin
+                                // the previewed name to disk.
+                                self.config.runtime_theme_override = Some(name);
                             }
                             Err(e) => {
                                 tracing::warn!("theme preview failed: {e}");
@@ -1346,6 +1349,10 @@ impl App {
                         match load_theme(&name, &dirs) {
                             Ok(t) => {
                                 self.apply_theme(Arc::new(t));
+                                // Commit is explicit: drop the runtime
+                                // override and promote the choice to the
+                                // persisted field.
+                                self.config.runtime_theme_override = None;
                                 self.config.theme_name = name.clone();
                                 if let Err(e) = self.config.save() {
                                     tracing::warn!("failed to persist theme: {e}");
@@ -1364,15 +1371,27 @@ impl App {
                         self.theme_picker.hide();
                     }
                     Action::CancelThemePreview => {
-                        // Prefer the captured Arc<Theme> snapshot so cancel
-                        // restores the exact colors that were live when the
-                        // picker opened, even if the original theme name no
-                        // longer loads (deleted custom file, etc.).
+                        // Restore the captured Arc<Theme> snapshot byte-for-
+                        // byte so cancel works even if the original theme
+                        // name no longer loads.
                         if let Some(theme_snapshot) = self.theme_picker.original_theme() {
                             self.apply_theme(theme_snapshot);
                         }
-                        if let Some(original) = self.theme_picker.original_name() {
-                            self.config.theme_name = original;
+                        // Re-establish the original override state. If the
+                        // captured "current" matches the persisted name,
+                        // there was no runtime override before the picker
+                        // opened; otherwise a `--theme` override was active.
+                        let original = self.theme_picker.original_name();
+                        match original {
+                            Some(name) if name == self.config.theme_name => {
+                                self.config.runtime_theme_override = None;
+                            }
+                            Some(name) => {
+                                self.config.runtime_theme_override = Some(name);
+                            }
+                            None => {
+                                self.config.runtime_theme_override = None;
+                            }
                         }
                         self.theme_picker.hide();
                     }
