@@ -161,6 +161,7 @@ pub(crate) struct App {
     /// When a worktree row is selected, stores context for diff/status routing
     /// and live-polling the worktree's changes.
     active_worktree: Option<ActiveWorktree>,
+    theme: Arc<crate::theme::Theme>,
 }
 
 #[derive(Clone)]
@@ -174,8 +175,9 @@ impl App {
     pub fn new(config: Config) -> Self {
         let repo_paths = scanner::discover_repos(&config);
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let theme = Arc::new(config.theme.clone());
 
-        let mut git_graph = GitGraph::new();
+        let mut git_graph = GitGraph::new(theme.clone());
         git_graph.graph_options = GraphOptions {
             branch_filter: config.graph.branches,
             label_max_len: config.graph.label_max_len,
@@ -191,13 +193,13 @@ impl App {
         Self {
             config,
             should_quit: false,
-            repo_list: RepoList::new(repo_paths),
-            file_list: FileList::new(),
+            repo_list: RepoList::new(repo_paths, theme.clone()),
+            file_list: FileList::new(theme.clone()),
             git_graph,
-            confirm_dialog: ConfirmDialog::new(),
-            context_menu: ContextMenu::new(),
-            path_input: PathInput::new(),
-            status_bar: StatusBar::new(),
+            confirm_dialog: ConfirmDialog::new(theme.clone()),
+            context_menu: ContextMenu::new(theme.clone()),
+            path_input: PathInput::new(theme.clone()),
+            status_bar: StatusBar::new(theme.clone()),
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
             action_tx,
@@ -217,6 +219,7 @@ impl App {
             pending_status: HashSet::new(),
             dirty_repos: HashSet::new(),
             active_worktree: None,
+            theme,
         }
     }
 
@@ -1250,7 +1253,7 @@ impl App {
                             tracing::error!("Failed to save config: {}", e);
                         }
                         let repo_paths = scanner::discover_repos(&self.config);
-                        self.repo_list = RepoList::new(repo_paths);
+                        self.repo_list = RepoList::new(repo_paths, self.theme.clone());
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;
@@ -1602,7 +1605,7 @@ impl App {
         // Vertical mode doesn't need this — the full-width horizontal borders
         // are already easy grab targets, and painting over them destroys titles.
         if self.horizontal_layout {
-            use ratatui::style::{Color, Style};
+            use ratatui::style::Style;
 
             let buf = frame.buffer_mut();
             for (dragging, x_a, x_b) in [
@@ -1618,9 +1621,9 @@ impl App {
                 ),
             ] {
                 let color = if dragging {
-                    Color::Yellow
+                    self.theme.overlay.border_drag_active
                 } else {
-                    Color::DarkGray
+                    self.theme.overlay.border_drag_idle
                 };
                 let style = Style::default().fg(color);
                 for x in [x_a, x_b] {
@@ -1633,10 +1636,8 @@ impl App {
                 }
             }
         } else if self.dragging_border.is_some() {
-            // In vertical mode, only highlight the seam during active drag
-            use ratatui::style::{Color, Style};
-
-            let style = Style::default().fg(Color::Yellow);
+            use ratatui::style::Style;
+            let style = Style::default().fg(self.theme.overlay.border_drag_active);
             let buf = frame.buffer_mut();
             for (dragging, y) in [
                 (self.dragging_border == Some(0), changes_area.y),
@@ -1693,13 +1694,14 @@ impl App {
 
 impl App {
     fn draw_update_notification(&self, frame: &mut ratatui::Frame, area: Rect, version: &str) {
-        use ratatui::style::{Color, Style};
+        use ratatui::style::Style;
         use ratatui::text::{Line, Span};
         use ratatui::widgets::{Block, Borders, Paragraph};
 
+        let t = &self.theme.overlay;
         let text = format!(" \u{2191} v{version} \u{00b7} cargo install gitpane ");
-        let width = text.len() as u16 + 2; // +2 for border
-        let height = 3; // top border + content + bottom border
+        let width = text.len() as u16 + 2;
+        let height = 3;
 
         if area.width < width || area.height < height {
             return;
@@ -1714,17 +1716,17 @@ impl App {
         let rect = Rect::new(x, y, width, height);
 
         let line = Line::from(vec![
-            Span::styled(" \u{2191} ", Style::default().fg(Color::Green)),
-            Span::styled(format!("v{version}"), Style::default().fg(Color::Yellow)),
+            Span::styled(" \u{2191} ", Style::default().fg(t.update_toast_arrow)),
+            Span::styled(format!("v{version}"), Style::default().fg(t.update_toast_version)),
             Span::styled(
                 " \u{00b7} cargo install gitpane ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.update_toast_install),
             ),
         ]);
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(t.update_toast_border));
 
         let paragraph = Paragraph::new(line).block(block);
 
@@ -1733,11 +1735,12 @@ impl App {
     }
 
     fn draw_help(&self, frame: &mut ratatui::Frame, area: Rect) {
-        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::style::{Modifier, Style};
         use ratatui::text::{Line, Span};
         use ratatui::widgets::{Block, Borders, Paragraph};
 
-        let key = |k: &str| Span::styled(format!("  {k:<10}"), Style::default().fg(Color::Yellow));
+        let t = &self.theme.overlay;
+        let key = |k: &str| Span::styled(format!("  {k:<10}"), Style::default().fg(t.help_key));
         let desc = |d: &str| Span::raw(d.to_string());
         let section = |title: &str| {
             Line::from(Span::styled(
@@ -1808,8 +1811,8 @@ impl App {
         let block = Block::default()
             .title(format!(" Keybindings \u{2014} {panel_name} "))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(t.help_border))
+            .style(Style::default().bg(t.help_bg));
 
         frame.render_widget(ratatui::widgets::Clear, help_area);
         let paragraph = Paragraph::new(lines).block(block);

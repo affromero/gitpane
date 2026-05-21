@@ -3,17 +3,19 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::graph::{BranchSegment, GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
+use crate::theme::Theme;
 
 struct CommitDetail {
     oid: String,
@@ -88,10 +90,11 @@ pub(crate) struct GitGraph {
     load_generation: u64,
     /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
     detail_generation: u64,
+    theme: Arc<Theme>,
 }
 
 impl GitGraph {
-    pub fn new() -> Self {
+    pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             rows: Vec::new(),
             all_rows: Vec::new(),
@@ -117,6 +120,7 @@ impl GitGraph {
             needs_reload: false,
             load_generation: 0,
             detail_generation: 0,
+            theme,
         }
     }
 
@@ -525,10 +529,11 @@ impl GitGraph {
             (false, 0) => format!(" Git Graph — {} ", self.repo_name),
             (false, n) => format!(" Git Graph — {} ({n} collapsed) ", self.repo_name),
         };
+        let t = &self.theme.graph;
         let border_color = if self.focused && self.commit_detail.is_none() {
-            Color::Cyan
+            t.border_focused
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
 
         let block = Block::default()
@@ -538,7 +543,7 @@ impl GitGraph {
 
         if self.loading {
             let paragraph = Paragraph::new("Loading graph...")
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(t.loading))
                 .block(block);
             frame.render_widget(paragraph, area);
             return;
@@ -546,7 +551,7 @@ impl GitGraph {
 
         if let Some(ref err) = self.error {
             let paragraph = Paragraph::new(err.as_str())
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(t.error_text))
                 .block(block);
             frame.render_widget(paragraph, area);
             return;
@@ -554,7 +559,7 @@ impl GitGraph {
 
         if self.display_rows().is_empty() {
             let paragraph = Paragraph::new("No commits")
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(t.empty))
                 .block(block);
             frame.render_widget(paragraph, area);
             return;
@@ -570,28 +575,27 @@ impl GitGraph {
             .map(|(i, row)| {
                 let dimmed = has_search && !self.search.matches.contains(&i);
                 let is_collapsed = row.collapsed.is_some();
-                let mut spans = graph_render::render_graph_prefix(row);
+                let mut spans = graph_render::render_graph_prefix(row, t);
 
                 if dimmed || is_collapsed {
                     for span in &mut spans {
-                        span.style = Style::default().fg(Color::DarkGray);
+                        span.style = Style::default().fg(t.dimmed);
                     }
                 }
 
                 if is_collapsed {
-                    // Collapsed placeholder: show only the message with italic style
                     spans.push(Span::styled(
                         row.message.clone(),
                         Style::default()
-                            .fg(Color::Rgb(130, 130, 130))
+                            .fg(t.collapsed_message)
                             .add_modifier(Modifier::ITALIC),
                     ));
                 } else {
                     let id_style = if dimmed {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(t.dimmed)
                     } else {
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(t.commit_id)
                             .add_modifier(Modifier::BOLD)
                     };
                     spans.push(Span::styled(format!("{} ", row.short_id), id_style));
@@ -600,15 +604,16 @@ impl GitGraph {
                         spans.extend(graph_render::render_branch_labels(
                             &row.labels,
                             label_max_len,
+                            t,
                         ));
                     }
 
                     let msg_color = if dimmed {
-                        Color::DarkGray
+                        t.dimmed
                     } else if row.is_merge {
-                        Color::Rgb(130, 130, 130)
+                        t.merge_message
                     } else {
-                        Color::White
+                        t.commit_message
                     };
                     spans.push(Span::styled(
                         row.message.clone(),
@@ -616,9 +621,9 @@ impl GitGraph {
                     ));
 
                     let author_color = if dimmed {
-                        Color::DarkGray
+                        t.dimmed
                     } else {
-                        graph_render::author_color(&row.author)
+                        graph_render::author_color(&row.author, t)
                     };
                     spans.push(Span::styled(
                         format!("  — {}", row.author),
@@ -626,7 +631,7 @@ impl GitGraph {
                     ));
                     spans.push(Span::styled(
                         format!(" {}", graph_render::format_relative_time(row.time)),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.time),
                     ));
 
                     if let Some(ref stat) = row.diff_stat
@@ -635,13 +640,13 @@ impl GitGraph {
                         if stat.additions > 0 {
                             spans.push(Span::styled(
                                 format!(" +{}", stat.additions),
-                                Style::default().fg(Color::Green),
+                                Style::default().fg(t.addition),
                             ));
                         }
                         if stat.deletions > 0 {
                             spans.push(Span::styled(
                                 format!(" -{}", stat.deletions),
-                                Style::default().fg(Color::Red),
+                                Style::default().fg(t.deletion),
                             ));
                         }
                     }
@@ -654,20 +659,22 @@ impl GitGraph {
 
         let list = List::new(items).block(block).highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(t.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
 
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
-    fn draw_commit_files(detail: &mut CommitDetail, frame: &mut Frame, area: Rect) {
+    fn draw_commit_files(
+        detail: &mut CommitDetail,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &crate::theme::GraphTheme,
+    ) {
         let title = format!(" Files — {} ", &detail.oid[..7.min(detail.oid.len())]);
 
-        // Split area: commit message at top, file list below
         let msg_line_count = detail.message.lines().count().max(1) as u16;
-        // Cap message height: 2 for border + lines, max ~1/3 of area
-        // Always guarantee at least 3 (1 content line + 2 borders)
         let msg_height = (msg_line_count + 2).min(area.height / 3).clamp(3, 8);
 
         let chunks = Layout::default()
@@ -675,31 +682,28 @@ impl GitGraph {
             .constraints([Constraint::Length(msg_height), Constraint::Min(3)])
             .split(area);
 
-        // Store sub-rects for mouse handling
         detail.msg_area = chunks[0];
         detail.file_list_area = chunks[1];
 
-        // Draw commit message block
         let msg_block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(theme.commit_msg_border));
 
         let msg_paragraph = Paragraph::new(detail.message.as_str())
-            .style(Style::default().fg(Color::White))
+            .style(Style::default().fg(theme.commit_msg_text))
             .block(msg_block)
             .wrap(Wrap { trim: false })
             .scroll((detail.msg_scroll, 0));
         frame.render_widget(msg_paragraph, chunks[0]);
 
-        // Draw file list block
         let files_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(theme.commit_files_border));
 
         if detail.files.is_empty() {
             let paragraph = Paragraph::new("No files changed")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(theme.commit_files_empty))
                 .block(files_block);
             frame.render_widget(paragraph, chunks[1]);
             return;
@@ -710,18 +714,18 @@ impl GitGraph {
             .iter()
             .map(|(status, path)| {
                 let color = match status.as_str() {
-                    "M" => Color::Yellow,
-                    "A" => Color::Green,
-                    "D" => Color::Red,
-                    "R" => Color::Blue,
-                    _ => Color::DarkGray,
+                    "M" => theme.commit_files_status_modified,
+                    "A" => theme.commit_files_status_added,
+                    "D" => theme.commit_files_status_deleted,
+                    "R" => theme.commit_files_status_renamed,
+                    _ => theme.commit_files_status_other,
                 };
                 let spans = vec![
                     Span::styled(
                         format!(" {} ", status),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(path, Style::default().fg(Color::White)),
+                    Span::styled(path, Style::default().fg(theme.commit_files_path)),
                 ];
                 ListItem::new(Line::from(spans))
             })
@@ -729,14 +733,19 @@ impl GitGraph {
 
         let list = List::new(items).block(files_block).highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(theme.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
 
         frame.render_stateful_widget(list, chunks[1], &mut detail.file_state);
     }
 
-    fn draw_commit_diff(detail: &CommitDetail, frame: &mut Frame, area: Rect) {
+    fn draw_commit_diff(
+        detail: &CommitDetail,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &crate::theme::GraphTheme,
+    ) {
         let Some(ref content) = detail.diff_content else {
             return;
         };
@@ -744,21 +753,21 @@ impl GitGraph {
         let block = Block::default()
             .title(" Commit Diff (Esc to close) ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(theme.commit_diff_border));
 
         let lines: Vec<Line> = content
             .lines()
             .map(|line| {
                 let style = if line.starts_with('+') && !line.starts_with("+++") {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(theme.commit_diff_added)
                 } else if line.starts_with('-') && !line.starts_with("---") {
-                    Style::default().fg(Color::Red)
+                    Style::default().fg(theme.commit_diff_removed)
                 } else if line.starts_with("@@") {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(theme.commit_diff_hunk)
                 } else if line.starts_with("diff ") || line.starts_with("index ") {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.commit_diff_meta)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.commit_diff_context)
                 };
                 Line::from(Span::styled(line, style))
             })
@@ -1025,10 +1034,10 @@ impl Component for GitGraph {
                 self.diff_area = chunks[2];
 
                 self.draw_graph_list(frame, chunks[0]);
-                // Borrow detail mutably for drawing
+                let graph_theme = self.theme.graph.clone();
                 let detail = self.commit_detail.as_mut().unwrap();
-                Self::draw_commit_files(detail, frame, chunks[1]);
-                Self::draw_commit_diff(detail, frame, chunks[2]);
+                Self::draw_commit_files(detail, frame, chunks[1], &graph_theme);
+                Self::draw_commit_diff(detail, frame, chunks[2], &graph_theme);
             }
             Some(_) => {
                 // Graph 50% | Files 50%
@@ -1047,8 +1056,9 @@ impl Component for GitGraph {
                 self.diff_area = Rect::default();
 
                 self.draw_graph_list(frame, chunks[0]);
+                let graph_theme = self.theme.graph.clone();
                 let detail = self.commit_detail.as_mut().unwrap();
-                Self::draw_commit_files(detail, frame, chunks[1]);
+                Self::draw_commit_files(detail, frame, chunks[1], &graph_theme);
             }
             None => {
                 self.graph_list_area = area;
@@ -1076,8 +1086,11 @@ impl Component for GitGraph {
                     .min(overlay_text.len() as u16 + 2),
                 1,
             );
-            let overlay = Paragraph::new(overlay_text)
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            let overlay = Paragraph::new(overlay_text).style(
+                Style::default()
+                    .fg(self.theme.graph.search_overlay_fg)
+                    .bg(self.theme.graph.search_overlay_bg),
+            );
             frame.render_widget(overlay, overlay_area);
         }
 
@@ -1111,7 +1124,7 @@ mod tests {
 
     #[test]
     fn test_search_matches_message() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             mock_row("abc1234", "fix: resolve crash", "Alice"),
             mock_row("def5678", "feat: add login", "Bob"),
@@ -1126,7 +1139,7 @@ mod tests {
 
     #[test]
     fn test_search_matches_author() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             mock_row("abc1234", "first", "Alice"),
             mock_row("def5678", "second", "Bob"),
@@ -1141,7 +1154,7 @@ mod tests {
 
     #[test]
     fn test_search_matches_short_id() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             mock_row("abc1234", "first", "Alice"),
             mock_row("def5678", "second", "Bob"),
@@ -1155,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_search_case_insensitive() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![mock_row("abc1234", "Fix Bug", "Alice")]);
 
         graph.search.input = "fix bug".to_string();
@@ -1166,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_search_next_wraps_around() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             mock_row("a", "match", "X"),
             mock_row("b", "no", "Y"),
@@ -1190,7 +1203,7 @@ mod tests {
 
     #[test]
     fn test_search_prev_wraps_around() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             mock_row("a", "match", "X"),
             mock_row("b", "no", "Y"),
@@ -1208,7 +1221,7 @@ mod tests {
 
     #[test]
     fn test_search_empty_input_no_matches() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![mock_row("a", "hello", "X")]);
 
         graph.search.input.clear();
@@ -1220,7 +1233,7 @@ mod tests {
 
     #[test]
     fn test_search_no_results() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![mock_row("a", "hello", "Alice")]);
 
         graph.search.input = "zzzzz".to_string();
@@ -1287,7 +1300,7 @@ mod tests {
 
     #[test]
     fn test_collapse_labeled_branch() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(make_branch_rows(vec![make_label("feature")]));
         // Select tip (row 1 in all_rows, row 1 in display)
         graph.state.select(Some(1));
@@ -1303,7 +1316,7 @@ mod tests {
 
     #[test]
     fn test_collapse_unlabeled_merge_lane() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         // No labels on the side branch
         graph.set_rows(make_branch_rows(vec![]));
         graph.state.select(Some(2)); // select base row of side branch
@@ -1317,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_expand_collapsed_group() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(make_branch_rows(vec![make_label("feature")]));
         graph.state.select(Some(1));
         graph.toggle_collapse_selected();
@@ -1333,7 +1346,7 @@ mod tests {
 
     #[test]
     fn test_collapse_from_middle_of_branch() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(make_branch_rows(vec![make_label("feature")]));
         // Select the base row (row 2) — should collapse the whole segment
         graph.state.select(Some(2));
@@ -1346,7 +1359,7 @@ mod tests {
 
     #[test]
     fn test_expand_all() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(make_branch_rows(vec![make_label("feat-a")]));
         graph.state.select(Some(1));
         graph.toggle_collapse_selected();
@@ -1359,7 +1372,7 @@ mod tests {
 
     #[test]
     fn test_main_trunk_not_collapsible() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(make_branch_rows(vec![]));
         // Select main trunk row (row 0)
         graph.state.select(Some(0));
@@ -1379,7 +1392,7 @@ mod tests {
         let oid_b = Oid::from_str(OID_B).unwrap();
         let oid_c = Oid::from_str(OID_C).unwrap();
 
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         graph.set_rows(vec![
             dag_row(OID_M, "m0", vec![oid_c], 0, vec![make_label("main")]),
             dag_row(OID_A, "a", vec![oid_b], 1, vec![]),
@@ -1401,7 +1414,7 @@ mod tests {
 
     #[test]
     fn test_unlabeled_branch_collapsible() {
-        let mut graph = GitGraph::new();
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
         // No labels on any side-branch row
         graph.set_rows(make_branch_rows(vec![]));
         graph.state.select(Some(1));

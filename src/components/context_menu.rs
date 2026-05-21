@@ -3,15 +3,17 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
 use crate::repo_id::RepoId;
+use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
 enum MenuAction {
@@ -40,10 +42,11 @@ pub(crate) struct ContextMenu {
     state: ListState,
     last_rendered_area: Rect,
     action_tx: Option<UnboundedSender<Action>>,
+    theme: Arc<Theme>,
 }
 
 impl ContextMenu {
-    pub fn new() -> Self {
+    pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             visible: false,
             repo_id: None,
@@ -52,6 +55,7 @@ impl ContextMenu {
             state: ListState::default(),
             last_rendered_area: Rect::default(),
             action_tx: None,
+            theme,
         }
     }
 
@@ -263,18 +267,21 @@ impl Component for ContextMenu {
 
         frame.render_widget(Clear, rect);
 
+        let t = &self.theme.overlay;
         let items: Vec<ListItem> = self
             .items
             .iter()
             .map(|item| {
                 let style = match item.action {
-                    MenuAction::Push => Style::default().fg(Color::Green),
+                    MenuAction::Push => Style::default().fg(t.context_menu_push),
                     MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => {
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(t.context_menu_pull)
                     }
                     MenuAction::SubmoduleUpdate
                     | MenuAction::SubmoduleSync
-                    | MenuAction::SubmoduleUpdateLatest => Style::default().fg(Color::LightMagenta),
+                    | MenuAction::SubmoduleUpdateLatest => {
+                        Style::default().fg(t.context_menu_submodule)
+                    }
                     _ => Style::default(),
                 };
                 ListItem::new(Line::from(Span::styled(&item.label, style)))
@@ -285,11 +292,11 @@ impl Component for ContextMenu {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .border_style(Style::default().fg(t.context_menu_border)),
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(t.context_menu_selection_bg)
                     .add_modifier(Modifier::BOLD),
             );
 
