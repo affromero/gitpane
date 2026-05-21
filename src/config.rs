@@ -394,6 +394,10 @@ impl Config {
         Ok(config)
     }
 
+    pub(crate) fn resolve_theme_with_env(&mut self, env: &dyn ConfigEnv) {
+        self.resolve_theme(env);
+    }
+
     fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
         let mut dirs = Vec::new();
         // Look beside the active config first, so `$GITPANE_CONFIG` overrides

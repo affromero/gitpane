@@ -21,6 +21,10 @@ struct Cli {
     #[arg(long)]
     root: Option<PathBuf>,
 
+    /// Override the active theme for this run (does not modify config.toml)
+    #[arg(long)]
+    theme: Option<String>,
+
     /// UI frame rate (deprecated — rendering is now on-demand)
     #[arg(long, default_value_t = 10, hide = true)]
     frame_rate: u16,
@@ -33,6 +37,8 @@ struct Cli {
 enum Command {
     /// Update gitpane to the latest version via cargo install
     Update,
+    /// List available themes (built-in + custom)
+    Themes,
 }
 
 #[tokio::main]
@@ -41,8 +47,10 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Command::Update) = cli.command {
-        return self_update();
+    match cli.command {
+        Some(Command::Update) => return self_update(),
+        Some(Command::Themes) => return list_themes(),
+        None => {}
     }
 
     tracing_subscriber::fmt()
@@ -58,11 +66,26 @@ async fn main() -> Result<()> {
     if let Some(root) = cli.root {
         config.override_root(root);
     }
+    if let Some(theme_name) = cli.theme {
+        config.theme_name = theme_name;
+        config.resolve_theme_with_env(&config::RealEnv);
+    }
     config.ui.frame_rate = cli.frame_rate;
 
     let mut app = app::App::new(config);
     app.run().await?;
 
+    Ok(())
+}
+
+fn list_themes() -> Result<()> {
+    let env = config::RealEnv;
+    let dirs = config::candidate_theme_dirs(&env);
+    let current = config::Config::load()?.theme_name;
+    for name in theme::discover_all_theme_names(&dirs) {
+        let marker = if name == current { "*" } else { " " };
+        println!("{marker} {name}");
+    }
     Ok(())
 }
 
