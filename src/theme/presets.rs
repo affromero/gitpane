@@ -20,8 +20,11 @@ pub(crate) fn muted() -> Theme {
     t.repo_list.unpushed_submodule = Color::Indexed(167);
     t.repo_list.repo_name = Color::Indexed(252); // Grey82
     t.repo_list.branch = Color::Indexed(73); // CadetBlue
-    t.repo_list.worktree_count = Color::Indexed(133);
-    t.repo_list.worktree_subtree_branch = Color::Indexed(133);
+    // Worktree = warm amber, stash = dark magenta. Stays clear of the
+    // cyan branch and the LightMagenta dirty-submodule slot.
+    t.repo_list.worktree_count = Color::Indexed(172); // Orange3, dimmer than default's 214
+    t.repo_list.worktree_subtree_branch = Color::Indexed(172);
+    t.repo_list.stash = Color::Indexed(96); // Plum4
     t.repo_list.border_focused = Color::Indexed(73);
 
     // StatusBar: error/success backgrounds softened.

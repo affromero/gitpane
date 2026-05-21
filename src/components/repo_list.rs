@@ -313,16 +313,22 @@ impl RepoList {
     fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
-        let spans = vec![
+        let mut spans = vec![
             Span::styled(
                 "    \u{2387} ",
                 Style::default().fg(t.worktree_subtree_icon),
             ),
             Span::styled(
-                wt.branch.clone(),
+                format!("{} ", wt.branch),
                 Style::default().fg(t.worktree_subtree_branch),
             ),
         ];
+        if wt.stash_count > 0 {
+            spans.push(Span::styled(
+                format!("${} ", wt.stash_count),
+                Style::default().fg(t.stash),
+            ));
+        }
         ListItem::new(Line::from(spans))
     }
 }
