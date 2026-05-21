@@ -89,9 +89,6 @@ pub(crate) struct WorktreeEntry {
     pub name: String,
     pub path: PathBuf,
     pub branch: String,
-    /// Stash entries in this worktree (linked worktrees have their own
-    /// `.git/worktrees/<name>/refs/stash`).
-    pub stash_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -389,26 +386,17 @@ fn collect_worktree_info(repo: &Repository) -> Vec<WorktreeEntry> {
             Err(_) => continue,
         };
         let wt_path = wt.path().to_path_buf();
-        let (branch, stash_count) = match Repository::open(&wt_path) {
-            Ok(mut wt_repo) => {
-                let branch = match wt_repo.head() {
-                    Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
-                    Err(_) => "(no branch)".to_string(),
-                };
-                let mut count = 0usize;
-                let _ = wt_repo.stash_foreach(|_, _, _| {
-                    count += 1;
-                    true
-                });
-                (branch, count)
-            }
+        let branch = match Repository::open(&wt_path) {
+            Ok(wt_repo) => match wt_repo.head() {
+                Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
+                Err(_) => "(no branch)".to_string(),
+            },
             Err(_) => continue,
         };
         entries.push(WorktreeEntry {
             name: name.to_string(),
             path: wt_path,
             branch,
-            stash_count,
         });
     }
     entries

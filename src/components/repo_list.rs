@@ -207,11 +207,13 @@ impl RepoList {
                     worktree_branch: wt.branch.clone(),
                 })
             }
-            DisplayRow::Stash(ri, _) => {
-                // Stash rows don't drive a separate detail view yet; the
-                // parent repo stays selected for diff/graph routing.
-                let id = RepoId(self.repos[*ri].path.clone());
-                Some(Action::SelectRepo(id))
+            DisplayRow::Stash(_, _) => {
+                // Stash rows are navigation-only markers for now: returning
+                // SelectRepo would snap the highlight back to the parent row
+                // (Action::SelectRepo calls select_repo_row), trapping
+                // navigation through the subtree. Emit nothing; the file
+                // list / graph stay showing the parent repo's data.
+                None
             }
         }
     }
@@ -369,22 +371,16 @@ impl RepoList {
     fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
-        let mut spans = vec![
+        let spans = vec![
             Span::styled(
                 "    \u{2387} ",
                 Style::default().fg(t.worktree_subtree_icon),
             ),
             Span::styled(
-                format!("{} ", wt.branch),
+                wt.branch.clone(),
                 Style::default().fg(t.worktree_subtree_branch),
             ),
         ];
-        if wt.stash_count > 0 {
-            spans.push(Span::styled(
-                format!("${} ", wt.stash_count),
-                Style::default().fg(t.stash),
-            ));
-        }
         ListItem::new(Line::from(spans))
     }
 

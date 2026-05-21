@@ -1299,13 +1299,13 @@ impl App {
                     }
                     Action::OpenThemePicker => {
                         let env = crate::config::RealEnv;
-                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        let dirs = self.config.theme_dirs(&env);
                         let themes = discover_all_theme_names(&dirs);
                         self.theme_picker.show(themes, &self.config.theme_name);
                     }
                     Action::PreviewTheme(name) => {
                         let env = crate::config::RealEnv;
-                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        let dirs = self.config.theme_dirs(&env);
                         match load_theme(&name, &dirs) {
                             Ok(t) => {
                                 self.apply_theme(Arc::new(t));
@@ -1318,7 +1318,7 @@ impl App {
                     }
                     Action::CommitTheme(name) => {
                         let env = crate::config::RealEnv;
-                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        let dirs = self.config.theme_dirs(&env);
                         match load_theme(&name, &dirs) {
                             Ok(t) => {
                                 self.apply_theme(Arc::new(t));
@@ -1345,7 +1345,7 @@ impl App {
                             .original_name()
                             .unwrap_or_else(|| self.config.theme_name.clone());
                         let env = crate::config::RealEnv;
-                        let dirs = crate::config::candidate_theme_dirs(&env);
+                        let dirs = self.config.theme_dirs(&env);
                         if let Ok(t) = load_theme(&original, &dirs) {
                             self.apply_theme(Arc::new(t));
                             self.config.theme_name = original;

@@ -398,11 +398,12 @@ impl Config {
         self.resolve_theme(env);
     }
 
-    fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+    /// Full theme-search list including any dir beside the active config
+    /// (`loaded_path` / `write_target_override`). Use this for the in-app
+    /// picker and any other code that needs to mirror `resolve_theme`'s
+    /// lookup semantics.
+    pub(crate) fn theme_dirs(&self, env: &dyn ConfigEnv) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        // Look beside the active config first, so `$GITPANE_CONFIG` overrides
-        // and any non-standard config location can ship their own themes
-        // dir without depending on XDG.
         for source in [
             self.loaded_path.as_deref(),
             self.write_target_override.as_deref(),
@@ -424,6 +425,11 @@ impl Config {
                 dirs.push(dir);
             }
         }
+        dirs
+    }
+
+    fn resolve_theme(&mut self, env: &dyn ConfigEnv) {
+        let dirs = self.theme_dirs(env);
 
         match load_theme(&self.theme_name, &dirs) {
             Ok(theme) => self.theme = theme,
