@@ -14,6 +14,9 @@ pub(crate) struct BranchLabel {
     pub is_remote: bool,
     pub is_worktree: bool,
     pub is_tag: bool,
+    /// Label points at a commit that is the parent of a stash entry
+    /// (`stash@{n}`). Rendered with the stash theme color.
+    pub is_stash: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -92,8 +95,9 @@ impl GraphBuilder {
         path: &Path,
         options: &GraphOptions,
     ) -> color_eyre::Result<Vec<GraphRow>> {
-        let repo = Repository::open(path)?;
+        let mut repo = Repository::open(path)?;
         let mut ref_map = resolve_refs(&repo, &options.branch_filter);
+        merge_stash_labels(&mut repo, &mut ref_map);
 
         let mut revwalk = repo.revwalk()?;
         revwalk.push_head().ok(); // ok: handles unborn HEAD
@@ -425,6 +429,7 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
                 is_remote,
                 is_worktree,
                 is_tag: false,
+                is_stash: false,
             });
         }
     }
@@ -448,6 +453,7 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
                     is_remote: false,
                     is_worktree: false,
                     is_tag: true,
+                    is_stash: false,
                 });
             }
         }
@@ -465,6 +471,35 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
     }
 
     map
+}
+
+/// Attach a `stash@{n}` label to the commit each stash was created on top of
+/// (i.e. the stash entry's first parent). The stash commit itself is not
+/// pushed into the revwalk, so its index/untracked tree parents don't
+/// pollute the graph. Existing labels for that oid are preserved.
+fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, Vec<BranchLabel>>) {
+    let mut stash_entries: Vec<(usize, Oid)> = Vec::new();
+    let _ = repo.stash_foreach(|index, _msg, oid| {
+        stash_entries.push((index, *oid));
+        true
+    });
+
+    for (index, oid) in stash_entries {
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let Some(parent_oid) = commit.parent_id(0).ok() else {
+            continue;
+        };
+        map.entry(parent_oid).or_default().push(BranchLabel {
+            name: format!("stash@{{{index}}}"),
+            is_head: false,
+            is_remote: false,
+            is_worktree: false,
+            is_tag: false,
+            is_stash: true,
+        });
+    }
 }
 
 fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
@@ -837,6 +872,38 @@ mod tests {
         let tag_labels: Vec<_> = tagged_row.labels.iter().filter(|l| l.is_tag).collect();
         assert_eq!(tag_labels.len(), 1);
         assert_eq!(tag_labels[0].name, "v1.0.0");
+    }
+
+    #[test]
+    fn test_stash_label_attaches_to_parent_commit() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        let mut repo = Repository::init(tmp.path()).unwrap();
+
+        // Initial commit so we have a HEAD to stash from.
+        let initial_oid = create_commit(&repo, "init", &[]);
+
+        // Modify the working tree so there's something to stash.
+        let file = tmp.path().join("scratch.txt");
+        fs::write(&file, "uncommitted change").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("scratch.txt")).unwrap();
+        index.write().unwrap();
+
+        let stasher = Signature::now("Test", "test@test.com").unwrap();
+        repo.stash_save2(&stasher, Some("first stash"), None)
+            .unwrap();
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        let parent_row = rows
+            .iter()
+            .find(|r| r.oid == initial_oid)
+            .expect("initial commit row");
+        let stash_labels: Vec<_> = parent_row.labels.iter().filter(|l| l.is_stash).collect();
+        assert_eq!(stash_labels.len(), 1, "expected one stash label");
+        assert_eq!(stash_labels[0].name, "stash@{0}");
     }
 
     #[test]

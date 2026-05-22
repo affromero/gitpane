@@ -98,6 +98,7 @@ pub(crate) fn muted() -> Theme {
     t.graph.tag_label = Color::Indexed(143); // DarkKhaki — much softer than LightYellow
     t.graph.remote_label = Color::Indexed(167);
     t.graph.local_branch_label = Color::Indexed(73);
+    t.graph.stash_label = Color::Indexed(96); // Plum4, matches muted repo_list.stash
 
     // Overlay: same softening across confirm/help/toast.
     t.overlay.context_menu_push = Color::Indexed(71);

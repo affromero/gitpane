@@ -83,7 +83,9 @@ pub(crate) fn render_branch_labels(
             spans.push(Span::styled(", ".to_string(), paren_style));
         }
 
-        let (prefix, color) = if label.is_head {
+        let (prefix, color) = if label.is_stash {
+            ("$ ", theme.stash_label)
+        } else if label.is_head {
             ("* ", theme.head_marker)
         } else if label.is_worktree {
             ("\u{2302} ", theme.worktree_marker)
@@ -254,6 +256,7 @@ mod tests {
             is_remote,
             is_worktree,
             is_tag: false,
+            is_stash: false,
         }
     }
 
@@ -466,6 +469,7 @@ mod tests {
             is_remote: false,
             is_worktree: false,
             is_tag: true,
+            is_stash: false,
         }];
         let spans = render_branch_labels(&labels, 24, &theme);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
@@ -475,6 +479,28 @@ mod tests {
             .find(|s| s.content.as_ref() == "v1.0.0")
             .unwrap();
         assert_eq!(tag_span.style.fg, Some(Color::LightYellow));
+    }
+
+    #[test]
+    fn test_stash_label_renders_with_dollar_prefix_and_stash_color() {
+        let theme = GraphTheme::default();
+        let labels = vec![BranchLabel {
+            name: "stash@{0}".to_string(),
+            is_head: false,
+            is_remote: false,
+            is_worktree: false,
+            is_tag: false,
+            is_stash: true,
+        }];
+        let spans = render_branch_labels(&labels, 24, &theme);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("$ "), "expected '$ ' prefix in {text}");
+        assert!(text.contains("stash@{0}"), "got: {text}");
+        let name_span = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "stash@{0}")
+            .expect("stash label span");
+        assert_eq!(name_span.style.fg, Some(theme.stash_label));
     }
 
     #[test]
