@@ -269,9 +269,15 @@ impl App {
     /// Rebuild the filesystem watcher to match the current `repo_list.repos`
     /// and `config.root_dirs`. The new watcher is constructed before the old
     /// one is dropped, so a transient construction failure leaves the
-    /// previous watches intact rather than silently going unwatched. The
-    /// brief OS-level overlap is harmless — notify's debouncer dedupes
-    /// identical paths within its window.
+    /// previous watches intact rather than silently going unwatched.
+    ///
+    /// On success, the old watcher is dropped by the `Some(w)` assignment.
+    /// Events already buffered in the old watcher's routing channel may
+    /// still surface briefly after the swap, routed against the stale
+    /// repo set. Those late events are absorbed downstream:
+    /// `Action::RefreshRepo` no-ops when `resolve_index` misses, and
+    /// `Action::DiscoverNewRepos` is idempotent. We rely on those
+    /// invariants rather than trying to drain the old channel here.
     fn rebuild_watcher(&mut self) {
         let Some(tx) = self.tui_event_tx.clone() else {
             return;

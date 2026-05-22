@@ -488,7 +488,7 @@ fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, Vec<BranchLa
         let Ok(commit) = repo.find_commit(oid) else {
             continue;
         };
-        let Some(parent_oid) = commit.parent_id(0).ok() else {
+        let Ok(parent_oid) = commit.parent_id(0) else {
             continue;
         };
         map.entry(parent_oid).or_default().push(BranchLabel {
