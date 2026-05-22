@@ -25,6 +25,12 @@ poll_local_secs = 5
 # Remote fetch poll interval in seconds — updates ahead/behind from origin (default: 30)
 poll_fetch_secs = 30
 
+# Minimum seconds between two auto-rescans triggered by root-dir filesystem
+# changes (new clones, deleted repos). Higher values reduce wasted scans
+# during long operations; lower values shorten the delay before a freshly
+# cloned repo appears in the list (default: 5).
+discovery_cooldown_secs = 5
+
 [ui]
 # Terminal refresh rate in frames per second (default: 10)
 frame_rate = 10

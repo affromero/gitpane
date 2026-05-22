@@ -222,9 +222,10 @@ pinned_repos = ["~/Code/important-project"]
 excluded_repos = ["node_modules", ".cargo", "target"]
 
 [watch]
-debounce_ms = 500        # Filesystem change debounce (ms)
-poll_local_secs = 5      # Local status poll interval (catches missed watcher events)
-poll_fetch_secs = 30     # Remote fetch poll interval (updates ahead/behind from origin)
+debounce_ms = 500             # Filesystem change debounce (ms)
+poll_local_secs = 5           # Local status poll interval (catches missed watcher events)
+poll_fetch_secs = 30          # Remote fetch poll interval (updates ahead/behind from origin)
+discovery_cooldown_secs = 5   # Min seconds between auto-rescans on root-dir changes (new clones)
 
 [ui]
 frame_rate = 10              # Terminal refresh rate (fps)

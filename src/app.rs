@@ -171,6 +171,14 @@ pub(crate) struct App {
     watcher: Option<RepoWatcher>,
     /// Clone of `Tui::event_tx` so `rebuild_watcher` can run outside `run()`.
     tui_event_tx: Option<UnboundedSender<Event>>,
+    /// Wall-clock of the last `DiscoverNewRepos` dispatch driven by a
+    /// `ReposRootChanged` event. Drives the leading-edge cooldown that
+    /// coalesces FS-event storms (e.g., the file deluge during `git clone`).
+    last_discovery: Option<Instant>,
+    /// True between a cooldown-suppressed `ReposRootChanged` and the
+    /// trailing-edge `DiscoverNewRepos` that fires once cooldown expires.
+    /// Prevents spawning a second deferred fire while one is already pending.
+    discovery_pending: bool,
 }
 
 #[derive(Clone)]
@@ -232,6 +240,8 @@ impl App {
             theme,
             watcher: None,
             tui_event_tx: None,
+            last_discovery: None,
+            discovery_pending: false,
         }
     }
 
@@ -275,6 +285,7 @@ impl App {
         self.watcher = None;
         match RepoWatcher::new(
             &repo_paths,
+            &self.config.root_dirs,
             self.config.watch.debounce_ms,
             tx,
             &self.config.watch.watch_exclude_dirs,
@@ -390,6 +401,31 @@ impl App {
                     Event::RepoChanged(ref path) => {
                         self.action_tx
                             .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                    }
+                    Event::ReposRootChanged => {
+                        // Leading-edge: fire immediately if outside cooldown.
+                        // Trailing-edge: if events arrive during cooldown,
+                        // schedule one deferred fire so we still pick up
+                        // repos that finished cloning mid-burst.
+                        let cooldown = std::time::Duration::from_secs(
+                            self.config.watch.discovery_cooldown_secs,
+                        );
+                        let now = Instant::now();
+                        let elapsed = self.last_discovery.map(|t| now.duration_since(t));
+                        let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
+                        if !in_cooldown {
+                            self.last_discovery = Some(now);
+                            self.discovery_pending = false;
+                            self.action_tx.send(Action::DiscoverNewRepos)?;
+                        } else if !self.discovery_pending {
+                            self.discovery_pending = true;
+                            let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
+                            let tx = self.action_tx.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(wait).await;
+                                let _ = tx.send(Action::DiscoverNewRepos);
+                            });
+                        }
                     }
                     Event::PollLocal => {
                         self.action_tx.send(Action::PollLocal)?;
@@ -1335,6 +1371,10 @@ impl App {
                         // Idempotent rescan: re-discover, but only mutate state
                         // when the set actually changed. Preserves selection,
                         // exclusions, in-flight queries, and dirty markers.
+                        // Clear the pending-trailing-edge flag and refresh the
+                        // cooldown anchor so back-to-back fires coalesce.
+                        self.discovery_pending = false;
+                        self.last_discovery = Some(Instant::now());
                         let new_paths = scanner::discover_repos(&self.config);
                         let saved_selection: Option<RepoId> = self
                             .repo_list
