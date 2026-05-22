@@ -264,7 +264,7 @@ impl Default for GraphTheme {
             ],
             paren: Color::Yellow,
             head_marker: Color::Green,
-            worktree_marker: Color::Magenta,
+            worktree_marker: Color::Indexed(214),
             tag_label: Color::LightYellow,
             remote_label: Color::Red,
             local_branch_label: Color::Cyan,

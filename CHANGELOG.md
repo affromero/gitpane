@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.2] - 2026-05-22
+
+### Fixed
+- Graph worktree marker (`⌂` prefix on worktree branch labels) now matches the repo-list worktree color: amber (`Color::Indexed(214)`) in the default theme, Orange3 (`Color::Indexed(172)`) in the muted preset. Previously the graph kept the pre-0.7.1 `Magenta` (default) and `Indexed(133)` (muted) values, so the same worktree showed up amber in the repo list and magenta in the graph.
+
 ## [0.7.1] - 2026-05-21
 
 ### Added

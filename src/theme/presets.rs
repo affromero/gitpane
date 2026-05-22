@@ -94,7 +94,7 @@ pub(crate) fn muted() -> Theme {
     ];
     t.graph.paren = Color::Indexed(178);
     t.graph.head_marker = Color::Indexed(71);
-    t.graph.worktree_marker = Color::Indexed(133);
+    t.graph.worktree_marker = Color::Indexed(172); // Orange3, matches repo_list.worktree_count
     t.graph.tag_label = Color::Indexed(143); // DarkKhaki — much softer than LightYellow
     t.graph.remote_label = Color::Indexed(167);
     t.graph.local_branch_label = Color::Indexed(73);
