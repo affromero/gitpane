@@ -267,8 +267,11 @@ impl App {
     }
 
     /// Rebuild the filesystem watcher to match the current `repo_list.repos`
-    /// and `config.root_dirs`. Dropping the previous `RepoWatcher` stops its
-    /// underlying OS watches. Safe to call repeatedly.
+    /// and `config.root_dirs`. The new watcher is constructed before the old
+    /// one is dropped, so a transient construction failure leaves the
+    /// previous watches intact rather than silently going unwatched. The
+    /// brief OS-level overlap is harmless — notify's debouncer dedupes
+    /// identical paths within its window.
     fn rebuild_watcher(&mut self) {
         let Some(tx) = self.tui_event_tx.clone() else {
             return;
@@ -279,10 +282,6 @@ impl App {
             .iter()
             .map(|r| r.path.clone())
             .collect();
-        // Drop the old watcher first so its OS-level watches are torn down
-        // before the new debouncer attaches; otherwise both briefly observe
-        // the same paths.
-        self.watcher = None;
         match RepoWatcher::new(
             &repo_paths,
             &self.config.root_dirs,
@@ -291,7 +290,10 @@ impl App {
             &self.config.watch.watch_exclude_dirs,
         ) {
             Ok(w) => self.watcher = Some(w),
-            Err(e) => tracing::warn!("Failed to rebuild filesystem watcher: {}", e),
+            Err(e) => tracing::warn!(
+                "Failed to rebuild filesystem watcher; keeping previous watches: {}",
+                e
+            ),
         }
     }
 
