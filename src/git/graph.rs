@@ -875,6 +875,57 @@ mod tests {
     }
 
     #[test]
+    fn test_stash_label_visible_when_parent_unreachable_from_head() {
+        // Regression: orphaned stashes (parent commit unreachable from any
+        // branch/HEAD after the user resets or deletes the branch) still
+        // need to render. The revwalk is seeded from `ref_map.keys()`,
+        // which `merge_stash_labels` extends with each stash's parent oid,
+        // so the parent commit row gets walked even when HEAD has moved on.
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        let mut repo = Repository::init(tmp.path()).unwrap();
+
+        // Commit A — root.
+        let oid_a = create_commit(&repo, "A", &[]);
+
+        // Commit B — child of A, becomes HEAD.
+        let file = tmp.path().join("b.txt");
+        fs::write(&file, "b").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("b.txt")).unwrap();
+        index.write().unwrap();
+        let oid_b = {
+            let c_a = repo.find_commit(oid_a).unwrap();
+            create_commit(&repo, "B", &[&c_a])
+        };
+
+        // Stash a working-tree change while HEAD is at B → stash parent = B.
+        fs::write(&file, "uncommitted").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("b.txt")).unwrap();
+        index.write().unwrap();
+        let stasher = Signature::now("Test", "test@test.com").unwrap();
+        repo.stash_save2(&stasher, Some("orphan-stash"), None)
+            .unwrap();
+
+        // Move HEAD back to A — B is now unreachable from HEAD/branches.
+        let obj_a = repo.find_object(oid_a, None).unwrap();
+        repo.reset(&obj_a, git2::ResetType::Hard, None).unwrap();
+
+        let builder = GraphBuilder::new();
+        let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
+
+        // B's row must still appear, carrying the stash label.
+        let b_row = rows
+            .iter()
+            .find(|r| r.oid == oid_b)
+            .expect("orphaned stash parent commit should still be walked");
+        let stash_labels: Vec<_> = b_row.labels.iter().filter(|l| l.is_stash).collect();
+        assert_eq!(stash_labels.len(), 1);
+        assert_eq!(stash_labels[0].name, "stash@{0}");
+    }
+
+    #[test]
     fn test_stash_label_attaches_to_parent_commit() {
         use std::fs;
         let tmp = TempDir::new().unwrap();
