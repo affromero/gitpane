@@ -18,6 +18,21 @@ use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
+/// Result of `RepoList::sync_paths` — the paths that newly appeared and the
+/// paths that vanished. Empty `added` and `removed` mean the set is unchanged
+/// and no rebuild ran.
+#[derive(Default, Clone, Debug)]
+pub(crate) struct SyncDiff {
+    pub added: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+}
+
+impl SyncDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RepoEntry {
     pub path: PathBuf,
@@ -180,6 +195,62 @@ impl RepoList {
             None => 0,
         };
         self.state.select(Some(i));
+    }
+
+    /// In-place merge of a freshly discovered repo path list.
+    ///
+    /// Existing entries are kept (preserves their `status` and `git_op` flags);
+    /// vanished entries are dropped along with their expansion state. Returns
+    /// the paths that were added and removed so the caller can prune related
+    /// per-repo state (pending status queries, dirty markers, active worktree).
+    /// Returns an empty diff (and skips the rebuild) when the set is unchanged.
+    pub fn sync_paths(&mut self, new_paths: Vec<PathBuf>) -> SyncDiff {
+        let current: HashSet<PathBuf> = self.repos.iter().map(|r| r.path.clone()).collect();
+        let desired: HashSet<PathBuf> = new_paths.iter().cloned().collect();
+
+        if current == desired
+            && new_paths
+                .iter()
+                .zip(self.repos.iter())
+                .all(|(p, e)| p == &e.path)
+        {
+            return SyncDiff::default();
+        }
+
+        let mut by_path: std::collections::HashMap<PathBuf, RepoEntry> =
+            self.repos.drain(..).map(|e| (e.path.clone(), e)).collect();
+
+        let mut next: Vec<RepoEntry> = Vec::with_capacity(new_paths.len());
+        let mut added: Vec<PathBuf> = Vec::new();
+        for path in &new_paths {
+            if let Some(existing) = by_path.remove(path) {
+                next.push(existing);
+            } else {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                next.push(RepoEntry {
+                    path: path.clone(),
+                    name,
+                    status: None,
+                    git_op: false,
+                });
+                added.push(path.clone());
+            }
+        }
+
+        let removed: Vec<PathBuf> = by_path.into_keys().collect();
+        for path in &removed {
+            let id = RepoId(path.clone());
+            self.expanded_repos.remove(&id);
+            self.expanded_stashes.remove(&id);
+        }
+
+        self.repos = next;
+        self.rebuild_display_rows();
+
+        SyncDiff { added, removed }
     }
 
     pub fn update_status(&mut self, index: usize, repo_status: RepoStatus) {
@@ -584,5 +655,70 @@ impl Component for RepoList {
 
         frame.render_stateful_widget(list, area, &mut self.state);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_list(paths: &[&str]) -> RepoList {
+        let theme = Arc::new(Theme::default());
+        RepoList::new(paths.iter().map(PathBuf::from).collect(), theme)
+    }
+
+    #[test]
+    fn sync_paths_noop_when_set_unchanged() {
+        let mut list = make_list(&["/a", "/b"]);
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert!(diff.is_empty());
+        assert_eq!(list.repos.len(), 2);
+    }
+
+    #[test]
+    fn sync_paths_reports_added_paths() {
+        let mut list = make_list(&["/a"]);
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert!(!diff.is_empty());
+        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
+        assert!(diff.removed.is_empty());
+        assert_eq!(list.repos.len(), 2);
+    }
+
+    #[test]
+    fn sync_paths_reports_removed_paths_and_prunes_expansion() {
+        let mut list = make_list(&["/a", "/b"]);
+        list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
+        list.expanded_stashes.insert(RepoId(PathBuf::from("/b")));
+
+        let diff = list.sync_paths(vec![PathBuf::from("/a")]);
+        assert_eq!(diff.removed, vec![PathBuf::from("/b")]);
+        assert!(diff.added.is_empty());
+        assert_eq!(list.repos.len(), 1);
+        assert!(!list.expanded_repos.contains(&RepoId(PathBuf::from("/b"))));
+        assert!(!list.expanded_stashes.contains(&RepoId(PathBuf::from("/b"))));
+    }
+
+    #[test]
+    fn sync_paths_preserves_existing_entry_status() {
+        let mut list = make_list(&["/a"]);
+        list.repos[0].git_op = true;
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
+        // Original entry kept its in-progress flag.
+        let a = list
+            .repos
+            .iter()
+            .find(|r| r.path == std::path::Path::new("/a"))
+            .unwrap();
+        assert!(a.git_op);
+        // Newly-added entry starts clean.
+        let b = list
+            .repos
+            .iter()
+            .find(|r| r.path == std::path::Path::new("/b"))
+            .unwrap();
+        assert!(!b.git_op);
+        assert!(b.status.is_none());
     }
 }

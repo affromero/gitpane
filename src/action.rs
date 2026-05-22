@@ -95,6 +95,11 @@ pub(crate) enum Action {
     RemoveRepo(RepoId),
     CycleSortOrder,
     RescanRepos,
+    /// Idempotent rescan triggered by FS events. Compares the discovered set
+    /// against the current set and only mutates state on a diff. Unlike
+    /// [`Action::RescanRepos`] this preserves `excluded_repos`, in-flight
+    /// status queries, dirty-repo tracking, and the user's selection.
+    DiscoverNewRepos,
     Error(String),
     UpdateAvailable(String),
     /// Clears the pending_status flag for a repo (sent on error paths)
