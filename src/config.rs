@@ -62,6 +62,12 @@ pub(crate) struct WatchConfig {
     /// Directory names to ignore in watcher events (reduces noise)
     #[serde(default = "default_watch_exclude_dirs")]
     pub watch_exclude_dirs: Vec<String>,
+    /// Minimum seconds between two auto-rescans triggered by root-dir
+    /// filesystem changes. Higher values reduce wasted scans during long
+    /// operations like `git clone`; lower values shorten the delay before
+    /// a newly-cloned repo appears.
+    #[serde(default = "default_discovery_cooldown_secs")]
+    pub discovery_cooldown_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +163,10 @@ fn default_theme_name() -> String {
 
 fn default_debounce_ms() -> u64 {
     500
+}
+
+fn default_discovery_cooldown_secs() -> u64 {
+    5
 }
 
 fn default_poll_local_secs() -> u64 {
@@ -306,6 +316,7 @@ impl Default for WatchConfig {
             poll_fetch_secs: default_poll_fetch_secs(),
             max_concurrent_polls: default_max_concurrent_polls(),
             watch_exclude_dirs: default_watch_exclude_dirs(),
+            discovery_cooldown_secs: default_discovery_cooldown_secs(),
         }
     }
 }

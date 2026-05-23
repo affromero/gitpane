@@ -1254,6 +1254,7 @@ mod tests {
             is_remote: false,
             is_worktree: false,
             is_tag: false,
+            is_stash: false,
         }
     }
 

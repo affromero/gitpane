@@ -18,6 +18,73 @@ use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
+/// Result of `RepoList::sync_paths` — the paths that newly appeared and the
+/// paths that vanished. Empty `added` and `removed` mean the set is unchanged
+/// and no rebuild ran.
+#[derive(Default, Clone, Debug)]
+pub(crate) struct SyncDiff {
+    pub added: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+}
+
+/// Half-open column ranges `[start, end)` of the subtree indicators rendered
+/// on a repo row. `None` means the indicator is not drawn for this entry.
+/// Used by the click handler to route a click to the right toggle.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct IndicatorColumns {
+    stash: Option<(u16, u16)>,
+    worktree: Option<(u16, u16)>,
+}
+
+/// Compute the column ranges of the stash and worktree indicators for a repo
+/// row, given the leftmost content column. Mirrors the layout in
+/// [`RepoList::render_repo_item`] — keep the two in sync.
+fn indicator_columns(entry: &RepoEntry, base_x: u16) -> IndicatorColumns {
+    let mut col = base_x;
+    // Dirty/git_op marker: always 2 columns ("* ", "~ ", or "  ").
+    col = col.saturating_add(2);
+
+    let mut out = IndicatorColumns::default();
+    let Some(status) = entry.status.as_ref() else {
+        return out;
+    };
+
+    // Branch field is left-padded to a minimum of 12 columns, then a space.
+    let branch_width = status.branch.chars().count().max(12).saturating_add(1);
+    col = col.saturating_add(branch_width as u16);
+
+    if status.ahead > 0 {
+        // "↑{N} " — chevron (1) + digits + trailing space.
+        col = col.saturating_add(2 + status.ahead.to_string().len() as u16);
+    }
+    if status.behind > 0 {
+        col = col.saturating_add(2 + status.behind.to_string().len() as u16);
+    }
+
+    if !status.stashes.is_empty() {
+        let start = col;
+        // "▶$N " — chevron (1) + '$' (1) + digits + trailing space.
+        let width = 3 + status.stash_count().to_string().len() as u16;
+        out.stash = Some((start, start.saturating_add(width)));
+        col = col.saturating_add(width);
+    }
+
+    if !status.worktree_info.is_empty() {
+        let start = col;
+        // "▶N " — chevron (1) + digits + trailing space.
+        let width = 2 + status.worktree_info.len().to_string().len() as u16;
+        out.worktree = Some((start, start.saturating_add(width)));
+    }
+
+    out
+}
+
+impl SyncDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RepoEntry {
     pub path: PathBuf,
@@ -180,6 +247,62 @@ impl RepoList {
             None => 0,
         };
         self.state.select(Some(i));
+    }
+
+    /// In-place merge of a freshly discovered repo path list.
+    ///
+    /// Existing entries are kept (preserves their `status` and `git_op` flags);
+    /// vanished entries are dropped along with their expansion state. Returns
+    /// the paths that were added and removed so the caller can prune related
+    /// per-repo state (pending status queries, dirty markers, active worktree).
+    /// Returns an empty diff (and skips the rebuild) when the set is unchanged.
+    pub fn sync_paths(&mut self, new_paths: Vec<PathBuf>) -> SyncDiff {
+        let current: HashSet<PathBuf> = self.repos.iter().map(|r| r.path.clone()).collect();
+        let desired: HashSet<PathBuf> = new_paths.iter().cloned().collect();
+
+        if current == desired
+            && new_paths
+                .iter()
+                .zip(self.repos.iter())
+                .all(|(p, e)| p == &e.path)
+        {
+            return SyncDiff::default();
+        }
+
+        let mut by_path: std::collections::HashMap<PathBuf, RepoEntry> =
+            self.repos.drain(..).map(|e| (e.path.clone(), e)).collect();
+
+        let mut next: Vec<RepoEntry> = Vec::with_capacity(new_paths.len());
+        let mut added: Vec<PathBuf> = Vec::new();
+        for path in &new_paths {
+            if let Some(existing) = by_path.remove(path) {
+                next.push(existing);
+            } else {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                next.push(RepoEntry {
+                    path: path.clone(),
+                    name,
+                    status: None,
+                    git_op: false,
+                });
+                added.push(path.clone());
+            }
+        }
+
+        let removed: Vec<PathBuf> = by_path.into_keys().collect();
+        for path in &removed {
+            let id = RepoId(path.clone());
+            self.expanded_repos.remove(&id);
+            self.expanded_stashes.remove(&id);
+        }
+
+        self.repos = next;
+        self.rebuild_display_rows();
+
+        SyncDiff { added, removed }
     }
 
     pub fn update_status(&mut self, index: usize, repo_status: RepoStatus) {
@@ -470,13 +593,31 @@ impl Component for RepoList {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
-                        // Click on already-selected repo row toggles a subtree. Worktrees
-                        // take priority when both are present; stash falls through when
-                        // the repo has no worktrees but does have stashes.
+                        // Click on the already-selected repo row toggles a subtree.
+                        // When both worktrees and stashes are present we hit-test
+                        // the click column against each indicator's range so the
+                        // user can target either. A click elsewhere on the row
+                        // falls back to whichever subtree exists (worktrees first).
                         if self.state.selected() == Some(idx)
                             && let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx)
                             && let Some(status) = self.repos[*i].status.as_ref()
                         {
+                            let base_x = self.render_area.x + 1;
+                            let cols = indicator_columns(&self.repos[*i], base_x);
+                            let clicked_stash = cols
+                                .stash
+                                .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
+                            let clicked_worktree = cols
+                                .worktree
+                                .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
+                            if clicked_stash {
+                                self.toggle_stash_expand();
+                                return Ok(self.emit_selection_action());
+                            }
+                            if clicked_worktree {
+                                self.toggle_expand();
+                                return Ok(self.emit_selection_action());
+                            }
                             if !status.worktree_info.is_empty() {
                                 self.toggle_expand();
                                 return Ok(self.emit_selection_action());
@@ -584,5 +725,167 @@ impl Component for RepoList {
 
         frame.render_stateful_widget(list, area, &mut self.state);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::status::{RepoStatus, StashEntry, WorktreeEntry};
+
+    fn empty_status(branch: &str) -> RepoStatus {
+        RepoStatus {
+            branch: branch.to_string(),
+            files: Vec::new(),
+            ahead: 0,
+            behind: 0,
+            is_dirty: false,
+            worktree_info: Vec::new(),
+            has_submodules: false,
+            submodules: Vec::new(),
+            has_dirty_submodules: false,
+            has_unpushed_submodules: false,
+            fetch_failed: false,
+            stashes: Vec::new(),
+        }
+    }
+
+    fn stash_entry(index: usize) -> StashEntry {
+        StashEntry {
+            index,
+            message: format!("WIP {index}"),
+            oid: format!("{index:040x}"),
+        }
+    }
+
+    fn worktree_entry(name: &str) -> WorktreeEntry {
+        WorktreeEntry {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/wt/{name}")),
+            branch: name.to_string(),
+        }
+    }
+
+    fn entry_with_status(path: &str, status: RepoStatus) -> RepoEntry {
+        RepoEntry {
+            path: PathBuf::from(path),
+            name: path.trim_start_matches('/').to_string(),
+            status: Some(status),
+            git_op: false,
+        }
+    }
+
+    fn make_list(paths: &[&str]) -> RepoList {
+        let theme = Arc::new(Theme::default());
+        RepoList::new(paths.iter().map(PathBuf::from).collect(), theme)
+    }
+
+    #[test]
+    fn sync_paths_noop_when_set_unchanged() {
+        let mut list = make_list(&["/a", "/b"]);
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert!(diff.is_empty());
+        assert_eq!(list.repos.len(), 2);
+    }
+
+    #[test]
+    fn sync_paths_reports_added_paths() {
+        let mut list = make_list(&["/a"]);
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert!(!diff.is_empty());
+        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
+        assert!(diff.removed.is_empty());
+        assert_eq!(list.repos.len(), 2);
+    }
+
+    #[test]
+    fn sync_paths_reports_removed_paths_and_prunes_expansion() {
+        let mut list = make_list(&["/a", "/b"]);
+        list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
+        list.expanded_stashes.insert(RepoId(PathBuf::from("/b")));
+
+        let diff = list.sync_paths(vec![PathBuf::from("/a")]);
+        assert_eq!(diff.removed, vec![PathBuf::from("/b")]);
+        assert!(diff.added.is_empty());
+        assert_eq!(list.repos.len(), 1);
+        assert!(!list.expanded_repos.contains(&RepoId(PathBuf::from("/b"))));
+        assert!(!list.expanded_stashes.contains(&RepoId(PathBuf::from("/b"))));
+    }
+
+    #[test]
+    fn sync_paths_preserves_existing_entry_status() {
+        let mut list = make_list(&["/a"]);
+        list.repos[0].git_op = true;
+        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
+        // Original entry kept its in-progress flag.
+        let a = list
+            .repos
+            .iter()
+            .find(|r| r.path == std::path::Path::new("/a"))
+            .unwrap();
+        assert!(a.git_op);
+        // Newly-added entry starts clean.
+        let b = list
+            .repos
+            .iter()
+            .find(|r| r.path == std::path::Path::new("/b"))
+            .unwrap();
+        assert!(!b.git_op);
+        assert!(b.status.is_none());
+    }
+
+    #[test]
+    fn indicator_columns_returns_none_when_neither_subtree_present() {
+        let entry = entry_with_status("/r", empty_status("main"));
+        let cols = indicator_columns(&entry, 0);
+        assert_eq!(cols.stash, None);
+        assert_eq!(cols.worktree, None);
+    }
+
+    #[test]
+    fn indicator_columns_locates_stash_then_worktree() {
+        let mut status = empty_status("main");
+        status.stashes.push(stash_entry(0));
+        status.worktree_info.push(worktree_entry("wt"));
+        let entry = entry_with_status("/r", status);
+
+        let cols = indicator_columns(&entry, 0);
+        // 2 (dirty marker) + 12 (branch pad for "main") + 1 (space) = 15 → stash start.
+        let (s_start, s_end) = cols.stash.expect("stash range");
+        let (w_start, w_end) = cols.worktree.expect("worktree range");
+        assert_eq!(s_start, 15);
+        // "▶$1 " = 4 columns.
+        assert_eq!(s_end, 19);
+        // Worktree starts immediately after stash.
+        assert_eq!(w_start, 19);
+        // "▶1 " = 3 columns.
+        assert_eq!(w_end, 22);
+    }
+
+    #[test]
+    fn indicator_columns_accounts_for_ahead_behind() {
+        let mut status = empty_status("main");
+        status.ahead = 3;
+        status.behind = 22;
+        status.stashes.push(stash_entry(0));
+        let entry = entry_with_status("/r", status);
+
+        let cols = indicator_columns(&entry, 0);
+        // 2 + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 22 → stash start.
+        let (s_start, _) = cols.stash.expect("stash range");
+        assert_eq!(s_start, 22);
+    }
+
+    #[test]
+    fn indicator_columns_respects_long_branch_name() {
+        let mut status = empty_status("feature/very-long-branch");
+        status.worktree_info.push(worktree_entry("wt"));
+        let entry = entry_with_status("/r", status);
+
+        let cols = indicator_columns(&entry, 0);
+        // 2 + 24 (branch chars) + 1 (space) = 27 → worktree start.
+        let (w_start, _) = cols.worktree.expect("worktree range");
+        assert_eq!(w_start, 27);
     }
 }

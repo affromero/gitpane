@@ -207,6 +207,9 @@ pub(crate) struct GraphTheme {
     pub tag_label: Color,
     pub remote_label: Color,
     pub local_branch_label: Color,
+    /// Color for `stash@{n}` labels in the graph. Matches the repo-list stash
+    /// indicator so the same stash reads consistently across panels.
+    pub stash_label: Color,
 }
 
 impl Default for GraphTheme {
@@ -268,6 +271,7 @@ impl Default for GraphTheme {
             tag_label: Color::LightYellow,
             remote_label: Color::Red,
             local_branch_label: Color::Cyan,
+            stash_label: Color::Indexed(127), // matches RepoListTheme::stash default
         }
     }
 }

@@ -165,6 +165,20 @@ pub(crate) struct App {
     /// and live-polling the worktree's changes.
     active_worktree: Option<ActiveWorktree>,
     theme: Arc<crate::theme::Theme>,
+    /// Filesystem watcher owning the notify debouncer. Held so its `Drop`
+    /// (which stops the underlying watches) only fires when we deliberately
+    /// replace it via `rebuild_watcher`.
+    watcher: Option<RepoWatcher>,
+    /// Clone of `Tui::event_tx` so `rebuild_watcher` can run outside `run()`.
+    tui_event_tx: Option<UnboundedSender<Event>>,
+    /// Wall-clock of the last `DiscoverNewRepos` dispatch driven by a
+    /// `ReposRootChanged` event. Drives the leading-edge cooldown that
+    /// coalesces FS-event storms (e.g., the file deluge during `git clone`).
+    last_discovery: Option<Instant>,
+    /// True between a cooldown-suppressed `ReposRootChanged` and the
+    /// trailing-edge `DiscoverNewRepos` that fires once cooldown expires.
+    /// Prevents spawning a second deferred fire while one is already pending.
+    discovery_pending: bool,
 }
 
 #[derive(Clone)]
@@ -224,6 +238,10 @@ impl App {
             dirty_repos: HashSet::new(),
             active_worktree: None,
             theme,
+            watcher: None,
+            tui_event_tx: None,
+            last_discovery: None,
+            discovery_pending: false,
         }
     }
 
@@ -245,6 +263,43 @@ impl App {
         // Reset selection to first
         if !self.repo_list.repos.is_empty() {
             self.repo_list.select_repo_row(0);
+        }
+    }
+
+    /// Rebuild the filesystem watcher to match the current `repo_list.repos`
+    /// and `config.root_dirs`. The new watcher is constructed before the old
+    /// one is dropped, so a transient construction failure leaves the
+    /// previous watches intact rather than silently going unwatched.
+    ///
+    /// On success, the old watcher is dropped by the `Some(w)` assignment.
+    /// Events already buffered in the old watcher's routing channel may
+    /// still surface briefly after the swap, routed against the stale
+    /// repo set. Those late events are absorbed downstream:
+    /// `Action::RefreshRepo` no-ops when `resolve_index` misses, and
+    /// `Action::DiscoverNewRepos` is idempotent. We rely on those
+    /// invariants rather than trying to drain the old channel here.
+    fn rebuild_watcher(&mut self) {
+        let Some(tx) = self.tui_event_tx.clone() else {
+            return;
+        };
+        let repo_paths: Vec<_> = self
+            .repo_list
+            .repos
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        match RepoWatcher::new(
+            &repo_paths,
+            &self.config.root_dirs,
+            self.config.watch.debounce_ms,
+            tx,
+            &self.config.watch.watch_exclude_dirs,
+        ) {
+            Ok(w) => self.watcher = Some(w),
+            Err(e) => tracing::warn!(
+                "Failed to rebuild filesystem watcher; keeping previous watches: {}",
+                e
+            ),
         }
     }
 
@@ -310,19 +365,11 @@ impl App {
         // first PollLocal timer fires. Goes through the semaphore-controlled path.
         self.action_tx.send(Action::PollLocal)?;
 
-        // Start filesystem watcher
-        let repo_paths: Vec<_> = self
-            .repo_list
-            .repos
-            .iter()
-            .map(|r| r.path.clone())
-            .collect();
-        let _watcher = RepoWatcher::new(
-            &repo_paths,
-            self.config.watch.debounce_ms,
-            tui.event_tx.clone(),
-            &self.config.watch.watch_exclude_dirs,
-        )?;
+        // Start filesystem watcher. Stored on `self` so `Action::RescanRepos`
+        // and `Action::DiscoverNewRepos` can rebuild it when the repo set
+        // changes (otherwise newly-discovered repos would go unwatched).
+        self.tui_event_tx = Some(tui.event_tx.clone());
+        self.rebuild_watcher();
 
         // Check for updates in the background
         if self.config.ui.check_for_updates {
@@ -362,6 +409,31 @@ impl App {
                     Event::RepoChanged(ref path) => {
                         self.action_tx
                             .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                    }
+                    Event::ReposRootChanged => {
+                        // Leading-edge: fire immediately if outside cooldown.
+                        // Trailing-edge: if events arrive during cooldown,
+                        // schedule one deferred fire so we still pick up
+                        // repos that finished cloning mid-burst.
+                        let cooldown = std::time::Duration::from_secs(
+                            self.config.watch.discovery_cooldown_secs,
+                        );
+                        let now = Instant::now();
+                        let elapsed = self.last_discovery.map(|t| now.duration_since(t));
+                        let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
+                        if !in_cooldown {
+                            self.last_discovery = Some(now);
+                            self.discovery_pending = false;
+                            self.action_tx.send(Action::DiscoverNewRepos)?;
+                        } else if !self.discovery_pending {
+                            self.discovery_pending = true;
+                            let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
+                            let tx = self.action_tx.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(wait).await;
+                                let _ = tx.send(Action::DiscoverNewRepos);
+                            });
+                        }
                     }
                     Event::PollLocal => {
                         self.action_tx.send(Action::PollLocal)?;
@@ -1298,9 +1370,66 @@ impl App {
                         self.repo_list
                             .register_action_handler(self.action_tx.clone())?;
                         self.repo_list.init()?;
+                        self.rebuild_watcher();
                         self.action_tx.send(Action::PollLocal)?;
                         self.sort_repos();
                         self.sync_selection();
+                    }
+                    Action::DiscoverNewRepos => {
+                        // Idempotent rescan: re-discover, but only mutate state
+                        // when the set actually changed. Preserves selection,
+                        // exclusions, in-flight queries, and dirty markers.
+                        // Clear the pending-trailing-edge flag and refresh the
+                        // cooldown anchor so back-to-back fires coalesce.
+                        self.discovery_pending = false;
+                        self.last_discovery = Some(Instant::now());
+                        let new_paths = scanner::discover_repos(&self.config);
+                        let saved_selection: Option<RepoId> = self
+                            .repo_list
+                            .selected_repo()
+                            .map(|e| RepoId(e.path.clone()));
+                        let diff = self.repo_list.sync_paths(new_paths);
+                        if diff.is_empty() {
+                            // No-op: discovered set matches the current list.
+                        } else {
+                            tracing::debug!(
+                                "DiscoverNewRepos: +{} -{}",
+                                diff.added.len(),
+                                diff.removed.len()
+                            );
+                            // Re-register so newly-added rows hand mouse events back.
+                            self.repo_list
+                                .register_action_handler(self.action_tx.clone())?;
+                            // Prune per-repo state for vanished repos so HashSets
+                            // don't keep growing across the session.
+                            for path in &diff.removed {
+                                let id = RepoId(path.clone());
+                                self.pending_status.remove(&id);
+                                self.dirty_repos.remove(&id);
+                                if self
+                                    .active_worktree
+                                    .as_ref()
+                                    .is_some_and(|aw| aw.repo_id == id)
+                                {
+                                    self.active_worktree = None;
+                                }
+                            }
+                            self.sort_repos();
+                            // Restore selection by saved repo id; fall back to
+                            // first row if the previously-selected repo vanished.
+                            if let Some(id) = saved_selection
+                                && let Some(idx) = self.repo_list.resolve_index(&id)
+                            {
+                                self.repo_list.select_repo_row(idx);
+                            }
+                            self.rebuild_watcher();
+                            // Queue status for newly added repos.
+                            for path in &diff.added {
+                                self.action_tx
+                                    .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                            }
+                            self.sync_selection();
+                        }
                     }
                     Action::UpdateAvailable(ref version) => {
                         self.update_version = Some(version.clone());
