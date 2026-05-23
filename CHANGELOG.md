@@ -2,6 +2,18 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.3] - 2026-05-23
+
+### Added
+- Repo list auto-rescans when a new git repository appears or vanishes under any configured `root_dirs`, so a fresh `git clone ~/Code/foo` shows up automatically without pressing `R`. Each configured root is watched with a non-recursive notify watch; events that match the direct child of a root (and are not already inside a known repo) fire an idempotent `DiscoverNewRepos` action.
+- New `[watch] discovery_cooldown_secs` config key (default `5`) coalesces FS event storms during `git clone` so the rescan does not thrash; a single trailing-edge fire still picks up repos finishing mid-burst.
+- Git graph now renders `stash@{n}` labels on the commit each stash was created on, themed via the new `graph.stash_label` color so stashes read consistently across the repo list and the graph. Orphaned stashes (parent commit no longer reachable from any branch) still appear because the parent oid is pushed into the revwalk as its own seed.
+
+### Fixed
+- Pressing `R` (manual `RescanRepos`) now also rebuilds the filesystem watcher, so newly discovered repos actually get watched. Previously the watcher was created once at startup and held as a function-local binding, so post-rescan repos went unwatched until restart.
+- Clicking the stash chevron toggles the stash subtree even when the repo also has worktrees. The mouse handler now hit-tests `mouse.column` against each indicator's range, routing the click to whichever chevron was clicked. Clicks elsewhere on the row keep the previous worktree-first fallback.
+- `rebuild_watcher` keeps the previous watcher alive when constructing a new one fails, instead of silently going unwatched after a transient notify error.
+
 ## [0.7.2] - 2026-05-22
 
 ### Fixed
