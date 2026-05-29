@@ -2,6 +2,12 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Fixed
+- Watcher no longer descends into symlinks (e.g. a Wine prefix's `dosdevices/z:` -> `/`), so it stops emitting permission warnings for root-owned paths like `/tmp/systemd-private-*` that happen to live under a tracked repo. The watcher walks each repo itself with walkdir, installing one non-recursive notify watch per real directory while skipping symlinks and `watch_exclude_dirs` entries before they ever hit inotify.
+- Deleting a tracked repo (e.g. `rm -rf <repo>` or `rm -rf <repo>/.git`) no longer surfaces a `Failed to query: ...` toast. The watcher-triggered `RefreshRepo` now detects the missing `.git` and fires `DiscoverNewRepos` instead, so the repo simply drops out of the list.
+
 ## [0.7.3] - 2026-05-23
 
 ### Added
