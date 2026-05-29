@@ -796,11 +796,27 @@ impl App {
                                         }
                                         Err(e) => {
                                             guard.complete();
-                                            let _ = tx.send(Action::StatusQueryDone(repo_id));
-                                            let _ = tx.send(Action::Error(format!(
-                                                "Failed to query: {}",
-                                                e
-                                            )));
+                                            let _ =
+                                                tx.send(Action::StatusQueryDone(repo_id.clone()));
+                                            // The watcher fires `RefreshRepo` on any
+                                            // change inside the repo, including
+                                            // `rm -rf <repo>` or `rm -rf <repo>/.git`.
+                                            // In that case the query naturally fails;
+                                            // surface a rescan instead of an error
+                                            // toast so the repo just disappears from
+                                            // the list.
+                                            if !path.join(".git").exists() {
+                                                tracing::debug!(
+                                                    "repo {} no longer a git repo; rescanning",
+                                                    path.display()
+                                                );
+                                                let _ = tx.send(Action::DiscoverNewRepos);
+                                            } else {
+                                                let _ = tx.send(Action::Error(format!(
+                                                    "Failed to query: {}",
+                                                    e
+                                                )));
+                                            }
                                         }
                                     }
                                 })
