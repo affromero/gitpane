@@ -2,7 +2,7 @@
 
 All notable changes to gitpane are documented here.
 
-## [Unreleased]
+## [0.7.4] - 2026-05-28
 
 ### Fixed
 - Watcher no longer descends into symlinks (e.g. a Wine prefix's `dosdevices/z:` -> `/`), so it stops emitting permission warnings for root-owned paths like `/tmp/systemd-private-*` that happen to live under a tracked repo. The watcher walks each repo itself with walkdir, installing one non-recursive notify watch per real directory while skipping symlinks and `watch_exclude_dirs` entries before they ever hit inotify.
