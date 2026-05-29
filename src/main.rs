@@ -53,13 +53,7 @@ async fn main() -> Result<()> {
         None => {}
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("gitpane=info".parse()?),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    install_tracing()?;
 
     let mut config = config::Config::load()?;
 
@@ -78,6 +72,38 @@ async fn main() -> Result<()> {
     let mut app = app::App::new(config);
     app.run().await?;
 
+    Ok(())
+}
+
+/// Set up tracing. By default, logs go to stderr (where they get clobbered
+/// by the TUI alt-screen as soon as the app starts). Set `GITPANE_LOG_FILE=...`
+/// to redirect everything to a file instead — handy for capturing
+/// `tracing::error!` toasts and `tracing::warn!` watcher messages while the
+/// TUI is running. `GITPANE_LOG=...` is a convenience knob for the level
+/// filter; equivalent to `RUST_LOG=...` but scoped so callers do not have
+/// to remember to namespace it.
+fn install_tracing() -> Result<()> {
+    let env_var = std::env::var("GITPANE_LOG").or_else(|_| std::env::var("RUST_LOG"));
+    let filter = match env_var {
+        Ok(v) => tracing_subscriber::EnvFilter::new(v),
+        Err(_) => tracing_subscriber::EnvFilter::new("gitpane=info"),
+    };
+    if let Ok(path) = std::env::var("GITPANE_LOG_FILE") {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .init();
+    }
     Ok(())
 }
 
