@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.5] - 2026-05-29
+
+### Fixed
+- Repo discovery now ignores empty `.git` directories (no `HEAD` file). A bare `mkdir .git` left over from an aborted clone, or any other stray empty `.git/` placeholder, would otherwise get treated as a real repo: every file change anywhere under the parent (commonly the configured `root_dirs` itself, e.g. `~/Code/`) routed to that "repo" via the watcher's classifier, `Repository::open` failed on each status query, and the status bar filled with an infinite stream of red `Failed to query: NotFound` toasts. The phantom is now skipped at discovery time, both for pinned repos and for root-dir scanning.
+
+### Added
+- `GITPANE_LOG_FILE=/path/to/log` redirects all `tracing` output to a file instead of stderr. Useful for capturing watcher warnings and `Action::Error` toast text while the TUI is occupying the screen. `GITPANE_LOG=...` is also accepted as a namespaced alias for `RUST_LOG`.
+- `just deploy-remote` and `just run-remote` recipes: rsync the source to an ssh host, build there, install over `~/.cargo/bin/gitpane`, and (for `run-remote`) launch in a detached tmux pane with `GITPANE_LOG_FILE` set, then print the captured log. Override `HOST=` / `REMOTE=` / `SECS=` on the command line. Intended for fast iteration against a workstation without going through a release cycle.
+
 ## [0.7.4] - 2026-05-28
 
 ### Fixed
