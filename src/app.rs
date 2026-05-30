@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -300,9 +300,18 @@ impl App {
         let debounce_ms = self.config.watch.debounce_ms;
         let exclude_dirs = self.config.watch.watch_exclude_dirs.clone();
         let slot = Arc::clone(&self.watcher);
+        let repo_count = repo_paths.len();
         tokio::task::spawn_blocking(move || {
+            let started = std::time::Instant::now();
             match RepoWatcher::new(&repo_paths, &root_dirs, debounce_ms, tx, &exclude_dirs) {
-                Ok(w) => *slot.lock().unwrap() = Some(w),
+                Ok(w) => {
+                    *slot.lock().unwrap() = Some(w);
+                    tracing::info!(
+                        "filesystem watcher ready: {} repos in {:?}",
+                        repo_count,
+                        started.elapsed()
+                    );
+                }
                 Err(e) => tracing::warn!(
                     "Failed to rebuild filesystem watcher; keeping previous watches: {}",
                     e
@@ -1563,6 +1572,14 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        // Ctrl+C always quits, before any overlay or focus-specific routing.
+        // Raw mode clears ISIG, so the terminal never raises SIGINT for Ctrl+C
+        // — this key binding is the only way it can terminate the app.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.action_tx.send(Action::Quit)?;
+            return Ok(());
+        }
+
         // Confirm dialog gets top priority
         if self.confirm_dialog.visible {
             if let Some(action) = self.confirm_dialog.handle_key_event(key)? {
