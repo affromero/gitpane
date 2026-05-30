@@ -1,9 +1,11 @@
+use ignore::WalkBuilder;
 use notify_debouncer_full::{
     DebounceEventResult, Debouncer, NoCache, new_debouncer_opt,
     notify::{Config, RecommendedWatcher, RecursiveMode},
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use walkdir::WalkDir;
@@ -89,7 +91,9 @@ fn classify(
 /// entry? `depth == 0` is the repo root itself — always kept (even if its
 /// name matches an exclude, the user explicitly tracks it). Symlinks are
 /// never followed: a Wine prefix's `dosdevices/z:` -> `/` would otherwise
-/// drag in restricted system paths like `/tmp/systemd-private-*`.
+/// drag in restricted system paths like `/tmp/systemd-private-*`. The repo's
+/// own `.git` directory is pruned here and re-watched selectively by
+/// `watch_git_metadata`, so we never install watches across `.git/objects`.
 fn should_keep_walk_entry(
     is_symlink: bool,
     depth: usize,
@@ -101,57 +105,115 @@ fn should_keep_walk_entry(
     }
     if depth > 0
         && let Some(name) = name
-        && exclude_set.contains(name)
+        && (name == ".git" || exclude_set.contains(name))
     {
         return false;
     }
     true
 }
 
-/// Walk `root` with walkdir, skipping symlinks and any directory whose name
-/// is in `exclude_set`, and install a non-recursive notify watch on each
-/// remaining directory. We do the walk ourselves (rather than asking notify
-/// for `RecursiveMode::Recursive`) so we never try to descend into symlinks
-/// that point at restricted system paths, and so vendored / build dirs never
-/// hit inotify at all.
+/// Enumerate the working-tree directories that should receive a watch. The walk
+/// is `.gitignore`-aware (via the `ignore` crate, honoring `.gitignore`,
+/// `.git/info/exclude`, and the global gitignore), skips symlinks and any
+/// directory whose name is in `exclude_set`, and prunes the repo's own `.git`
+/// directory (re-watched separately by `watch_git_metadata`).
+///
+/// Respecting `.gitignore` is the whole point: without it, the startup walk
+/// stats every ignored file and installs a watch per directory across huge
+/// vendored / data / virtualenv trees (an ML checkout can hold >1M ignored
+/// files), which blocks startup. Changes inside ignored directories never
+/// affect `git status`, so watching them is pure waste.
+fn watch_dirs(root: &Path, exclude_set: &HashSet<String>) -> Vec<PathBuf> {
+    // `ignore`'s filter_entry closure is `Send + Sync + 'static`, so it cannot
+    // borrow `exclude_set`; share an owned copy in.
+    let predicate_excludes = Arc::new(exclude_set.clone());
+    WalkBuilder::new(root)
+        .hidden(false) // keep .github / .vscode etc.; .git is pruned by the predicate
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .follow_links(false)
+        .filter_entry(move |e| {
+            should_keep_walk_entry(
+                e.path_is_symlink(),
+                e.depth(),
+                e.file_name().to_str(),
+                &predicate_excludes,
+            )
+        })
+        .build()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_dir()))
+        .map(|e| e.path().to_path_buf())
+        .collect()
+}
+
+/// Install a non-recursive notify watch on each gitignore-aware working-tree
+/// directory, then re-add the `.git` metadata watches the change classifier
+/// depends on. We do the walk ourselves (rather than asking notify for
+/// `RecursiveMode::Recursive`) so we never descend into symlinks that point at
+/// restricted system paths, and so ignored / build dirs never hit inotify.
 fn install_filtered_watches(
     debouncer: &mut Debouncer<RecommendedWatcher, NoCache>,
     root: &Path,
     exclude_set: &HashSet<String>,
 ) {
-    let walker = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            should_keep_walk_entry(
-                e.path_is_symlink(),
-                e.depth(),
-                e.file_name().to_str(),
-                exclude_set,
-            )
-        });
     let mut watched_root = false;
-    for entry in walker.filter_map(|e| e.ok()) {
-        if !entry.file_type().is_dir() {
-            continue;
-        }
-        match debouncer.watch(entry.path(), RecursiveMode::NonRecursive) {
+    for dir in watch_dirs(root, exclude_set) {
+        let is_root = dir.as_path() == root;
+        match debouncer.watch(&dir, RecursiveMode::NonRecursive) {
             Ok(()) => {
-                if entry.depth() == 0 {
+                if is_root {
                     watched_root = true;
                 }
             }
             Err(e) => {
-                if entry.depth() == 0 {
-                    tracing::warn!("Failed to watch repo {}: {}", entry.path().display(), e);
+                if is_root {
+                    tracing::warn!("Failed to watch repo {}: {}", dir.display(), e);
                 } else {
-                    tracing::debug!("skip watch on {}: {}", entry.path().display(), e);
+                    tracing::debug!("skip watch on {}: {}", dir.display(), e);
                 }
             }
         }
     }
     if !watched_root {
         tracing::debug!("no usable watch installed for repo {}", root.display());
+    }
+
+    // The working-tree walk prunes `.git`; re-add the watches we depend on.
+    watch_git_metadata(debouncer, &root.join(".git"));
+}
+
+/// Re-install the small set of `.git` watches the change classifier depends on.
+/// `classify` treats `.git/HEAD`, `index`, `packed-refs`, `MERGE_HEAD`,
+/// `REBASE_HEAD`, `COMMIT_EDITMSG`, and anything under `.git/refs/` as
+/// meaningful — that is how commits, checkouts, merges, and branch updates
+/// trigger a refresh. We watch `.git` itself (its top-level files) plus every
+/// directory under `.git/refs`, and deliberately skip `.git/objects` (huge and
+/// never classified as meaningful). The scanner only admits repos whose `.git`
+/// is a real directory, so a missing/file `.git` here is a no-op.
+fn watch_git_metadata(debouncer: &mut Debouncer<RecommendedWatcher, NoCache>, git_dir: &Path) {
+    if !git_dir.is_dir() {
+        return;
+    }
+    if let Err(e) = debouncer.watch(git_dir, RecursiveMode::NonRecursive) {
+        tracing::debug!("skip watch on {}: {}", git_dir.display(), e);
+    }
+    let refs_dir = git_dir.join("refs");
+    if !refs_dir.is_dir() {
+        return;
+    }
+    for entry in WalkDir::new(&refs_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_dir()
+            && let Err(e) = debouncer.watch(entry.path(), RecursiveMode::NonRecursive)
+        {
+            tracing::debug!("skip watch on {}: {}", entry.path().display(), e);
+        }
     }
 }
 
@@ -384,6 +446,15 @@ mod tests {
     }
 
     #[test]
+    fn walk_prunes_dot_git_below_root() {
+        // .git is watched selectively by watch_git_metadata, never through the
+        // working-tree walk (which would otherwise install watches across all
+        // of .git/objects).
+        let ex = exclude(&[]);
+        assert!(!should_keep_walk_entry(false, 1, Some(".git"), &ex));
+    }
+
+    #[test]
     #[cfg(unix)]
     fn walk_excludes_symlink_subtree_on_real_fs() {
         // End-to-end: build a tree with a symlink whose target is a dir we
@@ -421,6 +492,48 @@ mod tests {
                 .iter()
                 .any(|p| p.starts_with(&symlink_path) && p != &symlink_path),
             "no descendant of symlink should be visited, got {visited:?}"
+        );
+    }
+
+    #[test]
+    fn watch_dirs_respects_gitignore() {
+        // `ignore` only applies .gitignore inside a real git repo (require_git
+        // defaults to true), so we actually `git init` rather than fake `.git`.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let initialized = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(initialized, "git must be available to run this test");
+
+        std::fs::write(root.join(".gitignore"), "data/\n").unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("data").join("huge")).unwrap();
+
+        let dirs = watch_dirs(root, &HashSet::new());
+        let has_component = |needle: &str| {
+            dirs.iter()
+                .any(|d| d.components().any(|c| c.as_os_str() == needle))
+        };
+
+        assert!(
+            dirs.iter().any(|d| d.as_path() == root),
+            "repo root must be watched: {dirs:?}"
+        );
+        assert!(
+            has_component("src"),
+            "tracked dir src must be watched: {dirs:?}"
+        );
+        assert!(
+            !has_component("data"),
+            "gitignored data/ must NOT be watched: {dirs:?}"
+        );
+        assert!(
+            !has_component(".git"),
+            ".git must be excluded from the working-tree walk: {dirs:?}"
         );
     }
 }
