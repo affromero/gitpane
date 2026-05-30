@@ -1,8 +1,8 @@
 use color_eyre::Result;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -167,8 +167,9 @@ pub(crate) struct App {
     theme: Arc<crate::theme::Theme>,
     /// Filesystem watcher owning the notify debouncer. Held so its `Drop`
     /// (which stops the underlying watches) only fires when we deliberately
-    /// replace it via `rebuild_watcher`.
-    watcher: Option<RepoWatcher>,
+    /// replace it via `rebuild_watcher`. Shared so the watcher can be built on
+    /// a blocking thread and dropped into this slot once ready.
+    watcher: Arc<Mutex<Option<RepoWatcher>>>,
     /// Clone of `Tui::event_tx` so `rebuild_watcher` can run outside `run()`.
     tui_event_tx: Option<UnboundedSender<Event>>,
     /// Wall-clock of the last `DiscoverNewRepos` dispatch driven by a
@@ -238,7 +239,7 @@ impl App {
             dirty_repos: HashSet::new(),
             active_worktree: None,
             theme,
-            watcher: None,
+            watcher: Arc::new(Mutex::new(None)),
             tui_event_tx: None,
             last_discovery: None,
             discovery_pending: false,
@@ -278,6 +279,13 @@ impl App {
     /// `Action::RefreshRepo` no-ops when `resolve_index` misses, and
     /// `Action::DiscoverNewRepos` is idempotent. We rely on those
     /// invariants rather than trying to drain the old channel here.
+    /// Rebuild the filesystem watcher off the main loop. Walking each repo to
+    /// install per-directory watches can take noticeable wall-clock time on
+    /// large checkouts, so we build on a blocking thread and drop the finished
+    /// watcher into the shared slot. The UI stays responsive meanwhile, and the
+    /// periodic `PollLocal` timer covers the brief window before watches come
+    /// online. Storing the new watcher drops the previous one, tearing down its
+    /// watches; on error the previous watcher is left in place.
     fn rebuild_watcher(&mut self) {
         let Some(tx) = self.tui_event_tx.clone() else {
             return;
@@ -288,19 +296,28 @@ impl App {
             .iter()
             .map(|r| r.path.clone())
             .collect();
-        match RepoWatcher::new(
-            &repo_paths,
-            &self.config.root_dirs,
-            self.config.watch.debounce_ms,
-            tx,
-            &self.config.watch.watch_exclude_dirs,
-        ) {
-            Ok(w) => self.watcher = Some(w),
-            Err(e) => tracing::warn!(
-                "Failed to rebuild filesystem watcher; keeping previous watches: {}",
-                e
-            ),
-        }
+        let root_dirs = self.config.root_dirs.clone();
+        let debounce_ms = self.config.watch.debounce_ms;
+        let exclude_dirs = self.config.watch.watch_exclude_dirs.clone();
+        let slot = Arc::clone(&self.watcher);
+        let repo_count = repo_paths.len();
+        tokio::task::spawn_blocking(move || {
+            let started = std::time::Instant::now();
+            match RepoWatcher::new(&repo_paths, &root_dirs, debounce_ms, tx, &exclude_dirs) {
+                Ok(w) => {
+                    *slot.lock().unwrap() = Some(w);
+                    tracing::info!(
+                        "filesystem watcher ready: {} repos in {:?}",
+                        repo_count,
+                        started.elapsed()
+                    );
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to rebuild filesystem watcher; keeping previous watches: {}",
+                    e
+                ),
+            }
+        });
     }
 
     /// Auto-load graph + file list for the selected repo.
@@ -1555,6 +1572,14 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        // Ctrl+C always quits, before any overlay or focus-specific routing.
+        // Raw mode clears ISIG, so the terminal never raises SIGINT for Ctrl+C
+        // — this key binding is the only way it can terminate the app.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.action_tx.send(Action::Quit)?;
+            return Ok(());
+        }
+
         // Confirm dialog gets top priority
         if self.confirm_dialog.visible {
             if let Some(action) = self.confirm_dialog.handle_key_event(key)? {
