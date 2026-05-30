@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.6] - 2026-05-30
+
+### Fixed
+- Startup no longer hangs on large checkouts. The filesystem watcher walked every directory under each repo (honoring only the name-based `watch_exclude_dirs`), so it descended gitignored trees like `data/`, `.venv/`, and `__pycache__/`. On an ML workspace that is over a million files and tens of thousands of inotify watches, all installed synchronously before the UI could paint. The watcher now walks with the `ignore` crate, respecting `.gitignore`, `.git/info/exclude`, and the global gitignore, so ignored trees are never walked or watched (changes inside them never affect `git status` anyway). The repo's own `.git` is pruned from the working-tree walk and re-watched selectively (its top-level files plus `refs/`) so commit, checkout, and branch updates still trigger a refresh. On one workspace this cut the walk from roughly 1.14M files to 4.4k, and watches from about 13.7k to 779.
+- `Ctrl+C` now quits gitpane. It was bound nowhere, so only `q` exited; combined with the blocking startup walk above, a slow launch looked like a process that ignored `Ctrl+C` (keystrokes were buffered but never processed, and there was no `Ctrl+C` binding even once they were). Raw mode clears the terminal's `ISIG`, so `Ctrl+C` arrives as a key event rather than `SIGINT`; it is now handled globally, ahead of any overlay or panel routing.
+
+### Changed
+- The filesystem watcher is now built on a background thread instead of synchronously during launch, so the UI is interactive immediately even while watches are still being installed. The periodic local poll covers the brief window before the watcher comes online. A `filesystem watcher ready: N repos in <elapsed>` line is logged at info level (visible via `GITPANE_LOG` / `GITPANE_LOG_FILE`).
+
 ## [0.7.5] - 2026-05-29
 
 ### Fixed
