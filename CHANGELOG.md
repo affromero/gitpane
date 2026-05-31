@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.9] - 2026-05-31
+
+### Changed
+- Tightened the minimum `tokio` and `tracing-subscriber` versions to patched releases so dependency status tools do not report vulnerable semver ranges.
+
 ## [0.7.8] - 2026-05-31
 
 ### Added
