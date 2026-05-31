@@ -9,22 +9,19 @@
     <a href="https://github.com/affromero/gitpane/actions/workflows/coverage.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/coverage.yml?branch=main&label=Coverage&logo=github&style=flat-square" alt="Coverage"></a>
     <a href="https://github.com/affromero/gitpane/actions/workflows/docs.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/docs.yml?branch=main&label=Docs&logo=github&style=flat-square" alt="Docs"></a>
     <br>
-    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square" alt="crates.io"></a>
+    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square&color=brightgreen" alt="crates.io"></a>
     <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane?logo=rust&style=flat-square" alt="docs.rs"></a>
     <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg?style=flat-square" alt="Dependency status"></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-blue?style=flat-square" alt="MSRV 1.88.0"></a>
-    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads&style=flat-square" alt="Downloads"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-brightgreen?style=flat-square" alt="MSRV 1.88.0"></a>
+    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads&style=flat-square&color=brightgreen" alt="Downloads"></a>
     <br>
-    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release&style=flat-square" alt="GitHub Release"></a>
-    <a href="https://github.com/affromero/gitpane/releases"><img src="https://img.shields.io/github/downloads/affromero/gitpane/total?label=release%20downloads&style=flat-square" alt="Release downloads"></a>
-    <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-    <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational?style=flat-square" alt="Platform">
-    <img src="https://img.shields.io/github/languages/top/affromero/gitpane?style=flat-square" alt="Language">
-    <a href="https://socket.dev"><img src="https://img.shields.io/badge/Socket-protected-blueviolet?logo=socket.dev&style=flat-square" alt="Socket"></a>
+    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release&style=flat-square&color=brightgreen" alt="GitHub Release"></a>
+    <a href="https://github.com/affromero/gitpane/releases"><img src="https://img.shields.io/github/downloads/affromero/gitpane/total?label=release%20downloads&style=flat-square&color=brightgreen" alt="Release downloads"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-brightgreen?style=flat-square" alt="Platform">
+    <img src="https://img.shields.io/github/languages/top/affromero/gitpane?style=flat-square&color=brightgreen" alt="Language">
   </p>
 </div>
-
----
 
 Monitor **all your repos at a glance**. See branch, dirty state, ahead/behind, active worktrees, changed files, and commit history without leaving the terminal.
 
