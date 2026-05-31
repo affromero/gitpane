@@ -16,7 +16,7 @@ use color_eyre::Result;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "gitpane", about = "Multi-repo Git workspace dashboard")]
+#[command(name = "gitpane", about = "Multi-repo Git workspace dashboard", version = gitpane::VERSION)]
 struct Cli {
     /// Root directory to scan for repos
     #[arg(long)]
