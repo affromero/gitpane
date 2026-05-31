@@ -30,6 +30,15 @@ impl RepoStatus {
     }
 }
 
+struct ChangeSummary {
+    files: Vec<FileEntry>,
+    is_dirty: bool,
+    has_submodules: bool,
+    submodules: Vec<SubmoduleInfo>,
+    has_dirty_submodules: bool,
+    has_unpushed_submodules: bool,
+}
+
 /// One entry in a repo's stash list, mirroring `git stash list`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StashEntry {
@@ -90,6 +99,12 @@ pub(crate) struct WorktreeEntry {
     pub name: String,
     pub path: PathBuf,
     pub branch: String,
+    pub ahead: usize,
+    pub behind: usize,
+    pub is_dirty: bool,
+    pub file_count: usize,
+    pub has_dirty_submodules: bool,
+    pub has_unpushed_submodules: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -173,7 +188,41 @@ fn query_status_inner(
     // Ahead/behind
     let (ahead, behind) = compute_ahead_behind(&repo);
 
-    // File statuses
+    let ChangeSummary {
+        files,
+        is_dirty,
+        has_submodules,
+        submodules,
+        has_dirty_submodules,
+        has_unpushed_submodules,
+    } = collect_change_summary(&repo, path, recurse_untracked_dirs, sub_cfg)?;
+
+    // Collect linked worktree details (excludes the main working tree)
+    let worktree_info = collect_worktree_info(&repo, sub_cfg);
+
+    Ok(RepoStatus {
+        branch,
+        head_oid,
+        files,
+        ahead,
+        behind,
+        is_dirty,
+        worktree_info,
+        has_submodules,
+        submodules,
+        has_dirty_submodules,
+        has_unpushed_submodules,
+        fetch_failed,
+        stashes,
+    })
+}
+
+fn collect_change_summary(
+    repo: &Repository,
+    path: &Path,
+    recurse_untracked_dirs: bool,
+    sub_cfg: &SubmoduleConfig,
+) -> color_eyre::Result<ChangeSummary> {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(recurse_untracked_dirs)
@@ -218,9 +267,6 @@ fn query_status_inner(
     }
 
     let is_dirty = !files.is_empty();
-
-    // Collect linked worktree details (excludes the main working tree)
-    let worktree_info = collect_worktree_info(&repo);
 
     // Detect submodules by checking for .gitmodules
     let has_submodules = path.join(".gitmodules").is_file();
@@ -317,20 +363,13 @@ fn query_status_inner(
         }
     }
 
-    Ok(RepoStatus {
-        branch,
-        head_oid,
+    Ok(ChangeSummary {
         files,
-        ahead,
-        behind,
         is_dirty: is_dirty || has_dirty_submodules,
-        worktree_info,
         has_submodules,
         submodules,
         has_dirty_submodules,
         has_unpushed_submodules,
-        fetch_failed,
-        stashes,
     })
 }
 
@@ -379,7 +418,7 @@ fn compute_submodule_warn(sub: &git2::Submodule) -> SubmoduleWarn {
 
 /// Collect details for each linked worktree using the git2 API.
 /// Mirrors the pattern in `git/graph.rs::collect_worktree_branches`.
-fn collect_worktree_info(repo: &Repository) -> Vec<WorktreeEntry> {
+fn collect_worktree_info(repo: &Repository, sub_cfg: &SubmoduleConfig) -> Vec<WorktreeEntry> {
     let wt_names = match repo.worktrees() {
         Ok(names) => names,
         Err(_) => return Vec::new(),
@@ -395,17 +434,35 @@ fn collect_worktree_info(repo: &Repository) -> Vec<WorktreeEntry> {
             Err(_) => continue,
         };
         let wt_path = wt.path().to_path_buf();
-        let branch = match Repository::open(&wt_path) {
-            Ok(wt_repo) => match wt_repo.head() {
-                Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
-                Err(_) => "(no branch)".to_string(),
-            },
+        let wt_repo = match Repository::open(&wt_path) {
+            Ok(wt_repo) => wt_repo,
             Err(_) => continue,
         };
+        let branch = match wt_repo.head() {
+            Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
+            Err(_) => "(no branch)".to_string(),
+        };
+        let (ahead, behind) = compute_ahead_behind(&wt_repo);
+        let summary =
+            collect_change_summary(&wt_repo, &wt_path, false, sub_cfg).unwrap_or(ChangeSummary {
+                files: Vec::new(),
+                is_dirty: false,
+                has_submodules: false,
+                submodules: Vec::new(),
+                has_dirty_submodules: false,
+                has_unpushed_submodules: false,
+            });
+
         entries.push(WorktreeEntry {
             name: name.to_string(),
             path: wt_path,
             branch,
+            ahead,
+            behind,
+            is_dirty: summary.is_dirty,
+            file_count: summary.files.len(),
+            has_dirty_submodules: summary.has_dirty_submodules,
+            has_unpushed_submodules: summary.has_unpushed_submodules,
         });
     }
     entries
@@ -644,13 +701,71 @@ mod tests {
         let mut opts = git2::WorktreeAddOptions::new();
         opts.reference(Some(&reference));
 
-        let wt_dir = tmp.path().join("wt1");
+        let wt_tmp = TempDir::new().unwrap();
+        let wt_dir = wt_tmp.path().join("wt1");
         repo.worktree("wt1", &wt_dir, Some(&opts)).unwrap();
 
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert_eq!(status.worktree_info.len(), 1);
         assert_eq!(status.worktree_info[0].branch, "wt-branch");
         assert_eq!(status.worktree_info[0].name, "wt1");
+        assert!(!status.worktree_info[0].is_dirty);
+        assert_eq!(status.worktree_info[0].file_count, 0);
+        assert!(!status.worktree_info[0].has_dirty_submodules);
+        assert!(!status.worktree_info[0].has_unpushed_submodules);
+    }
+
+    #[test]
+    fn test_worktree_info_reflects_dirty_linked_worktree() {
+        let (tmp, repo) = init_temp_repo();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("wt-dirty", &head, false).unwrap();
+        let reference = branch.into_reference();
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+
+        let wt_tmp = TempDir::new().unwrap();
+        let wt_dir = wt_tmp.path().join("wt-dirty");
+        repo.worktree("wt-dirty", &wt_dir, Some(&opts)).unwrap();
+        fs::write(wt_dir.join("new.txt"), "new").unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let wt = status
+            .worktree_info
+            .iter()
+            .find(|wt| wt.name == "wt-dirty")
+            .unwrap();
+
+        assert!(wt.is_dirty);
+        assert_eq!(wt.file_count, 1);
+        assert!(!wt.has_dirty_submodules);
+        assert!(!wt.has_unpushed_submodules);
+    }
+
+    #[test]
+    fn test_worktree_info_reflects_submodule_signals() {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        let repo = Repository::open(tmp.path()).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("wt-submodule", &head, false).unwrap();
+        let reference = branch.into_reference();
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+
+        let wt_tmp = TempDir::new().unwrap();
+        let wt_dir = wt_tmp.path().join("wt-submodule");
+        repo.worktree("wt-submodule", &wt_dir, Some(&opts)).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let wt = status
+            .worktree_info
+            .iter()
+            .find(|wt| wt.name == "wt-submodule")
+            .unwrap();
+
+        assert!(wt.is_dirty);
+        assert!(wt.file_count > 0);
+        assert!(wt.has_dirty_submodules);
     }
 
     #[test]

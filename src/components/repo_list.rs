@@ -522,16 +522,56 @@ impl RepoList {
     fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
-        let spans = vec![
-            Span::styled(
-                "    \u{2387} ",
-                Style::default().fg(t.worktree_subtree_icon),
-            ),
-            Span::styled(
-                wt.branch.clone(),
-                Style::default().fg(t.worktree_subtree_branch),
-            ),
-        ];
+        let mut spans = vec![Span::styled(
+            "    \u{2387} ",
+            Style::default().fg(t.worktree_subtree_icon),
+        )];
+
+        if wt.is_dirty {
+            spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+
+        spans.push(Span::styled(
+            format!("{:<12} ", wt.branch),
+            Style::default().fg(t.worktree_subtree_branch),
+        ));
+
+        if wt.ahead > 0 {
+            spans.push(Span::styled(
+                format!("\u{2191}{} ", wt.ahead),
+                Style::default().fg(t.ahead),
+            ));
+        }
+        if wt.behind > 0 {
+            spans.push(Span::styled(
+                format!("\u{2193}{} ", wt.behind),
+                Style::default().fg(t.behind),
+            ));
+        }
+
+        if wt.has_dirty_submodules {
+            spans.push(Span::styled(
+                "\u{25c8} ",
+                Style::default().fg(t.dirty_submodule),
+            ));
+        }
+
+        if wt.has_unpushed_submodules {
+            spans.push(Span::styled(
+                "\u{21e1} ",
+                Style::default().fg(t.unpushed_submodule),
+            ));
+        }
+
+        if wt.file_count > 0 {
+            spans.push(Span::styled(
+                format!("[{}] ", wt.file_count),
+                Style::default().fg(t.file_count),
+            ));
+        }
+
         ListItem::new(Line::from(spans))
     }
 
@@ -764,6 +804,12 @@ mod tests {
             name: name.to_string(),
             path: PathBuf::from(format!("/wt/{name}")),
             branch: name.to_string(),
+            ahead: 0,
+            behind: 0,
+            is_dirty: false,
+            file_count: 0,
+            has_dirty_submodules: false,
+            has_unpushed_submodules: false,
         }
     }
 
