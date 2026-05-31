@@ -1,6 +1,6 @@
 [package]
 name = "gitpane"
-version = "0.7.7"
+version = "0.7.8"
 edition = "2024"
 rust-version = "1.88.0"
 description = "Multi-repo Git workspace dashboard TUI"
@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["git", "tui", "dashboard", "multi-repo", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--deny", "warnings"]
+
 [dependencies]
 ratatui = { version = "0.30", features = ["serde"] }
 crossterm = { version = "0.29", features = ["event-stream", "serde"] }
@@ -19,13 +23,13 @@ tokio-util = { version = "0.7", features = ["rt"] }
 color-eyre = "0.6"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-strum = { version = "0.27", features = ["derive"] }
+toml = "1"
+strum = { version = "0.28", features = ["derive"] }
 directories = "6"
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-git2 = { version = "0.20", features = ["vendored-openssl"] }
+git2 = { version = "0.21", features = ["vendored-openssl"] }
 walkdir = "2"
 ignore = "0.4"
 dirs = "6"

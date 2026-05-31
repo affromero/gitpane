@@ -145,7 +145,7 @@ pub(crate) struct App {
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
     dragging_border: Option<u8>,
     /// Fraction of the layout axis for each border (0.0..1.0).
-    /// [0] = repos/changes split, [1] = changes/graph split.
+    /// Index 0 is the repos/changes split. Index 1 is the changes/graph split.
     /// Applies to width in horizontal mode, height in vertical mode.
     border_frac: [f64; 2],
     /// True when the layout is horizontal (side-by-side panels)

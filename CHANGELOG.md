@@ -2,6 +2,19 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.8] - 2026-05-31
+
+### Added
+- Public library target and docs.rs metadata so published package docs build with warnings denied.
+- Docs workflow plus a pre-push `cargo doc` hook.
+
+### Changed
+- Updated direct dependencies `git2`, `strum`, and `toml`, clearing the outdated direct dependency set reported by deps.rs.
+- README badges are grouped into separate check, package health, and project metadata rows with matching Shields styling.
+
+### Fixed
+- Adapted graph and status code for the `git2` 0.21 shorthand and summary APIs.
+
 ## [0.7.7] - 2026-05-30
 
 ### Added

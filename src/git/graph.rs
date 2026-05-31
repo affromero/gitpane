@@ -121,7 +121,7 @@ impl GraphBuilder {
             let (commit_col, lanes, horizontal_spans) = self.process_commit(oid, &parent_oids);
 
             let short_id = oid.to_string()[..7].to_string();
-            let message = commit.summary().unwrap_or("").to_string();
+            let message = commit.summary().ok().flatten().unwrap_or("").to_string();
             let author = commit.author().name().unwrap_or("").to_string();
             let time = commit.time().seconds();
 
@@ -388,7 +388,7 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
     let head_name = repo
         .head()
         .ok()
-        .and_then(|r| r.shorthand().map(String::from));
+        .and_then(|r| r.shorthand().ok().map(String::from));
     let wt_branches = collect_worktree_branches(repo);
 
     let mut map: HashMap<Oid, Vec<BranchLabel>> = HashMap::new();
@@ -436,7 +436,11 @@ fn resolve_refs(repo: &Repository, filter: &BranchFilter) -> HashMap<Oid, Vec<Br
 
     // Tags
     if let Ok(tag_names) = repo.tag_names(None) {
-        for name in tag_names.iter().flatten() {
+        for i in 0..tag_names.len() {
+            let name = match tag_names.get(i) {
+                Ok(Some(n)) => n,
+                _ => continue,
+            };
             let refname = format!("refs/tags/{}", name);
             let Ok(reference) = repo.find_reference(&refname) else {
                 continue;
@@ -510,8 +514,8 @@ fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
     };
     for i in 0..wt_names.len() {
         let name = match wt_names.get(i) {
-            Some(n) => n,
-            None => continue,
+            Ok(Some(n)) => n,
+            _ => continue,
         };
         let wt = match repo.find_worktree(name) {
             Ok(wt) => wt,
@@ -522,7 +526,7 @@ fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
             Err(_) => continue,
         };
         if let Ok(head) = wt_repo.head()
-            && let Some(shorthand) = head.shorthand()
+            && let Ok(shorthand) = head.shorthand()
         {
             branches.insert(shorthand.to_string());
         }

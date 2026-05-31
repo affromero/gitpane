@@ -387,8 +387,8 @@ fn collect_worktree_info(repo: &Repository) -> Vec<WorktreeEntry> {
     let mut entries = Vec::new();
     for i in 0..wt_names.len() {
         let name = match wt_names.get(i) {
-            Some(n) => n,
-            None => continue,
+            Ok(Some(n)) => n,
+            _ => continue,
         };
         let wt = match repo.find_worktree(name) {
             Ok(wt) => wt,
@@ -466,8 +466,8 @@ fn compute_ahead_behind(repo: &Repository) -> (usize, usize) {
     };
 
     let branch_name = match head.shorthand() {
-        Some(name) => name.to_string(),
-        None => return (0, 0),
+        Ok(name) => name.to_string(),
+        Err(_) => return (0, 0),
     };
 
     let branch = match repo.find_branch(&branch_name, git2::BranchType::Local) {

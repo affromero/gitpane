@@ -1,25 +1,28 @@
-<p align="center">
-  <h1 align="center">gitpane</h1>
+<div align="center">
+  <h1>gitpane</h1>
   <p align="center">
     <strong>Multi repo Git workspace dashboard for the terminal</strong>
   </p>
   <p align="center">
-    <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <a href="https://github.com/affromero/gitpane/actions/workflows/security.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/security.yml/badge.svg" alt="Security"></a>
-    <a href="https://github.com/affromero/gitpane/actions/workflows/coverage.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/coverage.yml/badge.svg" alt="Coverage"></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-blue" alt="MSRV 1.88.0"></a>
-    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg" alt="crates.io"></a>
-    <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane" alt="docs.rs"></a>
-    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release" alt="GitHub Release"></a>
-    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads" alt="Downloads"></a>
-    <a href="https://github.com/affromero/gitpane/releases"><img src="https://img.shields.io/github/downloads/affromero/gitpane/total?label=release%20downloads" alt="Release downloads"></a>
-    <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg" alt="Dependency status"></a>
-    <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-    <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
-    <img src="https://img.shields.io/github/languages/top/affromero/gitpane" alt="Language">
-    <a href="https://socket.dev"><img src="https://img.shields.io/badge/Socket-protected-blueviolet?logo=socket.dev" alt="Socket"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/ci.yml?branch=main&label=CI&logo=github&style=flat-square" alt="CI"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/security.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/security.yml?branch=main&label=Security&logo=github&style=flat-square" alt="Security"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/coverage.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/coverage.yml?branch=main&label=Coverage&logo=github&style=flat-square" alt="Coverage"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/docs.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/docs.yml?branch=main&label=Docs&logo=github&style=flat-square" alt="Docs"></a>
+    <br>
+    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square" alt="crates.io"></a>
+    <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane?logo=rust&style=flat-square" alt="docs.rs"></a>
+    <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg?style=flat-square" alt="Dependency status"></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-blue?style=flat-square" alt="MSRV 1.88.0"></a>
+    <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads&style=flat-square" alt="Downloads"></a>
+    <br>
+    <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release&style=flat-square" alt="GitHub Release"></a>
+    <a href="https://github.com/affromero/gitpane/releases"><img src="https://img.shields.io/github/downloads/affromero/gitpane/total?label=release%20downloads&style=flat-square" alt="Release downloads"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational?style=flat-square" alt="Platform">
+    <img src="https://img.shields.io/github/languages/top/affromero/gitpane?style=flat-square" alt="Language">
+    <a href="https://socket.dev"><img src="https://img.shields.io/badge/Socket-protected-blueviolet?logo=socket.dev&style=flat-square" alt="Socket"></a>
   </p>
-</p>
+</div>
 
 ---
 
@@ -401,12 +404,13 @@ just fmt           # Format code
 just lint          # Run clippy with warnings denied
 just audit         # Run cargo-audit security advisory checks
 just coverage      # Generate lcov.info with cargo-llvm-cov
-just ci            # fmt + lint + test (mirrors CI pipeline)
+just docs          # Build docs with warnings denied
+just ci            # fmt + lint + docs + test
 ```
 
-CI runs formatting, clippy, MSRV checks, tests, and release builds across Linux,
-macOS, and Windows. Security and coverage run as separate workflows so their
-README badges map to real checks.
+CI runs formatting, clippy, MSRV checks, docs, tests, and release builds across
+Linux, macOS, and Windows. Security and coverage run as separate workflows so
+their README badges map to real checks.
 
 Install the local hooks before contributing:
 
@@ -417,7 +421,7 @@ pre-commit run --all-files     # optional one-time full check
 ```
 
 The pre-commit hook handles file hygiene, TOML/YAML validation, formatting, and
-clippy. The pre-push hook runs tests, audit, and coverage.
+clippy. The pre-push hook runs tests, audit, docs, and coverage.
 
 Optional tooling for the full local suite:
 

@@ -43,6 +43,13 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: cargo-doc
+        name: cargo doc
+        entry: cargo doc --no-deps --all-features
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: cargo-coverage
         name: cargo coverage
         entry: cargo llvm-cov --workspace --all-targets --all-features --lcov --output-path lcov.info

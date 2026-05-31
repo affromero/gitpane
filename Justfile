@@ -16,19 +16,22 @@ audit:
 coverage:
     cargo llvm-cov --workspace --all-targets --all-features --lcov --output-path lcov.info
 
-ci: fmt lint test
+docs:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+ci: fmt lint docs test
 
 # Recording recipes (require vhs: https://github.com/charmbracelet/vhs)
 
 record: record-demo record-screenshots
 
 record-demo:
-    @which vhs >/dev/null 2>&1 || { echo "error: vhs not found — install from https://github.com/charmbracelet/vhs"; exit 1; }
+    @which vhs >/dev/null 2>&1 || { echo "error: vhs not found; install from https://github.com/charmbracelet/vhs"; exit 1; }
     cargo build --release
     vhs assets/demo.tape
 
 record-screenshots:
-    @which vhs >/dev/null 2>&1 || { echo "error: vhs not found — install from https://github.com/charmbracelet/vhs"; exit 1; }
+    @which vhs >/dev/null 2>&1 || { echo "error: vhs not found; install from https://github.com/charmbracelet/vhs"; exit 1; }
     cargo build --release
     vhs assets/screenshot-main.tape
     vhs assets/screenshot-diff.tape
