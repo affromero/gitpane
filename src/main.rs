@@ -148,15 +148,23 @@ fn run_diagnostic(root: Option<PathBuf>, theme_override: Option<&str>) -> Result
     let report = diagnostic::render(
         &config,
         &repos,
-        diagnostic::RuntimeInfo::current(env!("CARGO_PKG_VERSION")),
+        diagnostic::RuntimeInfo::current(gitpane::VERSION),
     );
     print!("{report}");
     Ok(())
 }
 
 fn self_update() -> Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
-    println!("gitpane v{current} — checking for updates...");
+    let base = env!("CARGO_PKG_VERSION");
+    println!("gitpane v{} — checking for updates...", gitpane::VERSION);
+    if gitpane::VERSION != base {
+        println!(
+            "note: this build sets a custom version; update checks use the base version {base}"
+        );
+        println!(
+            "note: `gitpane update` runs `cargo install gitpane` and may replace a package-managed binary"
+        );
+    }
 
     if let Some(latest) = update_checker::check_latest() {
         println!("New version available: v{latest}");
