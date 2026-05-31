@@ -736,6 +736,7 @@ mod tests {
     fn empty_status(branch: &str) -> RepoStatus {
         RepoStatus {
             branch: branch.to_string(),
+            head_oid: None,
             files: Vec::new(),
             ahead: 0,
             behind: 0,

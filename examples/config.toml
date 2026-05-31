@@ -19,6 +19,15 @@ excluded_repos = ["node_modules", ".cargo"]
 # Filesystem change debounce interval in milliseconds (default: 500)
 debounce_ms = 500
 
+# Minimum time between watcher-triggered status refreshes for the same repo
+# in milliseconds (default: 5000)
+refresh_cooldown_ms = 5000
+
+# Watch every gitignore-aware worktree directory for nested file changes.
+# Disabled by default to keep Linux inotify quiet in busy generated workspaces.
+# Local status polling still catches nested changes (default: false).
+watch_worktree_dirs = false
+
 # Local status poll interval in seconds — catches missed watcher events (default: 5)
 poll_local_secs = 5
 

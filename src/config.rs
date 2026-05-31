@@ -50,6 +50,15 @@ pub(crate) struct Config {
 pub(crate) struct WatchConfig {
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
+    /// Minimum milliseconds between watcher-triggered local status refreshes
+    /// for the same repo.
+    #[serde(default = "default_refresh_cooldown_ms")]
+    pub refresh_cooldown_ms: u64,
+    /// Install watches inside each repo worktree. Disabled by default because
+    /// busy generated or training files can saturate Linux inotify even when
+    /// status refreshes are throttled. Local polling still catches changes.
+    #[serde(default = "default_watch_worktree_dirs")]
+    pub watch_worktree_dirs: bool,
     /// Local status poll interval in seconds (fast, catches missed watcher events)
     #[serde(default = "default_poll_local_secs")]
     pub poll_local_secs: u64,
@@ -163,6 +172,14 @@ fn default_theme_name() -> String {
 
 fn default_debounce_ms() -> u64 {
     500
+}
+
+fn default_refresh_cooldown_ms() -> u64 {
+    5000
+}
+
+fn default_watch_worktree_dirs() -> bool {
+    false
 }
 
 fn default_discovery_cooldown_secs() -> u64 {
@@ -312,6 +329,8 @@ impl Default for WatchConfig {
     fn default() -> Self {
         Self {
             debounce_ms: default_debounce_ms(),
+            refresh_cooldown_ms: default_refresh_cooldown_ms(),
+            watch_worktree_dirs: default_watch_worktree_dirs(),
             poll_local_secs: default_poll_local_secs(),
             poll_fetch_secs: default_poll_fetch_secs(),
             max_concurrent_polls: default_max_concurrent_polls(),
@@ -1005,6 +1024,18 @@ mod tests {
     fn test_max_concurrent_polls_default() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.watch.max_concurrent_polls, 4);
+    }
+
+    #[test]
+    fn test_refresh_cooldown_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.watch.refresh_cooldown_ms, 5000);
+    }
+
+    #[test]
+    fn test_watch_worktree_dirs_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.watch.watch_worktree_dirs);
     }
 
     #[test]

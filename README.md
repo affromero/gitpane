@@ -56,6 +56,7 @@ Then run:
 ```bash
 gitpane                     # Scans ~/Code by default
 gitpane --root ~/projects   # Scan a specific directory
+gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 ```
 
 ## Update
@@ -70,7 +71,7 @@ If you installed from a [GitHub Release](https://github.com/affromero/gitpane/re
 
 If you work across multiple repositories — microservices, monorepos with submodules, a mix of projects — you know the pain of `cd`-ing into each one to check status. Existing TUI tools focus on **one repo at a time**:
 
-| Tool | Multi-repo | Real-time watch | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull |
+| Tool | Multi-repo | Auto-refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 | [lazygit](https://github.com/jesseduffield/lazygit) | No | No | No | Yes | Yes | Yes | Yes |
@@ -105,7 +106,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 - **Multi-repo overview** — Scans `~/Code` (configurable) for git repos; shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count
 - **Worktree awareness** — Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development — gitpane lets you see at a glance which repos have active parallel work
-- **Real-time filesystem watching** — Status updates within ~500ms of any file change via `notify`
+- **Filesystem awareness** — Watches repo roots and Git metadata for commits, checkouts, and new repos; local polling catches nested worktree file changes without overwhelming Linux inotify
 - **Commit graph** — Lane-based graph with colored box-drawing characters, up to 200 commits
 - **Split diff views** — Click a file to see its diff side-by-side; click a commit to see its files and per-file diffs
 - **Full mouse support** — Click to select, right-click for context menu, scroll wheel everywhere
@@ -223,6 +224,8 @@ excluded_repos = ["node_modules", ".cargo", "target"]
 
 [watch]
 debounce_ms = 500             # Filesystem change debounce (ms)
+refresh_cooldown_ms = 5000    # Min ms between watcher-triggered status refreshes per repo
+watch_worktree_dirs = false   # Opt in to nested worktree watches; polling still catches changes
 poll_local_secs = 5           # Local status poll interval (catches missed watcher events)
 poll_fetch_secs = 30          # Remote fetch poll interval (updates ahead/behind from origin)
 discovery_cooldown_secs = 5   # Min seconds between auto-rescans on root-dir changes (new clones)
@@ -273,6 +276,13 @@ Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...)
 - **List available themes**: `gitpane themes` prints every built-in and custom theme, with a marker on the currently-resolved one.
 
 ## Troubleshooting
+
+For a copyable snapshot of the active config, scan roots, watcher settings, repo count, and CPU-pressure warnings, run:
+
+```sh
+gitpane diagnostic
+gitpane --root ~/projects diagnostic
+```
 
 ### gitpane shows no repositories
 

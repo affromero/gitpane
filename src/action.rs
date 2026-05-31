@@ -33,6 +33,8 @@ pub(crate) enum Action {
     },
     RefreshAll,
     RefreshRepo(RepoId),
+    /// Deferred watcher refresh fired after the per-repo cooldown expires.
+    RefreshRepoAfterCooldown(RepoId),
     /// Fast local status poll (no spinner, no fetch)
     PollLocal,
     /// Remote fetch poll (no spinner)

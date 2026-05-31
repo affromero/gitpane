@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub(crate) struct RepoStatus {
     pub branch: String,
+    pub head_oid: Option<String>,
     pub files: Vec<FileEntry>,
     pub ahead: usize,
     pub behind: usize,
@@ -120,7 +121,7 @@ pub(crate) fn query_status(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, false, sub_cfg)
+    query_status_inner(path, false, false, sub_cfg)
 }
 
 /// Status query with `git fetch` first. Used by explicit user refresh (`r` key).
@@ -128,12 +129,13 @@ pub(crate) fn query_status_with_fetch(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, true, sub_cfg)
+    query_status_inner(path, true, true, sub_cfg)
 }
 
 fn query_status_inner(
     path: &Path,
     fetch: bool,
+    recurse_untracked_dirs: bool,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
     let mut repo = Repository::open(path)?;
@@ -149,10 +151,16 @@ fn query_status_inner(
         true
     });
 
-    // Branch name
-    let branch = match repo.head() {
-        Ok(reference) => reference.shorthand().unwrap_or("HEAD").to_string(),
-        Err(_) => "(no branch)".to_string(),
+    // Branch name and current HEAD oid
+    let (branch, head_oid) = match repo.head() {
+        Ok(reference) => {
+            let oid = reference
+                .target()
+                .or_else(|| reference.peel_to_commit().ok().map(|commit| commit.id()))
+                .map(|oid| oid.to_string());
+            (reference.shorthand().unwrap_or("HEAD").to_string(), oid)
+        }
+        Err(_) => ("(no branch)".to_string(), None),
     };
 
     // Only fetch remote-tracking refs when explicitly requested
@@ -168,7 +176,7 @@ fn query_status_inner(
     // File statuses
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
-        .recurse_untracked_dirs(true)
+        .recurse_untracked_dirs(recurse_untracked_dirs)
         .renames_head_to_index(true);
 
     if sub_cfg.ignore_dirty {
@@ -311,6 +319,7 @@ fn query_status_inner(
 
     Ok(RepoStatus {
         branch,
+        head_oid,
         files,
         ahead,
         behind,
@@ -585,6 +594,37 @@ mod tests {
                 .files
                 .iter()
                 .any(|f| f.status == FileStatus::Untracked)
+        );
+    }
+
+    #[test]
+    fn test_background_status_does_not_recurse_untracked_dirs() {
+        let (tmp, _repo) = init_temp_repo();
+        fs::create_dir_all(tmp.path().join("nested")).unwrap();
+        fs::write(tmp.path().join("nested/file.txt"), "new").unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert!(status.is_dirty);
+        assert!(
+            status
+                .files
+                .iter()
+                .any(|f| f.status == FileStatus::Untracked)
+        );
+        assert!(
+            !status
+                .files
+                .iter()
+                .any(|f| f.path == Path::new("nested/file.txt"))
+        );
+
+        let recursive =
+            query_status_inner(tmp.path(), false, true, &SubmoduleConfig::default()).unwrap();
+        assert!(
+            recursive
+                .files
+                .iter()
+                .any(|f| f.path == Path::new("nested/file.txt"))
         );
     }
 

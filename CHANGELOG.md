@@ -2,6 +2,22 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.7] - 2026-05-30
+
+### Added
+- New `gitpane diagnostic` command prints a copyable report with version, platform, config source, scan roots, watcher settings, graph settings, discovered repo count, missing roots, and warnings for settings that can raise CPU usage. `gitpane diagnostics` is accepted as an alias.
+
+### Changed
+- Nested worktree directory watching is now opt in via `[watch] watch_worktree_dirs = true`. The default is `false`, so Linux inotify stays quiet in workspaces with busy generated or training files. Git metadata and repo roots are still watched, and the existing local poll continues to catch nested file changes.
+- Watcher triggered status refreshes are capped by `[watch] refresh_cooldown_ms`, default `5000`, so repeated file events cannot start back to back status walks for the same repo.
+- Background local status checks no longer recursively expand untracked directories. Explicit refresh with fetch keeps the deeper untracked listing behavior.
+- The TUI no longer redraws every 250 ms while idle. Ticks now handle lightweight message expiry, and renders are driven by input, polling, watcher changes, resize, and status updates.
+
+### Fixed
+- Busy Linux workspaces no longer peg a full core in `notify-rs inoti` when tracked files are written continuously under large repos. On the repro server, current CPU dropped from roughly one saturated core to about 10 to 16 percent, and in flight watcher refresh markers dropped to single digits over a 90 second sample.
+- Repo status updates that only change the file list no longer reload the commit graph. Graph reloads are limited to branch, HEAD, ahead or behind, and stash changes, with an in flight guard to coalesce overlapping graph loads.
+- TUI redraws now start from a blank buffer, and tracing is silent by default unless `GITPANE_LOG`, `RUST_LOG`, or `GITPANE_LOG_FILE` is set. This prevents stale panel titles/content and info log lines from appearing inside the alternate-screen UI.
+
 ## [0.7.6] - 2026-05-30
 
 ### Fixed

@@ -86,6 +86,8 @@ pub(crate) struct GitGraph {
     pub horizontal_layout: bool,
     /// Deferred reload: set when graph data arrives while detail is open.
     needs_reload: bool,
+    /// True while a graph rebuild is running for the current repo.
+    load_in_flight: bool,
     /// Monotonic counter to discard stale GraphLoaded/DiffStatsLoaded results.
     load_generation: u64,
     /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
@@ -118,6 +120,7 @@ impl GitGraph {
             h_scroll: 0,
             horizontal_layout: false,
             needs_reload: false,
+            load_in_flight: false,
             load_generation: 0,
             detail_generation: 0,
             theme,
@@ -130,6 +133,11 @@ impl GitGraph {
 
     pub fn load_repo(&mut self, path: PathBuf, repo_name: &str) {
         let is_same_repo = self.repo_path.as_deref() == Some(path.as_path());
+
+        if is_same_repo && self.load_in_flight {
+            self.needs_reload = true;
+            return;
+        }
 
         self.repo_name = repo_name.to_string();
         self.repo_path = Some(path.clone());
@@ -153,6 +161,7 @@ impl GitGraph {
         let Some(tx) = &self.action_tx else { return };
         let tx = tx.clone();
         let options = self.graph_options.clone();
+        self.load_in_flight = true;
         self.load_generation += 1;
         let load_gen = self.load_generation;
 
@@ -185,6 +194,7 @@ impl GitGraph {
     pub fn set_error(&mut self, msg: String) {
         self.error = Some(msg);
         self.loading = false;
+        self.load_in_flight = false;
     }
 
     pub fn set_rows(&mut self, mut rows: Vec<GraphRow>) {
@@ -205,6 +215,7 @@ impl GitGraph {
         }
         self.all_rows = rows;
         self.loading = false;
+        self.load_in_flight = false;
         self.recompute_segments();
         self.recompute_collapsed_rows();
         if !self.display_rows().is_empty() {
@@ -212,6 +223,10 @@ impl GitGraph {
                 .map(|i| i.min(self.display_rows().len() - 1))
                 .unwrap_or(0);
             self.state.select(Some(idx));
+        }
+
+        if std::mem::take(&mut self.needs_reload) {
+            self.reload_graph();
         }
     }
 

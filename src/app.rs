@@ -1,9 +1,9 @@
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
@@ -22,6 +22,7 @@ use crate::config::UpdatePosition;
 use crate::event::Event;
 use crate::git::graph::GraphOptions;
 use crate::git::scanner;
+use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::{Theme, discover_all_theme_names, load_theme};
 use crate::tui::Tui;
@@ -161,6 +162,10 @@ pub(crate) struct App {
     pending_status: HashSet<RepoId>,
     /// Repos that changed while a status query was in-flight (re-queued on completion)
     dirty_repos: HashSet<RepoId>,
+    /// Last time a status query finished per repo.
+    last_refresh: HashMap<RepoId, Instant>,
+    /// Repos with a trailing watcher refresh already scheduled.
+    refresh_scheduled: HashSet<RepoId>,
     /// When a worktree row is selected, stores context for diff/status routing
     /// and live-polling the worktree's changes.
     active_worktree: Option<ActiveWorktree>,
@@ -187,6 +192,40 @@ struct ActiveWorktree {
     path: std::path::PathBuf,
     repo_id: RepoId,
     display_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshDecision {
+    Now,
+    Later(Duration),
+}
+
+fn refresh_decision(last: Option<Instant>, now: Instant, cooldown: Duration) -> RefreshDecision {
+    if let Some(last) = last {
+        let elapsed = now.saturating_duration_since(last);
+        if elapsed < cooldown {
+            return RefreshDecision::Later(cooldown - elapsed);
+        }
+    }
+
+    RefreshDecision::Now
+}
+
+fn graph_status_changed(previous: Option<&RepoStatus>, next: &RepoStatus) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+
+    previous.branch != next.branch
+        || previous.head_oid != next.head_oid
+        || previous.ahead != next.ahead
+        || previous.behind != next.behind
+        || previous.stashes.len() != next.stashes.len()
+        || previous
+            .stashes
+            .iter()
+            .zip(next.stashes.iter())
+            .any(|(previous, next)| previous.oid != next.oid)
 }
 
 impl App {
@@ -237,6 +276,8 @@ impl App {
             poll_semaphore,
             pending_status: HashSet::new(),
             dirty_repos: HashSet::new(),
+            last_refresh: HashMap::new(),
+            refresh_scheduled: HashSet::new(),
             active_worktree: None,
             theme,
             watcher: Arc::new(Mutex::new(None)),
@@ -299,11 +340,19 @@ impl App {
         let root_dirs = self.config.root_dirs.clone();
         let debounce_ms = self.config.watch.debounce_ms;
         let exclude_dirs = self.config.watch.watch_exclude_dirs.clone();
+        let watch_worktree_dirs = self.config.watch.watch_worktree_dirs;
         let slot = Arc::clone(&self.watcher);
         let repo_count = repo_paths.len();
         tokio::task::spawn_blocking(move || {
             let started = std::time::Instant::now();
-            match RepoWatcher::new(&repo_paths, &root_dirs, debounce_ms, tx, &exclude_dirs) {
+            match RepoWatcher::new(
+                &repo_paths,
+                &root_dirs,
+                debounce_ms,
+                tx,
+                &exclude_dirs,
+                watch_worktree_dirs,
+            ) {
                 Ok(w) => {
                     *slot.lock().unwrap() = Some(w);
                     tracing::info!(
@@ -350,6 +399,76 @@ impl App {
         self.path_input.set_theme(theme.clone());
         self.status_bar.set_theme(theme.clone());
         self.theme_picker.set_theme(theme);
+    }
+
+    fn schedule_refresh(&mut self, id: &RepoId) {
+        if self.pending_status.contains(id) {
+            self.dirty_repos.insert(id.clone());
+            tracing::debug!("skipping repo {}: already in-flight (marked dirty)", id);
+            return;
+        }
+
+        let cooldown = Duration::from_millis(self.config.watch.refresh_cooldown_ms);
+        let now = Instant::now();
+        match refresh_decision(self.last_refresh.get(id).copied(), now, cooldown) {
+            RefreshDecision::Now => {
+                self.refresh_scheduled.remove(id);
+                self.spawn_refresh_query(id.clone());
+            }
+            RefreshDecision::Later(wait) => {
+                if self.refresh_scheduled.insert(id.clone()) {
+                    let repo_id = id.clone();
+                    let tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(wait).await;
+                        let _ = tx.send(Action::RefreshRepoAfterCooldown(repo_id));
+                    });
+                }
+            }
+        }
+    }
+
+    fn spawn_refresh_query(&mut self, repo_id: RepoId) {
+        let sub_cfg = self.config.submodules.clone();
+        if let Some(idx) = self.repo_list.resolve_index(&repo_id) {
+            self.pending_status.insert(repo_id.clone());
+            let path = self.repo_list.repos[idx].path.clone();
+            let tx = self.action_tx.clone();
+            let sem = self.poll_semaphore.clone();
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    match crate::git::status::query_status(&path, &sub_cfg) {
+                        Ok(s) => {
+                            let _ = tx.send(Action::RepoStatusUpdated {
+                                id: repo_id.clone(),
+                                status: s,
+                            });
+                            guard.complete();
+                        }
+                        Err(e) => {
+                            guard.complete();
+                            let _ = tx.send(Action::StatusQueryDone(repo_id.clone()));
+                            // The watcher fires `RefreshRepo` on any change inside the repo,
+                            // including `rm -rf <repo>` or `rm -rf <repo>/.git`. In that
+                            // case the query naturally fails; surface a rescan instead of an
+                            // error toast so the repo just disappears from the list.
+                            if !path.join(".git").exists() {
+                                tracing::debug!(
+                                    "repo {} no longer a git repo; rescanning",
+                                    path.display()
+                                );
+                                let _ = tx.send(Action::DiscoverNewRepos);
+                            } else {
+                                let _ = tx.send(Action::Error(format!("Failed to query: {}", e)));
+                            }
+                        }
+                    }
+                })
+                .await
+            });
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -409,7 +528,11 @@ impl App {
                         self.action_tx.send(Action::Quit)?;
                     }
                     Event::Tick => {
+                        let has_pending_actions = !self.action_rx.is_empty();
                         self.action_tx.send(Action::Tick)?;
+                        if has_pending_actions {
+                            self.action_tx.send(Action::Render)?;
+                        }
                     }
                     Event::Render => {
                         self.action_tx.send(Action::Render)?;
@@ -473,6 +596,11 @@ impl App {
                 match action {
                     Action::Quit => {
                         self.should_quit = true;
+                    }
+                    Action::Tick => {
+                        if self.clear_expired_messages() {
+                            self.action_tx.send(Action::Render)?;
+                        }
                     }
                     Action::Render => {
                         tui.terminal.draw(|frame| {
@@ -592,19 +720,25 @@ impl App {
                     }
                     Action::StatusQueryDone(ref id) => {
                         self.pending_status.remove(id);
+                        self.last_refresh.insert(id.clone(), Instant::now());
                         // Clear git_op so the repo isn't permanently skipped
                         // by future polls after a failed status query.
                         if let Some(idx) = self.repo_list.resolve_index(id) {
                             self.repo_list.repos[idx].git_op = false;
                         }
                         if self.dirty_repos.remove(id) {
-                            self.action_tx.send(Action::RefreshRepo(id.clone()))?;
+                            self.schedule_refresh(id);
                         }
                     }
                     Action::RepoStatusUpdated { ref id, ref status } => {
                         self.pending_status.remove(id);
+                        self.last_refresh.insert(id.clone(), Instant::now());
                         let is_dirty = self.dirty_repos.remove(id);
                         if let Some(idx) = self.repo_list.resolve_index(id) {
+                            let graph_changed = graph_status_changed(
+                                self.repo_list.repos[idx].status.as_ref(),
+                                status,
+                            );
                             let status_clone = status.clone();
                             self.repo_list.update_status(idx, status_clone);
 
@@ -625,16 +759,18 @@ impl App {
                                     .unwrap_or_default();
                                 self.file_list.set_files(files, &name, repo_id);
 
-                                if self.git_graph.has_detail() {
-                                    self.git_graph.set_needs_reload();
-                                } else {
-                                    let path = entry.path.clone();
-                                    self.git_graph.load_repo(path, &name);
+                                if graph_changed {
+                                    if self.git_graph.has_detail() {
+                                        self.git_graph.set_needs_reload();
+                                    } else {
+                                        let path = entry.path.clone();
+                                        self.git_graph.load_repo(path, &name);
+                                    }
                                 }
                             }
                         }
                         if is_dirty {
-                            self.action_tx.send(Action::RefreshRepo(id.clone()))?;
+                            self.schedule_refresh(id);
                         }
                     }
                     Action::RefreshAll => {
@@ -783,62 +919,12 @@ impl App {
                         }
                     }
                     Action::RefreshRepo(ref id) => {
-                        // Watcher-triggered: fast local-only, no spinner
-                        if self.pending_status.contains(id) {
-                            self.dirty_repos.insert(id.clone());
-                            tracing::debug!(
-                                "skipping repo {}: already in-flight (marked dirty)",
-                                id
-                            );
-                            continue;
-                        }
-                        let sub_cfg = self.config.submodules.clone();
-                        if let Some(idx) = self.repo_list.resolve_index(id) {
-                            let repo_id = id.clone();
-                            self.pending_status.insert(repo_id.clone());
-                            let path = self.repo_list.repos[idx].path.clone();
-                            let tx = self.action_tx.clone();
-                            let sem = self.poll_semaphore.clone();
-                            tokio::spawn(async move {
-                                let _permit = sem.acquire().await;
-                                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
-                                tokio::task::spawn_blocking(move || {
-                                    match crate::git::status::query_status(&path, &sub_cfg) {
-                                        Ok(s) => {
-                                            let _ = tx.send(Action::RepoStatusUpdated {
-                                                id: repo_id.clone(),
-                                                status: s,
-                                            });
-                                            guard.complete();
-                                        }
-                                        Err(e) => {
-                                            guard.complete();
-                                            let _ =
-                                                tx.send(Action::StatusQueryDone(repo_id.clone()));
-                                            // The watcher fires `RefreshRepo` on any
-                                            // change inside the repo, including
-                                            // `rm -rf <repo>` or `rm -rf <repo>/.git`.
-                                            // In that case the query naturally fails;
-                                            // surface a rescan instead of an error
-                                            // toast so the repo just disappears from
-                                            // the list.
-                                            if !path.join(".git").exists() {
-                                                tracing::debug!(
-                                                    "repo {} no longer a git repo; rescanning",
-                                                    path.display()
-                                                );
-                                                let _ = tx.send(Action::DiscoverNewRepos);
-                                            } else {
-                                                let _ = tx.send(Action::Error(format!(
-                                                    "Failed to query: {}",
-                                                    e
-                                                )));
-                                            }
-                                        }
-                                    }
-                                })
-                                .await
-                            });
+                        // Watcher-triggered: fast local-only, no spinner.
+                        self.schedule_refresh(id);
+                    }
+                    Action::RefreshRepoAfterCooldown(ref id) => {
+                        if self.refresh_scheduled.remove(id) {
+                            self.schedule_refresh(id);
                         }
                     }
                     Action::ShowGitGraph => {
@@ -1356,6 +1442,8 @@ impl App {
                             // Clean up tracking sets for the removed repo
                             self.pending_status.remove(id);
                             self.dirty_repos.remove(id);
+                            self.last_refresh.remove(id);
+                            self.refresh_scheduled.remove(id);
                             let entry = &self.repo_list.repos[idx];
                             // Remove from pinned if it was pinned
                             self.config.pinned_repos.retain(|p| *p != entry.path);
@@ -1393,6 +1481,8 @@ impl App {
                         // Clear tracking sets — old paths are stale after rescan
                         self.pending_status.clear();
                         self.dirty_repos.clear();
+                        self.last_refresh.clear();
+                        self.refresh_scheduled.clear();
                         // Clear user-added exclusions, save, and re-discover repos
                         self.config.excluded_repos.clear();
                         if let Err(e) = self.config.save() {
@@ -1439,6 +1529,8 @@ impl App {
                                 let id = RepoId(path.clone());
                                 self.pending_status.remove(&id);
                                 self.dirty_repos.remove(&id);
+                                self.last_refresh.remove(&id);
+                                self.refresh_scheduled.remove(&id);
                                 if self
                                     .active_worktree
                                     .as_ref()
@@ -1843,6 +1935,24 @@ impl App {
         Ok(())
     }
 
+    fn clear_expired_messages(&mut self) -> bool {
+        let had_error = self.error_message.is_some();
+        let had_success = self.success_message.is_some();
+
+        if let Some((_, when)) = &self.error_message
+            && when.elapsed().as_secs() >= 5
+        {
+            self.error_message = None;
+        }
+        if let Some((_, when)) = &self.success_message
+            && when.elapsed().as_secs() >= 3
+        {
+            self.success_message = None;
+        }
+
+        had_error != self.error_message.is_some() || had_success != self.success_message.is_some()
+    }
+
     fn draw(&mut self, frame: &mut ratatui::Frame) -> Result<()> {
         let area = frame.area();
 
@@ -1895,6 +2005,11 @@ impl App {
 
         self.file_list.horizontal_layout = self.horizontal_layout;
         self.git_graph.horizontal_layout = self.horizontal_layout;
+
+        // Start each render from a blank buffer. Split panels can collapse,
+        // logs may have written into the terminal before raw mode, and shorter
+        // list/detail content must overwrite old longer content deterministically.
+        frame.buffer_mut().reset();
 
         self.repo_list.draw(frame, repo_area)?;
         self.file_list.draw(frame, changes_area)?;
@@ -1954,17 +2069,7 @@ impl App {
             }
         }
 
-        // Clear timed-out messages so they don't keep re-appearing
-        if let Some((_, when)) = &self.error_message
-            && when.elapsed().as_secs() >= 5
-        {
-            self.error_message = None;
-        }
-        if let Some((_, when)) = &self.success_message
-            && when.elapsed().as_secs() >= 3
-        {
-            self.success_message = None;
-        }
+        self.clear_expired_messages();
 
         self.status_bar.focus = self.focus;
         self.status_bar.sort_order = self.sort_order;
@@ -2146,4 +2251,86 @@ fn base64_encode(data: &[u8]) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::status::StashEntry;
+
+    #[test]
+    fn refresh_decision_runs_without_previous_refresh() {
+        let now = Instant::now();
+        assert_eq!(
+            refresh_decision(None, now, Duration::from_millis(1000)),
+            RefreshDecision::Now
+        );
+    }
+
+    #[test]
+    fn refresh_decision_delays_inside_cooldown() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(250);
+        assert_eq!(
+            refresh_decision(Some(last), now, Duration::from_millis(1000)),
+            RefreshDecision::Later(Duration::from_millis(750))
+        );
+    }
+
+    #[test]
+    fn refresh_decision_runs_after_cooldown() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(1000);
+        assert_eq!(
+            refresh_decision(Some(last), now, Duration::from_millis(1000)),
+            RefreshDecision::Now
+        );
+    }
+
+    #[test]
+    fn graph_status_changed_ignores_file_only_changes() {
+        let previous = test_status("main", Some("aaa"));
+        let next = test_status("main", Some("aaa"));
+
+        assert!(!graph_status_changed(Some(&previous), &next));
+    }
+
+    #[test]
+    fn graph_status_changed_detects_head_changes() {
+        let previous = test_status("main", Some("aaa"));
+        let next = test_status("main", Some("bbb"));
+
+        assert!(graph_status_changed(Some(&previous), &next));
+    }
+
+    #[test]
+    fn graph_status_changed_detects_stash_changes() {
+        let previous = test_status("main", Some("aaa"));
+        let mut next = test_status("main", Some("aaa"));
+        next.stashes.push(StashEntry {
+            index: 0,
+            message: "WIP on main".to_string(),
+            oid: "stash-oid".to_string(),
+        });
+
+        assert!(graph_status_changed(Some(&previous), &next));
+    }
+
+    fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
+        RepoStatus {
+            branch: branch.to_string(),
+            head_oid: head_oid.map(str::to_string),
+            files: Vec::new(),
+            ahead: 0,
+            behind: 0,
+            is_dirty: false,
+            worktree_info: Vec::new(),
+            has_submodules: false,
+            submodules: Vec::new(),
+            has_dirty_submodules: false,
+            has_unpushed_submodules: false,
+            fetch_failed: false,
+            stashes: Vec::new(),
+        }
+    }
 }

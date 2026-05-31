@@ -158,27 +158,37 @@ fn install_filtered_watches(
     debouncer: &mut Debouncer<RecommendedWatcher, NoCache>,
     root: &Path,
     exclude_set: &HashSet<String>,
+    watch_worktree_dirs: bool,
 ) {
-    let mut watched_root = false;
-    for dir in watch_dirs(root, exclude_set) {
-        let is_root = dir.as_path() == root;
-        match debouncer.watch(&dir, RecursiveMode::NonRecursive) {
-            Ok(()) => {
-                if is_root {
-                    watched_root = true;
+    if watch_worktree_dirs {
+        let mut watched_root = false;
+        for dir in watch_dirs(root, exclude_set) {
+            let is_root = dir.as_path() == root;
+            match debouncer.watch(&dir, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    if is_root {
+                        watched_root = true;
+                    }
                 }
-            }
-            Err(e) => {
-                if is_root {
-                    tracing::warn!("Failed to watch repo {}: {}", dir.display(), e);
-                } else {
-                    tracing::debug!("skip watch on {}: {}", dir.display(), e);
+                Err(e) => {
+                    if is_root {
+                        tracing::warn!("Failed to watch repo {}: {}", dir.display(), e);
+                    } else {
+                        tracing::debug!("skip watch on {}: {}", dir.display(), e);
+                    }
                 }
             }
         }
-    }
-    if !watched_root {
-        tracing::debug!("no usable watch installed for repo {}", root.display());
+        if !watched_root {
+            tracing::debug!("no usable watch installed for repo {}", root.display());
+        }
+    } else {
+        match debouncer.watch(root, RecursiveMode::NonRecursive) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("Failed to watch repo {}: {}", root.display(), e);
+            }
+        }
     }
 
     // The working-tree walk prunes `.git`; re-add the watches we depend on.
@@ -224,6 +234,7 @@ impl RepoWatcher {
         debounce_ms: u64,
         event_tx: UnboundedSender<Event>,
         watch_exclude_dirs: &[String],
+        watch_worktree_dirs: bool,
     ) -> color_eyre::Result<Self> {
         let owned_repo_paths: Vec<PathBuf> = repo_paths.to_vec();
         let owned_root_dirs: Vec<PathBuf> = root_dirs.to_vec();
@@ -295,7 +306,7 @@ impl RepoWatcher {
             if !path.exists() {
                 continue;
             }
-            install_filtered_watches(&mut debouncer, path, &exclude_set);
+            install_filtered_watches(&mut debouncer, path, &exclude_set, watch_worktree_dirs);
         }
 
         // Watch each configured root non-recursively so we notice top-level

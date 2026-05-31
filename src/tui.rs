@@ -121,8 +121,8 @@ impl Tui {
         }));
     }
 
-    /// Render-on-demand event loop: renders after user input and on each tick
-    /// (250ms). No separate render timer — idle CPU is near zero.
+    /// Render-on-demand event loop: renders after input and background events.
+    /// Ticks are kept for lightweight housekeeping only.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
         let poll_local = self.poll_local_interval;
@@ -147,9 +147,7 @@ impl Tui {
                 tokio::select! {
                     _ = token.cancelled() => break,
                     _ = tick_delay => {
-                        // Tick + render: processes pending actions and redraws
                         let _ = event_tx.send(Event::Tick);
-                        let _ = event_tx.send(Event::Render);
                     }
                     _ = local_delay => {
                         let _ = event_tx.send(Event::PollLocal);

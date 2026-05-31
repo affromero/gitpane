@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod components;
 mod config;
+mod diagnostic;
 mod event;
 mod git;
 mod repo_id;
@@ -39,6 +40,9 @@ enum Command {
     Update,
     /// List available themes (built-in + custom)
     Themes,
+    /// Print configuration and workspace diagnostics
+    #[command(alias = "diagnostics")]
+    Diagnostic,
 }
 
 #[tokio::main]
@@ -50,6 +54,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Command::Update) => return self_update(),
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
+        Some(Command::Diagnostic) => return run_diagnostic(cli.root, cli.theme.as_deref()),
         None => {}
     }
 
@@ -75,20 +80,25 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Set up tracing. By default, logs go to stderr (where they get clobbered
-/// by the TUI alt-screen as soon as the app starts). Set `GITPANE_LOG_FILE=...`
-/// to redirect everything to a file instead — handy for capturing
-/// `tracing::error!` toasts and `tracing::warn!` watcher messages while the
-/// TUI is running. `GITPANE_LOG=...` is a convenience knob for the level
-/// filter; equivalent to `RUST_LOG=...` but scoped so callers do not have
-/// to remember to namespace it.
+/// Set up tracing. By default, tracing is disabled so log lines cannot corrupt
+/// the alternate-screen TUI. Set `GITPANE_LOG_FILE=...` to capture logs in a
+/// file, and set `GITPANE_LOG=...` or `RUST_LOG=...` to opt into stderr logging
+/// for foreground debugging.
 fn install_tracing() -> Result<()> {
-    let env_var = std::env::var("GITPANE_LOG").or_else(|_| std::env::var("RUST_LOG"));
-    let filter = match env_var {
-        Ok(v) => tracing_subscriber::EnvFilter::new(v),
-        Err(_) => tracing_subscriber::EnvFilter::new("gitpane=info"),
+    let env_filter = std::env::var("GITPANE_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .ok();
+    let log_file = std::env::var("GITPANE_LOG_FILE").ok();
+
+    if env_filter.is_none() && log_file.is_none() {
+        return Ok(());
+    }
+
+    let filter = match env_filter {
+        Some(v) => tracing_subscriber::EnvFilter::new(v),
+        None => tracing_subscriber::EnvFilter::new("gitpane=info"),
     };
-    if let Ok(path) = std::env::var("GITPANE_LOG_FILE") {
+    if let Some(path) = log_file {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -121,6 +131,26 @@ fn list_themes(cli_override: Option<&str>) -> Result<()> {
         let marker = if name == current { "*" } else { " " };
         println!("{marker} {name}");
     }
+    Ok(())
+}
+
+fn run_diagnostic(root: Option<PathBuf>, theme_override: Option<&str>) -> Result<()> {
+    let env = config::RealEnv;
+    let mut config = config::Config::load()?;
+    if let Some(root) = root {
+        config.override_root(root);
+    }
+    if let Some(name) = theme_override {
+        config.runtime_theme_override = Some(name.to_string());
+        config.resolve_theme_with_env(&env);
+    }
+    let repos = git::scanner::discover_repos(&config);
+    let report = diagnostic::render(
+        &config,
+        &repos,
+        diagnostic::RuntimeInfo::current(env!("CARGO_PKG_VERSION")),
+    );
+    print!("{report}");
     Ok(())
 }
 
