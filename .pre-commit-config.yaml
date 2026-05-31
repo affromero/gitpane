@@ -35,3 +35,17 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+
+      - id: cargo-audit
+        name: cargo audit
+        entry: cargo audit --deny warnings
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-coverage
+        name: cargo coverage
+        entry: cargo llvm-cov --workspace --all-targets --all-features --lcov --output-path lcov.info
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

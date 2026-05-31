@@ -249,7 +249,11 @@ mod tests {
 
     #[test]
     fn render_includes_operational_settings() {
-        let mut config = Config::default();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            root_dirs: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        };
         config.watch.refresh_cooldown_ms = 5000;
         config.watch.max_concurrent_polls = 2;
 

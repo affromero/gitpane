@@ -10,6 +10,12 @@ fmt:
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
+audit:
+    cargo audit --deny warnings
+
+coverage:
+    cargo llvm-cov --workspace --all-targets --all-features --lcov --output-path lcov.info
+
 ci: fmt lint test
 
 # Recording recipes (require vhs: https://github.com/charmbracelet/vhs)

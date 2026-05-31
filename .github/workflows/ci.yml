@@ -13,6 +13,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  MSRV: 1.88.0
 
 jobs:
   lint:
@@ -35,6 +36,24 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust ${{ env.MSRV }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV
+        run: cargo check --locked --all-targets --all-features
 
   test:
     name: Test (${{ matrix.os }})

@@ -1,13 +1,19 @@
 <p align="center">
   <h1 align="center">gitpane</h1>
   <p align="center">
-    <strong>Multi-repo Git workspace dashboard for the terminal</strong>
+    <strong>Multi repo Git workspace dashboard for the terminal</strong>
   </p>
   <p align="center">
     <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/security.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/security.yml/badge.svg" alt="Security"></a>
+    <a href="https://github.com/affromero/gitpane/actions/workflows/coverage.yml"><img src="https://github.com/affromero/gitpane/actions/workflows/coverage.yml/badge.svg" alt="Coverage"></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-blue" alt="MSRV 1.88.0"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg" alt="crates.io"></a>
+    <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane" alt="docs.rs"></a>
     <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release" alt="GitHub Release"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads" alt="Downloads"></a>
+    <a href="https://github.com/affromero/gitpane/releases"><img src="https://img.shields.io/github/downloads/affromero/gitpane/total?label=release%20downloads" alt="Release downloads"></a>
+    <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg" alt="Dependency status"></a>
     <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational" alt="Platform">
     <img src="https://img.shields.io/github/languages/top/affromero/gitpane" alt="Language">
@@ -17,7 +23,7 @@
 
 ---
 
-Monitor **all your repos at a glance** — branch, dirty state, ahead/behind, active worktrees, changed files, and commit history — without leaving the terminal.
+Monitor **all your repos at a glance**. See branch, dirty state, ahead/behind, active worktrees, changed files, and commit history without leaving the terminal.
 
 <p align="center">
   <img src="assets/demo.gif" alt="gitpane demo" width="800">
@@ -31,7 +37,7 @@ cargo install gitpane
 
 That's it. No cloning, no building from source. Runs on **Linux, macOS, and Windows**.
 
-> **Don't have Rust?** Download a pre-built binary from [GitHub Releases](https://github.com/affromero/gitpane/releases/latest) — single static binary, zero dependencies.
+> **Don't have Rust?** Download a prebuilt binary from [GitHub Releases](https://github.com/affromero/gitpane/releases/latest). It is a single static binary with zero dependencies.
 >
 > ```bash
 > # macOS (Apple Silicon)
@@ -62,16 +68,16 @@ gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 ## Update
 
 ```bash
-cargo install gitpane       # Same command — overwrites the old binary
+cargo install gitpane       # Same command, overwrites the old binary
 ```
 
-If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), re-download the latest binary for your platform using the same commands from the install section above.
+If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), download the latest binary for your platform using the same commands from the install section above.
 
 ## Why gitpane?
 
-If you work across multiple repositories — microservices, monorepos with submodules, a mix of projects — you know the pain of `cd`-ing into each one to check status. Existing TUI tools focus on **one repo at a time**:
+If you work across multiple repositories, such as microservices, monorepos with submodules, or a mix of projects, you know the pain of checking status one directory at a time. Existing TUI tools focus on **one repo at a time**:
 
-| Tool | Multi-repo | Auto-refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull |
+| Tool | Multi repo | Auto refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 | [lazygit](https://github.com/jesseduffield/lazygit) | No | No | No | Yes | Yes | Yes | Yes |
@@ -83,40 +89,40 @@ If you work across multiple repositories — microservices, monorepos with submo
 | [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No |
 | [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes |
 
-**lazygit** and **gitui** are excellent for deep single-repo work — staging hunks, interactive rebase, conflict resolution. gitpane is the **workspace-level dashboard** — see everything across all repos, drill into anything, never leave the terminal. They complement each other.
+**lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
 
 ## Screenshots
 
-### Three-panel overview
+### Three panel overview
 Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodules (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and file count. Changes in the middle. Commit graph on the right.
 
-<img src="assets/screenshot-main.png" alt="Three-panel overview" width="800">
+<img src="assets/screenshot-main.png" alt="Three panel overview" width="800">
 
 ### Split diff view
-Click a changed file (or press Enter) to see its diff side-by-side. File list stays navigable on the left.
+Click a changed file (or press Enter) to see its diff side by side. File list stays navigable on the left.
 
 <img src="assets/screenshot-diff.png" alt="Split diff view" width="800">
 
-### Commit detail drill-down
+### Commit detail drill down
 Click a commit in the graph to see its files. Click a file to see the commit diff. Layered Esc dismissal: diff → files → graph.
 
-<img src="assets/screenshot-commit.png" alt="Commit detail drill-down" width="800">
+<img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
 ## Features
 
-- **Multi-repo overview** — Scans `~/Code` (configurable) for git repos; shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count
-- **Worktree awareness** — Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development — gitpane lets you see at a glance which repos have active parallel work
-- **Filesystem awareness** — Watches repo roots and Git metadata for commits, checkouts, and new repos; local polling catches nested worktree file changes without overwhelming Linux inotify
-- **Commit graph** — Lane-based graph with colored box-drawing characters, up to 200 commits
-- **Split diff views** — Click a file to see its diff side-by-side; click a commit to see its files and per-file diffs
-- **Full mouse support** — Click to select, right-click for context menu, scroll wheel everywhere
-- **Push / Pull / Rebase** — Right-click context menu with ahead/behind-aware git operations (explicit `origin <branch>` for reliability)
-- **Add & remove repos** — Press `a` to add any repo with tab-completing path input; `d` to remove; `R` to rescan
-- **Sort repos** — Cycle between alphabetical and dirty-first with `s`
-- **Copy to clipboard** — Press `y` to copy selected item from any panel (OSC 52)
-- **Configurable** — TOML config for root dirs, scan depth, pinned repos, exclusions, frame rate
-- **Responsive layout** — Three horizontal panels on wide terminals, vertical stack on narrow ones
-- **Cross-platform** — Linux, macOS, Windows
+- **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
+- **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
+- **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
+- **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
+- **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files and per file diffs.
+- **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere.
+- **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state. Explicit `origin <branch>` is used for reliability.
+- **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
+- **Sort repos**: Cycle between alphabetical and dirty first with `s`.
+- **Copy to clipboard**: Press `y` to copy selected item from any panel (OSC 52).
+- **Configurable**: TOML config for root dirs, scan depth, pinned repos, exclusions, frame rate.
+- **Responsive layout**: Three horizontal panels on wide terminals, vertical stack on narrow ones.
+- **Cross platform**: Linux, macOS, Windows.
 
 ## Keybindings
 
@@ -131,7 +137,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `g` | Reload git graph for selected repo |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo (with confirmation) |
-| `s` | Cycle sort order (Alphabetical / Dirty-first) |
+| `s` | Cycle sort order (Alphabetical / Dirty first) |
 | `w` | Toggle worktree subtree for the selected repo |
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
@@ -166,7 +172,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `Esc` | Close diff → close files → back |
 | `/` | Search commits (message, author, short ID) |
 | `n` / `N` | Next / previous search match |
-| `f` | Toggle first-parent mode |
+| `f` | Toggle first parent mode |
 | `c` | Collapse / expand branch |
 | `H` | Expand all collapsed branches |
 
@@ -197,7 +203,7 @@ gitpane resolves its config file in this order (first existing file wins):
 1. `$GITPANE_CONFIG` (if set, treated as the full path; this overrides everything below and is also the save target)
 2. `$XDG_CONFIG_HOME/gitpane/config.toml` (if `$XDG_CONFIG_HOME` is set and absolute)
 3. `~/.config/gitpane/config.toml` (the XDG default, on every platform)
-4. The platform-native location:
+4. The platform native location:
 
 | Platform | Path |
 |----------|------|
@@ -205,7 +211,7 @@ gitpane resolves its config file in this order (first existing file wins):
 | macOS    | `~/Library/Application Support/gitpane/config.toml` |
 | Windows  | `%APPDATA%\gitpane\config\config.toml` |
 
-If no file is found at any candidate path, gitpane uses the built-in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). When saving after loading a file, gitpane writes back to the loaded path. When saving from defaults, it writes to `$GITPANE_CONFIG`, `$XDG_CONFIG_HOME/gitpane/config.toml`, `~/.config/gitpane/config.toml`, or the platform-native location, in that order.
+If no file is found at any candidate path, gitpane uses the built in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). When saving after loading a file, gitpane writes back to the loaded path. When saving from defaults, it writes to `$GITPANE_CONFIG`, `$XDG_CONFIG_HOME/gitpane/config.toml`, `~/.config/gitpane/config.toml`, or the platform native location, in that order.
 
 gitpane logs the resolved path at startup (`tracing` info level on stderr).
 
@@ -224,11 +230,11 @@ excluded_repos = ["node_modules", ".cargo", "target"]
 
 [watch]
 debounce_ms = 500             # Filesystem change debounce (ms)
-refresh_cooldown_ms = 5000    # Min ms between watcher-triggered status refreshes per repo
+refresh_cooldown_ms = 5000    # Min ms between watcher triggered status refreshes per repo
 watch_worktree_dirs = false   # Opt in to nested worktree watches; polling still catches changes
 poll_local_secs = 5           # Local status poll interval (catches missed watcher events)
 poll_fetch_secs = 30          # Remote fetch poll interval (updates ahead/behind from origin)
-discovery_cooldown_secs = 5   # Min seconds between auto-rescans on root-dir changes (new clones)
+discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root dir changes (new clones)
 
 [ui]
 frame_rate = 10              # Terminal refresh rate (fps)
@@ -245,10 +251,10 @@ See [`examples/config.toml`](examples/config.toml) for a fully annotated example
 
 ### Theming
 
-gitpane ships two built-in themes:
+gitpane ships two built in themes:
 
 - `default`, the original palette (used when `theme` is unset).
-- `muted`, softer 256-color indices for dark terminals where the default `Light*` colors feel too bright.
+- `muted`, softer 256 color indices for dark terminals where the default `Light*` colors feel too bright.
 
 ```toml
 # In config.toml
@@ -263,21 +269,21 @@ To define a custom theme, drop a TOML file at `<config_dir>/gitpane/themes/<name
 stash = "Magenta"
 
 [graph]
-tag_label = "143"        # 256-color index
+tag_label = "143"        # 256 color index
 lane_palette = ["Red", "#5fafd7", "Cyan", "67", "Magenta", "Yellow"]
 ```
 
-Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...), 8-bit indices as bare integers (`"67"`), or 24-bit hex (`"#5fafd7"`). If `$GITPANE_CONFIG` points to a non-XDG location, the `themes/` directory next to that file is searched first.
+Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...), 8 bit indices as bare integers (`"67"`), or 24 bit hex (`"#5fafd7"`). If `$GITPANE_CONFIG` points to a non XDG location, the `themes/` directory next to that file is searched first.
 
 **Switching themes:**
 
 - **From inside the app**: press `t` to open the picker. Up/Down (or `j`/`k`) cycles through themes with live preview, `Enter` saves the choice to `config.toml`, `Esc` cancels and restores.
 - **From the shell**: `gitpane --theme muted` overrides the active theme for one run without modifying `config.toml`.
-- **List available themes**: `gitpane themes` prints every built-in and custom theme, with a marker on the currently-resolved one.
+- **List available themes**: `gitpane themes` prints every built in and custom theme, with a marker on the currently resolved one.
 
 ## Troubleshooting
 
-For a copyable snapshot of the active config, scan roots, watcher settings, repo count, and CPU-pressure warnings, run:
+For a copyable snapshot of the active config, scan roots, watcher settings, repo count, and CPU pressure warnings, run:
 
 ```sh
 gitpane diagnostic
@@ -365,7 +371,7 @@ Then inspect `/tmp/gitpane.log` for any errors during config load or repo scanni
 │  │ Event    │→ │ Action   │→ │ Components            │   │
 │  │ Loop     │  │ Dispatch │  │  RepoList             │   │
 │  │ (tui.rs) │  │ (app.rs) │  │  FileList (split diff)│   │
-│  └──────────┘  └──────────┘  │  GitGraph (drill-down)│   │
+│  └──────────┘  └──────────┘  │  GitGraph (drill down)│   │
 │       ↑                      │  ContextMenu          │   │
 │  ┌──────────┐                │  PathInput             │   │
 │  │ notify   │                │  StatusBar             │   │
@@ -379,12 +385,12 @@ Then inspect `/tmp/gitpane.log` for any errors during config load or repo scanni
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **[ratatui](https://github.com/ratatui/ratatui)** + **[crossterm](https://github.com/crossterm-rs/crossterm)** — TUI rendering with full mouse support
-- **[git2](https://github.com/rust-lang/git2-rs)** (libgit2) — Branch, status, ahead/behind, graph, commit diffs
-- **[notify](https://github.com/notify-rs/notify)** — Filesystem watching with configurable debounce
-- **[tokio](https://github.com/tokio-rs/tokio)** — Async runtime; git queries run in `spawn_blocking` to keep the UI responsive
+- **[ratatui](https://github.com/ratatui/ratatui)** + **[crossterm](https://github.com/crossterm-rs/crossterm)**: TUI rendering with full mouse support.
+- **[git2](https://github.com/rust-lang/git2-rs)** (libgit2): Branch, status, ahead/behind, graph, commit diffs.
+- **[notify](https://github.com/notify-rs/notify)**: Filesystem watching with configurable debounce.
+- **[tokio](https://github.com/tokio-rs/tokio)**: Async runtime. Git queries run in `spawn_blocking` to keep the UI responsive.
 
-Message-passing architecture: terminal events → actions → component updates → render. Each component implements a `Component` trait with `draw`, `handle_key_event`, `handle_mouse_event`, and `update`.
+Message passing architecture: terminal events → actions → component updates → render. Each component implements a `Component` trait with `draw`, `handle_key_event`, `handle_mouse_event`, and `update`.
 
 ## Development
 
@@ -393,11 +399,14 @@ just run           # Build and run
 just test          # Run test suite
 just fmt           # Format code
 just lint          # Run clippy with warnings denied
+just audit         # Run cargo-audit security advisory checks
+just coverage      # Generate lcov.info with cargo-llvm-cov
 just ci            # fmt + lint + test (mirrors CI pipeline)
 ```
 
-CI runs the same Rust checks on Linux and macOS for pushes, pull requests, and
-version tags.
+CI runs formatting, clippy, MSRV checks, tests, and release builds across Linux,
+macOS, and Windows. Security and coverage run as separate workflows so their
+README badges map to real checks.
 
 Install the local hooks before contributing:
 
@@ -408,7 +417,13 @@ pre-commit run --all-files     # optional one-time full check
 ```
 
 The pre-commit hook handles file hygiene, TOML/YAML validation, formatting, and
-clippy. The pre-push hook runs the full test suite.
+clippy. The pre-push hook runs tests, audit, and coverage.
+
+Optional tooling for the full local suite:
+
+```bash
+cargo install cargo-audit cargo-llvm-cov
+```
 
 ### Project structure
 
@@ -420,31 +435,32 @@ src/
 ├── event.rs             # Terminal event types
 ├── tui.rs               # Terminal setup, event loop
 ├── config.rs            # TOML config load/save
-├── watcher.rs           # Filesystem watcher → repo index mapping
+├── watcher.rs           # Filesystem watcher to repo index mapping
 ├── components/
 │   ├── mod.rs           # Component trait
 │   ├── repo_list.rs     # Left panel: repo list with status
 │   ├── file_list.rs     # Middle panel: changed files + split diff
-│   ├── git_graph.rs     # Right panel: commit graph + drill-down
-│   ├── context_menu.rs  # Right-click overlay
-│   ├── path_input.rs    # Add-repo input overlay
+│   ├── git_graph.rs     # Right panel: commit graph and drill down
+│   ├── context_menu.rs  # Right click overlay
+│   ├── path_input.rs    # Add repo input overlay
 │   └── status_bar.rs    # Bottom bar with keybinding hints
 └── git/
     ├── mod.rs
     ├── scanner.rs       # Repo discovery via walkdir
     ├── status.rs        # Branch, files, ahead/behind, fetch
-    ├── graph.rs         # Lane-based commit graph builder
-    ├── graph_render.rs  # Box-drawing character rendering
-    └── commit_files.rs  # Commit file list and per-file diffs
+    ├── graph.rs         # Lane based commit graph builder
+    ├── graph_render.rs  # Box drawing character rendering
+    └── commit_files.rs  # Commit file list and per file diffs
 ```
 
 ## Related Projects
 
 | Project | Description |
 |---------|-------------|
-| [**Fairtrail**](https://github.com/affromero/fairtrail) | Flight price evolution tracker with natural language search |
-| [**PriceToken**](https://github.com/affromero/pricetoken) | Real-time LLM pricing API, npm/PyPI packages, and live dashboard |
-| [**kin3o**](https://github.com/affromero/kin3o) | AI-powered Lottie animation generator CLI |
+| [**Splattie**](https://github.com/affromero/splattie) | 3D Gaussian splat avatar pipeline, hosted editor, and portable `.splattie` bundle format |
+| [**Flight Finder**](https://github.com/affromero/flight-finder) | Flight price evolution tracker with natural language search |
+| [**PriceToken**](https://github.com/affromero/pricetoken) | Live LLM pricing API, npm/PyPI packages, and dashboard |
+| [**kin3o**](https://github.com/affromero/kin3o) | AI powered Lottie animation generator CLI |
 
 ## License
 
