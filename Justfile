@@ -2,13 +2,13 @@ run:
     cargo run
 
 test:
-    cargo test
+    cargo test --all-targets --all-features
 
 fmt:
     cargo fmt --all
 
 lint:
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-targets --all-features -- -D warnings
 
 ci: fmt lint test
 

@@ -390,11 +390,25 @@ Message-passing architecture: terminal events → actions → component updates 
 
 ```bash
 just run           # Build and run
-just test          # Run test suite (90 tests)
+just test          # Run test suite
 just fmt           # Format code
-just lint          # Run clippy
+just lint          # Run clippy with warnings denied
 just ci            # fmt + lint + test (mirrors CI pipeline)
 ```
+
+CI runs the same Rust checks on Linux and macOS for pushes, pull requests, and
+version tags.
+
+Install the local hooks before contributing:
+
+```bash
+brew install pre-commit        # or: pipx install pre-commit
+pre-commit install             # installs pre-commit and pre-push hooks
+pre-commit run --all-files     # optional one-time full check
+```
+
+The pre-commit hook handles file hygiene, TOML/YAML validation, formatting, and
+clippy. The pre-push hook runs the full test suite.
 
 ### Project structure
 
