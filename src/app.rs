@@ -960,8 +960,20 @@ impl App {
                             self.git_graph.set_diff_stats(stats);
                         }
                     }
-                    Action::GraphError(ref msg) => {
-                        self.git_graph.set_error(msg.clone());
+                    Action::GraphError {
+                        generation,
+                        ref message,
+                    } => {
+                        // Drop stale errors so a failed build from a previous
+                        // repo/generation can't clobber the current graph.
+                        if generation == self.git_graph.current_generation() {
+                            self.git_graph.set_error(message.clone());
+                        }
+                    }
+                    Action::GraphLoadAborted { generation } => {
+                        if generation == self.git_graph.current_generation() {
+                            self.git_graph.abort_load();
+                        }
                     }
                     Action::ShowContextMenu { ref id, row, col } => {
                         if let Some(idx) = self.repo_list.resolve_index(id) {

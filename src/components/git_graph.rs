@@ -17,6 +17,44 @@ use crate::git::graph::{BranchSegment, GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 use crate::theme::Theme;
 
+/// RAII guard that guarantees the graph's `load_in_flight` latch is released
+/// even when the background build panics. The build runs in a fire-and-forget
+/// `spawn_blocking` whose `JoinHandle` is never awaited, so a panic in
+/// `GraphBuilder::build` would otherwise swallow both the success and error
+/// paths and strand `load_in_flight = true` — freezing the graph for that repo
+/// until the user switches away and back. On drop without `complete()`, it
+/// emits `GraphLoadAborted` so the latch is cleared for its generation.
+struct GraphLoadGuard {
+    generation: u64,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl GraphLoadGuard {
+    fn new(generation: u64, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            generation,
+            tx,
+            completed: false,
+        }
+    }
+
+    /// Mark the build as having reported a terminal result so `Drop` is a no-op.
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for GraphLoadGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::GraphLoadAborted {
+                generation: self.generation,
+            });
+        }
+    }
+}
+
 struct CommitDetail {
     oid: String,
     message: String,
@@ -56,6 +94,11 @@ impl SearchState {
     }
 }
 
+/// How many consecutive aborted (panicked) builds to auto-retry before giving
+/// up and surfacing an error. Keeps a deterministically-failing build from
+/// replaying indefinitely while still self-healing from a one-off panic.
+const MAX_CONSECUTIVE_ABORTS: u8 = 2;
+
 pub(crate) struct GitGraph {
     /// Display rows (may contain collapsed placeholders).
     rows: Vec<GraphRow>,
@@ -88,6 +131,10 @@ pub(crate) struct GitGraph {
     needs_reload: bool,
     /// True while a graph rebuild is running for the current repo.
     load_in_flight: bool,
+    /// Consecutive aborted (panicked) builds since the last successful load.
+    /// Bounds the auto-retry so a deterministically-panicking build can't
+    /// replay forever under a watcher event storm.
+    consecutive_aborts: u8,
     /// Monotonic counter to discard stale GraphLoaded/DiffStatsLoaded results.
     load_generation: u64,
     /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
@@ -121,6 +168,7 @@ impl GitGraph {
             horizontal_layout: false,
             needs_reload: false,
             load_in_flight: false,
+            consecutive_aborts: 0,
             load_generation: 0,
             detail_generation: 0,
             theme,
@@ -152,6 +200,7 @@ impl GitGraph {
             self.state.select(None);
             self.commit_detail = None;
             self.needs_reload = false;
+            self.consecutive_aborts = 0;
             self.search.clear();
             self.collapsed_branches.clear();
             self.segments.clear();
@@ -166,6 +215,9 @@ impl GitGraph {
         let load_gen = self.load_generation;
 
         tokio::task::spawn_blocking(move || {
+            // Releases `load_in_flight` via `GraphLoadAborted` if `build` panics
+            // before either terminal action below is sent.
+            let guard = GraphLoadGuard::new(load_gen, tx.clone());
             let builder = GraphBuilder::new();
             match builder.build(&path, &options) {
                 Ok(rows) => {
@@ -174,6 +226,12 @@ impl GitGraph {
                         generation: load_gen,
                         rows,
                     });
+                    // `GraphLoaded` is the terminal action for the latch, so
+                    // mark complete before the optional (and separately
+                    // fallible) stats pass — a panic in `batch_diff_stats` must
+                    // not emit a false `GraphLoadAborted` for an already-loaded
+                    // graph.
+                    guard.complete();
                     // Compute stats after graph is sent — graph appears instantly
                     if options.show_stats
                         && let Ok(stats) = crate::git::commit_files::batch_diff_stats(&path, &oids)
@@ -185,7 +243,11 @@ impl GitGraph {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Action::GraphError(format!("Failed to load graph: {}", e)));
+                    let _ = tx.send(Action::GraphError {
+                        generation: load_gen,
+                        message: format!("Failed to load graph: {}", e),
+                    });
+                    guard.complete();
                 }
             }
         });
@@ -216,6 +278,7 @@ impl GitGraph {
         self.all_rows = rows;
         self.loading = false;
         self.load_in_flight = false;
+        self.consecutive_aborts = 0;
         self.recompute_segments();
         self.recompute_collapsed_rows();
         if !self.display_rows().is_empty() {
@@ -271,6 +334,37 @@ impl GitGraph {
 
     pub fn set_needs_reload(&mut self) {
         self.needs_reload = true;
+    }
+
+    /// Release the in-flight latch when a background build aborts without
+    /// reporting (it panicked). Keeps the currently-displayed rows so the view
+    /// doesn't blink, and honors a pending `needs_reload` so a refresh that was
+    /// coalesced during the dead build still runs — but only up to
+    /// `MAX_CONSECUTIVE_ABORTS`, after which it surfaces an error and stops
+    /// auto-retrying so a deterministically-panicking build can't replay forever.
+    pub fn abort_load(&mut self) {
+        // Ignore a stale abort: a build that already reported `GraphLoaded`
+        // (latch cleared) may still drop its guard if a later stats pass
+        // panics. Without this, the abort would consume a fresh `needs_reload`
+        // and fire a spurious reload for an already-loaded graph.
+        if !self.load_in_flight {
+            return;
+        }
+        self.load_in_flight = false;
+        self.loading = false;
+        self.consecutive_aborts = self.consecutive_aborts.saturating_add(1);
+
+        if self.consecutive_aborts > MAX_CONSECUTIVE_ABORTS {
+            // Drop the coalesced reload; replaying it would just panic again.
+            // A fresh repo (re)selection resets the counter and lets it retry.
+            self.needs_reload = false;
+            self.error = Some("Graph build failed repeatedly".to_string());
+            return;
+        }
+
+        if std::mem::take(&mut self.needs_reload) {
+            self.reload_graph();
+        }
     }
 
     pub fn current_generation(&self) -> u64 {
@@ -1445,5 +1539,86 @@ mod tests {
         let placeholder = &graph.rows[1];
         assert!(placeholder.collapsed.is_some());
         assert!(placeholder.message.contains("a")); // short_id of tip
+    }
+
+    #[test]
+    fn test_abort_load_releases_latch() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        // Simulate a build that started but never reported back (panicked).
+        graph.load_in_flight = true;
+        graph.loading = true;
+
+        graph.abort_load();
+
+        assert!(!graph.load_in_flight, "latch must be released on abort");
+        assert!(!graph.loading);
+    }
+
+    #[test]
+    fn test_abort_load_consumes_pending_reload() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        graph.load_in_flight = true;
+        graph.needs_reload = true;
+        // No repo_path is set, so reload_graph is a no-op; we only assert the
+        // coalesced-reload flag is drained and the latch is free for the next
+        // real load (instead of staying stranded).
+        graph.abort_load();
+
+        assert!(!graph.load_in_flight);
+        assert!(!graph.needs_reload, "pending reload flag must be consumed");
+    }
+
+    #[test]
+    fn test_abort_load_ignored_when_not_in_flight() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        // A build already reported GraphLoaded (latch clear) but its guard drops
+        // late (e.g. a stats panic). The abort must not touch a fresh reload.
+        graph.load_in_flight = false;
+        graph.needs_reload = true;
+
+        graph.abort_load();
+
+        assert!(
+            graph.needs_reload,
+            "stale abort must not consume a pending reload"
+        );
+        assert!(
+            graph.error.is_none(),
+            "stale abort must not surface an error"
+        );
+    }
+
+    #[test]
+    fn test_abort_load_bounds_repeated_panics() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        // Drive more aborts than the retry budget; each one re-arms the latch as
+        // a fresh panicking build would.
+        for _ in 0..=MAX_CONSECUTIVE_ABORTS {
+            graph.load_in_flight = true;
+            graph.needs_reload = true;
+            graph.abort_load();
+        }
+
+        assert!(
+            graph.error.is_some(),
+            "must surface an error once the retry budget is exhausted"
+        );
+        assert!(
+            !graph.needs_reload,
+            "must stop replaying the coalesced reload after the budget"
+        );
+    }
+
+    #[test]
+    fn test_set_rows_resets_abort_counter() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        graph.load_in_flight = true;
+        graph.abort_load();
+        assert_eq!(graph.consecutive_aborts, 1);
+
+        // A successful load clears the abort streak so future panics get the
+        // full retry budget again.
+        graph.set_rows(vec![mock_row("abc1234", "ok", "Alice")]);
+        assert_eq!(graph.consecutive_aborts, 0);
     }
 }

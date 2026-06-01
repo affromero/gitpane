@@ -72,7 +72,16 @@ pub(crate) enum Action {
         generation: u64,
         content: String,
     },
-    GraphError(String),
+    GraphError {
+        generation: u64,
+        message: String,
+    },
+    /// A background graph build exited without sending `GraphLoaded`/`GraphError`
+    /// (e.g. it panicked). Releases the `load_in_flight` latch for `generation`
+    /// so the graph can rebuild on the next change instead of freezing.
+    GraphLoadAborted {
+        generation: u64,
+    },
     ShowCommitFiles {
         repo_path: std::path::PathBuf,
         oid: String,
