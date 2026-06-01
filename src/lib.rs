@@ -24,4 +24,3 @@ pub const VERSION: &str = match option_env!("GITPANE_BUILD_OVERWRITE_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
-
