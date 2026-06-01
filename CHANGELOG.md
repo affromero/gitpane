@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.10] - 2026-06-01
+
+### Added
+- Build-time version override via the optional `GITPANE_BUILD_OVERWRITE_VERSION` environment variable, so packagers can stamp a custom version such as a git commit hash into the reported version. Empty values fall back to the Cargo package version, and `gitpane update` still compares against the base version. The new `--version` / `-V` flags print it. Thanks to @0x61nas.
+- Clearer messaging when the `git` binary is not available on the PATH.
+
+### Fixed
+- The gitignore watcher test no longer requires the `git` CLI, so the suite passes in pure build environments without git installed (reported by @DoomHammer).
+- Change badges now render on worktree rows.
+
 ## [0.7.9] - 2026-05-31
 
 ### Changed
