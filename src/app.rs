@@ -517,6 +517,16 @@ impl App {
             });
         }
 
+        // Warn once if the `git` binary is missing. gitpane reads repo state
+        // via libgit2, so it still runs, but fetch/pull/submodule/diff actions
+        // shell out to `git` and would otherwise fail with a cryptic OS error.
+        if !crate::git::git_available() {
+            self.action_tx.send(Action::Error(
+                "git not found on PATH: viewing works, but fetch/pull and submodule actions need git"
+                    .to_string(),
+            ))?;
+        }
+
         // Auto-select the first repo (graph loads once status arrives)
         self.sync_selection();
 
@@ -1052,7 +1062,7 @@ impl App {
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
-                                            e
+                                            crate::git::describe_spawn_error(&e)
                                         )));
                                         let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
@@ -1126,7 +1136,7 @@ impl App {
                                         let _ = tx.send(Action::Error(format!(
                                             "git {} failed: {}",
                                             git_args.join(" "),
-                                            e
+                                            crate::git::describe_spawn_error(&e)
                                         )));
                                         let _ = tx.send(Action::RefreshRepo(repo_id));
                                     }
@@ -1230,7 +1240,10 @@ impl App {
                                                 }
                                             }
                                             Err(e) => {
-                                                format!("Failed to get submodule diff: {}", e)
+                                                format!(
+                                                    "Failed to get submodule diff: {}",
+                                                    crate::git::describe_spawn_error(&e)
+                                                )
                                             }
                                         };
                                         let _ = tx.send(Action::DiffLoaded {
@@ -1261,7 +1274,10 @@ impl App {
                                                     text
                                                 }
                                             }
-                                            Err(e) => format!("Failed to get submodule log: {}", e),
+                                            Err(e) => format!(
+                                                "Failed to get submodule log: {}",
+                                                crate::git::describe_spawn_error(&e)
+                                            ),
                                         };
                                         let _ = tx.send(Action::DiffLoaded {
                                             generation: diff_gen,
@@ -1317,7 +1333,10 @@ impl App {
                                         Err(e) => {
                                             let _ = tx.send(Action::DiffLoaded {
                                                 generation: diff_gen,
-                                                content: format!("Failed to get diff: {}", e),
+                                                content: format!(
+                                                    "Failed to get diff: {}",
+                                                    crate::git::describe_spawn_error(&e)
+                                                ),
                                             });
                                         }
                                     }
