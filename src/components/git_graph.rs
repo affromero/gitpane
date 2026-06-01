@@ -17,6 +17,44 @@ use crate::git::graph::{BranchSegment, GraphBuilder, GraphOptions, GraphRow};
 use crate::git::graph_render;
 use crate::theme::Theme;
 
+/// RAII guard that guarantees the graph's `load_in_flight` latch is released
+/// even when the background build panics. The build runs in a fire-and-forget
+/// `spawn_blocking` whose `JoinHandle` is never awaited, so a panic in
+/// `GraphBuilder::build` would otherwise swallow both the success and error
+/// paths and strand `load_in_flight = true` — freezing the graph for that repo
+/// until the user switches away and back. On drop without `complete()`, it
+/// emits `GraphLoadAborted` so the latch is cleared for its generation.
+struct GraphLoadGuard {
+    generation: u64,
+    tx: UnboundedSender<Action>,
+    completed: bool,
+}
+
+impl GraphLoadGuard {
+    fn new(generation: u64, tx: UnboundedSender<Action>) -> Self {
+        Self {
+            generation,
+            tx,
+            completed: false,
+        }
+    }
+
+    /// Mark the build as having reported a terminal result so `Drop` is a no-op.
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for GraphLoadGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(Action::GraphLoadAborted {
+                generation: self.generation,
+            });
+        }
+    }
+}
+
 struct CommitDetail {
     oid: String,
     message: String,
@@ -166,6 +204,9 @@ impl GitGraph {
         let load_gen = self.load_generation;
 
         tokio::task::spawn_blocking(move || {
+            // Releases `load_in_flight` via `GraphLoadAborted` if `build` panics
+            // before either terminal action below is sent.
+            let guard = GraphLoadGuard::new(load_gen, tx.clone());
             let builder = GraphBuilder::new();
             match builder.build(&path, &options) {
                 Ok(rows) => {
@@ -183,9 +224,14 @@ impl GitGraph {
                             stats,
                         });
                     }
+                    guard.complete();
                 }
                 Err(e) => {
-                    let _ = tx.send(Action::GraphError(format!("Failed to load graph: {}", e)));
+                    let _ = tx.send(Action::GraphError {
+                        generation: load_gen,
+                        message: format!("Failed to load graph: {}", e),
+                    });
+                    guard.complete();
                 }
             }
         });
@@ -271,6 +317,18 @@ impl GitGraph {
 
     pub fn set_needs_reload(&mut self) {
         self.needs_reload = true;
+    }
+
+    /// Release the in-flight latch when a background build aborts without
+    /// reporting (it panicked). Keeps the currently-displayed rows so the view
+    /// doesn't blink, and honors a pending `needs_reload` so a refresh that was
+    /// coalesced during the dead build still runs.
+    pub fn abort_load(&mut self) {
+        self.load_in_flight = false;
+        self.loading = false;
+        if std::mem::take(&mut self.needs_reload) {
+            self.reload_graph();
+        }
     }
 
     pub fn current_generation(&self) -> u64 {
@@ -1445,5 +1503,32 @@ mod tests {
         let placeholder = &graph.rows[1];
         assert!(placeholder.collapsed.is_some());
         assert!(placeholder.message.contains("a")); // short_id of tip
+    }
+
+    #[test]
+    fn test_abort_load_releases_latch() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        // Simulate a build that started but never reported back (panicked).
+        graph.load_in_flight = true;
+        graph.loading = true;
+
+        graph.abort_load();
+
+        assert!(!graph.load_in_flight, "latch must be released on abort");
+        assert!(!graph.loading);
+    }
+
+    #[test]
+    fn test_abort_load_consumes_pending_reload() {
+        let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+        graph.load_in_flight = true;
+        graph.needs_reload = true;
+        // No repo_path is set, so reload_graph is a no-op; we only assert the
+        // coalesced-reload flag is drained and the latch is free for the next
+        // real load (instead of staying stranded).
+        graph.abort_load();
+
+        assert!(!graph.load_in_flight);
+        assert!(!graph.needs_reload, "pending reload flag must be consumed");
     }
 }
