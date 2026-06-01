@@ -43,7 +43,7 @@ impl Component for StatusBar {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let s = &self.theme.status_bar;
         let r = &self.theme.repo_list;
-        let version_text = format!("v{} ", env!("CARGO_PKG_VERSION"));
+        let version_text = format!("v{} ", gitpane::VERSION);
         let version_len = version_text.len() as u16;
         let chunks =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(version_len)]).split(area);

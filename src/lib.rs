@@ -16,5 +16,18 @@
 //!
 //! The public library surface is intentionally small.
 
-/// The crate version from `Cargo.toml`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The current gitpane version.
+///
+/// Uses `GITPANE_BUILD_OVERWRITE_VERSION` when set at build time,
+/// otherwise falls back to `CARGO_PKG_VERSION`.
+pub const VERSION: &str = match option_env!("GITPANE_BUILD_OVERWRITE_VERSION") {
+    Some(v) => {
+        if v.is_empty() {
+            // fallback to the `CARGO_PKG_VERSION`
+            env!("CARGO_PKG_VERSION")
+        } else {
+            v
+        }
+    }
+    None => env!("CARGO_PKG_VERSION"),
+};
