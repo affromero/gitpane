@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.11] - 2026-06-03
+
+### Fixed
+- The commit graph no longer freezes for a repository when a background graph build aborts unexpectedly. A guard now releases the in-flight load latch and replays any coalesced reload, so the graph keeps updating on commit and push instead of going stale until you switch repositories and back. Repeatedly failing builds are capped with bounded auto-retry so they cannot rebuild on every file-watcher event, and a stale build result can no longer overwrite a freshly loaded graph.
+
 ## [0.7.10] - 2026-06-01
 
 ### Added
