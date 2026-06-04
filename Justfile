@@ -49,7 +49,7 @@ deploy-remote:
     rsync -az --delete \
         --exclude=target --exclude=.git --exclude='*.log' \
         ./ {{HOST}}:{{REMOTE}}/
-    ssh {{HOST}} 'source ~/.cargo/env && cd {{REMOTE}} && cargo build --release && cp target/release/gitpane ~/.cargo/bin/gitpane'
+    ssh {{HOST}} 'source ~/.cargo/env && cd {{REMOTE}} && cargo build --release && cp target/release/gitpane ~/.cargo/bin/gitpane.new && mv -f ~/.cargo/bin/gitpane.new ~/.cargo/bin/gitpane'
 
 # Quick remote run: launches gitpane in a detached tmux pane on the remote
 # with GITPANE_LOG_FILE set, sleeps SECS seconds, sends `q`, and prints the log.
