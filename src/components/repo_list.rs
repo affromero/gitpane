@@ -788,6 +788,7 @@ mod tests {
             has_unpushed_submodules: false,
             fetch_failed: false,
             stashes: Vec::new(),
+            refs: crate::git::status::RefsFingerprint::default(),
         }
     }
 

@@ -22,12 +22,81 @@ pub(crate) struct RepoStatus {
     pub fetch_failed: bool,
     /// Local stash entries (oldest at index 0; `stash@{n}` matches by index).
     pub stashes: Vec<StashEntry>,
+    /// Fingerprint of the ref tips the graph renders (branches + tags), bucketed
+    /// so the change check can be scoped to the active `BranchFilter`. Lets the
+    /// graph reload when a commit lands on a branch that is not the root's
+    /// checked-out HEAD (e.g. a commit made in a linked worktree, whose branch
+    /// shares the root's `refs/heads/*`).
+    pub refs: RefsFingerprint,
+}
+
+/// Order-independent hashes of the rendered ref tips, split by category so the
+/// reload check can compare only what the current `BranchFilter` actually draws.
+/// Each bucket XORs `hash(name, oid)` over its refs: order-free, allocation-free,
+/// and O(ref count) with no sort. Names are included so a new branch/tag at an
+/// existing commit still registers as a change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RefsFingerprint {
+    pub local: u64,
+    pub remote: u64,
+    pub tags: u64,
 }
 
 impl RepoStatus {
     pub fn stash_count(&self) -> usize {
         self.stashes.len()
     }
+}
+
+/// Snapshot the tips of the refs the graph renders (`refs/heads/*`,
+/// `refs/remotes/*`, `refs/tags/*`), mirroring `git::graph::resolve_refs`:
+/// annotated tags are peeled to their commit. Symbolic refs (e.g.
+/// `refs/remotes/origin/HEAD`) have no direct target and are skipped, matching
+/// the graph's branch iteration. Reuses the already-open repo, so it costs one
+/// extra ref-db pass on a poll that already walks full status.
+fn graph_refs_fingerprint(repo: &Repository) -> RefsFingerprint {
+    use std::hash::{Hash, Hasher};
+
+    fn mix(acc: &mut u64, name: &str, oid: git2::Oid) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        oid.as_bytes().hash(&mut hasher);
+        *acc ^= hasher.finish();
+    }
+
+    let mut fp = RefsFingerprint::default();
+    let Ok(references) = repo.references() else {
+        return fp;
+    };
+    for reference in references {
+        let Ok(reference) = reference else {
+            continue;
+        };
+        let Ok(name) = reference.name() else {
+            continue;
+        };
+        if name.starts_with("refs/heads/") {
+            if let Some(oid) = reference.target() {
+                mix(&mut fp.local, name, oid);
+            }
+        } else if name.starts_with("refs/remotes/") {
+            if let Some(oid) = reference.target() {
+                mix(&mut fp.remote, name, oid);
+            }
+        } else if name.starts_with("refs/tags/") {
+            // Peel annotated tags to the commit the graph labels, falling back
+            // to the raw target for lightweight tags.
+            let oid = reference
+                .peel_to_commit()
+                .ok()
+                .map(|commit| commit.id())
+                .or_else(|| reference.target());
+            if let Some(oid) = oid {
+                mix(&mut fp.tags, name, oid);
+            }
+        }
+    }
+    fp
 }
 
 struct ChangeSummary {
@@ -200,6 +269,9 @@ fn query_status_inner(
     // Collect linked worktree details (excludes the main working tree)
     let worktree_info = collect_worktree_info(&repo, sub_cfg);
 
+    // Snapshot rendered ref tips (post-fetch, so moved remotes are reflected).
+    let refs = graph_refs_fingerprint(&repo);
+
     Ok(RepoStatus {
         branch,
         head_oid,
@@ -214,6 +286,7 @@ fn query_status_inner(
         has_unpushed_submodules,
         fetch_failed,
         stashes,
+        refs,
     })
 }
 
@@ -1473,5 +1546,136 @@ mod tests {
         let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
         assert_eq!(status.ahead, 2);
         assert_eq!(status.behind, 0);
+    }
+
+    #[test]
+    fn fingerprint_changes_when_other_branch_moves() {
+        // Reproduces the worktree case: a commit lands on a branch that is not
+        // the checked-out HEAD. The root HEAD stays put, but the graph renders
+        // that branch, so its fingerprint must change to drive a reload.
+        let (_tmp, repo) = init_temp_repo();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &base, false).unwrap();
+
+        let before = graph_refs_fingerprint(&repo);
+        let head_before = repo.head().unwrap().target();
+
+        // New commit on `feature` only — HEAD (master/main) is never updated,
+        // exactly as a commit made inside a linked worktree would behave.
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree = repo.find_tree(base.tree_id()).unwrap();
+        let moved = repo
+            .commit(None, &sig, &sig, "on feature", &tree, &[&base])
+            .unwrap();
+        repo.reference("refs/heads/feature", moved, true, "move feature")
+            .unwrap();
+
+        let after = graph_refs_fingerprint(&repo);
+
+        assert_ne!(
+            before.local, after.local,
+            "a moved local branch must change the local refs fingerprint"
+        );
+        assert_eq!(
+            repo.head().unwrap().target(),
+            head_before,
+            "the checked-out HEAD must be untouched by the other-branch commit"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_branch_added_at_existing_commit() {
+        // A new branch at an already-rendered commit changes the labels the
+        // graph draws even though no new OID appears, so names must be hashed.
+        let (_tmp, repo) = init_temp_repo();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+
+        let before = graph_refs_fingerprint(&repo);
+        repo.branch("feature", &base, false).unwrap();
+        let after = graph_refs_fingerprint(&repo);
+
+        assert_ne!(before.local, after.local);
+    }
+
+    #[test]
+    fn fingerprint_buckets_remote_separately_from_local() {
+        // A remote-only move must not perturb the local bucket, so the local
+        // filter can ignore fetches.
+        let (_tmp, repo) = init_temp_repo();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+
+        let before = graph_refs_fingerprint(&repo);
+        repo.reference("refs/remotes/origin/feature", base.id(), true, "remote tip")
+            .unwrap();
+        let after = graph_refs_fingerprint(&repo);
+
+        assert_eq!(
+            before.local, after.local,
+            "remote move must not touch local"
+        );
+        assert_ne!(before.remote, after.remote, "remote bucket must change");
+    }
+
+    #[test]
+    fn query_status_detects_commit_in_linked_worktree() {
+        // End-to-end through the public entry point with a real linked worktree:
+        // a commit made inside the worktree (on its own branch) must change the
+        // root's `refs` fingerprint while leaving the root's checked-out HEAD
+        // untouched — exactly the case the graph reload gate previously missed.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        let wt = tmp.path().join("wt-feature");
+        fs::create_dir_all(&root).unwrap();
+
+        let git = |args: &[&str], cwd: &Path| -> bool {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+
+        if !git(&["init", "-q"], &root) {
+            eprintln!("skipping query_status_detects_commit_in_linked_worktree: git unavailable");
+            return;
+        }
+        assert!(git(&["commit", "-q", "--allow-empty", "-m", "init"], &root));
+        // Linked worktree checked out on its own branch (shares root refs/heads).
+        assert!(git(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                wt.to_str().unwrap(),
+                "-b",
+                "feature"
+            ],
+            &root,
+        ));
+
+        let before = query_status(&root, &SubmoduleConfig::default()).unwrap();
+
+        // Commit inside the worktree only — the root's HEAD never moves.
+        assert!(git(
+            &["commit", "-q", "--allow-empty", "-m", "in worktree"],
+            &wt,
+        ));
+
+        let after = query_status(&root, &SubmoduleConfig::default()).unwrap();
+
+        assert_eq!(
+            before.head_oid, after.head_oid,
+            "root checked-out HEAD must be unchanged by the worktree commit"
+        );
+        assert_ne!(
+            before.refs.local, after.refs.local,
+            "worktree commit moved a shared branch tip; the local refs \
+             fingerprint must change so the graph reloads"
+        );
     }
 }

@@ -17,6 +17,7 @@ use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
 use crate::components::theme_picker::ThemePicker;
+use crate::config::BranchFilter;
 use crate::config::Config;
 use crate::config::UpdatePosition;
 use crate::event::Event;
@@ -211,12 +212,34 @@ fn refresh_decision(last: Option<Instant>, now: Instant, cooldown: Duration) -> 
     RefreshDecision::Now
 }
 
-fn graph_status_changed(previous: Option<&RepoStatus>, next: &RepoStatus) -> bool {
+fn graph_status_changed(
+    previous: Option<&RepoStatus>,
+    next: &RepoStatus,
+    filter: BranchFilter,
+) -> bool {
     let Some(previous) = previous else {
         return true;
     };
 
-    previous.branch != next.branch
+    // Reload when a ref the graph actually renders moves. Scope the comparison
+    // to the active filter so, e.g., a fetch that advances a remote-tracking ref
+    // does not reload a local-only graph. `None` draws only commits reachable
+    // from HEAD (covered by `head_oid`), so no ref bucket applies.
+    let prev_refs = &previous.refs;
+    let next_refs = &next.refs;
+    let refs_changed = match filter {
+        BranchFilter::All => prev_refs != next_refs,
+        BranchFilter::Local => {
+            prev_refs.local != next_refs.local || prev_refs.tags != next_refs.tags
+        }
+        BranchFilter::Remote => {
+            prev_refs.remote != next_refs.remote || prev_refs.tags != next_refs.tags
+        }
+        BranchFilter::None => false,
+    };
+
+    refs_changed
+        || previous.branch != next.branch
         || previous.head_oid != next.head_oid
         || previous.ahead != next.ahead
         || previous.behind != next.behind
@@ -748,6 +771,7 @@ impl App {
                             let graph_changed = graph_status_changed(
                                 self.repo_list.repos[idx].status.as_ref(),
                                 status,
+                                self.git_graph.graph_options.branch_filter,
                             );
                             let status_clone = status.clone();
                             self.repo_list.update_status(idx, status_clone);
@@ -2323,7 +2347,13 @@ mod tests {
         let previous = test_status("main", Some("aaa"));
         let next = test_status("main", Some("aaa"));
 
-        assert!(!graph_status_changed(Some(&previous), &next));
+        // Same HEAD and same rendered refs: a working-tree edit must not reload
+        // the graph (the no-churn guarantee that keeps CPU down).
+        assert!(!graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::All
+        ));
     }
 
     #[test]
@@ -2331,7 +2361,11 @@ mod tests {
         let previous = test_status("main", Some("aaa"));
         let next = test_status("main", Some("bbb"));
 
-        assert!(graph_status_changed(Some(&previous), &next));
+        assert!(graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::All
+        ));
     }
 
     #[test]
@@ -2344,7 +2378,53 @@ mod tests {
             oid: "stash-oid".to_string(),
         });
 
-        assert!(graph_status_changed(Some(&previous), &next));
+        assert!(graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::All
+        ));
+    }
+
+    #[test]
+    fn graph_status_changed_detects_commit_on_other_branch() {
+        // The worktree case: the root's checked-out HEAD is unchanged, but a
+        // commit landed on another local branch (its shared `refs/heads/*` tip
+        // moved). The graph renders that branch, so it must reload.
+        let previous = test_status("main", Some("aaa"));
+        let mut next = test_status("main", Some("aaa"));
+        next.refs.local = previous.refs.local ^ 0x9e37_79b9;
+
+        assert!(graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::All
+        ));
+        // Local-only graphs render local branches too, so they also reload.
+        assert!(graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::Local
+        ));
+    }
+
+    #[test]
+    fn graph_status_changed_local_filter_ignores_remote_only_moves() {
+        // A background fetch advances a remote-tracking ref. A local-only graph
+        // does not draw it, so it must not reload; an all-branches graph does.
+        let previous = test_status("main", Some("aaa"));
+        let mut next = test_status("main", Some("aaa"));
+        next.refs.remote = previous.refs.remote ^ 0x1234_5678;
+
+        assert!(!graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::Local
+        ));
+        assert!(graph_status_changed(
+            Some(&previous),
+            &next,
+            BranchFilter::All
+        ));
     }
 
     fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
@@ -2362,6 +2442,7 @@ mod tests {
             has_unpushed_submodules: false,
             fetch_failed: false,
             stashes: Vec::new(),
+            refs: crate::git::status::RefsFingerprint::default(),
         }
     }
 }
