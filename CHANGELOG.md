@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.12] - 2026-06-05
+
+### Fixed
+- The commit graph now refreshes when a commit or push lands on a branch other than the selected repository's checked-out HEAD, including commits made in linked worktrees whose branches share the repository's refs. Previously the change check only looked at the checked-out branch, so a commit on any other branch (a common case when several worktrees commit locally) left the graph stale until you switched repositories and back. The reload still fires only when a rendered ref actually moves, so it adds no extra graph rebuilds on ordinary file edits.
+
 ## [0.7.11] - 2026-06-03
 
 ### Fixed
