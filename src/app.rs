@@ -2159,7 +2159,7 @@ impl App {
         use ratatui::widgets::{Block, Borders, Paragraph};
 
         let t = &self.theme.overlay;
-        let text = format!(" \u{2191} v{version} \u{00b7} cargo install gitpane ");
+        let text = format!(" \u{2191} v{version} \u{00b7} gitpane update ");
         let width = text.len() as u16 + 2;
         let height = 3;
 
@@ -2182,7 +2182,7 @@ impl App {
                 Style::default().fg(t.update_toast_version),
             ),
             Span::styled(
-                " \u{00b7} cargo install gitpane ",
+                " \u{00b7} gitpane update ",
                 Style::default().fg(t.update_toast_install),
             ),
         ]);
