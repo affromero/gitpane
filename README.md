@@ -74,11 +74,16 @@ gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 
 ## Update
 
+If you installed with cargo, gitpane can update itself:
+
 ```bash
-cargo install gitpane       # Same command, overwrites the old binary
+gitpane update              # checks for a newer release, then runs cargo install
+cargo install gitpane       # the equivalent manual command, overwrites the old binary
 ```
 
 If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), download the latest binary for your platform using the same commands from the install section above.
+
+On NetBSD, update through pkgsrc instead of `gitpane update`, which shells out to `cargo install` and would replace the package-managed binary with a cargo-built one.
 
 ## Why gitpane?
 
