@@ -57,6 +57,13 @@ That's it. No cloning, no building from source. Runs on **Linux, macOS, and Wind
 > tar xzf gitpane-aarch64-unknown-linux-gnu.tar.gz && sudo mv gitpane /usr/local/bin/
 > ```
 
+> **On NetBSD?** gitpane is available as a community-maintained [pkgsrc](https://www.pkgsrc.org/) package in [`devel/gitpane`](https://pkgsrc.se/devel/gitpane), thanks to [@0323pin](https://github.com/0323pin):
+>
+> ```sh
+> pkgin install gitpane                            # prebuilt binary package
+> cd /usr/pkgsrc/devel/gitpane && make install     # build from pkgsrc source
+> ```
+
 Then run:
 
 ```bash
