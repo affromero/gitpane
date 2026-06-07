@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.13] - 2026-06-07
+
+### Fixed
+- Adding a git submodule or linked worktree with the `A` key no longer removes it from the list almost immediately. A submodule stores its `.git` as a pointer file (`gitdir: <path>`) instead of a directory, so repository discovery did not recognize it as a real repo and pruned the pinned entry on the next filesystem rescan. Discovery now resolves the `gitdir:` pointer (absolute, or relative to the working tree) and looks for `HEAD` at the referenced git directory, so pinned submodules and worktrees persist.
+
 ## [0.7.12] - 2026-06-05
 
 ### Fixed
