@@ -276,7 +276,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let super_git = tmp.path().join("superproject").join(".git");
         fs::create_dir_all(&super_git).unwrap();
-        let submodule = make_submodule(tmp.path(), "3dgrut", &super_git);
+        let submodule = make_submodule(tmp.path(), "vendored-lib", &super_git);
 
         let config = Config {
             root_dirs: vec![],
@@ -287,7 +287,7 @@ mod tests {
 
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
-        assert!(repos[0].ends_with("3dgrut"));
+        assert!(repos[0].ends_with("vendored-lib"));
     }
 
     /// A relative `gitdir:` pointer (the form real `git submodule` writes,

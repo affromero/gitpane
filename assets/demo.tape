@@ -24,7 +24,7 @@ Enter
 #   2. afromero
 #   3. capacitor-app
 #   4. gitpane        ← ⎇3 * dirty
-#   5. Hax-CV
+#   5. vendored-lib
 #   6. Sotto          ← ⎇3 * ↑13
 Sleep 4s
 
@@ -95,7 +95,7 @@ Escape
 Sleep 300ms
 
 # Back to repo list — continue down to Sotto
-# j → Hax-CV
+# j → vendored-lib
 Type "j"
 Sleep 500ms
 
