@@ -3,13 +3,42 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Cheap check that a `.git` directory looks real. A bare `mkdir .git` (which
+/// Cheap check that a `.git` entry looks real. A bare `mkdir .git` (which
 /// can happen by accident, e.g. an aborted clone) is enough to fool a
 /// `.git.exists()` test but `Repository::open` then fails on every status
 /// query, so we treat such paths as not-a-repo at discovery time. Anything
 /// produced by `git init` will have a `HEAD` file; that is what we look for.
+///
+/// Two layouts are accepted:
+/// - A standard checkout, where `.git` is a directory containing `HEAD`.
+/// - A submodule or linked worktree, where `.git` is a *file* of the form
+///   `gitdir: <path>` pointing at the real git directory (e.g.
+///   `<superproject>/.git/modules/<name>`). Without this branch, pinning a
+///   submodule would pass `AddRepo`'s `.git.exists()` check but then vanish on
+///   the next FS-driven rescan, because discovery couldn't find its `HEAD`.
 fn is_real_git_dir(dot_git: &Path) -> bool {
-    dot_git.join("HEAD").is_file()
+    if dot_git.join("HEAD").is_file() {
+        return true;
+    }
+    if dot_git.is_file()
+        && let Some(gitdir) = read_gitdir_pointer(dot_git)
+    {
+        return gitdir.join("HEAD").is_file();
+    }
+    false
+}
+
+/// Resolve a `gitdir: <path>` pointer file (used by submodules and linked
+/// worktrees) to the git directory it references. Relative targets resolve
+/// against the directory holding the pointer file.
+fn read_gitdir_pointer(dot_git_file: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(dot_git_file).ok()?;
+    let target = Path::new(contents.trim().strip_prefix("gitdir:")?.trim());
+    if target.is_absolute() {
+        Some(target.to_path_buf())
+    } else {
+        Some(dot_git_file.parent()?.join(target))
+    }
 }
 
 pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
@@ -108,6 +137,30 @@ mod tests {
         fs::create_dir_all(&dot_git).unwrap();
         // Mimic `git init`: a HEAD file is the minimum is_real_git_dir checks.
         fs::write(dot_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        repo_dir
+    }
+
+    /// A git submodule (or linked worktree): `.git` is a *file* containing a
+    /// `gitdir:` pointer to the real git directory, not a directory of its own.
+    /// `make_repo` can't model this because it always creates a `.git` dir.
+    fn make_submodule(
+        parent: &std::path::Path,
+        name: &str,
+        super_git: &std::path::Path,
+    ) -> PathBuf {
+        let repo_dir = parent.join(name);
+        fs::create_dir_all(&repo_dir).unwrap();
+        // The real git dir lives under the superproject, e.g.
+        // `<super>/.git/modules/<name>`, and carries the HEAD file.
+        let module_git = super_git.join("modules").join(name);
+        fs::create_dir_all(&module_git).unwrap();
+        fs::write(module_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        // The working tree's `.git` is a pointer file with an absolute target.
+        fs::write(
+            repo_dir.join(".git"),
+            format!("gitdir: {}\n", module_git.display()),
+        )
+        .unwrap();
         repo_dir
     }
 
@@ -211,6 +264,58 @@ mod tests {
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
         assert!(repos[0].ends_with("real"));
+    }
+
+    /// Regression: pinning a submodule (whose `.git` is a pointer file, not a
+    /// directory) must survive discovery. Previously `is_real_git_dir` only
+    /// accepted a `.git` directory with HEAD, so a pinned submodule passed
+    /// `AddRepo` but was pruned on the next FS-driven rescan, vanishing from
+    /// the list almost immediately after being added.
+    #[test]
+    fn test_pinned_submodule_is_discovered() {
+        let tmp = TempDir::new().unwrap();
+        let super_git = tmp.path().join("superproject").join(".git");
+        fs::create_dir_all(&super_git).unwrap();
+        let submodule = make_submodule(tmp.path(), "3dgrut", &super_git);
+
+        let config = Config {
+            root_dirs: vec![],
+            pinned_repos: vec![submodule.clone()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(repos[0].ends_with("3dgrut"));
+    }
+
+    /// A relative `gitdir:` pointer (the form real `git submodule` writes,
+    /// e.g. `gitdir: ../../.git/modules/<name>`) must resolve against the
+    /// working tree, not the process CWD.
+    #[test]
+    fn test_pinned_submodule_relative_gitdir_is_discovered() {
+        let tmp = TempDir::new().unwrap();
+        // Layout: tmp/super/.git/modules/sub  and  tmp/super/deps/sub
+        let super_dir = tmp.path().join("super");
+        let module_git = super_dir.join(".git").join("modules").join("sub");
+        fs::create_dir_all(&module_git).unwrap();
+        fs::write(module_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let work = super_dir.join("deps").join("sub");
+        fs::create_dir_all(&work).unwrap();
+        // Relative pointer from tmp/super/deps/sub back to the module git dir.
+        fs::write(work.join(".git"), "gitdir: ../../.git/modules/sub\n").unwrap();
+
+        let config = Config {
+            root_dirs: vec![],
+            pinned_repos: vec![work.clone()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(repos[0].ends_with("sub"));
     }
 
     #[test]
