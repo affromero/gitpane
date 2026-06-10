@@ -134,6 +134,8 @@ pub(crate) struct FileListTheme {
     pub submodule_bracket: Color,
     pub submodule_unpushed: Color,
     pub submodule_unreachable: Color,
+    pub submodule_branch: Color,
+    pub submodule_needs_merge: Color,
 }
 
 impl Default for FileListTheme {
@@ -160,6 +162,8 @@ impl Default for FileListTheme {
             submodule_bracket: Color::LightMagenta,
             submodule_unpushed: Color::Green,
             submodule_unreachable: Color::LightRed,
+            submodule_branch: Color::Cyan,
+            submodule_needs_merge: Color::Yellow,
         }
     }
 }

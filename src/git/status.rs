@@ -126,6 +126,9 @@ pub(crate) struct FileEntry {
     pub is_submodule: bool,
     pub submodule_state: Option<SubmoduleState>,
     pub submodule_warn: SubmoduleWarn,
+    /// Checked-out branch of the submodule (or detached). `None` for non
+    /// submodule rows and for submodules that could not be opened.
+    pub submodule_head: Option<SubmoduleHead>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +148,15 @@ pub(crate) enum SubmoduleState {
     Dirty,
 }
 
+/// The submodule's currently checked-out HEAD. After `git submodule update`
+/// a submodule sits on a detached HEAD by default, so `Detached` is common and
+/// itself a useful signal: a modification there is not on any tracked branch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SubmoduleHead {
+    Branch(String),
+    Detached,
+}
+
 /// "You owe a push" warnings for a submodule. Orthogonal to `SubmoduleState`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SubmoduleWarn {
@@ -154,11 +166,16 @@ pub(crate) struct SubmoduleWarn {
     /// `refs/remotes/*` refs — committing the parent would pin a sha nobody
     /// else can fetch.
     pub pointer_unreachable: bool,
+    /// Parent's recorded oid IS on a remote, but not on the submodule's default
+    /// branch (`origin/HEAD`, falling back to `origin/main`/`origin/master`),
+    /// so it still needs a merge/PR there. Stays `false` when no default branch
+    /// resolves, so it never fires on a false positive.
+    pub needs_merge_to_default: bool,
 }
 
 impl SubmoduleWarn {
     pub fn is_clean(&self) -> bool {
-        self.unpushed_commits == 0 && !self.pointer_unreachable
+        self.unpushed_commits == 0 && !self.pointer_unreachable && !self.needs_merge_to_default
     }
 }
 
@@ -182,6 +199,7 @@ pub(crate) struct SubmoduleInfo {
     pub name: String,
     pub path: PathBuf,
     pub state: Option<SubmoduleState>,
+    pub head: Option<SubmoduleHead>,
     pub head_oid: Option<String>,
     pub workdir_oid: Option<String>,
     pub warn: SubmoduleWarn,
@@ -336,6 +354,7 @@ fn collect_change_summary(
             is_submodule: false,
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
         });
     }
 
@@ -382,12 +401,16 @@ fn collect_change_summary(
                 }
             };
 
-            // Warn-state computation (gated on warn_unpushed). Skipped for
-            // uninitialized submodules — `sub.open()` would fail anyway.
-            let warn = if sub_cfg.warn_unpushed && state != Some(SubmoduleState::Uninitialized) {
-                compute_submodule_warn(sub)
+            // Open the submodule (once) to read its checked-out branch and,
+            // when enabled, compute push/merge warnings. Skip for uninitialized
+            // submodules (`sub.open()` fails) and when there is nothing to show
+            // (clean working tree with warnings disabled): branch is only worth
+            // reading for a submodule that will render a row.
+            let is_uninit = state == Some(SubmoduleState::Uninitialized);
+            let (head, warn) = if !is_uninit && (state.is_some() || sub_cfg.warn_unpushed) {
+                compute_submodule_head_and_warn(sub, sub_cfg.warn_unpushed)
             } else {
-                SubmoduleWarn::default()
+                (None, SubmoduleWarn::default())
             };
 
             let has_dirty_signal = state.is_some();
@@ -404,6 +427,7 @@ fn collect_change_summary(
                 name: name.clone(),
                 path: sub_path.clone(),
                 state: state.clone(),
+                head: head.clone(),
                 head_oid,
                 workdir_oid,
                 warn,
@@ -414,6 +438,7 @@ fn collect_change_summary(
                 file_entry.is_submodule = true;
                 file_entry.submodule_state = state.clone();
                 file_entry.submodule_warn = warn;
+                file_entry.submodule_head = head;
             } else {
                 // Synthetic FileEntry for any submodule with a dirty or warn signal.
                 // FileStatus::Modified keeps the leading `M` "needs attention" cue;
@@ -424,6 +449,7 @@ fn collect_change_summary(
                     is_submodule: true,
                     submodule_state: state,
                     submodule_warn: warn,
+                    submodule_head: head,
                 });
             }
 
@@ -446,47 +472,123 @@ fn collect_change_summary(
     })
 }
 
-/// Compute "you owe a push" warnings for a submodule.
-/// Uses `index_id()` (parent's *staged* pointer, not committed) so the warning
-/// fires *before* the parent commit ships, while the user can still amend or reset.
-fn compute_submodule_warn(sub: &git2::Submodule) -> SubmoduleWarn {
+/// Open the submodule once to read its checked-out branch and, when
+/// `warn_enabled`, compute its push/merge warnings. Returns `(head, warn)`;
+/// `head` is `None` only when the submodule cannot be opened.
+fn compute_submodule_head_and_warn(
+    sub: &git2::Submodule,
+    warn_enabled: bool,
+) -> (Option<SubmoduleHead>, SubmoduleWarn) {
+    let inner = match sub.open() {
+        Ok(r) => r,
+        Err(_) => return (None, SubmoduleWarn::default()),
+    };
+
+    let head = Some(read_submodule_head(&inner));
+    let warn = if warn_enabled {
+        compute_submodule_warn(sub, &inner)
+    } else {
+        SubmoduleWarn::default()
+    };
+    (head, warn)
+}
+
+/// Read the submodule's current branch, or `Detached` when it sits on a
+/// detached HEAD (git's default after `submodule update`) or has no branch.
+fn read_submodule_head(inner: &Repository) -> SubmoduleHead {
+    if inner.head_detached().unwrap_or(true) {
+        return SubmoduleHead::Detached;
+    }
+    match inner.head() {
+        Ok(head) => SubmoduleHead::Branch(head.shorthand().unwrap_or("HEAD").to_string()),
+        Err(_) => SubmoduleHead::Detached,
+    }
+}
+
+/// Compute "you owe a push/merge" warnings for a submodule, given an already
+/// open handle to it. Uses `index_id()` (parent's *staged* pointer, not
+/// committed) so the warning fires *before* the parent commit ships, while the
+/// user can still amend or reset.
+fn compute_submodule_warn(sub: &git2::Submodule, inner: &Repository) -> SubmoduleWarn {
     let recorded = match sub.index_id() {
         Some(o) => o,
         None => return SubmoduleWarn::default(),
     };
-    let inner = match sub.open() {
-        Ok(r) => r,
-        Err(_) => return SubmoduleWarn::default(),
-    };
 
-    let unpushed_commits = compute_ahead_behind(&inner).0;
+    let unpushed_commits = compute_ahead_behind(inner).0;
 
     // If the recorded oid isn't even in local objects, no remote can possibly hold it.
     if inner.find_object(recorded, None).is_err() {
         return SubmoduleWarn {
             unpushed_commits,
             pointer_unreachable: true,
+            needs_merge_to_default: false,
         };
     }
 
-    if let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) {
-        for (b, _) in branches.flatten() {
-            if let Some(tip) = b.get().target()
-                && (tip == recorded || inner.graph_descendant_of(tip, recorded).unwrap_or(false))
-            {
-                return SubmoduleWarn {
-                    unpushed_commits,
-                    pointer_unreachable: false,
-                };
-            }
-        }
+    if !remote_reaches(inner, recorded) {
+        // No remote tip reaches `recorded` (or no remotes configured) → must push.
+        return SubmoduleWarn {
+            unpushed_commits,
+            pointer_unreachable: true,
+            needs_merge_to_default: false,
+        };
     }
 
-    // No remote tip reaches `recorded` (or no remotes configured) → unreachable.
+    // Reachable from some remote. If we can resolve the default branch and it
+    // does NOT reach `recorded`, the commit lives on a side branch and still
+    // needs a merge there. When no default branch resolves, stay silent.
+    let needs_merge_to_default = match default_branch_tip(inner) {
+        Some(tip) => !reaches(inner, tip, recorded),
+        None => false,
+    };
+
     SubmoduleWarn {
         unpushed_commits,
-        pointer_unreachable: true,
+        pointer_unreachable: false,
+        needs_merge_to_default,
     }
+}
+
+/// Whether `recorded` is reachable from `tip` (equal, or an ancestor of it).
+fn reaches(inner: &Repository, tip: git2::Oid, recorded: git2::Oid) -> bool {
+    tip == recorded || inner.graph_descendant_of(tip, recorded).unwrap_or(false)
+}
+
+/// Whether `recorded` is reachable from any `refs/remotes/*` branch tip.
+fn remote_reaches(inner: &Repository, recorded: git2::Oid) -> bool {
+    let Ok(branches) = inner.branches(Some(git2::BranchType::Remote)) else {
+        return false;
+    };
+    for (b, _) in branches.flatten() {
+        if let Some(tip) = b.get().target()
+            && reaches(inner, tip, recorded)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve the submodule's default-branch tip: `origin/HEAD`'s symbolic target
+/// first, then `origin/main`, then `origin/master`. `None` when none resolve —
+/// common in submodule clones, where `origin/HEAD` is often absent.
+fn default_branch_tip(inner: &Repository) -> Option<git2::Oid> {
+    if let Ok(head_ref) = inner.find_reference("refs/remotes/origin/HEAD")
+        && let Ok(Some(target_name)) = head_ref.symbolic_target()
+        && let Ok(target_ref) = inner.find_reference(target_name)
+        && let Some(oid) = target_ref.target()
+    {
+        return Some(oid);
+    }
+    for name in ["refs/remotes/origin/main", "refs/remotes/origin/master"] {
+        if let Ok(r) = inner.find_reference(name)
+            && let Some(oid) = r.target()
+        {
+            return Some(oid);
+        }
+    }
+    None
 }
 
 /// Collect details for each linked worktree using the git2 API.
@@ -886,10 +988,15 @@ mod tests {
             is_submodule: true,
             submodule_state: Some(SubmoduleState::Modified),
             submodule_warn: SubmoduleWarn::default(),
+            submodule_head: Some(SubmoduleHead::Branch("feature".to_string())),
         };
         assert!(entry.is_submodule);
         assert_eq!(entry.submodule_state, Some(SubmoduleState::Modified));
         assert!(entry.submodule_warn.is_clean());
+        assert_eq!(
+            entry.submodule_head,
+            Some(SubmoduleHead::Branch("feature".to_string()))
+        );
 
         let plain = FileEntry {
             path: PathBuf::from("src/main.rs"),
@@ -897,9 +1004,11 @@ mod tests {
             is_submodule: false,
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
         };
         assert!(!plain.is_submodule);
         assert_eq!(plain.submodule_state, None);
+        assert_eq!(plain.submodule_head, None);
     }
 
     #[test]
@@ -1139,6 +1248,7 @@ mod tests {
             !SubmoduleWarn {
                 unpushed_commits: 1,
                 pointer_unreachable: false,
+                needs_merge_to_default: false,
             }
             .is_clean()
         );
@@ -1146,6 +1256,15 @@ mod tests {
             !SubmoduleWarn {
                 unpushed_commits: 0,
                 pointer_unreachable: true,
+                needs_merge_to_default: false,
+            }
+            .is_clean()
+        );
+        assert!(
+            !SubmoduleWarn {
+                unpushed_commits: 0,
+                pointer_unreachable: false,
+                needs_merge_to_default: true,
             }
             .is_clean()
         );
@@ -1422,6 +1541,77 @@ mod tests {
         assert!(!status.has_unpushed_submodules);
         for sub in &status.submodules {
             assert!(sub.warn.is_clean());
+        }
+    }
+
+    #[test]
+    fn test_needs_merge_to_default_when_pinned_on_side_branch() {
+        // The parent pins a submodule commit that lives on a remote *side*
+        // branch (origin/feature) but is not reachable from the default branch
+        // (origin/main). The commit is fetchable, so it is not "unreachable",
+        // yet it still needs merging to main → `needs_merge_to_default`.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+
+        // A: the initial cloned commit. Anchor the default branch here.
+        let a = inner.head().unwrap().peel_to_commit().unwrap().id();
+        inner
+            .reference("refs/remotes/origin/main", a, true, "test setup")
+            .unwrap();
+
+        // B: a new commit (child of A) now checked out in the submodule,
+        // published only on origin/feature.
+        let b = add_commit_on_head(&inner, "feature.rs", "fn f() {}");
+        inner
+            .reference("refs/remotes/origin/feature", b, true, "test setup")
+            .unwrap();
+
+        // Stage the parent's pointer at B (the submodule's current HEAD).
+        stage_submodule_pointer(tmp.path(), "my-sub");
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let sub = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry expected");
+
+        assert!(
+            sub.warn.needs_merge_to_default,
+            "pinned commit is on origin/feature, not origin/main: {:?}",
+            sub.warn
+        );
+        assert!(
+            !sub.warn.pointer_unreachable,
+            "commit is on a remote, so it is reachable: {:?}",
+            sub.warn
+        );
+        assert!(!sub.warn.is_clean());
+        assert!(status.has_unpushed_submodules);
+    }
+
+    /// A pinned commit that IS on the default branch must not warn.
+    #[test]
+    fn test_no_merge_warning_when_pinned_on_default_branch() {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+        let a = inner.head().unwrap().peel_to_commit().unwrap().id();
+        // Default branch points at the very commit the parent pins.
+        inner
+            .reference("refs/remotes/origin/main", a, true, "test setup")
+            .unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        for sub in &status.submodules {
+            assert!(
+                !sub.warn.needs_merge_to_default,
+                "pinned commit is on origin/main: {:?}",
+                sub.warn
+            );
         }
     }
 
