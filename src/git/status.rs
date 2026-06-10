@@ -1544,6 +1544,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_needs_merge_to_default_when_pinned_on_side_branch() {
+        // The parent pins a submodule commit that lives on a remote *side*
+        // branch (origin/feature) but is not reachable from the default branch
+        // (origin/main). The commit is fetchable, so it is not "unreachable",
+        // yet it still needs merging to main → `needs_merge_to_default`.
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+
+        // A: the initial cloned commit. Anchor the default branch here.
+        let a = inner.head().unwrap().peel_to_commit().unwrap().id();
+        inner
+            .reference("refs/remotes/origin/main", a, true, "test setup")
+            .unwrap();
+
+        // B: a new commit (child of A) now checked out in the submodule,
+        // published only on origin/feature.
+        let b = add_commit_on_head(&inner, "feature.rs", "fn f() {}");
+        inner
+            .reference("refs/remotes/origin/feature", b, true, "test setup")
+            .unwrap();
+
+        // Stage the parent's pointer at B (the submodule's current HEAD).
+        stage_submodule_pointer(tmp.path(), "my-sub");
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let sub = status
+            .submodules
+            .iter()
+            .find(|s| s.path == Path::new("my-sub"))
+            .expect("submodule entry expected");
+
+        assert!(
+            sub.warn.needs_merge_to_default,
+            "pinned commit is on origin/feature, not origin/main: {:?}",
+            sub.warn
+        );
+        assert!(
+            !sub.warn.pointer_unreachable,
+            "commit is on a remote, so it is reachable: {:?}",
+            sub.warn
+        );
+        assert!(!sub.warn.is_clean());
+        assert!(status.has_unpushed_submodules);
+    }
+
+    /// A pinned commit that IS on the default branch must not warn.
+    #[test]
+    fn test_no_merge_warning_when_pinned_on_default_branch() {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+
+        let sub_dir = tmp.path().join("my-sub");
+        let inner = Repository::open(&sub_dir).unwrap();
+        let a = inner.head().unwrap().peel_to_commit().unwrap().id();
+        // Default branch points at the very commit the parent pins.
+        inner
+            .reference("refs/remotes/origin/main", a, true, "test setup")
+            .unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        for sub in &status.submodules {
+            assert!(
+                !sub.warn.needs_merge_to_default,
+                "pinned commit is on origin/main: {:?}",
+                sub.warn
+            );
+        }
+    }
+
     fn add_commit_on_head(repo: &Repository, file: &str, contents: &str) -> git2::Oid {
         let workdir = repo.workdir().unwrap().to_path_buf();
         fs::write(workdir.join(file), contents).unwrap();
