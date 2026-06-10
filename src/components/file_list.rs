@@ -464,6 +464,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 3,
             pointer_unreachable: false,
+            needs_merge_to_default: false,
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Modified), warn),
@@ -476,6 +477,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 5,
             pointer_unreachable: true,
+            needs_merge_to_default: false,
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Modified), warn),
@@ -496,6 +498,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 1,
             pointer_unreachable: false,
+            needs_merge_to_default: false,
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Dirty), warn),
@@ -508,6 +511,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 0,
             pointer_unreachable: true,
+            needs_merge_to_default: false,
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Dirty), warn),
@@ -521,6 +525,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 7,
             pointer_unreachable: true,
+            needs_merge_to_default: false,
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Uninitialized), warn),
@@ -533,6 +538,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 0,
             pointer_unreachable: true,
+            needs_merge_to_default: false,
         };
         assert_eq!(rendered(None, warn), "[sub: \u{26a0}unreach] ");
     }
@@ -542,6 +548,7 @@ mod tag_tests {
         let warn = SubmoduleWarn {
             unpushed_commits: 4,
             pointer_unreachable: false,
+            needs_merge_to_default: false,
         };
         assert_eq!(rendered(None, warn), "[sub: \u{2191}4] ");
     }
