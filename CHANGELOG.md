@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.14] - 2026-06-09
+
+### Added
+- The submodule tag in the Changes panel now shows which branch the submodule is on (`@<branch>`, or `@detached` for a detached HEAD, which is git's default after `submodule update`), so a dirty or modified submodule tells you where the change lives. It also gains a `↛main` warning when the pinned submodule commit is reachable from a remote but not from the submodule's default branch (`origin/HEAD`, falling back to `origin/main`/`origin/master`), meaning it still needs a merge there. The warning stays silent when no default branch resolves, so it never fires on a false positive. The existing `⚠unreach` (commit on no remote) still takes precedence, while `↑N` (ahead of upstream) and `↛main` compose, e.g. `[sub: +commit @feature ↑3 ↛main]`.
+
 ## [0.7.13] - 2026-06-07
 
 ### Fixed
