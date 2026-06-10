@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::status::{FileEntry, FileStatus, SubmoduleState, SubmoduleWarn};
+use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
 use crate::theme::{FileListTheme, Theme};
 
@@ -188,6 +188,7 @@ impl FileList {
                 if entry.is_submodule {
                     spans.extend(submodule_tag_spans(
                         &entry.submodule_state,
+                        &entry.submodule_head,
                         &entry.submodule_warn,
                         t,
                     ));
@@ -255,16 +256,19 @@ impl FileList {
     }
 }
 
-/// Build the `[sub: …]` tag spans for a submodule file row.
-/// `state` is independent from `warn` — both can be present and compose.
+/// Build the `[sub: …]` tag spans for a submodule file row. `state`, `head`,
+/// and `warn` are independent and compose, e.g. `[sub: +commit @feature ↑3 ↛main]`.
 fn submodule_tag_spans(
     state: &Option<SubmoduleState>,
+    head: &Option<SubmoduleHead>,
     warn: &SubmoduleWarn,
     theme: &FileListTheme,
 ) -> Vec<Span<'static>> {
     let bracket_style = Style::default().fg(theme.submodule_bracket);
+    let branch_style = Style::default().fg(theme.submodule_branch);
     let unpushed_style = Style::default().fg(theme.submodule_unpushed);
     let unreach_style = Style::default().fg(theme.submodule_unreachable);
+    let merge_style = Style::default().fg(theme.submodule_needs_merge);
 
     let mut inner: Vec<Span<'static>> = Vec::new();
 
@@ -275,28 +279,50 @@ fn submodule_tag_spans(
         None => None,
     };
 
-    // Uninitialized takes precedence: never compose with warn — `sub.open()`
-    // can't introspect the inner repo, so warn fields are zero anyway.
+    // Uninitialized takes precedence: never compose with branch/warn —
+    // `sub.open()` can't introspect the inner repo, so those fields are empty.
     let suppress_warn = matches!(state, Some(SubmoduleState::Uninitialized));
 
     if let Some(label) = state_label {
         inner.push(Span::styled(label, bracket_style));
     }
 
+    // Push a separating space when the tag already has content.
+    fn sep(inner: &mut Vec<Span<'static>>, style: Style) {
+        if !inner.is_empty() {
+            inner.push(Span::styled(" ", style));
+        }
+    }
+
     if !suppress_warn {
+        // Branch indicator: `@feature`, or `@detached` for a detached HEAD.
+        if let Some(h) = head {
+            let label = match h {
+                SubmoduleHead::Branch(name) => format!("@{name}"),
+                SubmoduleHead::Detached => "@detached".to_string(),
+            };
+            sep(&mut inner, bracket_style);
+            inner.push(Span::styled(label, branch_style));
+        }
+
+        // Push/merge warnings. `⚠unreach` (on no remote) dominates; otherwise
+        // `↑N` (ahead of upstream) and `↛main` (not on the default branch)
+        // compose additively.
         if warn.pointer_unreachable {
-            if !inner.is_empty() {
-                inner.push(Span::styled(" ", bracket_style));
-            }
+            sep(&mut inner, bracket_style);
             inner.push(Span::styled("\u{26a0}unreach", unreach_style));
-        } else if warn.unpushed_commits > 0 {
-            if !inner.is_empty() {
-                inner.push(Span::styled(" ", bracket_style));
+        } else {
+            if warn.unpushed_commits > 0 {
+                sep(&mut inner, bracket_style);
+                inner.push(Span::styled(
+                    format!("\u{2191}{}", warn.unpushed_commits),
+                    unpushed_style,
+                ));
             }
-            inner.push(Span::styled(
-                format!("\u{2191}{}", warn.unpushed_commits),
-                unpushed_style,
-            ));
+            if warn.needs_merge_to_default {
+                sep(&mut inner, bracket_style);
+                inner.push(Span::styled("\u{219b}main", merge_style));
+            }
         }
     }
 
@@ -443,9 +469,13 @@ impl Component for FileList {
 mod tag_tests {
     use super::*;
 
-    fn rendered(state: Option<SubmoduleState>, warn: SubmoduleWarn) -> String {
+    fn rendered(
+        state: Option<SubmoduleState>,
+        head: Option<SubmoduleHead>,
+        warn: SubmoduleWarn,
+    ) -> String {
         let theme = FileListTheme::default();
-        submodule_tag_spans(&state, &warn, &theme)
+        submodule_tag_spans(&state, &head, &warn, &theme)
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>()
@@ -454,7 +484,11 @@ mod tag_tests {
     #[test]
     fn modified_clean() {
         assert_eq!(
-            rendered(Some(SubmoduleState::Modified), SubmoduleWarn::default()),
+            rendered(
+                Some(SubmoduleState::Modified),
+                None,
+                SubmoduleWarn::default()
+            ),
             "[sub: +commit] "
         );
     }
@@ -467,7 +501,7 @@ mod tag_tests {
             needs_merge_to_default: false,
         };
         assert_eq!(
-            rendered(Some(SubmoduleState::Modified), warn),
+            rendered(Some(SubmoduleState::Modified), None, warn),
             "[sub: +commit \u{2191}3] "
         );
     }
@@ -480,7 +514,7 @@ mod tag_tests {
             needs_merge_to_default: false,
         };
         assert_eq!(
-            rendered(Some(SubmoduleState::Modified), warn),
+            rendered(Some(SubmoduleState::Modified), None, warn),
             "[sub: +commit \u{26a0}unreach] "
         );
     }
@@ -488,7 +522,7 @@ mod tag_tests {
     #[test]
     fn dirty_clean() {
         assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), SubmoduleWarn::default()),
+            rendered(Some(SubmoduleState::Dirty), None, SubmoduleWarn::default()),
             "[sub: ~dirty] "
         );
     }
@@ -501,7 +535,7 @@ mod tag_tests {
             needs_merge_to_default: false,
         };
         assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), warn),
+            rendered(Some(SubmoduleState::Dirty), None, warn),
             "[sub: ~dirty \u{2191}1] "
         );
     }
@@ -514,7 +548,7 @@ mod tag_tests {
             needs_merge_to_default: false,
         };
         assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), warn),
+            rendered(Some(SubmoduleState::Dirty), None, warn),
             "[sub: ~dirty \u{26a0}unreach] "
         );
     }
@@ -528,7 +562,7 @@ mod tag_tests {
             needs_merge_to_default: false,
         };
         assert_eq!(
-            rendered(Some(SubmoduleState::Uninitialized), warn),
+            rendered(Some(SubmoduleState::Uninitialized), None, warn),
             "[sub: -uninit] "
         );
     }
@@ -540,7 +574,7 @@ mod tag_tests {
             pointer_unreachable: true,
             needs_merge_to_default: false,
         };
-        assert_eq!(rendered(None, warn), "[sub: \u{26a0}unreach] ");
+        assert_eq!(rendered(None, None, warn), "[sub: \u{26a0}unreach] ");
     }
 
     #[test]
@@ -550,11 +584,99 @@ mod tag_tests {
             pointer_unreachable: false,
             needs_merge_to_default: false,
         };
-        assert_eq!(rendered(None, warn), "[sub: \u{2191}4] ");
+        assert_eq!(rendered(None, None, warn), "[sub: \u{2191}4] ");
     }
 
     #[test]
     fn no_state_no_warn_falls_back_to_plain_tag() {
-        assert_eq!(rendered(None, SubmoduleWarn::default()), "[submodule] ");
+        assert_eq!(
+            rendered(None, None, SubmoduleWarn::default()),
+            "[submodule] "
+        );
+    }
+
+    #[test]
+    fn modified_with_branch() {
+        assert_eq!(
+            rendered(
+                Some(SubmoduleState::Modified),
+                Some(SubmoduleHead::Branch("feature".to_string())),
+                SubmoduleWarn::default(),
+            ),
+            "[sub: +commit @feature] "
+        );
+    }
+
+    #[test]
+    fn dirty_detached() {
+        assert_eq!(
+            rendered(
+                Some(SubmoduleState::Dirty),
+                Some(SubmoduleHead::Detached),
+                SubmoduleWarn::default(),
+            ),
+            "[sub: ~dirty @detached] "
+        );
+    }
+
+    #[test]
+    fn modified_needs_merge_to_default() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 0,
+            pointer_unreachable: false,
+            needs_merge_to_default: true,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Modified), None, warn),
+            "[sub: +commit \u{219b}main] "
+        );
+    }
+
+    #[test]
+    fn composed_branch_unpushed_and_needs_merge() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 3,
+            pointer_unreachable: false,
+            needs_merge_to_default: true,
+        };
+        assert_eq!(
+            rendered(
+                Some(SubmoduleState::Modified),
+                Some(SubmoduleHead::Branch("feature".to_string())),
+                warn,
+            ),
+            "[sub: +commit @feature \u{2191}3 \u{219b}main] "
+        );
+    }
+
+    #[test]
+    fn unreachable_dominates_needs_merge() {
+        // On no remote at all: only `⚠unreach`, never `↛main`.
+        let warn = SubmoduleWarn {
+            unpushed_commits: 0,
+            pointer_unreachable: true,
+            needs_merge_to_default: true,
+        };
+        assert_eq!(
+            rendered(Some(SubmoduleState::Modified), None, warn),
+            "[sub: +commit \u{26a0}unreach] "
+        );
+    }
+
+    #[test]
+    fn uninitialized_suppresses_branch_and_merge() {
+        let warn = SubmoduleWarn {
+            unpushed_commits: 0,
+            pointer_unreachable: false,
+            needs_merge_to_default: true,
+        };
+        assert_eq!(
+            rendered(
+                Some(SubmoduleState::Uninitialized),
+                Some(SubmoduleHead::Branch("x".to_string())),
+                warn,
+            ),
+            "[sub: -uninit] "
+        );
     }
 }

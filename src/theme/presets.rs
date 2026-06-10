@@ -51,6 +51,8 @@ pub(crate) fn muted() -> Theme {
     t.file_list.submodule_bracket = Color::Indexed(133);
     t.file_list.submodule_unpushed = Color::Indexed(71);
     t.file_list.submodule_unreachable = Color::Indexed(167);
+    t.file_list.submodule_branch = Color::Indexed(73);
+    t.file_list.submodule_needs_merge = Color::Indexed(178);
 
     // Graph: paragraph + commit colors muted, palettes desaturated.
     t.graph.border_focused = Color::Indexed(73);
