@@ -8,7 +8,6 @@
     <a href="https://github.com/affromero/gitpane/actions/workflows/security.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/security.yml?branch=main&label=Security&logo=github&style=flat-square" alt="Security"></a>
     <a href="https://github.com/affromero/gitpane/actions/workflows/coverage.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/coverage.yml?branch=main&label=Coverage&logo=github&style=flat-square" alt="Coverage"></a>
     <a href="https://github.com/affromero/gitpane/actions/workflows/docs.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/docs.yml?branch=main&label=Docs&logo=github&style=flat-square" alt="Docs"></a>
-    <a href="https://scorecard.dev/viewer/?uri=github.com/affromero/gitpane"><img src="https://img.shields.io/ossf-scorecard/github.com/affromero/gitpane?style=flat-square&label=scorecard" alt="OpenSSF Scorecard"></a>
     <a href="https://github.com/affromero/gitpane/actions/workflows/gitleaks.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/gitleaks.yml?branch=main&label=gitleaks&logo=github&style=flat-square" alt="Gitleaks secret scan"></a>
     <br>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square&color=brightgreen" alt="crates.io"></a>
