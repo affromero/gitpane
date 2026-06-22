@@ -2,6 +2,12 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.7.15] - 2026-06-22
+
+### Fixed
+- Right-clicking a linked worktree row now opens the context menu, so a worktree can be pulled, pushed, refreshed, copied, or opened in the git graph directly. Previously the menu appeared only on top-level repository rows, so worktrees had no way to run these actions. Each operation runs in the worktree's own directory against its branch (`git -C <worktree> ... origin <branch>`), while the parent repository row shows the spinner and refreshes afterward so the worktree's ahead/behind counts stay current. Submodule actions stay hidden on worktree menus.
+- The changes panel for an active worktree now refreshes immediately after a pull or push, instead of lagging until the next background status poll.
+
 ## [0.7.14] - 2026-06-09
 
 ### Added
