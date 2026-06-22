@@ -94,6 +94,19 @@ pub(crate) struct RepoEntry {
     pub git_op: bool,
 }
 
+/// A resolved target for a context-menu git operation, produced by
+/// [`RepoList::resolve_target`]. Decouples *where the op runs* (`exec_path`,
+/// `branch`) from *which row tracks it* (`parent_index`), so the same handler
+/// works for a top-level repo and for one of its linked worktrees.
+pub(crate) struct OpTarget {
+    pub exec_path: PathBuf,
+    pub branch: String,
+    pub parent_index: usize,
+    pub ahead: usize,
+    pub behind: usize,
+    pub has_submodules: bool,
+}
+
 /// Maps a visual row in the list to either a repo, one of its worktrees,
 /// or one of its stash entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +209,47 @@ impl RepoList {
         self.repos.iter().position(|e| e.path == id.0)
     }
 
+    /// Resolve a `RepoId` to a concrete git-operation target.
+    ///
+    /// The id may identify a top-level repo or one of its linked worktrees.
+    /// `exec_path` is the working directory `git -C` runs in; `branch` is the
+    /// branch checked out there. `parent_index` is the top-level repo whose
+    /// row shows the spinner and whose status query refreshes the data — a
+    /// worktree borrows its parent's row for progress feedback because its
+    /// ahead/behind counts are re-read by the parent's status query. For a
+    /// top-level repo the target is itself. Returns `None` if the path matches
+    /// neither a repo nor any known worktree.
+    pub fn resolve_target(&self, id: &RepoId) -> Option<OpTarget> {
+        if let Some(i) = self.resolve_index(id) {
+            let status = self.repos[i].status.as_ref();
+            return Some(OpTarget {
+                exec_path: self.repos[i].path.clone(),
+                branch: status.map(|s| s.branch.clone()).unwrap_or_default(),
+                parent_index: i,
+                ahead: status.map_or(0, |s| s.ahead),
+                behind: status.map_or(0, |s| s.behind),
+                has_submodules: status.is_some_and(|s| s.has_submodules),
+            });
+        }
+        for (i, entry) in self.repos.iter().enumerate() {
+            let Some(status) = entry.status.as_ref() else {
+                continue;
+            };
+            if let Some(wt) = status.worktree_info.iter().find(|w| w.path == id.0) {
+                return Some(OpTarget {
+                    exec_path: wt.path.clone(),
+                    branch: wt.branch.clone(),
+                    parent_index: i,
+                    ahead: wt.ahead,
+                    behind: wt.behind,
+                    // Submodule operations are not surfaced for worktrees.
+                    has_submodules: false,
+                });
+            }
+        }
+        None
+    }
+
     /// Returns the parent RepoEntry for the current selection.
     pub fn selected_repo(&self) -> Option<&RepoEntry> {
         self.selected_index().and_then(|i| self.repos.get(i))
@@ -203,7 +257,6 @@ impl RepoList {
 
     /// If a worktree row is currently selected, returns the parent repo path
     /// and the worktree details. Returns None when a repo row is selected.
-    #[allow(dead_code)]
     pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
@@ -683,9 +736,19 @@ impl Component for RepoList {
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
                         self.state.select(Some(idx));
-                        // Only show context menu for repo rows
-                        if let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx) {
-                            let id = RepoId(self.repos[*i].path.clone());
+                        // Repo and worktree rows get a context menu. A worktree
+                        // menu targets the worktree's own path so pull/push act
+                        // on it directly. Stash rows have no menu.
+                        let menu_id = match self.display_rows.get(idx) {
+                            Some(DisplayRow::Repo(i)) => Some(RepoId(self.repos[*i].path.clone())),
+                            Some(DisplayRow::Worktree(ri, wi)) => self.repos[*ri]
+                                .status
+                                .as_ref()
+                                .and_then(|s| s.worktree_info.get(*wi))
+                                .map(|wt| RepoId(wt.path.clone())),
+                            _ => None,
+                        };
+                        if let Some(id) = menu_id {
                             return Ok(Some(Action::ShowContextMenu {
                                 id,
                                 row: mouse.row,
@@ -935,5 +998,121 @@ mod tests {
         // 2 + 24 (branch chars) + 1 (space) = 27 → worktree start.
         let (w_start, _) = cols.worktree.expect("worktree range");
         assert_eq!(w_start, 27);
+    }
+
+    /// One repo with a linked worktree, expanded so the worktree row is
+    /// visible, with a render area set up for mouse hit-testing.
+    fn list_with_expanded_worktree() -> RepoList {
+        let mut list = make_list(&["/r"]);
+        let mut status = empty_status("main");
+        status.worktree_info.push(worktree_entry("feature"));
+        list.repos[0].status = Some(status);
+        list.expanded_repos.insert(RepoId(PathBuf::from("/r")));
+        list.rebuild_display_rows();
+        list.render_area = Rect::new(0, 0, 40, 10);
+        list
+    }
+
+    fn right_click(row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 5,
+            row,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }
+    }
+
+    #[test]
+    fn resolve_target_maps_worktree_path_to_its_branch_and_parent() {
+        let list = list_with_expanded_worktree();
+        let target = list
+            .resolve_target(&RepoId(PathBuf::from("/wt/feature")))
+            .expect("worktree path resolves to a target");
+        assert_eq!(target.exec_path, PathBuf::from("/wt/feature"));
+        assert_eq!(target.branch, "feature");
+        assert_eq!(target.parent_index, 0);
+        // Submodule menu items stay hidden for worktree targets.
+        assert!(!target.has_submodules);
+    }
+
+    #[test]
+    fn resolve_target_maps_repo_path_to_itself() {
+        let list = list_with_expanded_worktree();
+        let target = list
+            .resolve_target(&RepoId(PathBuf::from("/r")))
+            .expect("repo path resolves to a target");
+        assert_eq!(target.exec_path, PathBuf::from("/r"));
+        assert_eq!(target.branch, "main");
+        assert_eq!(target.parent_index, 0);
+    }
+
+    #[test]
+    fn resolve_target_returns_none_for_unknown_path() {
+        let list = list_with_expanded_worktree();
+        assert!(
+            list.resolve_target(&RepoId(PathBuf::from("/nope")))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn right_click_on_worktree_row_opens_menu_targeting_the_worktree() {
+        let mut list = list_with_expanded_worktree();
+        // content_y = render_area.y + 1 = 1; display rows: 0 = repo, 1 = worktree,
+        // so the worktree row is at mouse.row 2.
+        let action = list
+            .handle_mouse_event(right_click(2))
+            .expect("handler ok")
+            .expect("worktree right-click yields an action");
+        match action {
+            Action::ShowContextMenu { id, .. } => {
+                assert_eq!(id, RepoId(PathBuf::from("/wt/feature")));
+            }
+            other => panic!("expected ShowContextMenu, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn right_click_on_repo_row_opens_menu_targeting_the_repo() {
+        let mut list = list_with_expanded_worktree();
+        let action = list
+            .handle_mouse_event(right_click(1))
+            .expect("handler ok")
+            .expect("repo right-click yields an action");
+        match action {
+            Action::ShowContextMenu { id, .. } => {
+                assert_eq!(id, RepoId(PathBuf::from("/r")));
+            }
+            other => panic!("expected ShowContextMenu, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn right_click_on_stash_row_opens_no_menu() {
+        let mut list = make_list(&["/r"]);
+        let mut status = empty_status("main");
+        status.stashes.push(stash_entry(0));
+        list.repos[0].status = Some(status);
+        list.expanded_stashes.insert(RepoId(PathBuf::from("/r")));
+        list.rebuild_display_rows();
+        list.render_area = Rect::new(0, 0, 40, 10);
+        // display rows: 0 = repo, 1 = stash → stash row is mouse.row 2.
+        let action = list.handle_mouse_event(right_click(2)).expect("handler ok");
+        assert!(action.is_none(), "stash rows have no context menu");
+    }
+
+    #[test]
+    fn selected_worktree_reports_worktree_when_worktree_row_is_selected() {
+        let mut list = list_with_expanded_worktree();
+        // display rows: 0 = repo, 1 = worktree.
+        list.state.select(Some(1));
+        let (repo_id, wt) = list.selected_worktree().expect("worktree selected");
+        assert_eq!(repo_id, RepoId(PathBuf::from("/r")));
+        assert_eq!(wt.path, PathBuf::from("/wt/feature"));
+        assert_eq!(wt.branch, "feature");
+
+        // A repo row selection is not a worktree.
+        list.state.select(Some(0));
+        assert!(list.selected_worktree().is_none());
     }
 }
