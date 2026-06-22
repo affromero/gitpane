@@ -494,6 +494,36 @@ impl App {
         }
     }
 
+    /// If a worktree is the active selection, refresh its graph and re-query
+    /// its files so the changes panel updates live. Used by the local poll and
+    /// after a git op completes on the worktree's parent repo (the parent
+    /// status query updates the list row's ahead/behind, but the changes panel
+    /// for a worktree is fed only by `WorktreeFilesLoaded`).
+    fn refresh_active_worktree(&mut self) {
+        let Some(aw) = self.active_worktree.clone() else {
+            return;
+        };
+        // Refresh the graph from the worktree so new commits appear live.
+        if self.git_graph.has_detail() {
+            self.git_graph.set_needs_reload();
+        } else {
+            self.git_graph.load_repo(aw.path.clone(), &aw.display_name);
+        }
+
+        let tx = self.action_tx.clone();
+        let sub_cfg = self.config.submodules.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(s) = crate::git::status::query_status(&aw.path, &sub_cfg) {
+                let _ = tx.send(Action::WorktreeFilesLoaded {
+                    repo_id: aw.repo_id,
+                    worktree_path: aw.path,
+                    name: aw.display_name,
+                    files: s.files,
+                });
+            }
+        });
+    }
+
     pub async fn run(&mut self) -> Result<()> {
         let mut tui = Tui::new()?
             .mouse(true)
@@ -887,28 +917,7 @@ impl App {
                         }
 
                         // Also re-query the active worktree so its changes update live
-                        if let Some(aw) = self.active_worktree.clone() {
-                            // Refresh the graph from the worktree so new commits appear live
-                            if self.git_graph.has_detail() {
-                                self.git_graph.set_needs_reload();
-                            } else {
-                                self.git_graph.load_repo(aw.path.clone(), &aw.display_name);
-                            }
-
-                            let tx = self.action_tx.clone();
-                            let sub_cfg = sub_cfg.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Ok(s) = crate::git::status::query_status(&aw.path, &sub_cfg)
-                                {
-                                    let _ = tx.send(Action::WorktreeFilesLoaded {
-                                        repo_id: aw.repo_id,
-                                        worktree_path: aw.path,
-                                        name: aw.display_name,
-                                        files: s.files,
-                                    });
-                                }
-                            });
-                        }
+                        self.refresh_active_worktree();
                     }
                     Action::PollFetch => {
                         // Remote fetch poll (updates ahead/behind, no spinner)
@@ -1200,6 +1209,18 @@ impl App {
                     } => {
                         self.success_message = Some((message.clone(), Instant::now()));
                         self.action_tx.send(Action::RefreshRepo(id.clone()))?;
+                        // The parent refresh updates the list row's ahead/behind.
+                        // A worktree's changes panel is fed only by
+                        // WorktreeFilesLoaded, so if a worktree of this repo is
+                        // the active selection, refresh it now instead of
+                        // waiting for the next local poll.
+                        if self
+                            .active_worktree
+                            .as_ref()
+                            .is_some_and(|aw| aw.repo_id == *id)
+                        {
+                            self.refresh_active_worktree();
+                        }
                     }
                     Action::ShowDiff(ref id, ref file_path) => {
                         if let Some(idx) = self.repo_list.resolve_index(id) {
