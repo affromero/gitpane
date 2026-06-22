@@ -953,8 +953,14 @@ impl App {
                         }
                     }
                     Action::RefreshRepo(ref id) => {
-                        // Watcher-triggered: fast local-only, no spinner.
-                        self.schedule_refresh(id);
+                        // Watcher-triggered: fast local-only, no spinner. A
+                        // worktree path resolves to its parent repo, whose
+                        // status query re-reads worktree state.
+                        let parent_id = self
+                            .repo_list
+                            .resolve_target(id)
+                            .map(|t| RepoId(self.repo_list.repos[t.parent_index].path.clone()));
+                        self.schedule_refresh(parent_id.as_ref().unwrap_or(id));
                     }
                     Action::RefreshRepoAfterCooldown(ref id) => {
                         if self.refresh_scheduled.remove(id) {
@@ -962,9 +968,23 @@ impl App {
                         }
                     }
                     Action::ShowGitGraph => {
-                        // Force-reload graph for selected repo
+                        // Force-reload the graph for the current selection. A
+                        // worktree row routes through SelectWorktree so the
+                        // graph and changes panel target the worktree, matching
+                        // the other context-menu items; a repo row loads the
+                        // repo's own graph.
                         self.context_menu.hide();
-                        if let Some(entry) = self.repo_list.selected_repo() {
+                        let worktree = self
+                            .repo_list
+                            .selected_worktree()
+                            .map(|(repo_id, wt)| (repo_id, wt.path.clone(), wt.branch.clone()));
+                        if let Some((repo_id, worktree_path, worktree_branch)) = worktree {
+                            self.action_tx.send(Action::SelectWorktree {
+                                repo_id,
+                                worktree_path,
+                                worktree_branch,
+                            })?;
+                        } else if let Some(entry) = self.repo_list.selected_repo() {
                             let path = entry.path.clone();
                             let name = entry.name.clone();
                             self.git_graph.load_repo(path, &name);
@@ -1000,19 +1020,14 @@ impl App {
                         }
                     }
                     Action::ShowContextMenu { ref id, row, col } => {
-                        if let Some(idx) = self.repo_list.resolve_index(id) {
-                            let (ahead, behind, has_submodules) = self.repo_list.repos[idx]
-                                .status
-                                .as_ref()
-                                .map(|s| (s.ahead, s.behind, s.has_submodules))
-                                .unwrap_or((0, 0, false));
+                        if let Some(target) = self.repo_list.resolve_target(id) {
                             self.context_menu.show(
                                 id.clone(),
                                 col,
                                 row,
-                                ahead,
-                                behind,
-                                has_submodules,
+                                target.ahead,
+                                target.behind,
+                                target.has_submodules,
                             );
                         }
                     }
@@ -1020,9 +1035,8 @@ impl App {
                         self.context_menu.hide();
                     }
                     Action::CopyPath(ref id) => {
-                        if let Some(idx) = self.repo_list.resolve_index(id) {
-                            let entry = &self.repo_list.repos[idx];
-                            let path_str = entry.path.to_string_lossy().to_string();
+                        if let Some(target) = self.repo_list.resolve_target(id) {
+                            let path_str = target.exec_path.to_string_lossy().to_string();
                             use std::io::Write;
                             let encoded = base64_encode(path_str.as_bytes());
                             let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
@@ -1033,13 +1047,8 @@ impl App {
                     | Action::GitPull(ref id)
                     | Action::GitPullRebase(ref id)
                     | Action::GitPullSubmodules(ref id) => {
-                        if let Some(idx) = self.repo_list.resolve_index(id) {
-                            let entry = &mut self.repo_list.repos[idx];
-                            let branch = entry
-                                .status
-                                .as_ref()
-                                .map(|s| s.branch.clone())
-                                .unwrap_or_default();
+                        if let Some(target) = self.repo_list.resolve_target(id) {
+                            let branch = target.branch.clone();
                             let mut git_args: Vec<String> = match action {
                                 Action::GitPush(_) => vec!["push".into()],
                                 Action::GitPull(_) => vec!["pull".into()],
@@ -1056,12 +1065,17 @@ impl App {
                                 git_args.push("origin".into());
                                 git_args.push(branch);
                             }
-                            entry.git_op = true;
-                            let path = entry.path.clone();
-                            let repo_id = id.clone();
+                            // The op runs in `exec_path` (the worktree's own
+                            // directory when a worktree is targeted) but the
+                            // parent repo's row shows the spinner and is
+                            // refreshed afterward.
+                            let parent_id =
+                                RepoId(self.repo_list.repos[target.parent_index].path.clone());
+                            self.repo_list.repos[target.parent_index].git_op = true;
+                            let path = target.exec_path.clone();
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
-                                let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
+                                let guard = GitOpGuard::new(parent_id.clone(), tx.clone());
                                 let output = std::process::Command::new("git")
                                     .arg("-C")
                                     .arg(&path)
@@ -1071,7 +1085,7 @@ impl App {
                                     Ok(o) if o.status.success() => {
                                         guard.complete();
                                         let _ = tx.send(Action::GitOpComplete {
-                                            id: repo_id,
+                                            id: parent_id,
                                             message: format!(
                                                 "git {} succeeded",
                                                 git_args.join(" ")
@@ -1091,7 +1105,7 @@ impl App {
                                             git_args.join(" "),
                                             first_line
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(repo_id));
+                                        let _ = tx.send(Action::RefreshRepo(parent_id));
                                     }
                                     Err(e) => {
                                         guard.complete();
@@ -1100,7 +1114,7 @@ impl App {
                                             git_args.join(" "),
                                             crate::git::describe_spawn_error(&e)
                                         )));
-                                        let _ = tx.send(Action::RefreshRepo(repo_id));
+                                        let _ = tx.send(Action::RefreshRepo(parent_id));
                                     }
                                 }
                             });
