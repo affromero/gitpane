@@ -1146,6 +1146,34 @@ impl App {
                         ];
                         self.spawn_repo_git_op(repo.clone(), args);
                     }
+                    Action::RemoveWorktreeSelected => {
+                        // Resolve to the parent repo path + worktree path, then
+                        // confirm before removing.
+                        let wt = self
+                            .repo_list
+                            .selected_worktree()
+                            .map(|(rid, wt)| (rid.0.clone(), wt.path.clone(), wt.branch.clone()));
+                        if let Some((repo, worktree_path, branch)) = wt {
+                            self.confirm_dialog.show(
+                                format!("Remove worktree '{branch}'?"),
+                                Action::RemoveWorktree {
+                                    repo,
+                                    worktree_path,
+                                },
+                            );
+                        }
+                    }
+                    Action::RemoveWorktree {
+                        ref repo,
+                        ref worktree_path,
+                    } => {
+                        let args = vec![
+                            "worktree".to_string(),
+                            "remove".to_string(),
+                            worktree_path.to_string_lossy().to_string(),
+                        ];
+                        self.spawn_repo_git_op(repo.clone(), args);
+                    }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
                             self.git_graph.set_rows(rows);
@@ -2028,7 +2056,11 @@ impl App {
                 self.action_tx.send(Action::OpenAddRepo)?;
             }
             KeyCode::Char('d') => {
-                if let Some(idx) = self.repo_list.selected_index() {
+                // On a worktree row, `d` removes that worktree; on a repo row it
+                // removes the repo. Both go through a confirmation.
+                if self.repo_list.selected_worktree().is_some() {
+                    self.action_tx.send(Action::RemoveWorktreeSelected)?;
+                } else if let Some(idx) = self.repo_list.selected_index() {
                     let entry = &self.repo_list.repos[idx];
                     let name = entry.name.clone();
                     let repo_id = RepoId(entry.path.clone());

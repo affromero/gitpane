@@ -57,6 +57,14 @@ pub(crate) enum Action {
         repo: std::path::PathBuf,
         branch: String,
     },
+    /// Resolve the highlighted worktree and open a confirmation to remove it.
+    /// Sent by the `d` key on a worktree row and the context-menu item.
+    RemoveWorktreeSelected,
+    /// Remove `worktree_path` from `repo` (`git worktree remove <path>`).
+    RemoveWorktree {
+        repo: std::path::PathBuf,
+        worktree_path: std::path::PathBuf,
+    },
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,

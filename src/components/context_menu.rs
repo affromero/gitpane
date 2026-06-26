@@ -20,6 +20,7 @@ enum MenuAction {
     Open,
     Review,
     NewWorktree,
+    RemoveWorktree,
     OpenGraph,
     Refresh,
     CopyPath,
@@ -131,7 +132,12 @@ impl ContextMenu {
 
         // Worktree-specific items. "New worktree…" creates a worktree of the
         // repo on a repo row; worktree rows get worktree-management items.
-        if !is_worktree {
+        if is_worktree {
+            self.items.push(MenuItem {
+                label: "Remove worktree".into(),
+                action: MenuAction::RemoveWorktree,
+            });
+        } else {
             self.items.push(MenuItem {
                 label: "New worktree…".into(),
                 action: MenuAction::NewWorktree,
@@ -207,6 +213,7 @@ impl ContextMenu {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
+            MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,
             MenuAction::Refresh => Action::RefreshRepo(id),
             MenuAction::CopyPath => Action::CopyPath(id),
