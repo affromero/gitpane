@@ -13,6 +13,7 @@ use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
 use crate::components::path_input::PathInput;
+use crate::components::placement_picker::PlacementPicker;
 use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
@@ -134,6 +135,9 @@ pub(crate) struct App {
     path_input: PathInput,
     status_bar: StatusBar,
     theme_picker: ThemePicker,
+    placement_picker: PlacementPicker,
+    /// Launch context parked while the placement picker is open (`placement = "ask"`).
+    pending_launch: Option<PendingLaunch>,
     focus: FocusPanel,
     sort_order: SortOrder,
     action_tx: UnboundedSender<Action>,
@@ -196,6 +200,15 @@ struct ActiveWorktree {
     path: std::path::PathBuf,
     repo_id: RepoId,
     display_name: String,
+}
+
+/// A launch (`open`/`review`) parked while the placement picker is open, so it
+/// can be resumed with the chosen placement.
+struct PendingLaunch {
+    dir: std::path::PathBuf,
+    command: Option<String>,
+    base: Option<String>,
+    label: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +297,8 @@ impl App {
             path_input: PathInput::new(theme.clone()),
             status_bar: StatusBar::new(theme.clone()),
             theme_picker: ThemePicker::new(theme.clone()),
+            placement_picker: PlacementPicker::new(theme.clone()),
+            pending_launch: None,
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
             action_tx,
@@ -425,7 +440,8 @@ impl App {
         self.context_menu.set_theme(theme.clone());
         self.path_input.set_theme(theme.clone());
         self.status_bar.set_theme(theme.clone());
-        self.theme_picker.set_theme(theme);
+        self.theme_picker.set_theme(theme.clone());
+        self.placement_picker.set_theme(theme);
     }
 
     fn schedule_refresh(&mut self, id: &RepoId) {
@@ -555,6 +571,25 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Park a launch and open the placement picker (`placement = "ask"`), listing
+    /// the current tmux windows as right-of/below targets.
+    fn start_placement_picker(
+        &mut self,
+        dir: std::path::PathBuf,
+        command: Option<String>,
+        base: Option<String>,
+        label: &'static str,
+    ) {
+        let choices = crate::launcher::placement_choices(&crate::launcher::tmux_windows());
+        self.pending_launch = Some(PendingLaunch {
+            dir,
+            command,
+            base,
+            label,
+        });
+        self.placement_picker.show(choices);
     }
 
     fn spawn_refresh_query(&mut self, repo_id: RepoId) {
@@ -1131,14 +1166,19 @@ impl App {
                             .map(|(_, wt)| wt.path.clone())
                             .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
                         if let Some(path) = path {
+                            let command = self.config.open.command.clone();
                             let plan = crate::launcher::plan(
-                                self.config.open.command.as_deref(),
+                                command.as_deref(),
                                 &self.config.open.placement,
                                 &path.to_string_lossy(),
                                 None,
                                 std::env::var_os("TMUX").is_some(),
                             );
-                            self.run_launch_plan(plan, path, "open", &mut tui)?;
+                            if matches!(plan, crate::launcher::LaunchPlan::Ask) {
+                                self.start_placement_picker(path, command, None, "open");
+                            } else {
+                                self.run_launch_plan(plan, path, "open", &mut tui)?;
+                            }
                         }
                     }
                     Action::ReviewSelected => {
@@ -1174,7 +1214,16 @@ impl App {
                                     Some(&base),
                                     std::env::var_os("TMUX").is_some(),
                                 );
-                                self.run_launch_plan(plan, path, "review", &mut tui)?;
+                                if matches!(plan, crate::launcher::LaunchPlan::Ask) {
+                                    self.start_placement_picker(
+                                        path,
+                                        Some(command),
+                                        Some(base),
+                                        "review",
+                                    );
+                                } else {
+                                    self.run_launch_plan(plan, path, "review", &mut tui)?;
+                                }
                             } else {
                                 self.action_tx.send(Action::Error(
                                     "no base branch resolved; set [review] base in config".into(),
@@ -1253,6 +1302,23 @@ impl App {
                     Action::LivePathsLoaded(paths) => {
                         self.liveness_probe_in_flight = false;
                         self.repo_list.set_live_paths(paths);
+                    }
+                    Action::PlacementChosen(ref placement) => {
+                        self.placement_picker.hide();
+                        if let Some(p) = self.pending_launch.take() {
+                            let plan = crate::launcher::plan(
+                                p.command.as_deref(),
+                                placement,
+                                &p.dir.to_string_lossy(),
+                                p.base.as_deref(),
+                                std::env::var_os("TMUX").is_some(),
+                            );
+                            self.run_launch_plan(plan, p.dir, p.label, &mut tui)?;
+                        }
+                    }
+                    Action::CancelPlacement => {
+                        self.placement_picker.hide();
+                        self.pending_launch = None;
                     }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
@@ -2046,6 +2112,13 @@ impl App {
             return Ok(());
         }
 
+        if self.placement_picker.visible {
+            if let Some(action) = self.placement_picker.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         // Search input gets priority when active
         if self.focus == FocusPanel::Graph && self.git_graph.search_visible() {
             self.git_graph.handle_search_key(key)?;
@@ -2441,6 +2514,7 @@ impl App {
         self.path_input.draw(frame, area);
         self.confirm_dialog.draw(frame, area);
         self.theme_picker.draw(frame, area);
+        self.placement_picker.draw(frame, area);
 
         // Update notification overlay
         if let Some(ref version) = self.update_version {

@@ -146,6 +146,66 @@ pub(crate) fn plan(
     }
 }
 
+/// Parse `tmux list-windows` output formatted as `<window_id>\t<label>` into
+/// `(label, target)` pairs. The target is tmux's `window_id` (`@N`) — globally
+/// unique and space-free, so a session name with spaces can't corrupt the
+/// whitespace-split placement string. The label (session:index + name) is shown
+/// in the picker. Lines without a tab are skipped.
+pub(crate) fn parse_tmux_windows(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (target, label) = line.split_once('\t')?;
+            let target = target.trim();
+            if target.is_empty() {
+                return None;
+            }
+            let label = label.trim();
+            let label = if label.is_empty() {
+                target.to_string()
+            } else {
+                label.to_string()
+            };
+            Some((label, target.to_string()))
+        })
+        .collect()
+}
+
+/// tmux windows across all sessions as `(label, target)`. Empty when tmux is
+/// absent or errors.
+pub(crate) fn tmux_windows() -> Vec<(String, String)> {
+    let output = std::process::Command::new("tmux")
+        .args([
+            "list-windows",
+            "-a",
+            "-F",
+            "#{window_id}\t#{session_name}:#{window_index} #{window_name}",
+        ])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => parse_tmux_windows(&String::from_utf8_lossy(&o.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// Build placement-picker choices from tmux `windows`: "New window" plus
+/// "Right of"/"Below" each window. Each entry is `(label, placement-string)`,
+/// where the placement string is what `parse_placement`/`plan` consume.
+pub(crate) fn placement_choices(windows: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = vec![("New window".to_string(), "new-window".to_string())];
+    for (label, target) in windows {
+        out.push((
+            format!("Right of {label}"),
+            format!("split-window -h -t {target}"),
+        ));
+        out.push((
+            format!("Below {label}"),
+            format!("split-window -v -t {target}"),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +386,39 @@ mod tests {
             plan(Some("x"), "frobnicate", "/app", None, true),
             LaunchPlan::Error(_)
         ));
+    }
+
+    #[test]
+    fn parse_tmux_windows_skips_malformed_lines() {
+        let out = "@0\tmain:0 editor\n@1\t\nno-tab-here\n@2\twork:2 logs\n";
+        assert_eq!(
+            parse_tmux_windows(out),
+            vec![
+                ("main:0 editor".to_string(), "@0".to_string()),
+                ("@1".to_string(), "@1".to_string()), // empty label -> target as label
+                ("work:2 logs".to_string(), "@2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn placement_choices_use_space_free_window_id_target() {
+        // Even with a spaced label, the placement `-t` target is the window id,
+        // so the whitespace-split placement string stays valid.
+        let windows = vec![("my session:0 editor".to_string(), "@7".to_string())];
+        assert_eq!(
+            placement_choices(&windows),
+            vec![
+                ("New window".to_string(), "new-window".to_string()),
+                (
+                    "Right of my session:0 editor".to_string(),
+                    "split-window -h -t @7".to_string()
+                ),
+                (
+                    "Below my session:0 editor".to_string(),
+                    "split-window -v -t @7".to_string()
+                ),
+            ]
+        );
     }
 }

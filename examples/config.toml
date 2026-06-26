@@ -76,6 +76,7 @@ show_stats = true
 #       "split-window -v -t agents" = below it, "new-window -t work:" = a new
 #       window in session 'work'.
 #   "inline" suspend gitpane and run the command in this terminal.
+#   "ask" pick where (right of / below a named window, or new window) each time.
 # Outside tmux, a tmux placement runs inline automatically.
 # placement = "command"
 
