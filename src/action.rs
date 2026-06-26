@@ -68,6 +68,11 @@ pub(crate) enum Action {
     /// tmux pane cwds from the latest liveness probe; repos/worktrees whose
     /// path contains one are marked live.
     LivePathsLoaded(std::collections::HashSet<std::path::PathBuf>),
+    /// The placement picker (for `placement = "ask"`) chose this placement
+    /// string; resume the pending launch with it.
+    PlacementChosen(String),
+    /// The placement picker was dismissed; drop the pending launch.
+    CancelPlacement,
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,

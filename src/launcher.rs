@@ -146,6 +146,65 @@ pub(crate) fn plan(
     }
 }
 
+/// Parse `tmux list-windows` output formatted as
+/// `<session>:<index>\t<window_name>` into `(label, target)` pairs. The target
+/// (`session:index`) is what a placement's `-t` flag uses; the label is shown in
+/// the picker. Lines without a tab are skipped.
+pub(crate) fn parse_tmux_windows(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (target, name) = line.split_once('\t')?;
+            let target = target.trim();
+            if target.is_empty() {
+                return None;
+            }
+            let name = name.trim();
+            let label = if name.is_empty() {
+                target.to_string()
+            } else {
+                format!("{name} ({target})")
+            };
+            Some((label, target.to_string()))
+        })
+        .collect()
+}
+
+/// tmux windows across all sessions as `(label, target)`. Empty when tmux is
+/// absent or errors.
+pub(crate) fn tmux_windows() -> Vec<(String, String)> {
+    let output = std::process::Command::new("tmux")
+        .args([
+            "list-windows",
+            "-a",
+            "-F",
+            "#{session_name}:#{window_index}\t#{window_name}",
+        ])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => parse_tmux_windows(&String::from_utf8_lossy(&o.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// Build placement-picker choices from tmux `windows`: "New window" plus
+/// "Right of"/"Below" each window. Each entry is `(label, placement-string)`,
+/// where the placement string is what `parse_placement`/`plan` consume.
+pub(crate) fn placement_choices(windows: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = vec![("New window".to_string(), "new-window".to_string())];
+    for (label, target) in windows {
+        out.push((
+            format!("Right of {label}"),
+            format!("split-window -h -t {target}"),
+        ));
+        out.push((
+            format!("Below {label}"),
+            format!("split-window -v -t {target}"),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +385,37 @@ mod tests {
             plan(Some("x"), "frobnicate", "/app", None, true),
             LaunchPlan::Error(_)
         ));
+    }
+
+    #[test]
+    fn parse_tmux_windows_skips_malformed_lines() {
+        let out = "main:0\teditor\nmain:1\t\nno-tab-here\nwork:2\tlogs\n";
+        assert_eq!(
+            parse_tmux_windows(out),
+            vec![
+                ("editor (main:0)".to_string(), "main:0".to_string()),
+                ("main:1".to_string(), "main:1".to_string()),
+                ("logs (work:2)".to_string(), "work:2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn placement_choices_offers_new_window_and_directions() {
+        let windows = vec![("editor (main:0)".to_string(), "main:0".to_string())];
+        assert_eq!(
+            placement_choices(&windows),
+            vec![
+                ("New window".to_string(), "new-window".to_string()),
+                (
+                    "Right of editor (main:0)".to_string(),
+                    "split-window -h -t main:0".to_string()
+                ),
+                (
+                    "Below editor (main:0)".to_string(),
+                    "split-window -v -t main:0".to_string()
+                ),
+            ]
+        );
     }
 }

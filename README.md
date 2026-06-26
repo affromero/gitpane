@@ -313,6 +313,8 @@ placement = "split-window -h -t agents"   # right of the 'agents' window
 
 So "right of \<named\>" is `split-window -h -t <named>` and "below" is `split-window -v -t <named>`. The path is supplied safely by gitpane (`-c <dir>`), so the placement string only carries tmux flags.
 
+Prefer to choose per launch? Set `placement = "ask"` and gitpane pops a small picker listing your tmux windows ("Right of …", "Below …", or "New window") each time you press `o`/`v`. The fast path stays a fixed config string; `ask` is there when you want it. (`inline` runs the command in the current terminal by suspending gitpane — handy outside tmux.)
+
 The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
 
 ### Reviewing changes

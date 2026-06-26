@@ -3,6 +3,7 @@ pub(crate) mod context_menu;
 pub(crate) mod file_list;
 pub(crate) mod git_graph;
 pub(crate) mod path_input;
+pub(crate) mod placement_picker;
 pub(crate) mod repo_list;
 pub(crate) mod status_bar;
 pub(crate) mod theme_picker;
