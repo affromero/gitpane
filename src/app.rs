@@ -1135,16 +1135,27 @@ impl App {
                         ref repo,
                         ref branch,
                     } => {
-                        let new_path =
-                            crate::config::worktree_path(&self.config.worktree, repo, branch);
-                        let args = vec![
-                            "worktree".to_string(),
-                            "add".to_string(),
-                            new_path.to_string_lossy().to_string(),
-                            "-b".to_string(),
-                            branch.clone(),
-                        ];
-                        self.spawn_repo_git_op(repo.clone(), args);
+                        // A leading '-' would be read as an option by git; reject
+                        // it up front with a clear message rather than a cryptic
+                        // git error.
+                        if branch.starts_with('-') {
+                            self.action_tx
+                                .send(Action::Error("branch name cannot start with '-'".into()))?;
+                        } else {
+                            let new_path =
+                                crate::config::worktree_path(&self.config.worktree, repo, branch);
+                            // `-b <branch>` then `--` so the path is never parsed
+                            // as an option.
+                            let args = vec![
+                                "worktree".to_string(),
+                                "add".to_string(),
+                                "-b".to_string(),
+                                branch.clone(),
+                                "--".to_string(),
+                                new_path.to_string_lossy().to_string(),
+                            ];
+                            self.spawn_repo_git_op(repo.clone(), args);
+                        }
                     }
                     Action::RemoveWorktreeSelected => {
                         // Resolve to the parent repo path + worktree path, then
@@ -1167,9 +1178,20 @@ impl App {
                         ref repo,
                         ref worktree_path,
                     } => {
+                        // If we're removing the worktree whose changes/graph are
+                        // currently shown, drop it so nothing refreshes against a
+                        // now-deleted path.
+                        if self
+                            .active_worktree
+                            .as_ref()
+                            .is_some_and(|aw| &aw.path == worktree_path)
+                        {
+                            self.active_worktree = None;
+                        }
                         let args = vec![
                             "worktree".to_string(),
                             "remove".to_string(),
+                            "--".to_string(),
                             worktree_path.to_string_lossy().to_string(),
                         ];
                         self.spawn_repo_git_op(repo.clone(), args);
