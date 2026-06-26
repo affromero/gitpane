@@ -536,13 +536,15 @@ impl App {
                     .status();
                 tui.enter()?;
                 tui.terminal.clear()?;
-                self.action_tx.send(Action::Render)?;
+                // Set the error first, then render, so a spawn failure's toast
+                // is painted on the repaint rather than waiting for a later one.
                 if let Err(e) = status {
                     self.action_tx.send(Action::Error(format!(
                         "{label} failed: {}",
                         crate::git::describe_spawn_error(&e)
                     )))?;
                 }
+                self.action_tx.send(Action::Render)?;
             }
             LaunchPlan::Ask => {
                 self.action_tx
