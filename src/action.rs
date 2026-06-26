@@ -75,8 +75,11 @@ pub(crate) enum Action {
     PickerCancel,
     /// Go to the tmux session(s) live in the selected repo/worktree via the
     /// `[goto] command` (default `tmux switch-client -t {session}`). One session
-    /// goes directly; several open the picker.
+    /// goes directly; several open the picker. Triggered by the `G` key.
     GotoSessionSelected,
+    /// Go directly to a named tmux session (from a context-menu "Go to <session>"
+    /// item) via the `[goto] command`.
+    GotoSession(String),
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,

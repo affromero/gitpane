@@ -1395,6 +1395,9 @@ impl App {
                     Action::GotoSessionSelected => {
                         self.goto_session_selected()?;
                     }
+                    Action::GotoSession(ref session) => {
+                        self.goto_session(session);
+                    }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
                             self.git_graph.set_rows(rows);
@@ -1426,6 +1429,8 @@ impl App {
                         col,
                         is_worktree,
                     } => {
+                        let live_sessions =
+                            crate::liveness::live_sessions(&id.0, self.repo_list.live_panes());
                         if let Some(target) = self.repo_list.resolve_target(id) {
                             self.context_menu.show(
                                 id.clone(),
@@ -1436,6 +1441,7 @@ impl App {
                                     behind: target.behind,
                                     has_submodules: target.has_submodules,
                                     is_worktree,
+                                    live_sessions,
                                 },
                             );
                         }

@@ -358,7 +358,7 @@ dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
 
 ### Going to a live session
 
-A `◉ <session>` marker on a repo/worktree means a tmux pane is cwd'd inside it (so that session has work parked there). Press `G` (or `Go to session` in the right click menu) to jump to it. When several sessions share a folder, a picker lets you choose.
+A `◉ <session>` marker on a repo/worktree means a tmux pane is cwd'd inside it (so that session has work parked there); the marker shows the first such session. Press `G` to go to it — one session jumps directly, several open a picker. Right click for a `Go to <session>` item per live session, so you can see and pick any of them by name.
 
 By default `G` runs `tmux switch-client -t {session}` — it switches your current tmux client to that session. To instead open it in a **new terminal tab/window** (a fresh tab has no `$TMUX`, so `tmux attach` works there), set `[goto] command` to your terminal's spawn command:
 
