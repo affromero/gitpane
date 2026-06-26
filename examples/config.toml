@@ -50,6 +50,10 @@ check_for_updates = true
 # Where to show the update notification: "top-right" or "top-left" (default: "top-right")
 update_position = "top-right"
 
+# Mark repos/worktrees that have a live tmux pane cwd'd inside them with ◉
+# (tmux-only; default: true)
+show_liveness = true
+
 [graph]
 # Branch filter for commit graph: "all", "local", "remote", or "none" (default: "all")
 branches = "all"

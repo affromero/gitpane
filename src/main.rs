@@ -5,6 +5,7 @@ mod config;
 mod diagnostic;
 mod event;
 mod git;
+mod liveness;
 mod repo_id;
 mod theme;
 mod tui;

@@ -65,6 +65,9 @@ pub(crate) enum Action {
         repo: std::path::PathBuf,
         worktree_path: std::path::PathBuf,
     },
+    /// tmux pane cwds from the latest liveness probe; repos/worktrees whose
+    /// path contains one are marked live.
+    LivePathsLoaded(std::collections::HashSet<std::path::PathBuf>),
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,
