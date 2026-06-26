@@ -301,6 +301,18 @@ The template is split on whitespace and run directly (no shell), so `{path}` is 
 | Edit the repo in Cursor / VS Code / Zed | `cursor {path}` (or `code {path}`, `zed {path}`) |
 | Open a fresh tmux window to work in | `tmux new-window -c {path}` |
 
+**Placement** (`[open] placement`, default `command`) controls *where* the command runs. With the default `command`, the command above *is* the launcher (run directly), which is why those recipes embed their own `tmux …`. Alternatively, let gitpane place a plain command for you, so you can direct it to a **named** window or pane:
+
+```toml
+[open]
+command = "lazygit"
+placement = "split-window -h -t agents"   # right of the 'agents' window
+# placement = "split-window -v -t agents"  # below it
+# placement = "new-window -t work:"        # a new window in session 'work'
+```
+
+So "right of \<named\>" is `split-window -h -t <named>` and "below" is `split-window -v -t <named>`. The path is supplied safely by gitpane (`-c <dir>`), so the placement string only carries tmux flags.
+
 The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
 
 ### Reviewing changes
@@ -312,10 +324,11 @@ By default it runs `git diff {base}...HEAD`, where `{base}` is the resolved defa
 ```toml
 [review]
 command = "git diff {base}...HEAD | delta --side-by-side"
-# base = "origin/develop"   # optional; default = the repo's resolved default branch
+# base = "origin/develop"      # optional; default = the repo's resolved default branch
+# placement = "split-window -h"  # beside gitpane instead of a new window (default)
 ```
 
-The command runs via `sh -c` in the target directory, so pipes work. `{base}` is the only token (the path is supplied as the window's directory, not interpolated into the shell). Viewers worth a look:
+The command runs via `sh -c` in the target directory, so pipes work; `{base}` and `{path}` are shell-quoted before substitution. `[review] placement` uses the same vocabulary as `[open] placement` (default `new-window`), so the same `split-window -h -t <named>` recipes direct the review window wherever you like. Viewers worth a look:
 
 | Tool | What it gives |
 |------|---------------|
