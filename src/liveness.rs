@@ -12,7 +12,7 @@ pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{pane_current_path}",
+            "#{pane_current_path}\t#{session_name}",
         ])
         .output();
     match output {
@@ -21,14 +21,17 @@ pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
     }
 }
 
-/// Parse `<session>\t<pane_cwd>` lines into `(session, path)` pairs. Lines
-/// without a tab, an empty session, or an empty path are skipped.
+/// Parse `<pane_cwd>\t<session>` lines into `(session, path)` pairs. The path is
+/// first so a tab in a session name lands in (and stays in) the session field
+/// rather than corrupting the path. Lines without a tab, an empty session, or
+/// an empty path are skipped.
 fn parse_pane_sessions(output: &str) -> Vec<(String, PathBuf)> {
     output
         .lines()
         .filter_map(|line| {
-            let (session, path) = line.split_once('\t')?;
+            let (path, session) = line.split_once('\t')?;
             let path = path.trim();
+            let session = session.trim();
             if session.is_empty() || path.is_empty() {
                 return None;
             }
@@ -72,13 +75,22 @@ mod tests {
 
     #[test]
     fn parse_skips_malformed_and_empty() {
-        let out = "main\t/code/app\nno-tab\n\t/code/x\nwork\t\nside\t/code/app/src\n";
+        let out = "/code/app\tmain\nno-tab\n/code/x\t\n\twork\n/code/app/src\tside\n";
         assert_eq!(
             parse_pane_sessions(out),
             vec![
                 ("main".to_string(), PathBuf::from("/code/app")),
                 ("side".to_string(), PathBuf::from("/code/app/src")),
             ]
+        );
+    }
+
+    #[test]
+    fn parse_keeps_path_intact_when_session_name_has_tab() {
+        // Path is the first field, so a tab in a session name can't corrupt it.
+        assert_eq!(
+            parse_pane_sessions("/code/app\tweird\tname\n"),
+            vec![("weird\tname".to_string(), PathBuf::from("/code/app"))]
         );
     }
 

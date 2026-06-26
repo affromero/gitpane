@@ -626,19 +626,38 @@ impl App {
         Ok(())
     }
 
-    /// Run the `[goto] command` for `session`, detached (it opens a tab or
-    /// switches the tmux client and returns immediately).
+    /// Run the `[goto] command` for `session`. The command returns promptly
+    /// (switches the tmux client or spawns a terminal tab), so its exit status
+    /// is checked and a failure (e.g. a stale session) is surfaced.
     fn goto_session(&mut self, session: &str) {
         let argv = crate::launcher::build_goto_argv(&self.config.goto.command, session);
         if argv.is_empty() {
             return;
         }
-        spawn_detached(
-            argv,
-            std::path::PathBuf::from("."),
-            self.action_tx.clone(),
-            "goto",
-        );
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let first = stderr
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("command failed")
+                        .trim();
+                    let _ = tx.send(Action::Error(format!("goto failed: {first}")));
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::Error(format!(
+                        "goto failed: {}",
+                        crate::git::describe_spawn_error(&e)
+                    )));
+                }
+            }
+        });
     }
 
     fn spawn_refresh_query(&mut self, repo_id: RepoId) {
@@ -2326,6 +2345,16 @@ impl App {
 
     fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        // Modal overlays swallow mouse input so a click can't leak through to a
+        // panel or open a context menu hidden behind them.
+        if self.picker.visible
+            || self.theme_picker.visible
+            || self.path_input.visible
+            || self.confirm_dialog.visible
+        {
+            return Ok(());
+        }
 
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_mouse_event(mouse)? {
