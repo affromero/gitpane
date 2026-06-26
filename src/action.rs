@@ -80,6 +80,10 @@ pub(crate) enum Action {
     /// Attach a named tmux session directly (from a context-menu "Attach
     /// <session>" item) via the `[goto] command`.
     GotoSession(String),
+    /// Open the picker for the tmux sessions live in this repo/worktree path
+    /// (from the context-menu "Attach session…" item). Path-bound so it targets
+    /// the clicked row, not the current selection.
+    GotoSessionPicker(RepoId),
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,
