@@ -287,6 +287,18 @@ command = "tmux new-window -c {path}"   # new tmux window instead of a pane
 
 The template is split on whitespace and run directly (no shell), so `{path}` is safe even with spaces, but other template arguments cannot contain spaces. Need a pipe or quoting? Wrap it: `command = "sh -c 'code {path}'"`.
 
+**Example launchers** (set as `[open] command`):
+
+| You want to... | `command` |
+|----------------|-----------|
+| Drop a shell into the worktree (default inside tmux) | *(unset)* |
+| Start an AI agent in the selected worktree | `tmux new-window -c {path} claude` |
+| Open a side by side pane next to gitpane | `tmux split-window -h -c {path}` |
+| Edit the repo in Cursor / VS Code / Zed | `cursor {path}` (or `code {path}`, `zed {path}`) |
+| Open a fresh tmux window to work in | `tmux new-window -c {path}` |
+
+The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
+
 ### Theming
 
 gitpane ships two built in themes:
