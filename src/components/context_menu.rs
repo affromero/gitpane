@@ -19,7 +19,10 @@ use crate::theme::Theme;
 enum MenuAction {
     Open,
     Review,
+    /// Attach a single live session directly.
     GotoSession(String),
+    /// Several live sessions: open the picker to choose.
+    GotoSessionPicker,
     NewWorktree,
     RemoveWorktree,
     OpenGraph,
@@ -134,16 +137,25 @@ impl ContextMenu {
             },
         ];
 
-        // One "Go to <session>" item per tmux session live in this path,
-        // inserted right after "Review changes".
-        for (i, session) in live_sessions.into_iter().enumerate() {
-            self.items.insert(
-                2 + i,
-                MenuItem {
-                    label: format!("Go to {session}"),
+        // Attach the live tmux session(s), inserted right after "Review
+        // changes". One session attaches directly; several collapse to a picker
+        // so the menu stays compact.
+        let attach_item = match live_sessions.len() {
+            0 => None,
+            1 => {
+                let session = live_sessions.into_iter().next().unwrap();
+                Some(MenuItem {
+                    label: format!("Attach {session}"),
                     action: MenuAction::GotoSession(session),
-                },
-            );
+                })
+            }
+            _ => Some(MenuItem {
+                label: "Attach session…".into(),
+                action: MenuAction::GotoSessionPicker,
+            }),
+        };
+        if let Some(item) = attach_item {
+            self.items.insert(2, item);
         }
 
         // Worktree-specific items. "New worktree…" creates a worktree of the
@@ -229,6 +241,7 @@ impl ContextMenu {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
             MenuAction::GotoSession(ref s) => Action::GotoSession(s.clone()),
+            MenuAction::GotoSessionPicker => Action::GotoSessionSelected,
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
             MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,

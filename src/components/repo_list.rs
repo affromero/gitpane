@@ -583,14 +583,10 @@ impl RepoList {
             Style::default().fg(t.repo_name),
         ));
 
-        // Liveness marker with the tmux session name(s), after the repo name so
-        // it can truncate without hiding the name.
-        let sessions = crate::liveness::live_sessions(&entry.path, &self.live_panes);
-        if let Some(label) = crate::liveness::live_label(&sessions) {
-            spans.push(Span::styled(
-                format!(" \u{25c9} {label}"),
-                Style::default().fg(t.live),
-            ));
+        // Liveness marker (bare symbol; the session names are in the context
+        // menu), after the repo name so it doesn't shift the name.
+        if crate::liveness::is_live(&entry.path, &self.live_panes) {
+            spans.push(Span::styled(" \u{25c9}", Style::default().fg(t.live)));
         }
 
         ListItem::new(Line::from(spans))
@@ -649,12 +645,8 @@ impl RepoList {
             ));
         }
 
-        let sessions = crate::liveness::live_sessions(&wt.path, &self.live_panes);
-        if let Some(label) = crate::liveness::live_label(&sessions) {
-            spans.push(Span::styled(
-                format!("\u{25c9} {label} "),
-                Style::default().fg(t.live),
-            ));
+        if crate::liveness::is_live(&wt.path, &self.live_panes) {
+            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
 
         ListItem::new(Line::from(spans))

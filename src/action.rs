@@ -77,8 +77,8 @@ pub(crate) enum Action {
     /// `[goto] command` (default `tmux switch-client -t {session}`). One session
     /// goes directly; several open the picker. Triggered by the `G` key.
     GotoSessionSelected,
-    /// Go directly to a named tmux session (from a context-menu "Go to <session>"
-    /// item) via the `[goto] command`.
+    /// Attach a named tmux session directly (from a context-menu "Attach
+    /// <session>" item) via the `[goto] command`.
     GotoSession(String),
     GraphLoaded {
         generation: u64,
