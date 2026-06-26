@@ -282,6 +282,45 @@ mod tests {
     }
 
     #[test]
+    fn command_mode_expands_embedded_path_token() {
+        // `{path}` inside a token expands too (one argv element, space-safe).
+        assert_eq!(
+            plan(
+                Some("wezterm cli spawn --cwd={path}"),
+                "command",
+                "/w t/x",
+                None,
+                false
+            ),
+            argv(&["wezterm", "cli", "spawn", "--cwd=/w t/x"])
+        );
+    }
+
+    #[test]
+    fn command_mode_blank_command_opens_tmux_pane() {
+        // A whitespace-only command counts as empty.
+        assert_eq!(
+            plan(Some("   "), "command", "/repo", None, true),
+            argv(&["tmux", "split-window", "-c", "/repo"])
+        );
+    }
+
+    #[test]
+    fn shell_mode_quotes_path_token() {
+        // In shell modes, {path} is shell-quoted (it reaches `sh -c`).
+        assert_eq!(
+            plan(
+                Some("cd {path} && git diff"),
+                "inline",
+                "/w t/x",
+                None,
+                false
+            ),
+            LaunchPlan::Inline("cd '/w t/x' && git diff".to_string())
+        );
+    }
+
+    #[test]
     fn invalid_placement_is_an_error_plan() {
         assert!(matches!(
             plan(Some("x"), "frobnicate", "/app", None, true),
