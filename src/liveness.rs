@@ -1,63 +1,114 @@
-//! Detects which repos/worktrees have a live session by reading tmux pane cwds.
-//! tmux-only: when gitpane is not running under tmux (or tmux is unavailable)
-//! the probe yields an empty set and no liveness markers are shown.
+//! Detects which repos/worktrees have a live tmux session by reading each
+//! pane's session name and cwd. tmux-only: when gitpane is not under tmux (or
+//! tmux is unavailable) the probe yields nothing and no markers are shown.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// The current-working-directory of every tmux pane across all sessions, via a
+/// `(session_name, pane_cwd)` for every tmux pane across all sessions, via a
 /// single `tmux list-panes -a` call. Empty when tmux is absent or errors.
-pub(crate) fn tmux_pane_paths() -> HashSet<PathBuf> {
+pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
     let output = std::process::Command::new("tmux")
-        .args(["list-panes", "-a", "-F", "#{pane_current_path}"])
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{pane_current_path}",
+        ])
         .output();
     match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(PathBuf::from)
-            .collect(),
-        _ => HashSet::new(),
+        Ok(o) if o.status.success() => parse_pane_sessions(&String::from_utf8_lossy(&o.stdout)),
+        _ => Vec::new(),
     }
 }
 
-/// A repo/worktree at `path` is "live" if any tmux pane's cwd is at or below it
-/// (an agent or shell is working inside it).
-pub(crate) fn is_live(path: &Path, pane_paths: &HashSet<PathBuf>) -> bool {
-    pane_paths.iter().any(|p| p.starts_with(path))
+/// Parse `<session>\t<pane_cwd>` lines into `(session, path)` pairs. Lines
+/// without a tab, an empty session, or an empty path are skipped.
+fn parse_pane_sessions(output: &str) -> Vec<(String, PathBuf)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (session, path) = line.split_once('\t')?;
+            let path = path.trim();
+            if session.is_empty() || path.is_empty() {
+                return None;
+            }
+            Some((session.to_string(), PathBuf::from(path)))
+        })
+        .collect()
+}
+
+/// Sorted, unique session names that have a pane cwd'd at or below `path` (the
+/// repo/worktree is "live" in those sessions). Empty when none.
+pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<String> {
+    let mut names: Vec<String> = panes
+        .iter()
+        .filter(|(_, p)| p.starts_with(path))
+        .map(|(s, _)| s.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Compact marker label: the first session name, plus `+N` when more than one
+/// session is live in the path. `None` when not live.
+pub(crate) fn live_label(sessions: &[String]) -> Option<String> {
+    match sessions {
+        [] => None,
+        [one] => Some(one.clone()),
+        [first, rest @ ..] => Some(format!("{first} +{}", rest.len())),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn panes(ps: &[&str]) -> HashSet<PathBuf> {
-        ps.iter().map(PathBuf::from).collect()
+    fn panes(ps: &[(&str, &str)]) -> Vec<(String, PathBuf)> {
+        ps.iter()
+            .map(|(s, p)| (s.to_string(), PathBuf::from(p)))
+            .collect()
     }
 
     #[test]
-    fn live_when_a_pane_sits_inside_the_path() {
-        let p = panes(&["/code/app/src", "/elsewhere"]);
-        assert!(is_live(Path::new("/code/app"), &p));
+    fn parse_skips_malformed_and_empty() {
+        let out = "main\t/code/app\nno-tab\n\t/code/x\nwork\t\nside\t/code/app/src\n";
+        assert_eq!(
+            parse_pane_sessions(out),
+            vec![
+                ("main".to_string(), PathBuf::from("/code/app")),
+                ("side".to_string(), PathBuf::from("/code/app/src")),
+            ]
+        );
     }
 
     #[test]
-    fn live_when_a_pane_is_exactly_the_path() {
-        let p = panes(&["/code/app"]);
-        assert!(is_live(Path::new("/code/app"), &p));
+    fn live_sessions_are_prefix_matched_unique_and_sorted() {
+        let p = panes(&[
+            ("ternu", "/code/app/src"),
+            ("fairtrail", "/code/app"),
+            ("ternu", "/code/app"),         // duplicate session -> deduped
+            ("other", "/code/app-sibling"), // sibling, not inside
+        ]);
+        assert_eq!(
+            live_sessions(Path::new("/code/app"), &p),
+            vec!["fairtrail".to_string(), "ternu".to_string()]
+        );
     }
 
     #[test]
-    fn not_live_when_no_pane_is_inside() {
-        let p = panes(&["/code/other", "/code/app-sibling"]);
-        // `/code/app-sibling` must NOT count as inside `/code/app` (component
-        // boundary), and a separate worktree dir is its own subtree.
-        assert!(!is_live(Path::new("/code/app"), &p));
+    fn live_sessions_empty_when_none_inside() {
+        let p = panes(&[("x", "/elsewhere")]);
+        assert!(live_sessions(Path::new("/code/app"), &p).is_empty());
     }
 
     #[test]
-    fn not_live_with_no_panes() {
-        assert!(!is_live(Path::new("/code/app"), &HashSet::new()));
+    fn live_label_formats_count() {
+        assert_eq!(live_label(&[]), None);
+        assert_eq!(live_label(&["a".to_string()]), Some("a".to_string()));
+        assert_eq!(
+            live_label(&["a".to_string(), "b".to_string(), "c".to_string()]),
+            Some("a +2".to_string())
+        );
     }
 }

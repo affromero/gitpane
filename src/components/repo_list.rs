@@ -126,8 +126,9 @@ pub(crate) struct RepoList {
     expanded_repos: HashSet<RepoId>,
     /// Which repos have their stash list expanded
     expanded_stashes: HashSet<RepoId>,
-    /// tmux pane cwds; a repo/worktree whose path contains one is "live".
-    live_paths: HashSet<PathBuf>,
+    /// `(session, pane_cwd)` from the liveness probe; a repo/worktree whose path
+    /// contains a pane cwd is "live" in that session.
+    live_panes: Vec<(String, PathBuf)>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
     theme: Arc<Theme>,
@@ -164,7 +165,7 @@ impl RepoList {
             action_tx: None,
             expanded_repos: HashSet::new(),
             expanded_stashes: HashSet::new(),
-            live_paths: HashSet::new(),
+            live_panes: Vec::new(),
             display_rows: Vec::new(),
             theme,
         };
@@ -272,9 +273,9 @@ impl RepoList {
         }
     }
 
-    /// Replace the set of tmux pane cwds used to mark live repos/worktrees.
-    pub fn set_live_paths(&mut self, paths: HashSet<PathBuf>) {
-        self.live_paths = paths;
+    /// Replace the tmux pane sessions used to mark live repos/worktrees.
+    pub fn set_live_panes(&mut self, panes: Vec<(String, PathBuf)>) {
+        self.live_panes = panes;
     }
 
     /// Select the display row corresponding to a repo index.
@@ -572,14 +573,20 @@ impl RepoList {
             }
         }
 
-        if crate::liveness::is_live(&entry.path, &self.live_paths) {
-            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
-        }
-
         spans.push(Span::styled(
             entry.name.clone(),
             Style::default().fg(t.repo_name),
         ));
+
+        // Liveness marker with the tmux session name(s), after the repo name so
+        // it can truncate without hiding the name.
+        let sessions = crate::liveness::live_sessions(&entry.path, &self.live_panes);
+        if let Some(label) = crate::liveness::live_label(&sessions) {
+            spans.push(Span::styled(
+                format!(" \u{25c9} {label}"),
+                Style::default().fg(t.live),
+            ));
+        }
 
         ListItem::new(Line::from(spans))
     }
@@ -637,8 +644,12 @@ impl RepoList {
             ));
         }
 
-        if crate::liveness::is_live(&wt.path, &self.live_paths) {
-            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
+        let sessions = crate::liveness::live_sessions(&wt.path, &self.live_panes);
+        if let Some(label) = crate::liveness::live_label(&sessions) {
+            spans.push(Span::styled(
+                format!("\u{25c9} {label} "),
+                Style::default().fg(t.live),
+            ));
         }
 
         ListItem::new(Line::from(spans))

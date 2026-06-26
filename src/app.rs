@@ -1025,8 +1025,8 @@ impl App {
                             self.liveness_probe_in_flight = true;
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
-                                let _ = tx.send(Action::LivePathsLoaded(
-                                    crate::liveness::tmux_pane_paths(),
+                                let _ = tx.send(Action::LiveSessionsLoaded(
+                                    crate::liveness::tmux_pane_sessions(),
                                 ));
                             });
                         }
@@ -1299,9 +1299,9 @@ impl App {
                         ];
                         self.spawn_repo_git_op(repo.clone(), args);
                     }
-                    Action::LivePathsLoaded(paths) => {
+                    Action::LiveSessionsLoaded(panes) => {
                         self.liveness_probe_in_flight = false;
-                        self.repo_list.set_live_paths(paths);
+                        self.repo_list.set_live_panes(panes);
                     }
                     Action::PlacementChosen(ref placement) => {
                         self.placement_picker.hide();

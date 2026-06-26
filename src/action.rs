@@ -65,9 +65,9 @@ pub(crate) enum Action {
         repo: std::path::PathBuf,
         worktree_path: std::path::PathBuf,
     },
-    /// tmux pane cwds from the latest liveness probe; repos/worktrees whose
-    /// path contains one are marked live.
-    LivePathsLoaded(std::collections::HashSet<std::path::PathBuf>),
+    /// `(session, pane_cwd)` from the latest liveness probe; repos/worktrees
+    /// whose path contains a pane cwd are marked live with that session's name.
+    LiveSessionsLoaded(Vec<(String, std::path::PathBuf)>),
     /// The placement picker (for `placement = "ask"`) chose this placement
     /// string; resume the pending launch with it.
     PlacementChosen(String),
