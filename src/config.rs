@@ -31,6 +31,8 @@ pub(crate) struct Config {
     pub submodules: SubmoduleConfig,
     #[serde(default)]
     pub open: OpenConfig,
+    #[serde(default)]
+    pub review: ReviewConfig,
     /// Name of the active theme. Built-in: "default" or "muted". Any other
     /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
     #[serde(default = "default_theme_name", rename = "theme")]
@@ -147,6 +149,21 @@ pub(crate) struct OpenConfig {
     /// new tmux pane if it is running inside tmux.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ReviewConfig {
+    /// Command run by `v` to review the selected repo/worktree's changes,
+    /// executed via `sh -c` in the target directory inside a new tmux window.
+    /// `{base}` is replaced with the resolved default branch. When unset,
+    /// defaults to `git diff {base}...HEAD`; pipe through a viewer for nicer
+    /// output, e.g. `git diff {base}...HEAD | delta --side-by-side`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Base ref to diff against, e.g. `origin/main`. When unset, gitpane
+    /// resolves the repository's default branch (`origin/HEAD` → main → master).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 fn default_warn_unpushed() -> bool {
@@ -377,6 +394,7 @@ impl Default for Config {
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
             open: OpenConfig::default(),
+            review: ReviewConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,
@@ -1051,6 +1069,39 @@ mod tests {
             config.open.command.as_deref(),
             Some("tmux new-window -c {path}")
         );
+    }
+
+    #[test]
+    fn test_review_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.review.command.is_none());
+        assert!(config.review.base.is_none());
+    }
+
+    #[test]
+    fn test_review_config_roundtrip() {
+        let mut config = Config::default();
+        config.review.command = Some("git diff {base}...HEAD | delta".into());
+        config.review.base = Some("origin/main".into());
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            loaded.review.command.as_deref(),
+            Some("git diff {base}...HEAD | delta")
+        );
+        assert_eq!(loaded.review.base.as_deref(), Some("origin/main"));
+    }
+
+    #[test]
+    fn test_review_config_parse() {
+        let toml_str = r#"
+            [review]
+            command = "difft"
+            base = "develop"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.review.command.as_deref(), Some("difft"));
+        assert_eq!(config.review.base.as_deref(), Some("develop"));
     }
 
     #[test]

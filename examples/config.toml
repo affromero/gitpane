@@ -67,3 +67,12 @@ show_stats = true
 # Unset (default): open a new tmux pane when running inside tmux.
 # command = "tmux new-window -c {path}"
 # command = "cursor {path}"
+
+[review]
+# Command run by `v` to review the selected repo/worktree in a new tmux window.
+# Runs via `sh -c` in the target directory; `{base}` is replaced with the base
+# ref. Unset (default): `git diff {base}...HEAD`. Pipe through a viewer:
+# command = "git diff {base}...HEAD | delta --side-by-side"
+# command = "difft"
+# base ref to diff against. Unset: the repo's resolved default branch.
+# base = "origin/main"

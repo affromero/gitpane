@@ -45,6 +45,10 @@ pub(crate) enum Action {
     /// configured `[open] command`. Resolves the selection in-app, like
     /// `ShowGitGraph`, so it carries no payload.
     OpenSelected,
+    /// Review the highlighted repo/worktree's diff vs its base branch in a new
+    /// tmux window, via the `[review] command` (default `git diff {base}...HEAD`).
+    /// Resolves the selection in-app, so it carries no payload.
+    ReviewSelected,
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,

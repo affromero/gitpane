@@ -591,6 +591,29 @@ fn default_branch_tip(inner: &Repository) -> Option<git2::Oid> {
     None
 }
 
+/// Resolve the repository's default branch as a diff-able ref name in
+/// `origin/<branch>` form (so `git diff <base>...HEAD` works without a matching
+/// local branch): `origin/HEAD`'s symbolic target first, then `origin/main`,
+/// then `origin/master`. `None` when none resolve.
+pub(crate) fn default_branch_name(repo: &Repository) -> Option<String> {
+    if let Ok(head_ref) = repo.find_reference("refs/remotes/origin/HEAD")
+        && let Ok(Some(target_name)) = head_ref.symbolic_target()
+        && repo.find_reference(target_name).is_ok()
+        && let Some(short) = target_name.strip_prefix("refs/remotes/")
+    {
+        return Some(short.to_string());
+    }
+    for (full, short) in [
+        ("refs/remotes/origin/main", "origin/main"),
+        ("refs/remotes/origin/master", "origin/master"),
+    ] {
+        if repo.find_reference(full).is_ok() {
+            return Some(short.to_string());
+        }
+    }
+    None
+}
+
 /// Collect details for each linked worktree using the git2 API.
 /// Mirrors the pattern in `git/graph.rs::collect_worktree_branches`.
 fn collect_worktree_info(repo: &Repository, sub_cfg: &SubmoduleConfig) -> Vec<WorktreeEntry> {
@@ -858,6 +881,37 @@ mod tests {
                 .iter()
                 .any(|f| f.path == Path::new("nested/file.txt"))
         );
+    }
+
+    #[test]
+    fn test_default_branch_name_resolves_origin_main() {
+        let (_tmp, repo) = init_temp_repo();
+        let oid = repo.head().unwrap().target().unwrap();
+        repo.reference("refs/remotes/origin/main", oid, true, "test")
+            .unwrap();
+        assert_eq!(default_branch_name(&repo).as_deref(), Some("origin/main"));
+    }
+
+    #[test]
+    fn test_default_branch_name_follows_symbolic_head() {
+        let (_tmp, repo) = init_temp_repo();
+        let oid = repo.head().unwrap().target().unwrap();
+        repo.reference("refs/remotes/origin/master", oid, true, "test")
+            .unwrap();
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/master",
+            true,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(default_branch_name(&repo).as_deref(), Some("origin/master"));
+    }
+
+    #[test]
+    fn test_default_branch_name_none_without_remote() {
+        let (_tmp, repo) = init_temp_repo();
+        assert_eq!(default_branch_name(&repo), None);
     }
 
     #[test]
