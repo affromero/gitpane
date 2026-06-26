@@ -1948,6 +1948,9 @@ impl App {
             KeyCode::Char('o') => {
                 self.action_tx.send(Action::OpenSelected)?;
             }
+            KeyCode::Char('v') => {
+                self.action_tx.send(Action::ReviewSelected)?;
+            }
             KeyCode::Char('a') => {
                 self.action_tx.send(Action::OpenAddRepo)?;
             }
@@ -2336,6 +2339,7 @@ impl App {
             Line::from(vec![key("Esc"), desc("Close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
+            Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];

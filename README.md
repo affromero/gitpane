@@ -155,6 +155,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `R` | Rescan directories for repos (clears exclusions) |
 | `g` | Reload git graph for selected repo |
 | `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
+| `v` | Review selected repo/worktree's diff vs its base branch (new tmux window) |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
@@ -300,6 +301,29 @@ The template is split on whitespace and run directly (no shell), so `{path}` is 
 | Open a fresh tmux window to work in | `tmux new-window -c {path}` |
 
 The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
+
+### Reviewing changes
+
+Press `v` (or pick `Review changes` from the right click menu) to review the highlighted repo or worktree's diff against its base branch, in a new tmux window. This is the "what did the agent actually do" view: select a worktree, press `v`, read the diff, close the window.
+
+By default it runs `git diff {base}...HEAD`, where `{base}` is the resolved default branch (`origin/HEAD`, falling back to `origin/main` / `origin/master`). Point it at a nicer viewer with `[review] command`:
+
+```toml
+[review]
+command = "git diff {base}...HEAD | delta --side-by-side"
+# base = "origin/develop"   # optional; default = the repo's resolved default branch
+```
+
+The command runs via `sh -c` in the target directory, so pipes work. `{base}` is the only token (the path is supplied as the window's directory, not interpolated into the shell). Viewers worth a look:
+
+| Tool | What it gives |
+|------|---------------|
+| [delta](https://github.com/dandavison/delta) | Side by side, syntax highlighted, line numbers |
+| [difftastic](https://github.com/Wilfred/difftastic) (`difft`) | Structural diff, shows logic changes not whitespace noise |
+| [diffnav](https://github.com/dlvhdr/diffnav) | delta plus a GitHub style file tree |
+| [hunk](https://github.com/modem-dev/hunk) | Review first viewer built for agentic coders |
+
+Requires running inside tmux (the window host); outside tmux, `v` shows a hint.
 
 ### Theming
 
