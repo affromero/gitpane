@@ -53,14 +53,10 @@ pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<Str
     names
 }
 
-/// Compact marker label: the first session name, plus `+N` when more than one
-/// session is live in the path. `None` when not live.
+/// Marker label: the first live session name (the full list is on the context
+/// menu). `None` when not live.
 pub(crate) fn live_label(sessions: &[String]) -> Option<String> {
-    match sessions {
-        [] => None,
-        [one] => Some(one.clone()),
-        [first, rest @ ..] => Some(format!("{first} +{}", rest.len())),
-    }
+    sessions.first().cloned()
 }
 
 #[cfg(test)]
@@ -115,12 +111,12 @@ mod tests {
     }
 
     #[test]
-    fn live_label_formats_count() {
+    fn live_label_is_first_session() {
         assert_eq!(live_label(&[]), None);
         assert_eq!(live_label(&["a".to_string()]), Some("a".to_string()));
         assert_eq!(
             live_label(&["a".to_string(), "b".to_string(), "c".to_string()]),
-            Some("a +2".to_string())
+            Some("a".to_string())
         );
     }
 }

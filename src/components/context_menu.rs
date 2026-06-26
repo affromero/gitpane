@@ -19,7 +19,7 @@ use crate::theme::Theme;
 enum MenuAction {
     Open,
     Review,
-    GotoSession,
+    GotoSession(String),
     NewWorktree,
     RemoveWorktree,
     OpenGraph,
@@ -40,12 +40,14 @@ struct MenuItem {
 }
 
 /// Row context that decides which items the menu offers.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct MenuContext {
     pub ahead: usize,
     pub behind: usize,
     pub has_submodules: bool,
     pub is_worktree: bool,
+    /// tmux sessions live in this row's path; each gets a "Go to <session>" item.
+    pub live_sessions: Vec<String>,
 }
 
 pub(crate) struct ContextMenu {
@@ -83,6 +85,7 @@ impl ContextMenu {
             behind,
             has_submodules,
             is_worktree,
+            live_sessions,
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
@@ -96,10 +99,6 @@ impl ContextMenu {
             MenuItem {
                 label: "Review changes".into(),
                 action: MenuAction::Review,
-            },
-            MenuItem {
-                label: "Go to session".into(),
-                action: MenuAction::GotoSession,
             },
             MenuItem {
                 label: "Open git graph".into(),
@@ -134,6 +133,18 @@ impl ContextMenu {
                 action: MenuAction::PullRebase,
             },
         ];
+
+        // One "Go to <session>" item per tmux session live in this path,
+        // inserted right after "Review changes".
+        for (i, session) in live_sessions.into_iter().enumerate() {
+            self.items.insert(
+                2 + i,
+                MenuItem {
+                    label: format!("Go to {session}"),
+                    action: MenuAction::GotoSession(session),
+                },
+            );
+        }
 
         // Worktree-specific items. "New worktree…" creates a worktree of the
         // repo on a repo row; worktree rows get worktree-management items.
@@ -217,7 +228,7 @@ impl ContextMenu {
         let action = match item.action {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
-            MenuAction::GotoSession => Action::GotoSessionSelected,
+            MenuAction::GotoSession(ref s) => Action::GotoSession(s.clone()),
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
             MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,
