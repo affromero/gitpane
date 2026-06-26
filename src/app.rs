@@ -1014,53 +1014,40 @@ impl App {
                             .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
                         if let Some(path) = path {
                             let path_str = path.to_string_lossy().to_string();
-                            // Build argv from the `[open] command` template
-                            // (with `{path}` substituted as one arg), else a new
+                            // `[open] command` template (every `{path}` token
+                            // replaced, so `--cwd={path}` works too), else a new
                             // tmux pane when running inside tmux.
-                            let argv: Option<Vec<String>> =
-                                if let Some(template) = &self.config.open.command {
-                                    let v: Vec<String> = template
-                                        .split_whitespace()
-                                        .map(|tok| {
-                                            if tok == "{path}" {
-                                                path_str.clone()
-                                            } else {
-                                                tok.to_string()
-                                            }
-                                        })
-                                        .collect();
-                                    Some(v)
-                                } else if std::env::var_os("TMUX").is_some() {
-                                    Some(vec![
-                                        "tmux".into(),
-                                        "split-window".into(),
-                                        "-c".into(),
-                                        path_str.clone(),
-                                    ])
-                                } else {
-                                    None
-                                };
+                            let argv = build_open_argv(
+                                self.config.open.command.as_deref(),
+                                &path_str,
+                                std::env::var_os("TMUX").is_some(),
+                            );
                             match argv {
-                                Some(argv) if !argv.is_empty() => {
+                                Some(argv) => {
                                     let tx = self.action_tx.clone();
                                     tokio::task::spawn_blocking(move || {
                                         use std::process::Stdio;
+                                        // Run in the target directory so commands
+                                        // that rely on cwd (e.g. `lazygit`) act on
+                                        // the selection. `[open] command` must be a
+                                        // launcher that returns promptly (tmux, GUI
+                                        // editors) — stdio is null and the wait
+                                        // below only reaps the short-lived child.
                                         let child = std::process::Command::new(&argv[0])
                                             .args(&argv[1..])
+                                            .current_dir(&path)
                                             .stdin(Stdio::null())
                                             .stdout(Stdio::null())
                                             .stderr(Stdio::null())
                                             .spawn();
                                         match child {
-                                            // Reap so a finished child (e.g. tmux
-                                            // split-window, which returns at once)
-                                            // doesn't linger as a zombie.
                                             Ok(mut c) => {
                                                 let _ = c.wait();
                                             }
                                             Err(e) => {
                                                 let _ = tx.send(Action::Error(format!(
-                                                    "open failed: {}",
+                                                    "open failed running '{}': {}",
+                                                    argv[0],
                                                     crate::git::describe_spawn_error(&e)
                                                 )));
                                             }
@@ -2396,6 +2383,31 @@ impl App {
 }
 
 /// Simple base64 encoder for OSC 52 clipboard
+/// Build the argv that opens `path`: the `[open] command` template with every
+/// `{path}` token replaced (an empty or whitespace-only command counts as
+/// unset), else a new tmux pane when `in_tmux`. Returns `None` when neither
+/// applies, which the caller surfaces as a "configure it" hint.
+fn build_open_argv(command: Option<&str>, path: &str, in_tmux: bool) -> Option<Vec<String>> {
+    if let Some(template) = command.filter(|t| !t.trim().is_empty()) {
+        let argv: Vec<String> = template
+            .split_whitespace()
+            .map(|tok| tok.replace("{path}", path))
+            .collect();
+        // split_whitespace on a non-blank string always yields >=1 token, but
+        // guard anyway so an empty argv never reaches Command::new.
+        (!argv.is_empty()).then_some(argv)
+    } else if in_tmux {
+        Some(vec![
+            "tmux".into(),
+            "split-window".into(),
+            "-c".into(),
+            path.into(),
+        ])
+    } else {
+        None
+    }
+}
+
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::new();
@@ -2424,6 +2436,70 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::git::status::StashEntry;
+
+    #[test]
+    fn open_argv_substitutes_bare_path_token() {
+        assert_eq!(
+            build_open_argv(Some("cursor {path}"), "/my/repo", false),
+            Some(vec!["cursor".into(), "/my/repo".into()])
+        );
+    }
+
+    #[test]
+    fn open_argv_substitutes_embedded_path_token() {
+        // `{path}` inside a token expands too, not only as a standalone arg.
+        assert_eq!(
+            build_open_argv(Some("wezterm cli spawn --cwd={path}"), "/w t/x", false),
+            Some(vec![
+                "wezterm".into(),
+                "cli".into(),
+                "spawn".into(),
+                "--cwd=/w t/x".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn open_argv_runs_command_without_path_token() {
+        // No `{path}`: the command still runs (in the target dir, set by the
+        // caller via current_dir), e.g. `lazygit`.
+        assert_eq!(
+            build_open_argv(Some("lazygit"), "/repo", true),
+            Some(vec!["lazygit".into()])
+        );
+    }
+
+    #[test]
+    fn open_argv_blank_command_falls_back_to_tmux() {
+        assert_eq!(
+            build_open_argv(Some("   "), "/repo", true),
+            Some(vec![
+                "tmux".into(),
+                "split-window".into(),
+                "-c".into(),
+                "/repo".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn open_argv_tmux_pane_when_no_command() {
+        assert_eq!(
+            build_open_argv(None, "/repo", true),
+            Some(vec![
+                "tmux".into(),
+                "split-window".into(),
+                "-c".into(),
+                "/repo".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn open_argv_none_without_command_or_tmux() {
+        assert_eq!(build_open_argv(None, "/repo", false), None);
+        assert_eq!(build_open_argv(Some(""), "/repo", false), None);
+    }
 
     #[test]
     fn refresh_decision_runs_without_previous_refresh() {

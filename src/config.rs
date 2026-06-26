@@ -138,12 +138,13 @@ impl Default for SubmoduleConfig {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct OpenConfig {
-    /// Command run to open the selected repo/worktree, with `{path}` replaced
-    /// by its directory. The template is whitespace-split into argv, so the
-    /// path is space-safe (it is a single arg) but other template args cannot
-    /// contain spaces. When unset, gitpane opens a new tmux pane if it is
-    /// running inside tmux. ponytail: argv split, no shell; `sh -c '…'` if you
-    /// need pipes or quoting.
+    /// Command run to open the selected repo/worktree. Every `{path}` token is
+    /// replaced with the target directory, and the child also runs in that
+    /// directory. The template is whitespace-split into argv and run without a
+    /// shell: a `{path}` expanding to a path with spaces stays a single
+    /// argument, but other template arguments cannot contain spaces (wrap them
+    /// in `sh -c '…'` if you need quoting or pipes). When unset, gitpane opens a
+    /// new tmux pane if it is running inside tmux.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 }
