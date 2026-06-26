@@ -229,6 +229,7 @@ pub(crate) fn goto_placement(command: &str) -> Option<&'static str> {
         Some("new tab")
     } else if command.contains("new-window")
         || command.contains("-na ")          // open -na (Ghostty mac)
+        || command.starts_with("ghostty ")   // ghostty -e (Ghostty linux)
         || command.contains("create-window")
     // alacritty
     {

@@ -128,12 +128,12 @@ impl ContextMenu {
             1 => {
                 let s = live_sessions.into_iter().next().unwrap();
                 launch.push(item(
-                    format!("Open {s}{where_suffix}"),
+                    format!("Open {s} active tmux{where_suffix}"),
                     MenuAction::GotoSession(s),
                 ));
             }
             _ => launch.push(item(
-                format!("Open session…{where_suffix}"),
+                format!("Open active tmux session…{where_suffix}"),
                 MenuAction::GotoSessionPicker,
             )),
         }
@@ -206,8 +206,23 @@ impl ContextMenu {
         self.rows.iter().position(|r| matches!(r, MenuRow::Item(_)))
     }
 
+    /// Width that fits the longest item label (min `MENU_WIDTH`), so labels like
+    /// "Open fairtrail active tmux (new window)" aren't truncated.
+    fn menu_width(&self) -> u16 {
+        let longest = self
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                MenuRow::Item(i) => Some(i.label.chars().count()),
+                MenuRow::Separator => None,
+            })
+            .max()
+            .unwrap_or(0) as u16;
+        (longest + 4).max(MENU_WIDTH) // +2 border, +2 list padding
+    }
+
     fn menu_rect(&self, terminal_area: Rect) -> Rect {
-        let width = MENU_WIDTH;
+        let width = self.menu_width().min(terminal_area.width);
         let height = (self.rows.len() as u16) + 2; // +2 for border
 
         let x = self
@@ -355,7 +370,7 @@ impl Component for ContextMenu {
         frame.render_widget(Clear, rect);
 
         let t = &self.theme.overlay;
-        let divider = "─".repeat((MENU_WIDTH.saturating_sub(2)) as usize);
+        let divider = "─".repeat((rect.width.saturating_sub(2)) as usize);
         let items: Vec<ListItem> = self
             .rows
             .iter()

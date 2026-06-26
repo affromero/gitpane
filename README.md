@@ -358,16 +358,16 @@ dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
 
 ### Going to a live session
 
-A `◉` marker on a repo/worktree means a tmux pane is cwd'd inside it (a session has work parked there). Press `G` to open it — one session opens directly, several open a picker. Right click to see the session names: `Open <session> (new tab)` / `(new window)`, depending on your terminal.
+A `◉` marker on a repo/worktree means a tmux pane is cwd'd inside it (a session has work parked there). Press `G` to open it — one session opens directly, several open a picker. Right click to see the session names: `Open <session> active tmux (new tab)` / `(new window)`, depending on your terminal.
 
 gitpane **auto-detects your terminal** and opens the session in a **new tab** (or window) — your current view never gets replaced. It never does an in-place `tmux switch-client`, which would strand you away from gitpane. Detected terminals:
 
 | Terminal | Opens a… |
 |----------|----------|
-| WezTerm, kitty, GNOME Terminal, Konsole, Windows Terminal | new **tab** |
+| WezTerm, kitty, GNOME Terminal, Konsole | new **tab** |
 | Ghostty, Alacritty | new **window** (their CLI can't run a command in a tab) |
 
-For an unsupported terminal, set `[goto] command` (it's run as argv, `{session}` = the session name):
+For an unsupported terminal (e.g. Windows Terminal under WSL, which needs a distro-aware `cmd.exe /c wt.exe … wsl.exe -e …` form), set `[goto] command` (it's run as argv, `{session}` = the session name):
 
 ```toml
 [goto]

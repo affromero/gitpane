@@ -243,6 +243,9 @@ impl Default for GotoConfig {
 //   • Prefer a NEW TAB; use a NEW WINDOW only if the terminal's CLI can't run a
 //     command in a tab (e.g. Ghostty). NEVER use `tmux switch-client` — gitpane
 //     deliberately avoids an in-place switch, which strands you from gitpane.
+//   • Make sure `launcher::goto_placement` recognizes the command so the menu
+//     can label it "(new tab)"/"(new window)" — `test_goto_command_table` asserts
+//     every row is classifiable.
 // An unknown terminal yields "" ⇒ gitpane prompts the user to set `[goto]`.
 
 struct TerminalGoto {
@@ -263,6 +266,7 @@ const TERMINAL_GOTOS: &[TerminalGoto] = &[
         command: "wezterm cli spawn -- tmux attach -t {session}",
     },
     TerminalGoto {
+        // Needs `allow_remote_control` in kitty.conf; best-effort default.
         env: &["KITTY_WINDOW_ID"],
         command: "kitten @ launch --type=tab tmux attach -t {session}",
     },
@@ -275,13 +279,14 @@ const TERMINAL_GOTOS: &[TerminalGoto] = &[
         command: "konsole --new-tab -e tmux attach -t {session}",
     },
     TerminalGoto {
-        env: &["WT_SESSION"],
-        command: "wt new-tab tmux attach -t {session}",
-    },
-    TerminalGoto {
-        env: &["ALACRITTY_WINDOW_ID", "ALACRITTY_SOCKET"],
+        // `msg create-window` talks over the IPC socket, so gate on the socket
+        // (a bare window id doesn't mean IPC is available).
+        env: &["ALACRITTY_SOCKET"],
         command: "alacritty msg create-window -e tmux attach -t {session}",
     },
+    // Windows Terminal is intentionally omitted: `wt` from WSL needs a
+    // distro-aware `cmd.exe /c wt.exe … wsl.exe -e …` form that varies per
+    // setup, so WT users configure `[goto] command` explicitly.
     TerminalGoto {
         env: &["GNOME_TERMINAL_SCREEN"],
         command: "gnome-terminal --tab -- tmux attach -t {session}",
@@ -1322,12 +1327,12 @@ mod tests {
                 .contains("ghostty")
         );
         assert!(cmd("KONSOLE_VERSION").contains("konsole --new-tab"));
-        assert!(cmd("WT_SESSION").contains("wt new-tab"));
         assert!(cmd("ALACRITTY_SOCKET").contains("alacritty msg create-window"));
         assert!(cmd("GNOME_TERMINAL_SCREEN").contains("gnome-terminal --tab"));
         // Unknown terminal: empty (never an in-place switch fallback).
         assert!(goto_command_for_env(|_| false).is_empty());
-        // Every table entry carries the {session} token and opens a new view.
+        // Every table entry carries the {session} token, opens a new view, and
+        // is classifiable so the menu can show a "(new tab/window)" label.
         for t in TERMINAL_GOTOS {
             assert!(
                 t.command.contains("{session}"),
@@ -1337,6 +1342,11 @@ mod tests {
             assert!(
                 !t.command.contains("switch-client"),
                 "{} must not switch in place",
+                t.command
+            );
+            assert!(
+                crate::launcher::goto_placement(t.command).is_some(),
+                "{} has no placement label",
                 t.command
             );
         }
