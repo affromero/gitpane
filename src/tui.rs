@@ -68,6 +68,10 @@ impl Tui {
     }
 
     pub fn enter(&mut self) -> Result<()> {
+        // Fresh token so `enter()` after `exit()` (inline-command suspend)
+        // restarts a live event loop rather than one that sees the previous
+        // `exit()`'s cancellation and stops immediately.
+        self.cancellation_token = CancellationToken::new();
         enable_raw_mode()?;
         crossterm::execute!(
             io::stdout(),
@@ -89,36 +93,55 @@ impl Tui {
         if let Some(task) = self.task.take() {
             task.abort();
         }
-        if crossterm::terminal::is_raw_mode_enabled()? {
-            if self.mouse {
-                crossterm::execute!(io::stdout(), DisableMouseCapture)?;
+        // Best-effort teardown: attempt every step even if an earlier one fails,
+        // so the terminal is restored as fully as possible (important for the
+        // inline-suspend path, which re-enters afterward). Return the first error.
+        let mut first_err: Option<std::io::Error> = None;
+        if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
+            if self.mouse
+                && let Err(e) = crossterm::execute!(io::stdout(), DisableMouseCapture)
+            {
+                first_err.get_or_insert(e);
             }
-            crossterm::execute!(
+            if let Err(e) = crossterm::execute!(
                 io::stdout(),
                 LeaveAlternateScreen,
                 DisableBracketedPaste,
                 DisableFocusChange,
                 cursor::Show,
-            )?;
-            disable_raw_mode()?;
+            ) {
+                first_err.get_or_insert(e);
+            }
+            if let Err(e) = disable_raw_mode() {
+                first_err.get_or_insert(e);
+            }
         }
-        Ok(())
+        match first_err {
+            Some(e) => Err(e.into()),
+            None => Ok(()),
+        }
     }
 
     fn install_panic_hook(&self) {
-        let original_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |panic_info| {
-            let _ = disable_raw_mode();
-            let _ = crossterm::execute!(
-                io::stdout(),
-                LeaveAlternateScreen,
-                DisableBracketedPaste,
-                DisableFocusChange,
-                DisableMouseCapture,
-                cursor::Show,
-            );
-            original_hook(panic_info);
-        }));
+        // Install exactly once per process: `enter()` runs on every inline
+        // suspend/resume, and re-wrapping the hook each time would nest them
+        // unboundedly.
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            let original_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic_info| {
+                let _ = disable_raw_mode();
+                let _ = crossterm::execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableBracketedPaste,
+                    DisableFocusChange,
+                    DisableMouseCapture,
+                    cursor::Show,
+                );
+                original_hook(panic_info);
+            }));
+        });
     }
 
     /// Render-on-demand event loop: renders after input and background events.

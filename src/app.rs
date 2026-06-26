@@ -508,23 +508,43 @@ impl App {
     }
 
     /// Execute a [`crate::launcher::LaunchPlan`] for a verb (`open`/`review`)
-    /// targeting `dir`. Inline and Ask plans arrive in L2/L3; until then they
-    /// surface a clear message.
+    /// targeting `dir`. Needs `tui` so an `Inline` plan can suspend the TUI,
+    /// run the command in the inherited terminal, and restore. Ask arrives in L3.
     fn run_launch_plan(
         &mut self,
         plan: crate::launcher::LaunchPlan,
         dir: std::path::PathBuf,
         label: &'static str,
+        tui: &mut Tui,
     ) -> Result<()> {
         use crate::launcher::LaunchPlan;
         match plan {
             LaunchPlan::Spawn(argv) => {
                 spawn_detached(argv, dir, self.action_tx.clone(), label);
             }
-            LaunchPlan::Inline(_) => {
-                self.action_tx.send(Action::Error(
-                    "inline placement isn't available yet (run inside tmux)".into(),
-                ))?;
+            LaunchPlan::Inline(cmd) => {
+                // Suspend the TUI, run the command in the inherited terminal so
+                // an interactive viewer/editor works, then restore. `enter()` is
+                // called unconditionally — a failed command must not leave us
+                // suspended — and `clear()` forces a full repaint of the
+                // re-entered alternate screen.
+                tui.exit()?;
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&dir)
+                    .status();
+                tui.enter()?;
+                tui.terminal.clear()?;
+                // Set the error first, then render, so a spawn failure's toast
+                // is painted on the repaint rather than waiting for a later one.
+                if let Err(e) = status {
+                    self.action_tx.send(Action::Error(format!(
+                        "{label} failed: {}",
+                        crate::git::describe_spawn_error(&e)
+                    )))?;
+                }
+                self.action_tx.send(Action::Render)?;
             }
             LaunchPlan::Ask => {
                 self.action_tx
@@ -1118,7 +1138,7 @@ impl App {
                                 None,
                                 std::env::var_os("TMUX").is_some(),
                             );
-                            self.run_launch_plan(plan, path, "open")?;
+                            self.run_launch_plan(plan, path, "open", &mut tui)?;
                         }
                     }
                     Action::ReviewSelected => {
@@ -1154,7 +1174,7 @@ impl App {
                                     Some(&base),
                                     std::env::var_os("TMUX").is_some(),
                                 );
-                                self.run_launch_plan(plan, path, "review")?;
+                                self.run_launch_plan(plan, path, "review", &mut tui)?;
                             } else {
                                 self.action_tx.send(Action::Error(
                                     "no base branch resolved; set [review] base in config".into(),
