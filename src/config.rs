@@ -33,6 +33,8 @@ pub(crate) struct Config {
     pub open: OpenConfig,
     #[serde(default)]
     pub review: ReviewConfig,
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
     /// Name of the active theme. Built-in: "default" or "muted". Any other
     /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
     #[serde(default = "default_theme_name", rename = "theme")]
@@ -164,6 +166,29 @@ pub(crate) struct ReviewConfig {
     /// resolves the repository's default branch (`origin/HEAD` → main → master).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct WorktreeConfig {
+    /// Directory new worktrees are created under, each as `<repo>-<branch>`.
+    /// When unset, a worktree is created as a sibling of its repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<PathBuf>,
+}
+
+/// Filesystem path for a new worktree of `repo_path` on `branch`: `<dir>` (or
+/// the repo's parent when `dir` is unset) joined with `<repo_name>-<branch>`.
+/// Branch slashes become dashes so the directory name stays single-segment.
+pub(crate) fn worktree_path(config: &WorktreeConfig, repo_path: &Path, branch: &str) -> PathBuf {
+    let repo_name = repo_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("repo");
+    let dir_name = format!("{repo_name}-{}", branch.replace('/', "-"));
+    match &config.dir {
+        Some(base) => base.join(dir_name),
+        None => repo_path.parent().unwrap_or(repo_path).join(dir_name),
+    }
 }
 
 fn default_warn_unpushed() -> bool {
@@ -395,6 +420,7 @@ impl Default for Config {
             submodules: SubmoduleConfig::default(),
             open: OpenConfig::default(),
             review: ReviewConfig::default(),
+            worktree: WorktreeConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,
@@ -560,6 +586,11 @@ impl Config {
                 if dir.starts_with("~") {
                     *dir = home.join(dir.strip_prefix("~").unwrap());
                 }
+            }
+            if let Some(dir) = &mut self.worktree.dir
+                && dir.starts_with("~")
+            {
+                *dir = home.join(dir.strip_prefix("~").unwrap());
             }
         }
     }
@@ -1102,6 +1133,46 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.review.command.as_deref(), Some("difft"));
         assert_eq!(config.review.base.as_deref(), Some("develop"));
+    }
+
+    #[test]
+    fn test_worktree_config_roundtrip() {
+        let mut config = Config::default();
+        assert!(config.worktree.dir.is_none());
+        config.worktree.dir = Some(PathBuf::from("/wt"));
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(loaded.worktree.dir, Some(PathBuf::from("/wt")));
+    }
+
+    #[test]
+    fn test_worktree_path_sibling_when_dir_unset() {
+        let cfg = WorktreeConfig::default();
+        assert_eq!(
+            worktree_path(&cfg, Path::new("/home/me/code/app"), "feat/x"),
+            PathBuf::from("/home/me/code/app-feat-x")
+        );
+    }
+
+    #[test]
+    fn test_worktree_path_under_configured_dir() {
+        let cfg = WorktreeConfig {
+            dir: Some(PathBuf::from("/wt")),
+        };
+        assert_eq!(
+            worktree_path(&cfg, Path::new("/home/me/code/app"), "bugfix"),
+            PathBuf::from("/wt/app-bugfix")
+        );
+    }
+
+    #[test]
+    fn test_worktree_dir_tilde_expanded() {
+        if let Some(home) = dirs::home_dir() {
+            let mut config = Config::default();
+            config.worktree.dir = Some(PathBuf::from("~/worktrees"));
+            config.expand_tildes();
+            assert_eq!(config.worktree.dir, Some(home.join("worktrees")));
+        }
     }
 
     #[test]

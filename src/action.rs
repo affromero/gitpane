@@ -49,6 +49,22 @@ pub(crate) enum Action {
     /// tmux window, via the `[review] command` (default `git diff {base}...HEAD`).
     /// Resolves the selection in-app, so it carries no payload.
     ReviewSelected,
+    /// Open the branch-name input to create a new worktree for the given repo.
+    OpenNewWorktree(RepoId),
+    /// Create a worktree for `repo` on a new branch `branch`
+    /// (`git worktree add <dir> -b <branch>`).
+    CreateWorktree {
+        repo: std::path::PathBuf,
+        branch: String,
+    },
+    /// Resolve the highlighted worktree and open a confirmation to remove it.
+    /// Sent by the `d` key on a worktree row and the context-menu item.
+    RemoveWorktreeSelected,
+    /// Remove `worktree_path` from `repo` (`git worktree remove <path>`).
+    RemoveWorktree {
+        repo: std::path::PathBuf,
+        worktree_path: std::path::PathBuf,
+    },
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,
@@ -61,6 +77,9 @@ pub(crate) enum Action {
         id: RepoId,
         row: u16,
         col: u16,
+        /// True when the right-clicked row is a worktree (vs a top-level repo),
+        /// so the menu can offer worktree-specific items.
+        is_worktree: bool,
     },
     HideContextMenu,
     CopyPath(RepoId),

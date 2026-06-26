@@ -19,6 +19,8 @@ use crate::theme::Theme;
 enum MenuAction {
     Open,
     Review,
+    NewWorktree,
+    RemoveWorktree,
     OpenGraph,
     Refresh,
     CopyPath,
@@ -34,6 +36,15 @@ enum MenuAction {
 struct MenuItem {
     label: String,
     action: MenuAction,
+}
+
+/// Row context that decides which items the menu offers.
+#[derive(Clone, Copy)]
+pub(crate) struct MenuContext {
+    pub ahead: usize,
+    pub behind: usize,
+    pub has_submodules: bool,
+    pub is_worktree: bool,
 }
 
 pub(crate) struct ContextMenu {
@@ -65,15 +76,13 @@ impl ContextMenu {
         self.theme = theme;
     }
 
-    pub fn show(
-        &mut self,
-        repo_id: RepoId,
-        col: u16,
-        row: u16,
-        ahead: usize,
-        behind: usize,
-        has_submodules: bool,
-    ) {
+    pub fn show(&mut self, repo_id: RepoId, col: u16, row: u16, ctx: MenuContext) {
+        let MenuContext {
+            ahead,
+            behind,
+            has_submodules,
+            is_worktree,
+        } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
         self.position = (col, row);
@@ -120,6 +129,20 @@ impl ContextMenu {
                 action: MenuAction::PullRebase,
             },
         ];
+
+        // Worktree-specific items. "New worktree…" creates a worktree of the
+        // repo on a repo row; worktree rows get worktree-management items.
+        if is_worktree {
+            self.items.push(MenuItem {
+                label: "Remove worktree".into(),
+                action: MenuAction::RemoveWorktree,
+            });
+        } else {
+            self.items.push(MenuItem {
+                label: "New worktree…".into(),
+                action: MenuAction::NewWorktree,
+            });
+        }
 
         if has_submodules {
             self.items.push(MenuItem {
@@ -189,6 +212,8 @@ impl ContextMenu {
         let action = match item.action {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
+            MenuAction::NewWorktree => Action::OpenNewWorktree(id),
+            MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,
             MenuAction::Refresh => Action::RefreshRepo(id),
             MenuAction::CopyPath => Action::CopyPath(id),
