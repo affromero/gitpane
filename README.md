@@ -157,6 +157,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `g` | Reload git graph for selected repo |
 | `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
 | `v` | Review selected repo/worktree's diff vs its base branch (new tmux window) |
+| `G` | Go to the live tmux session(s) for the selected repo/worktree |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
@@ -354,6 +355,22 @@ New worktrees are created as a sibling of the repo (`<repo>-<branch>`). Put them
 [worktree]
 dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
 ```
+
+### Going to a live session
+
+A `◉ <session>` marker on a repo/worktree means a tmux pane is cwd'd inside it (so that session has work parked there). Press `G` (or `Go to session` in the right click menu) to jump to it. When several sessions share a folder, a picker lets you choose.
+
+By default `G` runs `tmux switch-client -t {session}` — it switches your current tmux client to that session. To instead open it in a **new terminal tab/window** (a fresh tab has no `$TMUX`, so `tmux attach` works there), set `[goto] command` to your terminal's spawn command:
+
+```toml
+[goto]
+# command = "tmux switch-client -t {session}"               # default: jump within tmux
+# command = "wezterm cli spawn -- tmux attach -t {session}"  # WezTerm: new tab
+# command = "kitten @ launch --type=tab tmux attach -t {session}"  # kitty: new tab
+# command = "open -na Ghostty --args -e tmux attach -t {session}"  # Ghostty: new window (macOS)
+```
+
+`{session}` is the only token; the command is split on whitespace and run as argv (no shell).
 
 ### Theming
 

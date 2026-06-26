@@ -206,12 +206,36 @@ pub(crate) fn placement_choices(windows: &[(String, String)]) -> Vec<(String, St
     out
 }
 
+/// Build the argv for the `[goto] command`: whitespace-split, with every
+/// `{session}` token replaced by `session` (one argv element per token, no
+/// shell). Used to attach/switch to a repo's live tmux session.
+pub(crate) fn build_goto_argv(template: &str, session: &str) -> Vec<String> {
+    template
+        .split_whitespace()
+        .map(|tok| tok.replace("{session}", session))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn argv(parts: &[&str]) -> LaunchPlan {
         LaunchPlan::Spawn(parts.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn goto_argv_substitutes_session() {
+        assert_eq!(
+            build_goto_argv("tmux switch-client -t {session}", "fairtrail"),
+            vec!["tmux", "switch-client", "-t", "fairtrail"]
+        );
+        assert_eq!(
+            build_goto_argv("wezterm cli spawn -- tmux attach -t {session}", "ft-rec"),
+            vec![
+                "wezterm", "cli", "spawn", "--", "tmux", "attach", "-t", "ft-rec"
+            ]
+        );
     }
 
     #[test]

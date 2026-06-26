@@ -13,7 +13,7 @@ use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
 use crate::components::path_input::PathInput;
-use crate::components::placement_picker::PlacementPicker;
+use crate::components::picker::Picker;
 use crate::components::repo_list::RepoEntry;
 use crate::components::repo_list::RepoList;
 use crate::components::status_bar::StatusBar;
@@ -135,9 +135,9 @@ pub(crate) struct App {
     path_input: PathInput,
     status_bar: StatusBar,
     theme_picker: ThemePicker,
-    placement_picker: PlacementPicker,
-    /// Launch context parked while the placement picker is open (`placement = "ask"`).
-    pending_launch: Option<PendingLaunch>,
+    picker: Picker,
+    /// What the picker is currently choosing for, parked until it resolves.
+    pending_pick: Option<PendingPick>,
     focus: FocusPanel,
     sort_order: SortOrder,
     action_tx: UnboundedSender<Action>,
@@ -209,6 +209,15 @@ struct PendingLaunch {
     command: Option<String>,
     base: Option<String>,
     label: &'static str,
+}
+
+/// What the shared [`Picker`] is choosing for, so `PickerChose` can route the
+/// selected value.
+enum PendingPick {
+    /// `placement = "ask"`: the value is the chosen tmux placement; resume this launch.
+    Launch(PendingLaunch),
+    /// "Go to session": the value is the chosen tmux session name.
+    GotoSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,8 +306,8 @@ impl App {
             path_input: PathInput::new(theme.clone()),
             status_bar: StatusBar::new(theme.clone()),
             theme_picker: ThemePicker::new(theme.clone()),
-            placement_picker: PlacementPicker::new(theme.clone()),
-            pending_launch: None,
+            picker: Picker::new(theme.clone()),
+            pending_pick: None,
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
             action_tx,
@@ -441,7 +450,7 @@ impl App {
         self.path_input.set_theme(theme.clone());
         self.status_bar.set_theme(theme.clone());
         self.theme_picker.set_theme(theme.clone());
-        self.placement_picker.set_theme(theme);
+        self.picker.set_theme(theme);
     }
 
     fn schedule_refresh(&mut self, id: &RepoId) {
@@ -583,13 +592,72 @@ impl App {
         label: &'static str,
     ) {
         let choices = crate::launcher::placement_choices(&crate::launcher::tmux_windows());
-        self.pending_launch = Some(PendingLaunch {
+        self.pending_pick = Some(PendingPick::Launch(PendingLaunch {
             dir,
             command,
             base,
             label,
+        }));
+        self.picker.show("Open where?", choices);
+    }
+
+    /// Go to a repo/worktree's live tmux session(s): one goes directly via the
+    /// `[goto] command`, several open the picker.
+    fn goto_session_selected(&mut self) -> Result<()> {
+        let path = self
+            .repo_list
+            .selected_worktree()
+            .map(|(_, wt)| wt.path.clone())
+            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
+        let Some(path) = path else { return Ok(()) };
+        let sessions = crate::liveness::live_sessions(&path, self.repo_list.live_panes());
+        match sessions.as_slice() {
+            [] => {
+                self.action_tx
+                    .send(Action::Error("no live tmux session here".into()))?;
+            }
+            [one] => self.goto_session(one),
+            many => {
+                let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
+                self.pending_pick = Some(PendingPick::GotoSession);
+                self.picker.show("Go to session", choices);
+            }
+        }
+        Ok(())
+    }
+
+    /// Run the `[goto] command` for `session`. The command returns promptly
+    /// (switches the tmux client or spawns a terminal tab), so its exit status
+    /// is checked and a failure (e.g. a stale session) is surfaced.
+    fn goto_session(&mut self, session: &str) {
+        let argv = crate::launcher::build_goto_argv(&self.config.goto.command, session);
+        if argv.is_empty() {
+            return;
+        }
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let first = stderr
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("command failed")
+                        .trim();
+                    let _ = tx.send(Action::Error(format!("goto failed: {first}")));
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::Error(format!(
+                        "goto failed: {}",
+                        crate::git::describe_spawn_error(&e)
+                    )));
+                }
+            }
         });
-        self.placement_picker.show(choices);
     }
 
     fn spawn_refresh_query(&mut self, repo_id: RepoId) {
@@ -1025,8 +1093,8 @@ impl App {
                             self.liveness_probe_in_flight = true;
                             let tx = self.action_tx.clone();
                             tokio::task::spawn_blocking(move || {
-                                let _ = tx.send(Action::LivePathsLoaded(
-                                    crate::liveness::tmux_pane_paths(),
+                                let _ = tx.send(Action::LiveSessionsLoaded(
+                                    crate::liveness::tmux_pane_sessions(),
                                 ));
                             });
                         }
@@ -1299,26 +1367,33 @@ impl App {
                         ];
                         self.spawn_repo_git_op(repo.clone(), args);
                     }
-                    Action::LivePathsLoaded(paths) => {
+                    Action::LiveSessionsLoaded(panes) => {
                         self.liveness_probe_in_flight = false;
-                        self.repo_list.set_live_paths(paths);
+                        self.repo_list.set_live_panes(panes);
                     }
-                    Action::PlacementChosen(ref placement) => {
-                        self.placement_picker.hide();
-                        if let Some(p) = self.pending_launch.take() {
-                            let plan = crate::launcher::plan(
-                                p.command.as_deref(),
-                                placement,
-                                &p.dir.to_string_lossy(),
-                                p.base.as_deref(),
-                                std::env::var_os("TMUX").is_some(),
-                            );
-                            self.run_launch_plan(plan, p.dir, p.label, &mut tui)?;
+                    Action::PickerChose(ref value) => {
+                        self.picker.hide();
+                        match self.pending_pick.take() {
+                            Some(PendingPick::Launch(p)) => {
+                                let plan = crate::launcher::plan(
+                                    p.command.as_deref(),
+                                    value,
+                                    &p.dir.to_string_lossy(),
+                                    p.base.as_deref(),
+                                    std::env::var_os("TMUX").is_some(),
+                                );
+                                self.run_launch_plan(plan, p.dir, p.label, &mut tui)?;
+                            }
+                            Some(PendingPick::GotoSession) => self.goto_session(value),
+                            None => {}
                         }
                     }
-                    Action::CancelPlacement => {
-                        self.placement_picker.hide();
-                        self.pending_launch = None;
+                    Action::PickerCancel => {
+                        self.picker.hide();
+                        self.pending_pick = None;
+                    }
+                    Action::GotoSessionSelected => {
+                        self.goto_session_selected()?;
                     }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
@@ -2112,8 +2187,8 @@ impl App {
             return Ok(());
         }
 
-        if self.placement_picker.visible {
-            if let Some(action) = self.placement_picker.handle_key_event(key)? {
+        if self.picker.visible {
+            if let Some(action) = self.picker.handle_key_event(key)? {
                 self.action_tx.send(action)?;
             }
             return Ok(());
@@ -2199,6 +2274,9 @@ impl App {
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
+            KeyCode::Char('G') => {
+                self.action_tx.send(Action::GotoSessionSelected)?;
+            }
             KeyCode::Char('o') => {
                 self.action_tx.send(Action::OpenSelected)?;
             }
@@ -2267,6 +2345,16 @@ impl App {
 
     fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        // Modal overlays swallow mouse input so a click can't leak through to a
+        // panel or open a context menu hidden behind them.
+        if self.picker.visible
+            || self.theme_picker.visible
+            || self.path_input.visible
+            || self.confirm_dialog.visible
+        {
+            return Ok(());
+        }
 
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_mouse_event(mouse)? {
@@ -2514,7 +2602,7 @@ impl App {
         self.path_input.draw(frame, area);
         self.confirm_dialog.draw(frame, area);
         self.theme_picker.draw(frame, area);
-        self.placement_picker.draw(frame, area);
+        self.picker.draw(frame, area);
 
         // Update notification overlay
         if let Some(ref version) = self.update_version {
@@ -2599,6 +2687,7 @@ impl App {
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
+            Line::from(vec![key("G"), desc("Go to live tmux session")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];
