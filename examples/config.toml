@@ -95,10 +95,10 @@ show_stats = true
 # dir = "~/worktrees"
 
 [goto]
-# Command run by `G` to go to a repo's live tmux session. `{session}` is the
-# session name; run as argv (no shell). Default jumps within tmux; set your
-# terminal's spawn command to open the session in a new tab/window instead.
-# command = "tmux switch-client -t {session}"
+# Command run by `G` to open a repo's live tmux session, `{session}` = the
+# session name (run as argv, no shell). By DEFAULT this is auto-detected from
+# your terminal to open a new tab (WezTerm, kitty, GNOME Terminal, Konsole,
+# Windows Terminal) or a new window (Ghostty, Alacritty). Override only for an
+# unsupported terminal or different behavior:
 # command = "wezterm cli spawn -- tmux attach -t {session}"
 # command = "kitten @ launch --type=tab tmux attach -t {session}"
-# command = "open -na Ghostty --args -e tmux attach -t {session}"

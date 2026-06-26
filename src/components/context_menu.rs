@@ -57,8 +57,11 @@ pub(crate) struct MenuContext {
     pub behind: usize,
     pub has_submodules: bool,
     pub is_worktree: bool,
-    /// tmux sessions live in this row's path; surfaced as "Attach <session>".
+    /// tmux sessions live in this row's path; surfaced as session menu items.
     pub live_sessions: Vec<String>,
+    /// The resolved `[goto] command`, used to label the session item with where
+    /// it opens (new tab / new window).
+    pub goto_command: String,
 }
 
 pub(crate) struct ContextMenu {
@@ -97,6 +100,7 @@ impl ContextMenu {
             has_submodules,
             is_worktree,
             live_sessions,
+            goto_command,
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
@@ -112,14 +116,24 @@ impl ContextMenu {
             item("Open".into(), MenuAction::Open),
             item("Review changes".into(), MenuAction::Review),
         ];
+        // The session item label says where it opens ("(new tab)"/"(new
+        // window)"), inferred from the [goto] command, so it's clear the current
+        // view stays put.
+        let where_suffix = match crate::launcher::goto_placement(&goto_command) {
+            Some(p) => format!(" ({p})"),
+            None => String::new(),
+        };
         match live_sessions.len() {
             0 => {}
             1 => {
                 let s = live_sessions.into_iter().next().unwrap();
-                launch.push(item(format!("Attach {s}"), MenuAction::GotoSession(s)));
+                launch.push(item(
+                    format!("Open {s}{where_suffix}"),
+                    MenuAction::GotoSession(s),
+                ));
             }
             _ => launch.push(item(
-                "Attach session…".into(),
+                format!("Open session…{where_suffix}"),
                 MenuAction::GotoSessionPicker,
             )),
         }

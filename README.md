@@ -358,19 +358,23 @@ dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
 
 ### Going to a live session
 
-A `◉` marker on a repo/worktree means a tmux pane is cwd'd inside it (a session has work parked there). Press `G` to attach it — one session attaches directly, several open a picker. Right click to see the session names: `Attach <session>` when there's one, `Attach session…` (the picker) when there are several.
+A `◉` marker on a repo/worktree means a tmux pane is cwd'd inside it (a session has work parked there). Press `G` to open it — one session opens directly, several open a picker. Right click to see the session names: `Open <session> (new tab)` / `(new window)`, depending on your terminal.
 
-By default `G` runs `tmux switch-client -t {session}` — it switches your current tmux client to that session. To instead open it in a **new terminal tab/window** (a fresh tab has no `$TMUX`, so `tmux attach` works there), set `[goto] command` to your terminal's spawn command:
+gitpane **auto-detects your terminal** and opens the session in a **new tab** (or window) — your current view never gets replaced. It never does an in-place `tmux switch-client`, which would strand you away from gitpane. Detected terminals:
+
+| Terminal | Opens a… |
+|----------|----------|
+| WezTerm, kitty, GNOME Terminal, Konsole, Windows Terminal | new **tab** |
+| Ghostty, Alacritty | new **window** (their CLI can't run a command in a tab) |
+
+For an unsupported terminal, set `[goto] command` (it's run as argv, `{session}` = the session name):
 
 ```toml
 [goto]
-# command = "tmux switch-client -t {session}"               # default: jump within tmux
-# command = "wezterm cli spawn -- tmux attach -t {session}"  # WezTerm: new tab
-# command = "kitten @ launch --type=tab tmux attach -t {session}"  # kitty: new tab
-# command = "open -na Ghostty --args -e tmux attach -t {session}"  # Ghostty: new window (macOS)
+command = "wezterm cli spawn -- tmux attach -t {session}"
 ```
 
-`{session}` is the only token; the command is split on whitespace and run as argv (no shell).
+**Adding a terminal:** append a row to the `TERMINAL_GOTOS` table in `src/config.rs` — the env var(s) that identify the terminal plus its new-tab/window command. The doc comment there explains the rules (prefer a tab, pass the tmux command as trailing argv, never `switch-client`).
 
 ### Theming
 
