@@ -216,7 +216,7 @@ struct PendingLaunch {
 enum PendingPick {
     /// `placement = "ask"`: the value is the chosen tmux placement; resume this launch.
     Launch(PendingLaunch),
-    /// "Go to session": the value is the chosen tmux session name.
+    /// "Attach session": the value is the chosen tmux session name.
     GotoSession,
 }
 
@@ -601,16 +601,24 @@ impl App {
         self.picker.show("Open where?", choices);
     }
 
-    /// Go to a repo/worktree's live tmux session(s): one goes directly via the
-    /// `[goto] command`, several open the picker.
+    /// Attach the live tmux session(s) for the currently selected row (the `G`
+    /// key path).
     fn goto_session_selected(&mut self) -> Result<()> {
         let path = self
             .repo_list
             .selected_worktree()
             .map(|(_, wt)| wt.path.clone())
             .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
-        let Some(path) = path else { return Ok(()) };
-        let sessions = crate::liveness::live_sessions(&path, self.repo_list.live_panes());
+        if let Some(path) = path {
+            self.attach_sessions_for(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Attach the live tmux session(s) at `path`: none -> a hint, one -> attach
+    /// directly via the `[goto] command`, several -> the picker.
+    fn attach_sessions_for(&mut self, path: &std::path::Path) -> Result<()> {
+        let sessions = crate::liveness::live_sessions(path, self.repo_list.live_panes());
         match sessions.as_slice() {
             [] => {
                 self.action_tx
@@ -620,7 +628,7 @@ impl App {
             many => {
                 let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
                 self.pending_pick = Some(PendingPick::GotoSession);
-                self.picker.show("Go to session", choices);
+                self.picker.show("Attach session", choices);
             }
         }
         Ok(())
@@ -1397,6 +1405,9 @@ impl App {
                     }
                     Action::GotoSession(ref session) => {
                         self.goto_session(session);
+                    }
+                    Action::GotoSessionPicker(ref id) => {
+                        self.attach_sessions_for(&id.0)?;
                     }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
@@ -2693,7 +2704,7 @@ impl App {
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
-            Line::from(vec![key("G"), desc("Go to live tmux session")]),
+            Line::from(vec![key("G"), desc("Attach live tmux session")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];

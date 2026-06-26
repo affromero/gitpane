@@ -53,10 +53,10 @@ pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<Str
     names
 }
 
-/// Marker label: the first live session name (the full list is on the context
-/// menu). `None` when not live.
-pub(crate) fn live_label(sessions: &[String]) -> Option<String> {
-    sessions.first().cloned()
+/// Whether `path` has any live session (a tmux pane cwd'd at or below it). Used
+/// for the bare `◉` row marker; the session names go in the context menu.
+pub(crate) fn is_live(path: &Path, panes: &[(String, PathBuf)]) -> bool {
+    panes.iter().any(|(_, p)| p.starts_with(path))
 }
 
 #[cfg(test)]
@@ -111,12 +111,10 @@ mod tests {
     }
 
     #[test]
-    fn live_label_is_first_session() {
-        assert_eq!(live_label(&[]), None);
-        assert_eq!(live_label(&["a".to_string()]), Some("a".to_string()));
-        assert_eq!(
-            live_label(&["a".to_string(), "b".to_string(), "c".to_string()]),
-            Some("a".to_string())
-        );
+    fn is_live_matches_a_pane_inside_the_path() {
+        let p = panes(&[("s", "/code/app/src")]);
+        assert!(is_live(Path::new("/code/app"), &p));
+        assert!(!is_live(Path::new("/code/app-sibling"), &p));
+        assert!(!is_live(Path::new("/code/app"), &[]));
     }
 }

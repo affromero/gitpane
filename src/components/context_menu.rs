@@ -15,11 +15,16 @@ use crate::components::Component;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
+const MENU_WIDTH: u16 = 26;
+
 #[derive(Clone, Debug)]
 enum MenuAction {
     Open,
     Review,
+    /// Attach a single live session directly.
     GotoSession(String),
+    /// Several live sessions: open the picker to choose.
+    GotoSessionPicker,
     NewWorktree,
     RemoveWorktree,
     OpenGraph,
@@ -39,6 +44,12 @@ struct MenuItem {
     action: MenuAction,
 }
 
+/// A rendered menu row: a selectable item or a non-selectable group divider.
+enum MenuRow {
+    Item(MenuItem),
+    Separator,
+}
+
 /// Row context that decides which items the menu offers.
 #[derive(Clone)]
 pub(crate) struct MenuContext {
@@ -46,7 +57,7 @@ pub(crate) struct MenuContext {
     pub behind: usize,
     pub has_submodules: bool,
     pub is_worktree: bool,
-    /// tmux sessions live in this row's path; each gets a "Go to <session>" item.
+    /// tmux sessions live in this row's path; surfaced as "Attach <session>".
     pub live_sessions: Vec<String>,
 }
 
@@ -54,7 +65,7 @@ pub(crate) struct ContextMenu {
     pub visible: bool,
     pub repo_id: Option<RepoId>,
     pub position: (u16, u16), // (col, row)
-    items: Vec<MenuItem>,
+    rows: Vec<MenuRow>,
     state: ListState,
     last_rendered_area: Rect,
     action_tx: Option<UnboundedSender<Action>>,
@@ -67,7 +78,7 @@ impl ContextMenu {
             visible: false,
             repo_id: None,
             position: (0, 0),
-            items: Vec::new(),
+            rows: Vec::new(),
             state: ListState::default(),
             last_rendered_area: Rect::default(),
             action_tx: None,
@@ -91,104 +102,99 @@ impl ContextMenu {
         self.repo_id = Some(repo_id);
         self.position = (col, row);
 
-        self.items = vec![
-            MenuItem {
-                label: "Open".into(),
-                action: MenuAction::Open,
-            },
-            MenuItem {
-                label: "Review changes".into(),
-                action: MenuAction::Review,
-            },
-            MenuItem {
-                label: "Open git graph".into(),
-                action: MenuAction::OpenGraph,
-            },
-            MenuItem {
-                label: "Refresh".into(),
-                action: MenuAction::Refresh,
-            },
-            MenuItem {
-                label: "Copy path".into(),
-                action: MenuAction::CopyPath,
-            },
-            MenuItem {
-                label: if ahead > 0 {
-                    format!("Push  ↑{}", ahead)
-                } else {
-                    "Push".into()
-                },
-                action: MenuAction::Push,
-            },
-            MenuItem {
-                label: if behind > 0 {
-                    format!("Pull  ↓{}", behind)
-                } else {
-                    "Pull".into()
-                },
-                action: MenuAction::Pull,
-            },
-            MenuItem {
-                label: "Pull --rebase".into(),
-                action: MenuAction::PullRebase,
-            },
+        let item = |label: String, action: MenuAction| MenuItem { label, action };
+
+        // Items are grouped by topic; groups are joined with separators so the
+        // menu reads as sections instead of one long list.
+
+        // Launch / inspect.
+        let mut launch = vec![
+            item("Open".into(), MenuAction::Open),
+            item("Review changes".into(), MenuAction::Review),
+        ];
+        match live_sessions.len() {
+            0 => {}
+            1 => {
+                let s = live_sessions.into_iter().next().unwrap();
+                launch.push(item(format!("Attach {s}"), MenuAction::GotoSession(s)));
+            }
+            _ => launch.push(item(
+                "Attach session…".into(),
+                MenuAction::GotoSessionPicker,
+            )),
+        }
+        launch.push(item("Open git graph".into(), MenuAction::OpenGraph));
+
+        // Repo housekeeping.
+        let housekeeping = vec![
+            item("Refresh".into(), MenuAction::Refresh),
+            item("Copy path".into(), MenuAction::CopyPath),
         ];
 
-        // One "Go to <session>" item per tmux session live in this path,
-        // inserted right after "Review changes".
-        for (i, session) in live_sessions.into_iter().enumerate() {
-            self.items.insert(
-                2 + i,
-                MenuItem {
-                    label: format!("Go to {session}"),
-                    action: MenuAction::GotoSession(session),
-                },
-            );
-        }
-
-        // Worktree-specific items. "New worktree…" creates a worktree of the
-        // repo on a repo row; worktree rows get worktree-management items.
-        if is_worktree {
-            self.items.push(MenuItem {
-                label: "Remove worktree".into(),
-                action: MenuAction::RemoveWorktree,
-            });
+        // Sync (push/pull, plus submodules when present).
+        let push_label = if ahead > 0 {
+            format!("Push  ↑{ahead}")
         } else {
-            self.items.push(MenuItem {
-                label: "New worktree…".into(),
-                action: MenuAction::NewWorktree,
-            });
-        }
-
+            "Push".into()
+        };
+        let pull_label = if behind > 0 {
+            format!("Pull  ↓{behind}")
+        } else {
+            "Pull".into()
+        };
+        let mut sync = vec![
+            item(push_label, MenuAction::Push),
+            item(pull_label, MenuAction::Pull),
+            item("Pull --rebase".into(), MenuAction::PullRebase),
+        ];
         if has_submodules {
-            self.items.push(MenuItem {
-                label: "Pull --recurse-subs".into(),
-                action: MenuAction::PullSubmodules,
-            });
-            self.items.push(MenuItem {
-                label: "Sub: update --init".into(),
-                action: MenuAction::SubmoduleUpdate,
-            });
-            self.items.push(MenuItem {
-                label: "Sub: sync".into(),
-                action: MenuAction::SubmoduleSync,
-            });
-            self.items.push(MenuItem {
-                label: "Sub: pull latest".into(),
-                action: MenuAction::SubmoduleUpdateLatest,
-            });
+            sync.push(item(
+                "Pull --recurse-subs".into(),
+                MenuAction::PullSubmodules,
+            ));
+            sync.push(item(
+                "Sub: update --init".into(),
+                MenuAction::SubmoduleUpdate,
+            ));
+            sync.push(item("Sub: sync".into(), MenuAction::SubmoduleSync));
+            sync.push(item(
+                "Sub: pull latest".into(),
+                MenuAction::SubmoduleUpdateLatest,
+            ));
         }
 
-        self.state.select(Some(0));
+        // Worktree management.
+        let worktree = if is_worktree {
+            vec![item("Remove worktree".into(), MenuAction::RemoveWorktree)]
+        } else {
+            vec![item("New worktree…".into(), MenuAction::NewWorktree)]
+        };
+
+        self.rows.clear();
+        for group in [launch, housekeeping, sync, worktree] {
+            if group.is_empty() {
+                continue;
+            }
+            if !self.rows.is_empty() {
+                self.rows.push(MenuRow::Separator);
+            }
+            self.rows.extend(group.into_iter().map(MenuRow::Item));
+        }
+
+        self.state.select(self.first_item_index());
     }
 
     pub fn hide(&mut self) {
         self.visible = false;
     }
 
+    fn first_item_index(&self) -> Option<usize> {
+        self.rows.iter().position(|r| matches!(r, MenuRow::Item(_)))
+    }
+
     fn menu_rect(&self, terminal_area: Rect) -> Rect {
-        let width = 24u16;
-        let height = (self.items.len() as u16) + 2; // +2 for border
+        let width = MENU_WIDTH;
+        let height = (self.rows.len() as u16) + 2; // +2 for border
 
         let x = self
             .position
@@ -203,32 +209,37 @@ impl ContextMenu {
     }
 
     fn select_next(&mut self) {
-        if self.items.is_empty() {
-            return;
+        let cur = self.state.selected().unwrap_or(0);
+        if let Some(next) =
+            ((cur + 1)..self.rows.len()).find(|&i| matches!(self.rows[i], MenuRow::Item(_)))
+        {
+            self.state.select(Some(next));
         }
-        let i = match self.state.selected() {
-            Some(i) => (i + 1).min(self.items.len() - 1),
-            None => 0,
-        };
-        self.state.select(Some(i));
     }
 
     fn select_prev(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => i.saturating_sub(1),
-            None => 0,
-        };
-        self.state.select(Some(i));
+        let cur = self.state.selected().unwrap_or(0);
+        if let Some(prev) = (0..cur)
+            .rev()
+            .find(|&i| matches!(self.rows[i], MenuRow::Item(_)))
+        {
+            self.state.select(Some(prev));
+        }
     }
 
     fn activate_selected(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
-        let item = self.items.get(idx)?;
+        let MenuRow::Item(item) = self.rows.get(idx)? else {
+            return None;
+        };
         let id = self.repo_id.clone()?;
         let action = match item.action {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
             MenuAction::GotoSession(ref s) => Action::GotoSession(s.clone()),
+            // Path-bound (carries the row's id) so an async row re-sort while the
+            // menu is open can't attach a different repo than was clicked.
+            MenuAction::GotoSessionPicker => Action::GotoSessionPicker(id),
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
             MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,
@@ -251,7 +262,7 @@ impl ContextMenu {
         let content_x = rect.x + 1;
         let content_y = rect.y + 1;
         let content_right = rect.x + rect.width.saturating_sub(1);
-        let content_bottom = content_y + self.items.len() as u16;
+        let content_bottom = content_y + self.rows.len() as u16;
 
         if col >= content_x && col < content_right && row >= content_y && row < content_bottom {
             Some((row - content_y) as usize)
@@ -301,8 +312,12 @@ impl Component for ContextMenu {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(idx) = self.click_item_index(mouse.column, mouse.row) {
-                    self.state.select(Some(idx));
-                    return Ok(self.activate_selected());
+                    // Clicking a separator does nothing; only items activate.
+                    if matches!(self.rows.get(idx), Some(MenuRow::Item(_))) {
+                        self.state.select(Some(idx));
+                        return Ok(self.activate_selected());
+                    }
+                    return Ok(None);
                 }
                 self.hide();
                 Ok(None)
@@ -326,23 +341,32 @@ impl Component for ContextMenu {
         frame.render_widget(Clear, rect);
 
         let t = &self.theme.overlay;
+        let divider = "─".repeat((MENU_WIDTH.saturating_sub(2)) as usize);
         let items: Vec<ListItem> = self
-            .items
+            .rows
             .iter()
-            .map(|item| {
-                let style = match item.action {
-                    MenuAction::Push => Style::default().fg(t.context_menu_push),
-                    MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => {
-                        Style::default().fg(t.context_menu_pull)
-                    }
-                    MenuAction::SubmoduleUpdate
-                    | MenuAction::SubmoduleSync
-                    | MenuAction::SubmoduleUpdateLatest => {
-                        Style::default().fg(t.context_menu_submodule)
-                    }
-                    _ => Style::default(),
-                };
-                ListItem::new(Line::from(Span::styled(&item.label, style)))
+            .map(|row| match row {
+                MenuRow::Separator => ListItem::new(Line::from(Span::styled(
+                    divider.clone(),
+                    Style::default()
+                        .fg(t.context_menu_border)
+                        .add_modifier(Modifier::DIM),
+                ))),
+                MenuRow::Item(item) => {
+                    let style = match item.action {
+                        MenuAction::Push => Style::default().fg(t.context_menu_push),
+                        MenuAction::Pull | MenuAction::PullRebase | MenuAction::PullSubmodules => {
+                            Style::default().fg(t.context_menu_pull)
+                        }
+                        MenuAction::SubmoduleUpdate
+                        | MenuAction::SubmoduleSync
+                        | MenuAction::SubmoduleUpdateLatest => {
+                            Style::default().fg(t.context_menu_submodule)
+                        }
+                        _ => Style::default(),
+                    };
+                    ListItem::new(Line::from(Span::styled(&item.label, style)))
+                }
             })
             .collect();
 
