@@ -65,21 +65,26 @@ label_max_len = 24
 show_stats = true
 
 [open]
-# Command run by `o` to open the selected repo/worktree. `{path}` is replaced
-# with its directory. Split on whitespace and run directly (no shell), so the
-# path is space-safe but other args cannot contain spaces.
-# Unset (default): open a new tmux pane when running inside tmux.
-# command = "tmux new-window -c {path}"
-# command = "cursor {path}"
+# Command run by `o` to open the selected repo/worktree. `{path}` is its dir.
+# command = "cursor {path}"          # GUI editor (launched directly)
+# Unset + placement "command": open a tmux pane (a shell) when inside tmux.
+#
+# placement controls WHERE/HOW the command runs:
+#   "command" (default) the command IS the launcher, run directly as argv
+#   "split-window"/"new-window" (+ tmux flags) gitpane runs it in a tmux
+#       pane/window, e.g. "split-window -h -t agents" = right of window 'agents',
+#       "split-window -v -t agents" = below it, "new-window -t work:" = a new
+#       window in session 'work'.
+# placement = "command"
 
 [review]
-# Command run by `v` to review the selected repo/worktree in a new tmux window.
-# Runs via `sh -c` in the target directory; `{base}` is replaced with the base
-# ref. Unset (default): `git diff {base}...HEAD`. Pipe through a viewer:
+# Command run by `v` to review the selected repo/worktree. `{base}` is the base
+# ref, `{path}` the dir. Unset (default): `git diff {base}...HEAD`.
 # command = "git diff {base}...HEAD | delta --side-by-side"
-# command = "difft"
 # base ref to diff against. Unset: the repo's resolved default branch.
 # base = "origin/main"
+# placement: same vocabulary as [open]; default opens a new tmux window.
+# placement = "split-window -h"      # beside gitpane instead of a new window
 
 [worktree]
 # Directory new worktrees are created under, each as <repo>-<branch>.

@@ -143,24 +143,36 @@ impl Default for SubmoduleConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct OpenConfig {
-    /// Command run to open the selected repo/worktree. Every `{path}` token is
-    /// replaced with the target directory, and the child also runs in that
-    /// directory. The template is whitespace-split into argv and run without a
-    /// shell: a `{path}` expanding to a path with spaces stays a single
-    /// argument, but other template arguments cannot contain spaces (wrap them
-    /// in `sh -c '…'` if you need quoting or pipes). When unset, gitpane opens a
-    /// new tmux pane if it is running inside tmux.
+    /// Command run by `o` to open the selected repo/worktree. `{path}` is the
+    /// target directory. How it runs depends on `placement` (below). Unset opens
+    /// a tmux pane (a shell) when `placement` is the default `command`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Where/how to launch `command`. `command` (default): the command IS the
+    /// launcher, run directly (e.g. `cursor {path}`); empty opens a tmux pane.
+    /// `split-window`/`new-window` (+ tmux flags like `-h`/`-t <name>`): gitpane
+    /// runs it in a tmux pane/window. `inline`: suspend gitpane and run it here.
+    /// `ask`: pick placement interactively. Outside tmux, a tmux placement runs
+    /// inline.
+    #[serde(default = "default_open_placement")]
+    pub placement: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+impl Default for OpenConfig {
+    fn default() -> Self {
+        Self {
+            command: None,
+            placement: default_open_placement(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ReviewConfig {
-    /// Command run by `v` to review the selected repo/worktree's changes,
-    /// executed via `sh -c` in the target directory inside a new tmux window.
-    /// `{base}` is replaced with the resolved default branch. When unset,
+    /// Command run by `v` to review the selected repo/worktree's changes.
+    /// `{base}` is the resolved base ref, `{path}` the directory. When unset,
     /// defaults to `git diff {base}...HEAD`; pipe through a viewer for nicer
     /// output, e.g. `git diff {base}...HEAD | delta --side-by-side`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,6 +181,28 @@ pub(crate) struct ReviewConfig {
     /// resolves the repository's default branch (`origin/HEAD` → main → master).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// Where/how to launch the review command. Same vocabulary as `[open]
+    /// placement`; defaults to `new-window` (a new tmux window).
+    #[serde(default = "default_review_placement")]
+    pub placement: String,
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            command: None,
+            base: None,
+            placement: default_review_placement(),
+        }
+    }
+}
+
+fn default_open_placement() -> String {
+    "command".to_string()
+}
+
+fn default_review_placement() -> String {
+    "new-window".to_string()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1086,6 +1120,10 @@ mod tests {
     fn test_open_config_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.open.command.is_none());
+        assert_eq!(config.open.placement, "command");
+        // Config::default() is a live runtime fallback, so its placement must
+        // match the serde default (not "" from a derived Default).
+        assert_eq!(Config::default().open.placement, "command");
     }
 
     #[test]
@@ -1115,6 +1153,8 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.review.command.is_none());
         assert!(config.review.base.is_none());
+        assert_eq!(config.review.placement, "new-window");
+        assert_eq!(Config::default().review.placement, "new-window");
     }
 
     #[test]
