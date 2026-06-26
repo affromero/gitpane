@@ -627,8 +627,12 @@ impl App {
             [one] => self.goto_session(one),
             many => {
                 let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
+                let title = match crate::launcher::goto_placement(&self.config.goto.command) {
+                    Some(p) => format!("Open session ({p})"),
+                    None => "Open session".to_string(),
+                };
                 self.pending_pick = Some(PendingPick::GotoSession);
-                self.picker.show("Attach session", choices);
+                self.picker.show(&title, choices);
             }
         }
         Ok(())
@@ -640,6 +644,11 @@ impl App {
     fn goto_session(&mut self, session: &str) {
         let argv = crate::launcher::build_goto_argv(&self.config.goto.command, session);
         if argv.is_empty() {
+            // Unknown terminal (no detected new-tab/window command) and no
+            // override: tell the user to configure it rather than switch in place.
+            let _ = self.action_tx.send(Action::Error(
+                "set [goto] command for your terminal (no new-tab/window command detected)".into(),
+            ));
             return;
         }
         let tx = self.action_tx.clone();
@@ -1453,6 +1462,7 @@ impl App {
                                     has_submodules: target.has_submodules,
                                     is_worktree,
                                     live_sessions,
+                                    goto_command: self.config.goto.command.clone(),
                                 },
                             );
                         }

@@ -57,8 +57,11 @@ pub(crate) struct MenuContext {
     pub behind: usize,
     pub has_submodules: bool,
     pub is_worktree: bool,
-    /// tmux sessions live in this row's path; surfaced as "Attach <session>".
+    /// tmux sessions live in this row's path; surfaced as session menu items.
     pub live_sessions: Vec<String>,
+    /// The resolved `[goto] command`, used to label the session item with where
+    /// it opens (new tab / new window).
+    pub goto_command: String,
 }
 
 pub(crate) struct ContextMenu {
@@ -97,6 +100,7 @@ impl ContextMenu {
             has_submodules,
             is_worktree,
             live_sessions,
+            goto_command,
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
@@ -112,14 +116,24 @@ impl ContextMenu {
             item("Open".into(), MenuAction::Open),
             item("Review changes".into(), MenuAction::Review),
         ];
+        // The session item label says where it opens ("(new tab)"/"(new
+        // window)"), inferred from the [goto] command, so it's clear the current
+        // view stays put.
+        let where_suffix = match crate::launcher::goto_placement(&goto_command) {
+            Some(p) => format!(" ({p})"),
+            None => String::new(),
+        };
         match live_sessions.len() {
             0 => {}
             1 => {
                 let s = live_sessions.into_iter().next().unwrap();
-                launch.push(item(format!("Attach {s}"), MenuAction::GotoSession(s)));
+                launch.push(item(
+                    format!("Open {s} active tmux{where_suffix}"),
+                    MenuAction::GotoSession(s),
+                ));
             }
             _ => launch.push(item(
-                "Attach session…".into(),
+                format!("Open active tmux session…{where_suffix}"),
                 MenuAction::GotoSessionPicker,
             )),
         }
@@ -192,8 +206,23 @@ impl ContextMenu {
         self.rows.iter().position(|r| matches!(r, MenuRow::Item(_)))
     }
 
+    /// Width that fits the longest item label (min `MENU_WIDTH`), so labels like
+    /// "Open fairtrail active tmux (new window)" aren't truncated.
+    fn menu_width(&self) -> u16 {
+        let longest = self
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                MenuRow::Item(i) => Some(i.label.chars().count()),
+                MenuRow::Separator => None,
+            })
+            .max()
+            .unwrap_or(0) as u16;
+        (longest + 4).max(MENU_WIDTH) // +2 border, +2 list padding
+    }
+
     fn menu_rect(&self, terminal_area: Rect) -> Rect {
-        let width = MENU_WIDTH;
+        let width = self.menu_width().min(terminal_area.width);
         let height = (self.rows.len() as u16) + 2; // +2 for border
 
         let x = self
@@ -341,7 +370,7 @@ impl Component for ContextMenu {
         frame.render_widget(Clear, rect);
 
         let t = &self.theme.overlay;
-        let divider = "─".repeat((MENU_WIDTH.saturating_sub(2)) as usize);
+        let divider = "─".repeat((rect.width.saturating_sub(2)) as usize);
         let items: Vec<ListItem> = self
             .rows
             .iter()

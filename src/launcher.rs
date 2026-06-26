@@ -208,12 +208,35 @@ pub(crate) fn placement_choices(windows: &[(String, String)]) -> Vec<(String, St
 
 /// Build the argv for the `[goto] command`: whitespace-split, with every
 /// `{session}` token replaced by `session` (one argv element per token, no
-/// shell). Used to attach/switch to a repo's live tmux session.
+/// shell). Used to attach to a repo's live tmux session.
 pub(crate) fn build_goto_argv(template: &str, session: &str) -> Vec<String> {
     template
         .split_whitespace()
         .map(|tok| tok.replace("{session}", session))
         .collect()
+}
+
+/// Short placement hint inferred from a `[goto] command`, for menu labels:
+/// `Some("new tab")` / `Some("new window")` when the command opens one, else
+/// `None` (a plain/unknown command).
+pub(crate) fn goto_placement(command: &str) -> Option<&'static str> {
+    if command.contains("cli spawn")        // wezterm
+        || command.contains("--type=tab")   // kitty
+        || command.contains("new-tab")      // wt / konsole --new-tab
+        || command.contains("--tab")
+    // gnome-terminal
+    {
+        Some("new tab")
+    } else if command.contains("new-window")
+        || command.contains("-na ")          // open -na (Ghostty mac)
+        || command.starts_with("ghostty ")   // ghostty -e (Ghostty linux)
+        || command.contains("create-window")
+    // alacritty
+    {
+        Some("new window")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +245,23 @@ mod tests {
 
     fn argv(parts: &[&str]) -> LaunchPlan {
         LaunchPlan::Spawn(parts.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn goto_placement_infers_tab_or_window() {
+        assert_eq!(
+            goto_placement("wezterm cli spawn -- tmux attach -t {session}"),
+            Some("new tab")
+        );
+        assert_eq!(
+            goto_placement("kitten @ launch --type=tab tmux attach -t {session}"),
+            Some("new tab")
+        );
+        assert_eq!(
+            goto_placement("open -na Ghostty --args -e tmux attach -t {session}"),
+            Some("new window")
+        );
+        assert_eq!(goto_placement("tmux switch-client -t {session}"), None);
     }
 
     #[test]

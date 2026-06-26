@@ -209,12 +209,12 @@ fn default_review_placement() -> String {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct GotoConfig {
-    /// Command run to go to a repo/worktree's live tmux session. `{session}` is
-    /// the session name. Default `tmux switch-client -t {session}` (jump within
-    /// tmux). Set your terminal's new-tab command to open it in a tab instead,
-    /// e.g. `wezterm cli spawn -- tmux attach -t {session}` or
-    /// `kitten @ launch --type=tab tmux attach -t {session}`. Run as argv (no
-    /// shell), `{session}` substituted per token.
+    /// Command run by `G` to open a repo's live tmux session, `{session}` being
+    /// the session name. By default it is auto-detected from your terminal (see
+    /// the `TERMINAL_GOTOS` table) to open a new tab/window. Override here for an
+    /// unsupported terminal or a different behavior, e.g.
+    /// `wezterm cli spawn -- tmux attach -t {session}`. Run as argv (no shell),
+    /// `{session}` substituted per token.
     #[serde(default = "default_goto_command")]
     pub command: String,
 }
@@ -227,8 +227,84 @@ impl Default for GotoConfig {
     }
 }
 
+// ── Terminal "go to session" table ──────────────────────────────────────────
+//
+// `G` / "Attach" opens a repo's live tmux session in a new tab/window of the
+// user's terminal. Each row maps the environment variable(s) that identify a
+// terminal — they survive into tmux panes started by that terminal, so this
+// works even though tmux overwrites `$TERM_PROGRAM` — to the command that opens
+// it. Auto-detection is just a sensible default; `[goto] command` always wins.
+//
+// TO ADD A TERMINAL: append one `TerminalGoto` row below.
+//   • `env`: any of these vars present ⇒ this terminal (first matching row wins).
+//   • `command`: argv template, `{session}` ⇒ the tmux session name. It runs as
+//     argv (NO shell), so pass the tmux command as TRAILING ARGS
+//     (e.g. `… -- tmux attach -t {session}`), never a quoted string.
+//   • Prefer a NEW TAB; use a NEW WINDOW only if the terminal's CLI can't run a
+//     command in a tab (e.g. Ghostty). NEVER use `tmux switch-client` — gitpane
+//     deliberately avoids an in-place switch, which strands you from gitpane.
+//   • Make sure `launcher::goto_placement` recognizes the command so the menu
+//     can label it "(new tab)"/"(new window)" — `test_goto_command_table` asserts
+//     every row is classifiable.
+// An unknown terminal yields "" ⇒ gitpane prompts the user to set `[goto]`.
+
+struct TerminalGoto {
+    /// Env var(s) that identify the terminal (any present ⇒ match).
+    env: &'static [&'static str],
+    /// argv template with a `{session}` placeholder.
+    command: &'static str,
+}
+
+#[cfg(target_os = "macos")]
+const GHOSTTY_GOTO: &str = "open -na Ghostty --args -e tmux attach -t {session}";
+#[cfg(not(target_os = "macos"))]
+const GHOSTTY_GOTO: &str = "ghostty -e tmux attach -t {session}";
+
+const TERMINAL_GOTOS: &[TerminalGoto] = &[
+    TerminalGoto {
+        env: &["WEZTERM_PANE"],
+        command: "wezterm cli spawn -- tmux attach -t {session}",
+    },
+    TerminalGoto {
+        // Needs `allow_remote_control` in kitty.conf; best-effort default.
+        env: &["KITTY_WINDOW_ID"],
+        command: "kitten @ launch --type=tab tmux attach -t {session}",
+    },
+    TerminalGoto {
+        env: &["GHOSTTY_RESOURCES_DIR"],
+        command: GHOSTTY_GOTO,
+    },
+    TerminalGoto {
+        env: &["KONSOLE_VERSION"],
+        command: "konsole --new-tab -e tmux attach -t {session}",
+    },
+    TerminalGoto {
+        // `msg create-window` talks over the IPC socket, so gate on the socket
+        // (a bare window id doesn't mean IPC is available).
+        env: &["ALACRITTY_SOCKET"],
+        command: "alacritty msg create-window -e tmux attach -t {session}",
+    },
+    // Windows Terminal is intentionally omitted: `wt` from WSL needs a
+    // distro-aware `cmd.exe /c wt.exe … wsl.exe -e …` form that varies per
+    // setup, so WT users configure `[goto] command` explicitly.
+    TerminalGoto {
+        env: &["GNOME_TERMINAL_SCREEN"],
+        command: "gnome-terminal --tab -- tmux attach -t {session}",
+    },
+];
+
+/// Resolve the default `[goto] command` from the terminal table, using `present`
+/// to test whether an env var is set. Empty when no terminal matches.
+fn goto_command_for_env(present: impl Fn(&str) -> bool) -> String {
+    TERMINAL_GOTOS
+        .iter()
+        .find(|t| t.env.iter().any(|v| present(v)))
+        .map(|t| t.command.to_string())
+        .unwrap_or_default()
+}
+
 fn default_goto_command() -> String {
-    "tmux switch-client -t {session}".to_string()
+    goto_command_for_env(|v| std::env::var_os(v).is_some())
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1241,13 +1317,43 @@ mod tests {
     }
 
     #[test]
-    fn test_goto_config_default_and_parse() {
-        let config: Config = toml::from_str("").unwrap();
-        assert_eq!(config.goto.command, "tmux switch-client -t {session}");
-        assert_eq!(
-            Config::default().goto.command,
-            "tmux switch-client -t {session}"
+    fn test_goto_command_table() {
+        let cmd = |term_var: &str| goto_command_for_env(|v| v == term_var);
+        assert!(cmd("WEZTERM_PANE").contains("wezterm cli spawn"));
+        assert!(cmd("KITTY_WINDOW_ID").contains("--type=tab"));
+        assert!(
+            cmd("GHOSTTY_RESOURCES_DIR")
+                .to_lowercase()
+                .contains("ghostty")
         );
+        assert!(cmd("KONSOLE_VERSION").contains("konsole --new-tab"));
+        assert!(cmd("ALACRITTY_SOCKET").contains("alacritty msg create-window"));
+        assert!(cmd("GNOME_TERMINAL_SCREEN").contains("gnome-terminal --tab"));
+        // Unknown terminal: empty (never an in-place switch fallback).
+        assert!(goto_command_for_env(|_| false).is_empty());
+        // Every table entry carries the {session} token, opens a new view, and
+        // is classifiable so the menu can show a "(new tab/window)" label.
+        for t in TERMINAL_GOTOS {
+            assert!(
+                t.command.contains("{session}"),
+                "{} missing token",
+                t.command
+            );
+            assert!(
+                !t.command.contains("switch-client"),
+                "{} must not switch in place",
+                t.command
+            );
+            assert!(
+                crate::launcher::goto_placement(t.command).is_some(),
+                "{} has no placement label",
+                t.command
+            );
+        }
+    }
+
+    #[test]
+    fn test_goto_config_parse_overrides_default() {
         let toml_str = r#"
             [goto]
             command = "wezterm cli spawn -- tmux attach -t {session}"
