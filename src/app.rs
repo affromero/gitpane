@@ -1003,6 +1003,79 @@ impl App {
                     Action::ShowFileList => {
                         self.focus = FocusPanel::Changes;
                     }
+                    Action::OpenSelected => {
+                        // Resolve the highlighted target's directory: a worktree
+                        // row opens the worktree's own path, otherwise the
+                        // selected repo's path. Mirrors ShowGitGraph resolution.
+                        let path = self
+                            .repo_list
+                            .selected_worktree()
+                            .map(|(_, wt)| wt.path.clone())
+                            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
+                        if let Some(path) = path {
+                            let path_str = path.to_string_lossy().to_string();
+                            // Build argv from the `[open] command` template
+                            // (with `{path}` substituted as one arg), else a new
+                            // tmux pane when running inside tmux.
+                            let argv: Option<Vec<String>> =
+                                if let Some(template) = &self.config.open.command {
+                                    let v: Vec<String> = template
+                                        .split_whitespace()
+                                        .map(|tok| {
+                                            if tok == "{path}" {
+                                                path_str.clone()
+                                            } else {
+                                                tok.to_string()
+                                            }
+                                        })
+                                        .collect();
+                                    Some(v)
+                                } else if std::env::var_os("TMUX").is_some() {
+                                    Some(vec![
+                                        "tmux".into(),
+                                        "split-window".into(),
+                                        "-c".into(),
+                                        path_str.clone(),
+                                    ])
+                                } else {
+                                    None
+                                };
+                            match argv {
+                                Some(argv) if !argv.is_empty() => {
+                                    let tx = self.action_tx.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        use std::process::Stdio;
+                                        let child = std::process::Command::new(&argv[0])
+                                            .args(&argv[1..])
+                                            .stdin(Stdio::null())
+                                            .stdout(Stdio::null())
+                                            .stderr(Stdio::null())
+                                            .spawn();
+                                        match child {
+                                            // Reap so a finished child (e.g. tmux
+                                            // split-window, which returns at once)
+                                            // doesn't linger as a zombie.
+                                            Ok(mut c) => {
+                                                let _ = c.wait();
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::Error(format!(
+                                                    "open failed: {}",
+                                                    crate::git::describe_spawn_error(&e)
+                                                )));
+                                            }
+                                        }
+                                    });
+                                }
+                                _ => {
+                                    self.action_tx.send(Action::Error(
+                                        "set [open] command in config or run gitpane inside tmux"
+                                            .into(),
+                                    ))?;
+                                }
+                            }
+                        }
+                    }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
                             self.git_graph.set_rows(rows);
@@ -1867,6 +1940,9 @@ impl App {
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
+            KeyCode::Char('o') => {
+                self.action_tx.send(Action::OpenSelected)?;
+            }
             KeyCode::Char('a') => {
                 self.action_tx.send(Action::OpenAddRepo)?;
             }
@@ -2254,6 +2330,7 @@ impl App {
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
             Line::from(vec![key("Esc"), desc("Close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
+            Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];
