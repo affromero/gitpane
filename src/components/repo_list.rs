@@ -126,6 +126,8 @@ pub(crate) struct RepoList {
     expanded_repos: HashSet<RepoId>,
     /// Which repos have their stash list expanded
     expanded_stashes: HashSet<RepoId>,
+    /// tmux pane cwds; a repo/worktree whose path contains one is "live".
+    live_paths: HashSet<PathBuf>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
     theme: Arc<Theme>,
@@ -162,6 +164,7 @@ impl RepoList {
             action_tx: None,
             expanded_repos: HashSet::new(),
             expanded_stashes: HashSet::new(),
+            live_paths: HashSet::new(),
             display_rows: Vec::new(),
             theme,
         };
@@ -267,6 +270,11 @@ impl RepoList {
                 Some((RepoId(entry.path.clone()), wt))
             }
         }
+    }
+
+    /// Replace the set of tmux pane cwds used to mark live repos/worktrees.
+    pub fn set_live_paths(&mut self, paths: HashSet<PathBuf>) {
+        self.live_paths = paths;
     }
 
     /// Select the display row corresponding to a repo index.
@@ -564,6 +572,10 @@ impl RepoList {
             }
         }
 
+        if crate::liveness::is_live(&entry.path, &self.live_paths) {
+            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
+        }
+
         spans.push(Span::styled(
             entry.name.clone(),
             Style::default().fg(t.repo_name),
@@ -623,6 +635,10 @@ impl RepoList {
                 format!("[{}] ", wt.file_count),
                 Style::default().fg(t.file_count),
             ));
+        }
+
+        if crate::liveness::is_live(&wt.path, &self.live_paths) {
+            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
 
         ListItem::new(Line::from(spans))

@@ -41,6 +41,8 @@ pub(crate) struct RepoListTheme {
     pub repo_name: Color,
     pub worktree_subtree_icon: Color,
     pub worktree_subtree_branch: Color,
+    /// Marker for a repo/worktree with a live tmux session inside it.
+    pub live: Color,
     pub border_focused: Color,
     pub border_unfocused: Color,
     pub selection_bg: Color,
@@ -63,6 +65,8 @@ impl Default for RepoListTheme {
             repo_name: Color::White,
             worktree_subtree_icon: Color::DarkGray,
             worktree_subtree_branch: Color::Indexed(214),
+            // Vivid spring-green (xterm 48), unused elsewhere, reads as "online".
+            live: Color::Indexed(48),
             border_focused: Color::Cyan,
             border_unfocused: Color::DarkGray,
             selection_bg: Color::DarkGray,

@@ -170,6 +170,9 @@ pub(crate) struct App {
     /// When a worktree row is selected, stores context for diff/status routing
     /// and live-polling the worktree's changes.
     active_worktree: Option<ActiveWorktree>,
+    /// True while a tmux liveness probe is running, so polls don't pile up
+    /// blocking tasks (and results stay in order) if tmux stalls.
+    liveness_probe_in_flight: bool,
     theme: Arc<crate::theme::Theme>,
     /// Filesystem watcher owning the notify debouncer. Held so its `Drop`
     /// (which stops the underlying watches) only fires when we deliberately
@@ -302,6 +305,7 @@ impl App {
             last_refresh: HashMap::new(),
             refresh_scheduled: HashSet::new(),
             active_worktree: None,
+            liveness_probe_in_flight: false,
             theme,
             watcher: Arc::new(Mutex::new(None)),
             tui_event_tx: None,
@@ -929,6 +933,18 @@ impl App {
                         }
                     }
                     Action::PollLocal => {
+                        // Probe tmux pane cwds once per poll so live
+                        // repos/worktrees get a marker (tmux-only; empty set
+                        // otherwise). One `tmux list-panes` call, off-thread.
+                        if self.config.ui.show_liveness && !self.liveness_probe_in_flight {
+                            self.liveness_probe_in_flight = true;
+                            let tx = self.action_tx.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let _ = tx.send(Action::LivePathsLoaded(
+                                    crate::liveness::tmux_pane_paths(),
+                                ));
+                            });
+                        }
                         // Fast local status poll (no network, no spinner)
                         let sub_cfg = self.config.submodules.clone();
                         for entry in self.repo_list.repos.iter() {
@@ -1195,6 +1211,10 @@ impl App {
                             worktree_path.to_string_lossy().to_string(),
                         ];
                         self.spawn_repo_git_op(repo.clone(), args);
+                    }
+                    Action::LivePathsLoaded(paths) => {
+                        self.liveness_probe_in_flight = false;
+                        self.repo_list.set_live_paths(paths);
                     }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {

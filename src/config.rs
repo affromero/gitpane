@@ -101,6 +101,9 @@ pub(crate) struct UiConfig {
     pub check_for_updates: bool,
     #[serde(default)]
     pub update_position: UpdatePosition,
+    /// Mark repos/worktrees that have a live tmux pane cwd'd inside them.
+    #[serde(default = "default_show_liveness")]
+    pub show_liveness: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +279,10 @@ fn default_frame_rate() -> u16 {
     10
 }
 
+fn default_show_liveness() -> bool {
+    true
+}
+
 fn default_check_for_updates() -> bool {
     true
 }
@@ -403,6 +410,7 @@ impl Default for UiConfig {
             frame_rate: default_frame_rate(),
             check_for_updates: default_check_for_updates(),
             update_position: UpdatePosition::default(),
+            show_liveness: default_show_liveness(),
         }
     }
 }

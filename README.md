@@ -131,6 +131,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
+- **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane open inside it, so at a glance you can see which parallel agents are actively working where. tmux only; toggle with `[ui] show_liveness`.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files and per file diffs.
