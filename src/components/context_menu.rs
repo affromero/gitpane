@@ -19,6 +19,7 @@ use crate::theme::Theme;
 enum MenuAction {
     Open,
     Review,
+    GotoSession,
     NewWorktree,
     RemoveWorktree,
     OpenGraph,
@@ -95,6 +96,10 @@ impl ContextMenu {
             MenuItem {
                 label: "Review changes".into(),
                 action: MenuAction::Review,
+            },
+            MenuItem {
+                label: "Go to session".into(),
+                action: MenuAction::GotoSession,
             },
             MenuItem {
                 label: "Open git graph".into(),
@@ -212,6 +217,7 @@ impl ContextMenu {
         let action = match item.action {
             MenuAction::Open => Action::OpenSelected,
             MenuAction::Review => Action::ReviewSelected,
+            MenuAction::GotoSession => Action::GotoSessionSelected,
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
             MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,

@@ -68,11 +68,15 @@ pub(crate) enum Action {
     /// `(session, pane_cwd)` from the latest liveness probe; repos/worktrees
     /// whose path contains a pane cwd are marked live with that session's name.
     LiveSessionsLoaded(Vec<(String, std::path::PathBuf)>),
-    /// The placement picker (for `placement = "ask"`) chose this placement
-    /// string; resume the pending launch with it.
-    PlacementChosen(String),
-    /// The placement picker was dismissed; drop the pending launch.
-    CancelPlacement,
+    /// The picker chose this value (a placement string, or a session name);
+    /// the app routes it by its pending picker purpose.
+    PickerChose(String),
+    /// The picker was dismissed; drop the pending action.
+    PickerCancel,
+    /// Go to the tmux session(s) live in the selected repo/worktree via the
+    /// `[goto] command` (default `tmux switch-client -t {session}`). One session
+    /// goes directly; several open the picker.
+    GotoSessionSelected,
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,

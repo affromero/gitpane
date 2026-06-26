@@ -273,6 +273,11 @@ impl RepoList {
         }
     }
 
+    /// The tmux pane sessions from the latest liveness probe.
+    pub fn live_panes(&self) -> &[(String, PathBuf)] {
+        &self.live_panes
+    }
+
     /// Replace the tmux pane sessions used to mark live repos/worktrees.
     pub fn set_live_panes(&mut self, panes: Vec<(String, PathBuf)>) {
         self.live_panes = panes;

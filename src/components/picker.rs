@@ -12,20 +12,22 @@ use std::sync::Arc;
 use crate::action::Action;
 use crate::theme::Theme;
 
-/// Overlay shown when `[open]/[review] placement = "ask"`: pick where the new
-/// tmux pane/window goes. Each choice is `(label, placement)`; on Enter it emits
-/// the chosen placement string for the pending launch to resume with.
-pub(crate) struct PlacementPicker {
+/// Generic single-choice list overlay used for "ask" placement and "go to
+/// session". Each choice is `(label, value)`; on Enter it emits the chosen
+/// `value` via [`Action::PickerChose`], routed by the caller's pending state.
+pub(crate) struct Picker {
     pub visible: bool,
+    title: String,
     choices: Vec<(String, String)>,
     state: ListState,
     theme: Arc<Theme>,
 }
 
-impl PlacementPicker {
+impl Picker {
     pub fn new(theme: Arc<Theme>) -> Self {
         Self {
             visible: false,
+            title: String::new(),
             choices: Vec::new(),
             state: ListState::default(),
             theme,
@@ -36,7 +38,8 @@ impl PlacementPicker {
         self.theme = theme;
     }
 
-    pub fn show(&mut self, choices: Vec<(String, String)>) {
+    pub fn show(&mut self, title: &str, choices: Vec<(String, String)>) {
+        self.title = title.to_string();
         self.choices = choices;
         self.state.select(Some(0));
         self.visible = true;
@@ -82,13 +85,13 @@ impl PlacementPicker {
             }
             KeyCode::Enter => {
                 if let Some(i) = self.state.selected()
-                    && let Some((_, placement)) = self.choices.get(i)
+                    && let Some((_, value)) = self.choices.get(i)
                 {
-                    return Ok(Some(Action::PlacementChosen(placement.clone())));
+                    return Ok(Some(Action::PickerChose(value.clone())));
                 }
                 Ok(None)
             }
-            KeyCode::Esc | KeyCode::Char('q') => Ok(Some(Action::CancelPlacement)),
+            KeyCode::Esc | KeyCode::Char('q') => Ok(Some(Action::PickerCancel)),
             _ => Ok(None),
         }
     }
@@ -121,7 +124,7 @@ impl PlacementPicker {
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title(" Open where? — ↑↓ select · Enter · Esc cancel ")
+                    .title(format!(" {} — ↑↓ select · Enter · Esc cancel ", self.title))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(t.context_menu_border)),
             )

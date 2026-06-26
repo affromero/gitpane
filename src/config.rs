@@ -35,6 +35,8 @@ pub(crate) struct Config {
     pub review: ReviewConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    #[serde(default)]
+    pub goto: GotoConfig,
     /// Name of the active theme. Built-in: "default" or "muted". Any other
     /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
     #[serde(default = "default_theme_name", rename = "theme")]
@@ -203,6 +205,30 @@ fn default_open_placement() -> String {
 
 fn default_review_placement() -> String {
     "new-window".to_string()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct GotoConfig {
+    /// Command run to go to a repo/worktree's live tmux session. `{session}` is
+    /// the session name. Default `tmux switch-client -t {session}` (jump within
+    /// tmux). Set your terminal's new-tab command to open it in a tab instead,
+    /// e.g. `wezterm cli spawn -- tmux attach -t {session}` or
+    /// `kitten @ launch --type=tab tmux attach -t {session}`. Run as argv (no
+    /// shell), `{session}` substituted per token.
+    #[serde(default = "default_goto_command")]
+    pub command: String,
+}
+
+impl Default for GotoConfig {
+    fn default() -> Self {
+        Self {
+            command: default_goto_command(),
+        }
+    }
+}
+
+fn default_goto_command() -> String {
+    "tmux switch-client -t {session}".to_string()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -463,6 +489,7 @@ impl Default for Config {
             open: OpenConfig::default(),
             review: ReviewConfig::default(),
             worktree: WorktreeConfig::default(),
+            goto: GotoConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,
@@ -1210,6 +1237,25 @@ mod tests {
         assert_eq!(
             worktree_path(&cfg, Path::new("/home/me/code/app"), "bugfix"),
             PathBuf::from("/wt/app-bugfix")
+        );
+    }
+
+    #[test]
+    fn test_goto_config_default_and_parse() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.goto.command, "tmux switch-client -t {session}");
+        assert_eq!(
+            Config::default().goto.command,
+            "tmux switch-client -t {session}"
+        );
+        let toml_str = r#"
+            [goto]
+            command = "wezterm cli spawn -- tmux attach -t {session}"
+        "#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            parsed.goto.command,
+            "wezterm cli spawn -- tmux attach -t {session}"
         );
     }
 
