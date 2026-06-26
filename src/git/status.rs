@@ -893,6 +893,22 @@ mod tests {
     }
 
     #[test]
+    fn test_default_branch_name_follows_symbolic_head() {
+        let (_tmp, repo) = init_temp_repo();
+        let oid = repo.head().unwrap().target().unwrap();
+        repo.reference("refs/remotes/origin/master", oid, true, "test")
+            .unwrap();
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/master",
+            true,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(default_branch_name(&repo).as_deref(), Some("origin/master"));
+    }
+
+    #[test]
     fn test_default_branch_name_none_without_remote() {
         let (_tmp, repo) = init_temp_repo();
         assert_eq!(default_branch_name(&repo), None);

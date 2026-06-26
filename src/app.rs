@@ -1049,34 +1049,29 @@ impl App {
                             .map(|(_, wt)| wt.path.clone())
                             .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
                         if let Some(path) = path {
-                            if std::env::var_os("TMUX").is_some() {
-                                // Base ref: explicit config, else the repo's
-                                // resolved default branch, else origin/HEAD.
-                                let base = self.config.review.base.clone().unwrap_or_else(|| {
-                                    git2::Repository::open(&path)
-                                        .ok()
-                                        .and_then(|r| crate::git::status::default_branch_name(&r))
-                                        .unwrap_or_else(|| "origin/HEAD".to_string())
-                                });
+                            // Base ref: explicit `[review] base`, else the repo's
+                            // resolved default branch. No silent fallback — a
+                            // doomed `git diff origin/HEAD...HEAD` window is worse
+                            // than a clear in-app error.
+                            let base = self.config.review.base.clone().or_else(|| {
+                                git2::Repository::open(&path)
+                                    .ok()
+                                    .and_then(|r| crate::git::status::default_branch_name(&r))
+                            });
+                            if std::env::var_os("TMUX").is_none() {
+                                self.action_tx.send(Action::Error(
+                                    "run gitpane inside tmux to review changes".into(),
+                                ))?;
+                            } else if let Some(base) = base {
                                 let cmd = build_review_command(
                                     self.config.review.command.as_deref(),
                                     &base,
                                 );
-                                // Separate argv (not one string) so tmux execs
-                                // `sh -c <cmd>` directly without re-parsing it.
-                                let argv = vec![
-                                    "tmux".to_string(),
-                                    "new-window".to_string(),
-                                    "-c".to_string(),
-                                    path.to_string_lossy().to_string(),
-                                    "sh".to_string(),
-                                    "-c".to_string(),
-                                    cmd,
-                                ];
+                                let argv = build_review_argv(&path.to_string_lossy(), cmd);
                                 spawn_detached(argv, path, self.action_tx.clone(), "review");
                             } else {
                                 self.action_tx.send(Action::Error(
-                                    "run gitpane inside tmux to review changes".into(),
+                                    "no base branch resolved; set [review] base in config".into(),
                                 ))?;
                             }
                         }
@@ -2439,16 +2434,41 @@ fn spawn_detached(
     });
 }
 
+/// POSIX single-quote a value for safe inclusion in a `sh -c` string: wrap in
+/// `'…'` and rewrite each embedded `'` as `'\''`. So `main;id` -> `'main;id'`
+/// (the `;` is data, not a separator) and `a'b` -> `'a'\''b'`.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Build the shell command for `[review]`: the configured template (or the
-/// default `git diff {base}...HEAD`) with every `{base}` token replaced. Run
-/// via `sh -c` in the worktree (cwd set by the caller), so `{path}` is not a
-/// template token — that keeps the worktree path out of the shell string and
-/// avoids a quoting/injection vector.
+/// default `git diff {base}...HEAD`) with every `{base}` token replaced by the
+/// shell-quoted base ref. Run via `sh -c` in the worktree (cwd set by the
+/// caller), so `{path}` is not a template token — keeping the worktree path out
+/// of the shell string. `{base}` is quoted because git ref names may legally
+/// contain shell metacharacters (`;`, `$`, `|`, backticks), which would
+/// otherwise be a command-injection vector. Adjacent to `...HEAD` the quoting
+/// is transparent: `git diff 'origin/main'...HEAD` is one ref arg to git.
 fn build_review_command(template: Option<&str>, base: &str) -> String {
     let t = template
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("git diff {base}...HEAD");
-    t.replace("{base}", base)
+    t.replace("{base}", &shell_single_quote(base))
+}
+
+/// Build the argv that runs `cmd` (a `sh -c` string) in a new tmux window at
+/// `path`. Separate argv — tmux execs `sh -c <cmd>` directly without
+/// re-parsing it as shell words.
+fn build_review_argv(path: &str, cmd: String) -> Vec<String> {
+    vec![
+        "tmux".to_string(),
+        "new-window".to_string(),
+        "-c".to_string(),
+        path.to_string(),
+        "sh".to_string(),
+        "-c".to_string(),
+        cmd,
+    ]
 }
 
 /// Build the argv that opens `path`: the `[open] command` template with every
@@ -2573,7 +2593,7 @@ mod tests {
     fn review_command_defaults_to_plain_diff() {
         assert_eq!(
             build_review_command(None, "origin/main"),
-            "git diff origin/main...HEAD"
+            "git diff 'origin/main'...HEAD"
         );
     }
 
@@ -2581,7 +2601,7 @@ mod tests {
     fn review_command_substitutes_base_in_template() {
         assert_eq!(
             build_review_command(Some("git diff {base}...HEAD | delta"), "origin/dev"),
-            "git diff origin/dev...HEAD | delta"
+            "git diff 'origin/dev'...HEAD | delta"
         );
     }
 
@@ -2589,7 +2609,37 @@ mod tests {
     fn review_command_blank_template_uses_default() {
         assert_eq!(
             build_review_command(Some("   "), "main"),
-            "git diff main...HEAD"
+            "git diff 'main'...HEAD"
+        );
+    }
+
+    #[test]
+    fn review_command_shell_quotes_metachar_base() {
+        // A ref with shell metacharacters is data, never a command separator.
+        assert_eq!(
+            build_review_command(None, "main;id"),
+            "git diff 'main;id'...HEAD"
+        );
+        // Embedded single quote is escaped, not terminating.
+        assert_eq!(
+            build_review_command(None, "a'b"),
+            "git diff 'a'\\''b'...HEAD"
+        );
+    }
+
+    #[test]
+    fn review_argv_is_tmux_new_window_sh_c() {
+        assert_eq!(
+            build_review_argv("/wt path", "git diff 'main'...HEAD".to_string()),
+            vec![
+                "tmux",
+                "new-window",
+                "-c",
+                "/wt path",
+                "sh",
+                "-c",
+                "git diff 'main'...HEAD"
+            ]
         );
     }
 
