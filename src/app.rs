@@ -216,7 +216,7 @@ struct PendingLaunch {
 enum PendingPick {
     /// `placement = "ask"`: the value is the chosen tmux placement; resume this launch.
     Launch(PendingLaunch),
-    /// "Go to session": the value is the chosen tmux session name.
+    /// "Attach session": the value is the chosen tmux session name.
     GotoSession,
 }
 

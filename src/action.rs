@@ -73,7 +73,7 @@ pub(crate) enum Action {
     PickerChose(String),
     /// The picker was dismissed; drop the pending action.
     PickerCancel,
-    /// Go to the tmux session(s) live in the selected repo/worktree via the
+    /// Attach the tmux session(s) live in the selected repo/worktree via the
     /// `[goto] command` (default `tmux switch-client -t {session}`). One session
     /// goes directly; several open the picker. Triggered by the `G` key.
     GotoSessionSelected,

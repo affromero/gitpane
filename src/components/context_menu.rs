@@ -348,7 +348,9 @@ impl Component for ContextMenu {
             .map(|row| match row {
                 MenuRow::Separator => ListItem::new(Line::from(Span::styled(
                     divider.clone(),
-                    Style::default().fg(t.context_menu_border),
+                    Style::default()
+                        .fg(t.context_menu_border)
+                        .add_modifier(Modifier::DIM),
                 ))),
                 MenuRow::Item(item) => {
                     let style = match item.action {
