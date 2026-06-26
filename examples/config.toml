@@ -59,3 +59,11 @@ label_max_len = 24
 
 # Show +N/-M diff stats per commit (default: true)
 show_stats = true
+
+[open]
+# Command run by `o` to open the selected repo/worktree. `{path}` is replaced
+# with its directory. Split on whitespace and run directly (no shell), so the
+# path is space-safe but other args cannot contain spaces.
+# Unset (default): open a new tmux pane when running inside tmux.
+# command = "tmux new-window -c {path}"
+# command = "cursor {path}"

@@ -101,8 +101,13 @@ If you work across multiple repositories, such as microservices, monorepos with 
 | [git-summary](https://github.com/MircoT/git-summary) | Yes (list only) | No | No | No | No | No | No |
 | [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No |
 | [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes |
+| [gitbatch](https://github.com/isacikgoz/gitbatch) | Yes (TUI) | No | No | No | No | No | Yes (batch) |
+| [gwq](https://github.com/d-kuro/gwq) | Yes (CLI) | No | Yes | No | No | No | No |
+| [Canopy](https://github.com/ashmitb95/canopy) | Yes (CLI) | No | Yes | No | No | No | No |
 
 **lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
+
+A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
 
 ## Screenshots
 
@@ -125,6 +130,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
+- **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files and per file diffs.
@@ -148,6 +154,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `r` | Refresh all repo statuses |
 | `R` | Rescan directories for repos (clears exclusions) |
 | `g` | Reload git graph for selected repo |
+| `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
@@ -258,9 +265,41 @@ update_position = "top-right" # Update notification position ("top-right" or "to
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
 label_max_len = 24       # Max length for branch/tag labels
 show_stats = true        # Show +N/-M diff stats per commit
+
+[open]
+# Command run by `o` to open the selected repo/worktree. `{path}` is replaced
+# with its directory. Unset: open a new tmux pane when running inside tmux.
+command = "cursor {path}"
 ```
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.
+
+### Opening a repo or worktree
+
+Press `o` (or pick `Open` from the right click menu) to launch the highlighted repo, or worktree if a worktree row is selected, in its own directory.
+
+- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Outside tmux it shows a hint to configure `[open] command`.
+- **Custom:** set `[open] command` to any launcher, with `{path}` standing in for the directory:
+
+```toml
+[open]
+command = "tmux new-window -c {path}"   # new tmux window instead of a pane
+# command = "cursor {path}"             # or your editor: code, zed, nvim wrapper, ...
+```
+
+The template is split on whitespace and run directly (no shell), so `{path}` is safe even with spaces, but other template arguments cannot contain spaces. Need a pipe or quoting? Wrap it: `command = "sh -c 'code {path}'"`.
+
+**Example launchers** (set as `[open] command`):
+
+| You want to... | `command` |
+|----------------|-----------|
+| Drop a shell into the worktree (default inside tmux) | *(unset)* |
+| Start an AI agent in the selected worktree | `tmux new-window -c {path} claude` |
+| Open a side by side pane next to gitpane | `tmux split-window -h -c {path}` |
+| Edit the repo in Cursor / VS Code / Zed | `cursor {path}` (or `code {path}`, `zed {path}`) |
+| Open a fresh tmux window to work in | `tmux new-window -c {path}` |
+
+The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
 
 ### Theming
 

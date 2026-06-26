@@ -29,6 +29,8 @@ pub(crate) struct Config {
     pub graph: GraphConfig,
     #[serde(default)]
     pub submodules: SubmoduleConfig,
+    #[serde(default)]
+    pub open: OpenConfig,
     /// Name of the active theme. Built-in: "default" or "muted". Any other
     /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
     #[serde(default = "default_theme_name", rename = "theme")]
@@ -132,6 +134,19 @@ impl Default for SubmoduleConfig {
             warn_unpushed: default_warn_unpushed(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct OpenConfig {
+    /// Command run to open the selected repo/worktree. Every `{path}` token is
+    /// replaced with the target directory, and the child also runs in that
+    /// directory. The template is whitespace-split into argv and run without a
+    /// shell: a `{path}` expanding to a path with spaces stays a single
+    /// argument, but other template arguments cannot contain spaces (wrap them
+    /// in `sh -c '…'` if you need quoting or pipes). When unset, gitpane opens a
+    /// new tmux pane if it is running inside tmux.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 fn default_warn_unpushed() -> bool {
@@ -361,6 +376,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
+            open: OpenConfig::default(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,
@@ -1007,6 +1023,34 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.submodules.ignore_dirty);
         assert!(!config.submodules.warn_unpushed);
+    }
+
+    #[test]
+    fn test_open_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.open.command.is_none());
+    }
+
+    #[test]
+    fn test_open_config_roundtrip() {
+        let mut config = Config::default();
+        config.open.command = Some("cursor {path}".into());
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(loaded.open.command.as_deref(), Some("cursor {path}"));
+    }
+
+    #[test]
+    fn test_open_config_parse() {
+        let toml_str = r#"
+            [open]
+            command = "tmux new-window -c {path}"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.open.command.as_deref(),
+            Some("tmux new-window -c {path}")
+        );
     }
 
     #[test]

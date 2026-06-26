@@ -17,6 +17,7 @@ use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
 enum MenuAction {
+    Open,
     OpenGraph,
     Refresh,
     CopyPath,
@@ -77,6 +78,10 @@ impl ContextMenu {
         self.position = (col, row);
 
         self.items = vec![
+            MenuItem {
+                label: "Open".into(),
+                action: MenuAction::Open,
+            },
             MenuItem {
                 label: "Open git graph".into(),
                 action: MenuAction::OpenGraph,
@@ -177,6 +182,7 @@ impl ContextMenu {
         let item = self.items.get(idx)?;
         let id = self.repo_id.clone()?;
         let action = match item.action {
+            MenuAction::Open => Action::OpenSelected,
             MenuAction::OpenGraph => Action::ShowGitGraph,
             MenuAction::Refresh => Action::RefreshRepo(id),
             MenuAction::CopyPath => Action::CopyPath(id),

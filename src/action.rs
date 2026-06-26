@@ -41,6 +41,10 @@ pub(crate) enum Action {
     PollFetch,
     ShowGitGraph,
     ShowFileList,
+    /// Open the highlighted repo (or worktree) in a new tmux pane, or the
+    /// configured `[open] command`. Resolves the selection in-app, like
+    /// `ShowGitGraph`, so it carries no payload.
+    OpenSelected,
     GraphLoaded {
         generation: u64,
         rows: Vec<GraphRow>,
