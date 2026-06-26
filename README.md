@@ -157,7 +157,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
 | `v` | Review selected repo/worktree's diff vs its base branch (new tmux window) |
 | `a` | Add a repo (opens path input with tab completion) |
-| `d` | Remove selected repo (with confirmation) |
+| `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
 | `w` | Toggle worktree subtree for the selected repo |
 | `S` | Toggle stash subtree for the selected repo |
@@ -324,6 +324,20 @@ The command runs via `sh -c` in the target directory, so pipes work. `{base}` is
 | [hunk](https://github.com/modem-dev/hunk) | Review first viewer built for agentic coders |
 
 Requires running inside tmux (the window host); outside tmux, `v` shows a hint.
+
+### Creating and removing worktrees
+
+gitpane manages the worktree lifecycle for the parallel-agents workflow, so you can spin up and tear down task worktrees without leaving the dashboard.
+
+- **Create:** right click a repo row and pick `New worktree…`, type a branch name, press Enter. gitpane runs `git worktree add <dir> -b <branch>` and the new worktree appears under the repo.
+- **Remove:** select a worktree row (expand with `w`) and press `d`, or right click it and pick `Remove worktree`. After confirming, gitpane runs `git worktree remove`. A worktree with uncommitted changes is refused by git; commit or discard first.
+
+New worktrees are created as a sibling of the repo (`<repo>-<branch>`). Put them somewhere else with `[worktree] dir`:
+
+```toml
+[worktree]
+dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
+```
 
 ### Theming
 

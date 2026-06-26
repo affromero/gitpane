@@ -587,6 +587,11 @@ impl Config {
                     *dir = home.join(dir.strip_prefix("~").unwrap());
                 }
             }
+            if let Some(dir) = &mut self.worktree.dir
+                && dir.starts_with("~")
+            {
+                *dir = home.join(dir.strip_prefix("~").unwrap());
+            }
         }
     }
 }
@@ -1158,6 +1163,16 @@ mod tests {
             worktree_path(&cfg, Path::new("/home/me/code/app"), "bugfix"),
             PathBuf::from("/wt/app-bugfix")
         );
+    }
+
+    #[test]
+    fn test_worktree_dir_tilde_expanded() {
+        if let Some(home) = dirs::home_dir() {
+            let mut config = Config::default();
+            config.worktree.dir = Some(PathBuf::from("~/worktrees"));
+            config.expand_tildes();
+            assert_eq!(config.worktree.dir, Some(home.join("worktrees")));
+        }
     }
 
     #[test]

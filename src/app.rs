@@ -2455,9 +2455,16 @@ impl App {
                 lines.push(section("Repos"));
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("a"), desc("Add repo")]));
-                lines.push(Line::from(vec![key("d"), desc("Remove repo (confirm)")]));
+                lines.push(Line::from(vec![
+                    key("d"),
+                    desc("Remove repo / worktree (confirm)"),
+                ]));
                 lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
                 lines.push(Line::from(vec![key("w"), desc("Toggle worktrees")]));
+                lines.push(Line::from(vec![
+                    key("right-click"),
+                    desc("Menu: new worktree, push/pull, …"),
+                ]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
                 lines.push(Line::from(vec![key("g"), desc("Open git graph")]));
             }

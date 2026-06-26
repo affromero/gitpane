@@ -76,3 +76,8 @@ show_stats = true
 # command = "difft"
 # base ref to diff against. Unset: the repo's resolved default branch.
 # base = "origin/main"
+
+[worktree]
+# Directory new worktrees are created under, each as <repo>-<branch>.
+# Unset (default): a worktree is created as a sibling of its repo.
+# dir = "~/worktrees"
