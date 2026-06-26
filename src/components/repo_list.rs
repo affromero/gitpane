@@ -739,20 +739,23 @@ impl Component for RepoList {
                         // Repo and worktree rows get a context menu. A worktree
                         // menu targets the worktree's own path so pull/push act
                         // on it directly. Stash rows have no menu.
-                        let menu_id = match self.display_rows.get(idx) {
-                            Some(DisplayRow::Repo(i)) => Some(RepoId(self.repos[*i].path.clone())),
+                        let menu = match self.display_rows.get(idx) {
+                            Some(DisplayRow::Repo(i)) => {
+                                Some((RepoId(self.repos[*i].path.clone()), false))
+                            }
                             Some(DisplayRow::Worktree(ri, wi)) => self.repos[*ri]
                                 .status
                                 .as_ref()
                                 .and_then(|s| s.worktree_info.get(*wi))
-                                .map(|wt| RepoId(wt.path.clone())),
+                                .map(|wt| (RepoId(wt.path.clone()), true)),
                             _ => None,
                         };
-                        if let Some(id) = menu_id {
+                        if let Some((id, is_worktree)) = menu {
                             return Ok(Some(Action::ShowContextMenu {
                                 id,
                                 row: mouse.row,
                                 col: mouse.column,
+                                is_worktree,
                             }));
                         }
                     }

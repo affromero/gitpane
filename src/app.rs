@@ -451,6 +451,58 @@ impl App {
         }
     }
 
+    /// Run `git -C <repo_path> <args>` off-thread, marking the repo row busy and
+    /// refreshing it on completion (via `GitOpComplete`). Used for worktree
+    /// add/remove; mirrors the push/pull op flow.
+    fn spawn_repo_git_op(&mut self, repo_path: std::path::PathBuf, args: Vec<String>) {
+        let repo_id = RepoId(repo_path.clone());
+        if let Some(idx) = self.repo_list.resolve_index(&repo_id) {
+            self.repo_list.repos[idx].git_op = true;
+        }
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_path)
+                .args(&args)
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    guard.complete();
+                    let _ = tx.send(Action::GitOpComplete {
+                        id: repo_id,
+                        message: format!("git {} succeeded", args.join(" ")),
+                    });
+                }
+                Ok(o) => {
+                    guard.complete();
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let first_line = stderr
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("unknown error")
+                        .trim();
+                    let _ = tx.send(Action::Error(format!(
+                        "git {} failed: {}",
+                        args.join(" "),
+                        first_line
+                    )));
+                    let _ = tx.send(Action::RefreshRepo(repo_id));
+                }
+                Err(e) => {
+                    guard.complete();
+                    let _ = tx.send(Action::Error(format!(
+                        "git {} failed: {}",
+                        args.join(" "),
+                        crate::git::describe_spawn_error(&e)
+                    )));
+                    let _ = tx.send(Action::RefreshRepo(repo_id));
+                }
+            }
+        });
+    }
+
     fn spawn_refresh_query(&mut self, repo_id: RepoId) {
         let sub_cfg = self.config.submodules.clone();
         if let Some(idx) = self.repo_list.resolve_index(&repo_id) {
@@ -1076,6 +1128,24 @@ impl App {
                             }
                         }
                     }
+                    Action::OpenNewWorktree(ref repo_id) => {
+                        self.path_input.show_new_worktree(repo_id.clone());
+                    }
+                    Action::CreateWorktree {
+                        ref repo,
+                        ref branch,
+                    } => {
+                        let new_path =
+                            crate::config::worktree_path(&self.config.worktree, repo, branch);
+                        let args = vec![
+                            "worktree".to_string(),
+                            "add".to_string(),
+                            new_path.to_string_lossy().to_string(),
+                            "-b".to_string(),
+                            branch.clone(),
+                        ];
+                        self.spawn_repo_git_op(repo.clone(), args);
+                    }
                     Action::GraphLoaded { generation, rows } => {
                         if generation == self.git_graph.current_generation() {
                             self.git_graph.set_rows(rows);
@@ -1101,15 +1171,23 @@ impl App {
                             self.git_graph.abort_load();
                         }
                     }
-                    Action::ShowContextMenu { ref id, row, col } => {
+                    Action::ShowContextMenu {
+                        ref id,
+                        row,
+                        col,
+                        is_worktree,
+                    } => {
                         if let Some(target) = self.repo_list.resolve_target(id) {
                             self.context_menu.show(
                                 id.clone(),
                                 col,
                                 row,
-                                target.ahead,
-                                target.behind,
-                                target.has_submodules,
+                                crate::components::context_menu::MenuContext {
+                                    ahead: target.ahead,
+                                    behind: target.behind,
+                                    has_submodules: target.has_submodules,
+                                    is_worktree,
+                                },
                             );
                         }
                     }

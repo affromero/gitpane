@@ -11,7 +11,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::action::Action;
+use crate::repo_id::RepoId;
 use crate::theme::Theme;
+
+/// What the input is collecting, which determines the action emitted on Enter.
+#[derive(Clone)]
+enum InputPurpose {
+    /// Add a repo by path (Tab completes paths).
+    AddRepo,
+    /// Name a branch for a new worktree of `repo` (no path completion).
+    NewWorktree { repo: RepoId },
+}
 
 pub(crate) struct PathInput {
     pub visible: bool,
@@ -19,6 +29,7 @@ pub(crate) struct PathInput {
     cursor: usize,
     completions: Vec<String>,
     completion_index: Option<usize>,
+    purpose: InputPurpose,
     theme: Arc<Theme>,
 }
 
@@ -30,6 +41,7 @@ impl PathInput {
             cursor: 0,
             completions: Vec::new(),
             completion_index: None,
+            purpose: InputPurpose::AddRepo,
             theme,
         }
     }
@@ -39,19 +51,27 @@ impl PathInput {
     }
 
     pub fn show(&mut self) {
+        self.reset(InputPurpose::AddRepo);
         self.visible = true;
+    }
+
+    /// Show the input to name a branch for a new worktree of `repo`.
+    pub fn show_new_worktree(&mut self, repo: RepoId) {
+        self.reset(InputPurpose::NewWorktree { repo });
+        self.visible = true;
+    }
+
+    fn reset(&mut self, purpose: InputPurpose) {
         self.input.clear();
         self.cursor = 0;
         self.completions.clear();
         self.completion_index = None;
+        self.purpose = purpose;
     }
 
     pub fn hide(&mut self) {
         self.visible = false;
-        self.input.clear();
-        self.cursor = 0;
-        self.completions.clear();
-        self.completion_index = None;
+        self.reset(InputPurpose::AddRepo);
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
@@ -61,16 +81,25 @@ impl PathInput {
                 Ok(None)
             }
             KeyCode::Enter => {
-                if self.input.is_empty() {
+                if self.input.trim().is_empty() {
                     self.hide();
                     return Ok(None);
                 }
-                let path = expand_tilde(&self.input);
+                let action = match &self.purpose {
+                    InputPurpose::AddRepo => Action::AddRepo(expand_tilde(&self.input)),
+                    InputPurpose::NewWorktree { repo } => Action::CreateWorktree {
+                        repo: repo.0.clone(),
+                        branch: self.input.trim().to_string(),
+                    },
+                };
                 self.hide();
-                Ok(Some(Action::AddRepo(path)))
+                Ok(Some(action))
             }
             KeyCode::Tab => {
-                self.complete_path();
+                // Path completion only makes sense when entering a path.
+                if matches!(self.purpose, InputPurpose::AddRepo) {
+                    self.complete_path();
+                }
                 Ok(None)
             }
             KeyCode::Backspace => {
@@ -215,10 +244,21 @@ impl PathInput {
             ""
         };
 
+        let (prompt, title) = match self.purpose {
+            InputPurpose::AddRepo => (
+                " Add repo: ",
+                " Path (Tab: complete, Enter: add, Esc: cancel) ",
+            ),
+            InputPurpose::NewWorktree { .. } => (
+                " New worktree branch: ",
+                " Branch (Enter: create, Esc: cancel) ",
+            ),
+        };
+
         let t = &self.theme.overlay;
         let mut spans = vec![
             Span::styled(
-                " Add repo: ",
+                prompt,
                 Style::default()
                     .fg(t.path_input_prompt)
                     .add_modifier(Modifier::BOLD),
@@ -243,7 +283,7 @@ impl PathInput {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(t.path_input_border))
-            .title(" Path (Tab: complete, Enter: add, Esc: cancel) ");
+            .title(title);
 
         let paragraph = Paragraph::new(Line::from(spans)).block(block);
         frame.render_widget(paragraph, input_area);
