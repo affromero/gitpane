@@ -280,7 +280,7 @@ See [`examples/config.toml`](examples/config.toml) for a fully annotated example
 
 Press `o` (or pick `Open` from the right click menu) to launch the highlighted repo, or worktree if a worktree row is selected, in its own directory.
 
-- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Outside tmux it shows a hint to configure `[open] command`.
+- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Outside tmux it shows a hint to configure `[open] command` (a `command` launches directly, with no tmux needed).
 - **Custom:** set `[open] command` to any launcher, with `{path}` standing in for the directory:
 
 ```toml
@@ -337,7 +337,7 @@ The command runs via `sh -c` in the target directory, so pipes work; `{base}` an
 | [diffnav](https://github.com/dlvhdr/diffnav) | delta plus a GitHub style file tree |
 | [hunk](https://github.com/modem-dev/hunk) | Review first viewer built for agentic coders |
 
-Requires running inside tmux (the window host); outside tmux, `v` shows a hint.
+**Outside tmux** the review runs *inline*: gitpane suspends, runs the viewer in your terminal (e.g. `git diff` through its pager), and restores when you quit it. Force this anywhere with `placement = "inline"`. (Only the no-command tmux-pane case still needs tmux.)
 
 ### Creating and removing worktrees
 

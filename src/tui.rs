@@ -68,6 +68,10 @@ impl Tui {
     }
 
     pub fn enter(&mut self) -> Result<()> {
+        // Fresh token so `enter()` after `exit()` (inline-command suspend)
+        // restarts a live event loop rather than one that sees the previous
+        // `exit()`'s cancellation and stops immediately.
+        self.cancellation_token = CancellationToken::new();
         enable_raw_mode()?;
         crossterm::execute!(
             io::stdout(),
