@@ -491,25 +491,36 @@ Then inspect `/tmp/gitpane.log` for any errors during config load or repo scanni
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                     tokio runtime                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐   │
-│  │ Event    │→ │ Action   │→ │ Components            │   │
-│  │ Loop     │  │ Dispatch │  │  RepoList             │   │
-│  │ (tui.rs) │  │ (app.rs) │  │  FileList (split diff)│   │
-│  └──────────┘  └──────────┘  │  GitGraph (drill down)│   │
-│       ↑                      │  ContextMenu          │   │
-│  ┌──────────┐                │  PathInput             │   │
-│  │ notify   │                │  StatusBar             │   │
-│  │ watcher  │                └──────────────────────┘   │
-│  └──────────┘                                           │
-│       ↑              ┌───────────────────────┐           │
-│  filesystem          │ git2 (spawn_blocking) │           │
-│  changes             │  status · graph       │           │
-│                      │  commit_files · fetch │           │
-│                      └───────────────────────┘           │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph rt["tokio runtime"]
+        tui["Event loop<br/>(tui.rs)"]
+        watcher["notify watcher<br/>(watcher.rs)"]
+        app["Action dispatch<br/>(app/ handle_action)"]
+        git["git2 via spawn_blocking<br/>(status · graph · commit_files · fetch)"]
+        session["session/<br/>launcher (tmux/terminal) · liveness"]
+        subgraph comps["Components"]
+            repolist["RepoList"]
+            filelist["FileList (split diff)"]
+            graph["GitGraph (drill down)"]
+            overlays["ContextMenu · PathInput<br/>Picker · StatusBar"]
+        end
+    end
+
+    kbd["Keyboard & mouse"]
+    fs[("Filesystem")]
+    cfg[("config.toml")]
+    ui["Rendered UI"]
+
+    kbd -->|crossterm events| tui
+    fs -->|change events| watcher
+    cfg -.->|load| app
+    tui -->|Event| app
+    watcher -->|Event| app
+    app -->|Action| comps
+    app <-->|spawn_blocking / results| git
+    app -->|launch & attach| session
+    comps -->|draw| ui
 ```
 
 - **[ratatui](https://github.com/ratatui/ratatui)** + **[crossterm](https://github.com/crossterm-rs/crossterm)**: TUI rendering with full mouse support.
@@ -558,25 +569,45 @@ cargo install cargo-audit cargo-llvm-cov
 ```
 src/
 ├── main.rs              # Entry point, CLI parsing
-├── app.rs               # Main loop, action dispatch, layout
+├── lib.rs               # Crate and module wiring
 ├── action.rs            # Action enum (message passing)
-├── event.rs             # Terminal event types
+├── event.rs             # Terminal event types (incl. paste)
 ├── tui.rs               # Terminal setup, event loop
-├── config.rs            # TOML config load/save
+├── repo_id.rs           # Repo identity (path newtype)
 ├── watcher.rs           # Filesystem watcher to repo index mapping
+├── diagnostic.rs        # Startup environment diagnostics
+├── update_checker.rs    # GitHub release update check
+├── app/                 # Main loop and action dispatch, split by concern
+│   ├── mod.rs           # App state, run() event loop, helpers
+│   ├── actions.rs       # handle_action (dispatch, first half)
+│   ├── actions_extra.rs # handle_action_rest (dispatch, second half)
+│   ├── launch.rs        # open/review/goto launching, git op spawning
+│   ├── input.rs         # Key and mouse handling
+│   └── render.rs        # Layout and drawing
+├── config/              # TOML config load/save
+│   ├── mod.rs           # Config structs, load/save
+│   ├── defaults.rs      # serde defaults and Default impls
+│   ├── terminal.rs      # Terminal auto-detect table for goto
+│   └── load.rs          # Config path resolution
+├── session/             # tmux and terminal session integration
+│   ├── launcher.rs      # Placement planning, tmux/terminal launch
+│   └── liveness.rs      # Live tmux pane detection per repo
 ├── components/
 │   ├── mod.rs           # Component trait
-│   ├── repo_list.rs     # Left panel: repo list with status
+│   ├── repo_list/       # Left panel: repos, status, ◉ live marker
 │   ├── file_list.rs     # Middle panel: changed files + split diff
-│   ├── git_graph.rs     # Right panel: commit graph and drill down
-│   ├── context_menu.rs  # Right click overlay
-│   ├── path_input.rs    # Add repo input overlay
+│   ├── git_graph/       # Right panel: commit graph and drill down
+│   ├── context_menu.rs  # Right click overlay (grouped by topic)
+│   ├── path_input.rs    # Add repo / new worktree input overlay
+│   ├── picker.rs        # Generic selection overlay (placement, session)
+│   ├── confirm_dialog.rs # Confirmation overlay
+│   ├── theme_picker.rs  # Theme selection overlay
 │   └── status_bar.rs    # Bottom bar with keybinding hints
 └── git/
     ├── mod.rs
     ├── scanner.rs       # Repo discovery via walkdir
-    ├── status.rs        # Branch, files, ahead/behind, fetch
-    ├── graph.rs         # Lane based commit graph builder
+    ├── status/          # Branch, files, ahead/behind, submodules, worktrees
+    ├── graph/           # Lane based commit graph builder
     ├── graph_render.rs  # Box drawing character rendering
     └── commit_files.rs  # Commit file list and per file diffs
 ```
