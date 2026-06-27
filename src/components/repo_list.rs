@@ -273,6 +273,21 @@ impl RepoList {
         }
     }
 
+    /// Resolve a worktree row id to `(parent repo path, worktree path, branch)`,
+    /// independent of the current selection. Used by the path-bound context-menu
+    /// remove action.
+    pub fn worktree_remove_target(&self, id: &RepoId) -> Option<(PathBuf, PathBuf, String)> {
+        for entry in &self.repos {
+            let Some(status) = entry.status.as_ref() else {
+                continue;
+            };
+            if let Some(wt) = status.worktree_info.iter().find(|w| w.path == id.0) {
+                return Some((entry.path.clone(), wt.path.clone(), wt.branch.clone()));
+            }
+        }
+        None
+    }
+
     /// The tmux pane sessions from the latest liveness probe.
     pub fn live_panes(&self) -> &[(String, PathBuf)] {
         &self.live_panes

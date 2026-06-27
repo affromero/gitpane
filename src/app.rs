@@ -591,6 +591,88 @@ impl App {
         Ok(())
     }
 
+    /// The directory of the highlighted row: a worktree row resolves to its own
+    /// path, otherwise the selected repo's path (mirrors ShowGitGraph). Used by
+    /// the keyboard `o`/`v` shortcuts; the context menu passes an explicit id.
+    fn selected_launch_path(&self) -> Option<std::path::PathBuf> {
+        self.repo_list
+            .selected_worktree()
+            .map(|(_, wt)| wt.path.clone())
+            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()))
+    }
+
+    /// Open `path` via the `[open]` launcher (or the placement picker for "ask").
+    fn launch_open(&mut self, path: std::path::PathBuf, tui: &mut Tui) -> Result<()> {
+        let command = self.config.open.command.clone();
+        let plan = crate::launcher::plan(
+            command.as_deref(),
+            &self.config.open.placement,
+            &path.to_string_lossy(),
+            None,
+            std::env::var_os("TMUX").is_some(),
+        );
+        if matches!(plan, crate::launcher::LaunchPlan::Ask) {
+            self.start_placement_picker(path, command, None, "open");
+        } else {
+            self.run_launch_plan(plan, path, "open", tui)?;
+        }
+        Ok(())
+    }
+
+    /// Review `path`'s diff vs its base ref via the `[review]` launcher. The base
+    /// is explicit `[review] base`, else the repo's resolved default branch — no
+    /// silent fallback, a doomed `git diff origin/HEAD...HEAD` errors clearly.
+    fn launch_review(&mut self, path: std::path::PathBuf, tui: &mut Tui) -> Result<()> {
+        let base = self.config.review.base.clone().or_else(|| {
+            git2::Repository::open(&path)
+                .ok()
+                .and_then(|r| crate::git::status::default_branch_name(&r))
+        });
+        let Some(base) = base else {
+            self.action_tx.send(Action::Error(
+                "no base branch resolved; set [review] base in config".into(),
+            ))?;
+            return Ok(());
+        };
+        let command = self
+            .config
+            .review
+            .command
+            .clone()
+            .unwrap_or_else(|| "git diff {base}...HEAD".to_string());
+        let plan = crate::launcher::plan(
+            Some(&command),
+            &self.config.review.placement,
+            &path.to_string_lossy(),
+            Some(&base),
+            std::env::var_os("TMUX").is_some(),
+        );
+        if matches!(plan, crate::launcher::LaunchPlan::Ask) {
+            self.start_placement_picker(path, Some(command), Some(base), "review");
+        } else {
+            self.run_launch_plan(plan, path, "review", tui)?;
+        }
+        Ok(())
+    }
+
+    /// Confirm removal of a worktree (the actual `git worktree remove` runs only
+    /// after the user accepts the dialog).
+    fn confirm_remove_worktree(
+        &mut self,
+        repo: std::path::PathBuf,
+        worktree_path: std::path::PathBuf,
+        branch: String,
+    ) -> Result<()> {
+        self.confirm_dialog.show(
+            format!("Remove worktree '{branch}'?"),
+            Action::RemoveWorktree {
+                repo,
+                worktree_path,
+            },
+        );
+        Ok(())
+    }
+
     /// Park a launch and open the placement picker (`placement = "ask"`), listing
     /// the current tmux windows as right-of/below targets.
     fn start_placement_picker(
@@ -1258,78 +1340,23 @@ impl App {
                         self.focus = FocusPanel::Changes;
                     }
                     Action::OpenSelected => {
-                        // Resolve the highlighted target's directory: a worktree
-                        // row opens the worktree's own path, otherwise the
-                        // selected repo's path. Mirrors ShowGitGraph resolution.
-                        let path = self
-                            .repo_list
-                            .selected_worktree()
-                            .map(|(_, wt)| wt.path.clone())
-                            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
-                        if let Some(path) = path {
-                            let command = self.config.open.command.clone();
-                            let plan = crate::launcher::plan(
-                                command.as_deref(),
-                                &self.config.open.placement,
-                                &path.to_string_lossy(),
-                                None,
-                                std::env::var_os("TMUX").is_some(),
-                            );
-                            if matches!(plan, crate::launcher::LaunchPlan::Ask) {
-                                self.start_placement_picker(path, command, None, "open");
-                            } else {
-                                self.run_launch_plan(plan, path, "open", &mut tui)?;
-                            }
+                        if let Some(path) = self.selected_launch_path() {
+                            self.launch_open(path, &mut tui)?;
+                        }
+                    }
+                    Action::OpenAt(ref id) => {
+                        if let Some(path) = self.repo_list.resolve_target(id).map(|t| t.exec_path) {
+                            self.launch_open(path, &mut tui)?;
                         }
                     }
                     Action::ReviewSelected => {
-                        // Review the highlighted repo/worktree's diff vs its base
-                        // branch via the [review] launcher. Same selection
-                        // resolution as OpenSelected.
-                        let path = self
-                            .repo_list
-                            .selected_worktree()
-                            .map(|(_, wt)| wt.path.clone())
-                            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
-                        if let Some(path) = path {
-                            // Base ref: explicit `[review] base`, else the repo's
-                            // resolved default branch. No silent fallback — a
-                            // doomed `git diff origin/HEAD...HEAD` is worse than a
-                            // clear in-app error.
-                            let base = self.config.review.base.clone().or_else(|| {
-                                git2::Repository::open(&path)
-                                    .ok()
-                                    .and_then(|r| crate::git::status::default_branch_name(&r))
-                            });
-                            if let Some(base) = base {
-                                let command = self
-                                    .config
-                                    .review
-                                    .command
-                                    .clone()
-                                    .unwrap_or_else(|| "git diff {base}...HEAD".to_string());
-                                let plan = crate::launcher::plan(
-                                    Some(&command),
-                                    &self.config.review.placement,
-                                    &path.to_string_lossy(),
-                                    Some(&base),
-                                    std::env::var_os("TMUX").is_some(),
-                                );
-                                if matches!(plan, crate::launcher::LaunchPlan::Ask) {
-                                    self.start_placement_picker(
-                                        path,
-                                        Some(command),
-                                        Some(base),
-                                        "review",
-                                    );
-                                } else {
-                                    self.run_launch_plan(plan, path, "review", &mut tui)?;
-                                }
-                            } else {
-                                self.action_tx.send(Action::Error(
-                                    "no base branch resolved; set [review] base in config".into(),
-                                ))?;
-                            }
+                        if let Some(path) = self.selected_launch_path() {
+                            self.launch_review(path, &mut tui)?;
+                        }
+                    }
+                    Action::ReviewAt(ref id) => {
+                        if let Some(path) = self.repo_list.resolve_target(id).map(|t| t.exec_path) {
+                            self.launch_review(path, &mut tui)?;
                         }
                     }
                     Action::OpenNewWorktree(ref repo_id) => {
@@ -1362,20 +1389,22 @@ impl App {
                         }
                     }
                     Action::RemoveWorktreeSelected => {
-                        // Resolve to the parent repo path + worktree path, then
-                        // confirm before removing.
+                        // `d` key: resolve the selected worktree, then confirm.
                         let wt = self
                             .repo_list
                             .selected_worktree()
                             .map(|(rid, wt)| (rid.0.clone(), wt.path.clone(), wt.branch.clone()));
                         if let Some((repo, worktree_path, branch)) = wt {
-                            self.confirm_dialog.show(
-                                format!("Remove worktree '{branch}'?"),
-                                Action::RemoveWorktree {
-                                    repo,
-                                    worktree_path,
-                                },
-                            );
+                            self.confirm_remove_worktree(repo, worktree_path, branch)?;
+                        }
+                    }
+                    Action::RemoveWorktreeAt(ref id) => {
+                        // Context menu: resolve the right-clicked worktree by id so
+                        // a row re-sort can't retarget a different worktree.
+                        if let Some((repo, worktree_path, branch)) =
+                            self.repo_list.worktree_remove_target(id)
+                        {
+                            self.confirm_remove_worktree(repo, worktree_path, branch)?;
                         }
                     }
                     Action::RemoveWorktree {
@@ -2243,18 +2272,14 @@ impl App {
             return Ok(());
         }
 
-        // Context menu gets priority
+        // Context menu is modal: it consumes every key while open (an unknown key
+        // dismisses it) so e.g. `q`/`d` can't both close the menu AND fire the
+        // global quit/delete action.
         if self.context_menu.visible {
             if let Some(action) = self.context_menu.handle_key_event(key)? {
-                if matches!(action, Action::HideContextMenu) {
-                    // fall through to normal handling
-                } else {
-                    self.action_tx.send(action)?;
-                    return Ok(());
-                }
-            } else {
-                return Ok(());
+                self.action_tx.send(action)?;
             }
+            return Ok(());
         }
 
         // Help overlay: ? toggles, any other key dismisses

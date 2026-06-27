@@ -262,15 +262,16 @@ impl ContextMenu {
             return None;
         };
         let id = self.repo_id.clone()?;
+        // Every menu action is path-bound (carries the right-clicked row's id) so
+        // an async row re-sort while the menu is open can't retarget a different
+        // repo/worktree than was clicked.
         let action = match item.action {
-            MenuAction::Open => Action::OpenSelected,
-            MenuAction::Review => Action::ReviewSelected,
+            MenuAction::Open => Action::OpenAt(id),
+            MenuAction::Review => Action::ReviewAt(id),
             MenuAction::GotoSession(ref s) => Action::GotoSession(s.clone()),
-            // Path-bound (carries the row's id) so an async row re-sort while the
-            // menu is open can't attach a different repo than was clicked.
             MenuAction::GotoSessionPicker => Action::GotoSessionPicker(id),
             MenuAction::NewWorktree => Action::OpenNewWorktree(id),
-            MenuAction::RemoveWorktree => Action::RemoveWorktreeSelected,
+            MenuAction::RemoveWorktree => Action::RemoveWorktreeAt(id),
             MenuAction::OpenGraph => Action::ShowGitGraph,
             MenuAction::Refresh => Action::RefreshRepo(id),
             MenuAction::CopyPath => Action::CopyPath(id),
