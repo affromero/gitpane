@@ -465,7 +465,7 @@ impl App {
                 self.picker.hide();
                 self.pending_pick = None;
             }
-            other => self.handle_action_rest(other, tui)?,
+            other => self.handle_action_rest(other)?,
         }
         Ok(())
     }

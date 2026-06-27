@@ -1,7 +1,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn handle_action_rest(&mut self, action: Action, _tui: &mut Tui) -> Result<()> {
+    pub(super) fn handle_action_rest(&mut self, action: Action) -> Result<()> {
         match action {
             Action::GotoSessionSelected => {
                 self.goto_session_selected()?;

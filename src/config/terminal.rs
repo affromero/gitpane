@@ -14,7 +14,7 @@
 //   • Prefer a NEW TAB; use a NEW WINDOW only if the terminal's CLI can't run a
 //     command in a tab (e.g. Ghostty). NEVER use `tmux switch-client` — gitpane
 //     deliberately avoids an in-place switch, which strands you from gitpane.
-//   • Make sure `launcher::goto_placement` recognizes the command so the menu
+//   • Make sure `session::launcher::goto_placement` recognizes the command so the menu
 //     can label it "(new tab)"/"(new window)" — `test_goto_command_table` asserts
 //     every row is classifiable.
 // An unknown terminal yields "" ⇒ gitpane prompts the user to set `[goto]`.
