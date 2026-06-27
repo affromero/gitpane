@@ -2,6 +2,18 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.8.0] - 2026-06-26
+
+### Added
+- Open a repo or worktree with `o`. It opens the selected row in a new tmux pane (a shell in its directory) or runs a configurable `[open]` command such as a GUI editor. Where it runs is configurable through `placement`: a tmux split or new window (with right-of, below, or a named target), inline in the current terminal, or an interactive picker chosen at launch. When gitpane is not running inside tmux, a tmux placement falls back to running the command inline.
+- Review the selected repo or worktree's diff with `v`. It runs `[review] command` (default `git diff {base}...HEAD`) in a new tmux window. The base ref comes from `[review] base` or the repository's resolved default branch; when neither resolves, gitpane shows a clear error instead of running a doomed diff.
+- Create and remove linked worktrees from gitpane, via both the key bindings and the context menu. Creation makes the worktree on a new branch under `[worktree] dir` (or as a sibling of the repo). Removal is confirmation gated and runs `git worktree remove` without `--force`, so git refuses to delete a dirty or main worktree and no work is lost.
+- Mark repositories and worktrees that have a live tmux pane cwd'd inside them with a `◉` indicator, so you can see at a glance where an agent or shell is parked. The marker is tmux only and shows nothing when tmux is unavailable.
+- Go to a repo's live tmux session with `G` (or the context menu). gitpane auto-detects your terminal and opens the session in a new tab (WezTerm, kitty, GNOME Terminal, Konsole) or a new window (Ghostty, Alacritty), so the current view is never replaced and there is no in-place switch to get stranded by. The terminal table is data driven and documented, and `[goto] command` overrides it for any other terminal.
+
+### Fixed
+- Typing accented or multibyte characters, and pasting, in the path input used by Add repo and New worktree no longer panics. The cursor now advances by whole characters, and bracketed paste is inserted at the cursor.
+
 ## [0.7.15] - 2026-06-22
 
 ### Fixed
