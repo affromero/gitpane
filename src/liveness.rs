@@ -16,7 +16,16 @@ pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
         ])
         .output();
     match output {
-        Ok(o) if o.status.success() => parse_pane_sessions(&String::from_utf8_lossy(&o.stdout)),
+        Ok(o) if o.status.success() => parse_pane_sessions(&String::from_utf8_lossy(&o.stdout))
+            .into_iter()
+            // Canonicalize each pane cwd so it matches the canonicalized repo /
+            // worktree paths even through symlinks (e.g. macOS /tmp ->
+            // /private/tmp). Fall back to the raw path if it no longer exists.
+            .map(|(s, p)| {
+                let canon = p.canonicalize().unwrap_or(p);
+                (s, canon)
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
