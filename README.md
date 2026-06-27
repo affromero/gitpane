@@ -502,7 +502,7 @@ flowchart TD
         subgraph comps["Components"]
             repolist["RepoList"]
             filelist["FileList (split diff)"]
-            graph["GitGraph (drill down)"]
+            gitgraph["GitGraph (drill down)"]
             overlays["ContextMenu · PathInput<br/>Picker · StatusBar"]
         end
     end
