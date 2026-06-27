@@ -1,0 +1,289 @@
+use git2::{Oid, Repository, Sort};
+use std::path::Path;
+
+use crate::config::BranchFilter;
+
+mod refs;
+mod segments;
+#[cfg(test)]
+mod tests;
+
+use refs::{merge_stash_labels, resolve_refs};
+
+pub(crate) use segments::{BranchSegment, compute_branch_segments};
+
+const MAX_COMMITS: usize = 200;
+const PALETTE_SIZE: usize = 6;
+
+#[derive(Clone, Debug)]
+pub(crate) struct BranchLabel {
+    pub name: String,
+    pub is_head: bool,
+    pub is_remote: bool,
+    pub is_worktree: bool,
+    pub is_tag: bool,
+    /// Label points at a commit that is the parent of a stash entry
+    /// (`stash@{n}`). Rendered with the stash theme color.
+    pub is_stash: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GraphOptions {
+    pub branch_filter: BranchFilter,
+    pub label_max_len: usize,
+    pub first_parent: bool,
+    pub show_stats: bool,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        Self {
+            branch_filter: BranchFilter::All,
+            label_max_len: 24,
+            first_parent: false,
+            show_stats: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DiffStat {
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct GraphRow {
+    pub commit_col: usize,
+    pub lanes: Vec<LaneSegment>,
+    pub oid: Oid,
+    pub short_id: String,
+    pub message: String,
+    pub author: String,
+    pub time: i64,
+    pub labels: Vec<BranchLabel>,
+    pub is_merge: bool,
+    pub horizontal_spans: Vec<(usize, usize, usize)>,
+    pub parent_oids: Vec<Oid>,
+    pub diff_stat: Option<DiffStat>,
+    /// If set, this row is a collapsed-branch placeholder: (branch_name, hidden_count).
+    pub collapsed: Option<(String, usize)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LaneSegment {
+    Empty,
+    Straight,
+    Commit,
+    MergeLeft,
+    MergeRight,
+    ForkLeft,
+    ForkRight,
+    Horizontal,
+    CrossHorizontal,
+    RightTee,
+    LeftTee,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GraphBuilder {
+    active_lanes: Vec<Option<Oid>>,
+}
+
+impl GraphBuilder {
+    pub fn new() -> Self {
+        Self {
+            active_lanes: Vec::new(),
+        }
+    }
+
+    pub fn build(
+        mut self,
+        path: &Path,
+        options: &GraphOptions,
+    ) -> color_eyre::Result<Vec<GraphRow>> {
+        let mut repo = Repository::open(path)?;
+        let mut ref_map = resolve_refs(&repo, &options.branch_filter);
+        merge_stash_labels(&mut repo, &mut ref_map);
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push_head().ok(); // ok: handles unborn HEAD
+        for &oid in ref_map.keys() {
+            revwalk.push(oid).ok(); // git2 deduplicates
+        }
+        revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+        if options.first_parent {
+            revwalk.simplify_first_parent()?;
+        }
+
+        let mut rows = Vec::new();
+
+        for oid_result in revwalk.take(MAX_COMMITS) {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+
+            let parent_oids: Vec<Oid> = commit.parent_ids().collect();
+            let is_merge = commit.parent_count() > 1;
+            let labels = ref_map.remove(&oid).unwrap_or_default();
+            let (commit_col, lanes, horizontal_spans) = self.process_commit(oid, &parent_oids);
+
+            let short_id = oid.to_string()[..7].to_string();
+            let message = commit.summary().ok().flatten().unwrap_or("").to_string();
+            let author = commit.author().name().unwrap_or("").to_string();
+            let time = commit.time().seconds();
+
+            rows.push(GraphRow {
+                commit_col,
+                lanes,
+                oid,
+                short_id,
+                message,
+                author,
+                time,
+                labels,
+                is_merge,
+                horizontal_spans,
+                parent_oids,
+                diff_stat: None,
+                collapsed: None,
+            });
+        }
+
+        Ok(rows)
+    }
+
+    fn process_commit(
+        &mut self,
+        oid: Oid,
+        parent_oids: &[Oid],
+    ) -> (usize, Vec<LaneSegment>, Vec<(usize, usize, usize)>) {
+        // Find which lane this commit occupies
+        let commit_col = self
+            .active_lanes
+            .iter()
+            .position(|lane| *lane == Some(oid))
+            .unwrap_or_else(|| {
+                // Allocate a new lane
+                let col = self.find_free_lane();
+                if col < self.active_lanes.len() {
+                    self.active_lanes[col] = Some(oid);
+                } else {
+                    self.active_lanes.push(Some(oid));
+                }
+                col
+            });
+
+        // Build lane segments for this row
+        let lane_count = self.active_lanes.len().max(commit_col + 1);
+        let mut lanes = vec![LaneSegment::Empty; lane_count];
+
+        // Mark continuing lanes
+        for (i, lane) in self.active_lanes.iter().enumerate() {
+            if i < lanes.len() && lane.is_some() && i != commit_col {
+                lanes[i] = LaneSegment::Straight;
+            }
+        }
+
+        // Mark commit position
+        lanes[commit_col] = LaneSegment::Commit;
+
+        // Process parents
+        // Clear this commit's lane first
+        self.active_lanes[commit_col] = None;
+        let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+
+        if !parent_oids.is_empty() {
+            // First parent continues in same lane
+            let first_parent = parent_oids[0];
+
+            // Check if first parent is already in another lane
+            let existing_lane = self
+                .active_lanes
+                .iter()
+                .position(|lane| *lane == Some(first_parent));
+
+            if let Some(existing) = existing_lane {
+                // First parent already has a lane — merge to it
+                if existing < commit_col {
+                    lanes[commit_col] = LaneSegment::MergeLeft;
+                    spans.push((existing, commit_col, lane_color(commit_col)));
+                } else if existing > commit_col {
+                    lanes[commit_col] = LaneSegment::MergeRight;
+                    spans.push((commit_col, existing, lane_color(commit_col)));
+                }
+                // Don't re-assign; lane stays as is
+            } else {
+                // First parent takes over this lane
+                self.active_lanes[commit_col] = Some(first_parent);
+            }
+
+            // Additional parents fork into new lanes
+            for &parent_oid in &parent_oids[1..] {
+                let existing = self
+                    .active_lanes
+                    .iter()
+                    .position(|lane| *lane == Some(parent_oid));
+
+                if existing.is_none() {
+                    let new_col = self.find_free_lane();
+                    if new_col < self.active_lanes.len() {
+                        self.active_lanes[new_col] = Some(parent_oid);
+                    } else {
+                        self.active_lanes.push(Some(parent_oid));
+                    }
+                    // Extend lanes if needed
+                    while lanes.len() <= new_col {
+                        lanes.push(LaneSegment::Empty);
+                    }
+                    if new_col > commit_col {
+                        lanes[new_col] = LaneSegment::ForkRight;
+                        spans.push((commit_col, new_col, lane_color(new_col)));
+                    } else {
+                        lanes[new_col] = LaneSegment::ForkLeft;
+                        spans.push((new_col, commit_col, lane_color(new_col)));
+                    }
+                }
+            }
+        }
+
+        // Horizontal fill: connect merge/fork endpoints with ─ and ┼
+        for &(left, right, _) in &spans {
+            if lanes[left] == LaneSegment::Straight {
+                lanes[left] = LaneSegment::RightTee;
+            }
+            if right < lanes.len() && lanes[right] == LaneSegment::Straight {
+                lanes[right] = LaneSegment::LeftTee;
+            }
+            for col in (left + 1)..right {
+                if col < lanes.len() {
+                    if lanes[col] == LaneSegment::Straight {
+                        lanes[col] = LaneSegment::CrossHorizontal;
+                    } else if lanes[col] == LaneSegment::Empty {
+                        lanes[col] = LaneSegment::Horizontal;
+                    }
+                }
+            }
+        }
+
+        // Compact: remove trailing empty lanes
+        while self.active_lanes.last() == Some(&None) {
+            self.active_lanes.pop();
+        }
+
+        (commit_col, lanes, spans)
+    }
+
+    fn find_free_lane(&self) -> usize {
+        self.active_lanes
+            .iter()
+            .position(|lane| lane.is_none())
+            .unwrap_or(self.active_lanes.len())
+    }
+}
+
+/// Assign a color index (0..PALETTE_SIZE) for a given lane column.
+/// Adjacent lanes get different colors.
+pub(crate) fn lane_color(col: usize) -> usize {
+    col % PALETTE_SIZE
+}
