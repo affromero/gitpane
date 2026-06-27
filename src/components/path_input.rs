@@ -103,8 +103,8 @@ impl PathInput {
                 Ok(None)
             }
             KeyCode::Backspace => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
+                if let Some(prev) = self.input[..self.cursor].chars().next_back() {
+                    self.cursor -= prev.len_utf8();
                     self.input.remove(self.cursor);
                     self.completions.clear();
                     self.completion_index = None;
@@ -113,18 +113,22 @@ impl PathInput {
             }
             KeyCode::Delete => {
                 if self.cursor < self.input.len() {
-                    self.input.remove(self.cursor);
+                    self.input.remove(self.cursor); // cursor is a char boundary
                     self.completions.clear();
                     self.completion_index = None;
                 }
                 Ok(None)
             }
             KeyCode::Left => {
-                self.cursor = self.cursor.saturating_sub(1);
+                if let Some(prev) = self.input[..self.cursor].chars().next_back() {
+                    self.cursor -= prev.len_utf8();
+                }
                 Ok(None)
             }
             KeyCode::Right => {
-                self.cursor = (self.cursor + 1).min(self.input.len());
+                if let Some(next) = self.input[self.cursor..].chars().next() {
+                    self.cursor += next.len_utf8();
+                }
                 Ok(None)
             }
             KeyCode::Home | KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -144,13 +148,23 @@ impl PathInput {
             }
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor, c);
-                self.cursor += 1;
+                self.cursor += c.len_utf8();
                 self.completions.clear();
                 self.completion_index = None;
                 Ok(None)
             }
             _ => Ok(None),
         }
+    }
+
+    /// Insert pasted text at the cursor (bracketed paste). Newlines are dropped
+    /// so a multi-line paste stays a single path/branch.
+    pub fn paste(&mut self, text: &str) {
+        let cleaned: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+        self.input.insert_str(self.cursor, &cleaned);
+        self.cursor += cleaned.len();
+        self.completions.clear();
+        self.completion_index = None;
     }
 
     fn complete_path(&mut self) {
@@ -236,13 +250,20 @@ impl PathInput {
 
         frame.render_widget(Clear, input_area);
 
+        // Split on char boundaries so multibyte input (é, emoji, CJK) renders and
+        // never slices mid-codepoint.
         let before_cursor = &self.input[..self.cursor];
-        let cursor_char = self.input.get(self.cursor..self.cursor + 1).unwrap_or(" ");
-        let after_cursor = if self.cursor < self.input.len() {
-            &self.input[self.cursor + 1..]
+        let cc_len = self.input[self.cursor..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(0);
+        let cursor_char = if cc_len > 0 {
+            &self.input[self.cursor..self.cursor + cc_len]
         } else {
-            ""
+            " "
         };
+        let after_cursor = &self.input[self.cursor + cc_len..];
 
         let (prompt, title) = match self.purpose {
             InputPurpose::AddRepo => (
@@ -291,11 +312,80 @@ impl PathInput {
 }
 
 fn expand_tilde(input: &str) -> PathBuf {
-    if let Some(rest) = input.strip_prefix('~')
-        && let Some(home) = dirs::home_dir()
-    {
-        let rest = rest.strip_prefix('/').unwrap_or(rest);
-        return home.join(rest);
+    if let Some(home) = dirs::home_dir() {
+        if input == "~" {
+            return home;
+        }
+        if let Some(rest) = input.strip_prefix("~/") {
+            return home.join(rest);
+        }
     }
+    // Leave `~other` (a literal name or `~user`) untouched — only bare `~`/`~/`
+    // expand to $HOME.
     PathBuf::from(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+
+    fn input() -> PathInput {
+        PathInput::new(std::sync::Arc::new(Theme::default()))
+    }
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+    fn press(p: &mut PathInput, code: KeyCode) {
+        let _ = p.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn multibyte_typing_keeps_cursor_on_char_boundary() {
+        let mut p = input();
+        for c in "é🚀ü/r".chars() {
+            let _ = p.handle_key_event(key(c));
+            assert!(p.input.is_char_boundary(p.cursor));
+        }
+        assert_eq!(p.input, "é🚀ü/r");
+        // Backspace removes whole codepoints and never lands mid-codepoint.
+        for _ in 0..5 {
+            press(&mut p, KeyCode::Backspace);
+            assert!(p.input.is_char_boundary(p.cursor));
+        }
+        assert_eq!(p.input, "");
+        assert_eq!(p.cursor, 0);
+    }
+
+    #[test]
+    fn left_right_move_by_codepoint() {
+        let mut p = input();
+        for c in "aé🚀".chars() {
+            let _ = p.handle_key_event(key(c));
+        }
+        press(&mut p, KeyCode::Left); // before 🚀
+        press(&mut p, KeyCode::Left); // before é
+        assert_eq!(p.cursor, 1); // just after the 1-byte 'a'
+        press(&mut p, KeyCode::Right); // past é
+        assert_eq!(p.cursor, 1 + "é".len());
+        assert!(p.input.is_char_boundary(p.cursor));
+    }
+
+    #[test]
+    fn paste_inserts_and_strips_newlines() {
+        let mut p = input();
+        p.paste("/some/path\nwith-newline\r");
+        assert_eq!(p.input, "/some/pathwith-newline");
+        assert!(p.input.is_char_boundary(p.cursor));
+    }
+
+    #[test]
+    fn expand_tilde_only_bare_tilde_and_slash() {
+        let home = dirs::home_dir().expect("home dir in test env");
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/Code"), home.join("Code"));
+        // `~other` must stay literal, not become $HOME/other.
+        assert_eq!(expand_tilde("~other"), PathBuf::from("~other"));
+        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
+    }
 }

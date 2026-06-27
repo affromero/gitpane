@@ -832,6 +832,13 @@ impl App {
                     Event::Mouse(mouse) => {
                         self.handle_mouse_event(mouse)?;
                     }
+                    Event::Paste(ref text) => {
+                        // Bracketed paste only targets the text input overlay.
+                        if self.path_input.visible {
+                            self.path_input.paste(text);
+                            self.action_tx.send(Action::Render)?;
+                        }
+                    }
                     Event::Resize(w, h) => {
                         self.action_tx.send(Action::Resize(w, h))?;
                     }

@@ -10,6 +10,8 @@ pub(crate) enum Event {
     Render,
     Key(KeyEvent),
     Mouse(MouseEvent),
+    /// Bracketed-paste payload, routed to the focused text input.
+    Paste(String),
     Resize(u16, u16),
     FocusGained,
     FocusLost,
