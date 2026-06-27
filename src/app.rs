@@ -561,13 +561,22 @@ impl App {
                     .status();
                 tui.enter()?;
                 tui.terminal.clear()?;
-                // Set the error first, then render, so a spawn failure's toast
-                // is painted on the repaint rather than waiting for a later one.
-                if let Err(e) = status {
-                    self.action_tx.send(Action::Error(format!(
+                // Set the error first, then render, so a failure's toast is
+                // painted on the repaint rather than waiting for a later one.
+                match status {
+                    Err(e) => self.action_tx.send(Action::Error(format!(
                         "{label} failed: {}",
                         crate::git::describe_spawn_error(&e)
-                    )))?;
+                    )))?,
+                    Ok(st) if !st.success() => {
+                        let code = st
+                            .code()
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "signal".to_string());
+                        self.action_tx
+                            .send(Action::Error(format!("{label} exited with status {code}")))?;
+                    }
+                    Ok(_) => {}
                 }
                 self.action_tx.send(Action::Render)?;
             }
@@ -2804,23 +2813,51 @@ fn spawn_detached(
     tx: UnboundedSender<Action>,
     label: &'static str,
 ) {
+    let Some(program) = argv.first().cloned() else {
+        let _ = tx.send(Action::Error(format!("{label} failed: empty command")));
+        return;
+    };
     tokio::task::spawn_blocking(move || {
+        use std::io::Read;
         use std::process::Stdio;
-        let child = std::process::Command::new(&argv[0])
+        let child = std::process::Command::new(&program)
             .args(&argv[1..])
             .current_dir(&cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn();
         match child {
             Ok(mut c) => {
-                let _ = c.wait();
+                // Drain stderr on a side thread so the pipe can't fill and block
+                // the child before it exits (it exits promptly: tmux returns at
+                // once, editor CLIs hand off and return).
+                let stderr = c.stderr.take();
+                let drain = std::thread::spawn(move || {
+                    let mut buf = String::new();
+                    if let Some(mut e) = stderr {
+                        let _ = e.read_to_string(&mut buf);
+                    }
+                    buf
+                });
+                let status = c.wait();
+                let err = drain.join().unwrap_or_default();
+                // A failed tmux target ("can't find window") or quick-failing
+                // launch would otherwise be silent.
+                if let Ok(st) = status
+                    && !st.success()
+                {
+                    let msg = err
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .map(str::trim)
+                        .unwrap_or("command failed");
+                    let _ = tx.send(Action::Error(format!("{label} failed: {msg}")));
+                }
             }
             Err(e) => {
                 let _ = tx.send(Action::Error(format!(
-                    "{label} failed running '{}': {}",
-                    argv[0],
+                    "{label} failed running '{program}': {}",
                     crate::git::describe_spawn_error(&e)
                 )));
             }

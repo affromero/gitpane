@@ -71,7 +71,18 @@ fn parse_placement(s: &str) -> Result<Placement, String> {
         _ => {
             let tokens: Vec<String> = s.split_whitespace().map(String::from).collect();
             match tokens.first().map(String::as_str) {
-                Some("split-window") | Some("new-window") => Ok(Placement::Tmux(tokens)),
+                Some("split-window") | Some("new-window") => {
+                    // tmux parses `;` as a command separator, so a placement like
+                    // "split-window ; kill-server" would chain extra tmux
+                    // commands. Allow only split/new-window plus their flags.
+                    if tokens.iter().any(|t| t.contains(';')) {
+                        Err(format!(
+                            "placement '{s}' may not contain ';' (a tmux command separator)"
+                        ))
+                    } else {
+                        Ok(Placement::Tmux(tokens))
+                    }
+                }
                 _ => Err(format!(
                     "invalid placement '{s}'; use command, inline, ask, or split-window/new-window with flags"
                 )),
@@ -294,6 +305,9 @@ mod tests {
         );
         assert!(parse_placement("kill-server").is_err());
         assert!(parse_placement("-t other").is_err());
+        // A `;` would chain extra tmux commands — rejected even after a valid head.
+        assert!(parse_placement("split-window -h ; kill-server").is_err());
+        assert!(parse_placement("new-window;kill-server").is_err());
     }
 
     #[test]
