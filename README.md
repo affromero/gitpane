@@ -21,6 +21,7 @@
     <a href="https://github.com/affromero/gitpane/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
     <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/github/languages/top/affromero/gitpane?style=flat-square&color=dea584" alt="Language">
+    <a href="https://github.com/affromero/gitpane/blob/main/AGENTS.md"><img src="https://img.shields.io/badge/AGENTS.md-7c3aed?style=flat-square" alt="AGENTS.md"></a>
   </p>
 </div>
 
