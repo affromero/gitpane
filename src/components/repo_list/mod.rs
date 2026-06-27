@@ -548,7 +548,7 @@ impl RepoList {
 
         // Liveness marker (bare symbol; the session names are in the context
         // menu), after the repo name so it doesn't shift the name.
-        if crate::liveness::is_live(&entry.path, &self.live_panes) {
+        if crate::session::liveness::is_live(&entry.path, &self.live_panes) {
             spans.push(Span::styled(" \u{25c9}", Style::default().fg(t.live)));
         }
 
@@ -608,7 +608,7 @@ impl RepoList {
             ));
         }
 
-        if crate::liveness::is_live(&wt.path, &self.live_panes) {
+        if crate::session::liveness::is_live(&wt.path, &self.live_panes) {
             spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
 

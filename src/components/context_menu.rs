@@ -119,7 +119,7 @@ impl ContextMenu {
         // The session item label says where it opens ("(new tab)"/"(new
         // window)"), inferred from the [goto] command, so it's clear the current
         // view stays put.
-        let where_suffix = match crate::launcher::goto_placement(&goto_command) {
+        let where_suffix = match crate::session::launcher::goto_placement(&goto_command) {
             Some(p) => format!(" ({p})"),
             None => String::new(),
         };

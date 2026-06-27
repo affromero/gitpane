@@ -607,7 +607,7 @@ fn test_goto_command_table() {
             t.command
         );
         assert!(
-            crate::launcher::goto_placement(t.command).is_some(),
+            crate::session::launcher::goto_placement(t.command).is_some(),
             "{} has no placement label",
             t.command
         );
