@@ -17,6 +17,19 @@ repos:
 
   - repo: local
     hooks:
+      - id: file-line-count
+        name: file line count (< 1000)
+        entry: scripts/hooks/check_file_line_count.sh
+        language: system
+        types: [rust]
+
+      - id: dir-file-count
+        name: directory file count (<= 10)
+        entry: scripts/hooks/check_dir_file_count.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all --check

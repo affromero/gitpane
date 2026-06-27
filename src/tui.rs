@@ -72,15 +72,32 @@ impl Tui {
         // restarts a live event loop rather than one that sees the previous
         // `exit()`'s cancellation and stops immediately.
         self.cancellation_token = CancellationToken::new();
+        let mouse = self.mouse;
         enable_raw_mode()?;
-        crossterm::execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableFocusChange,
-        )?;
-        if self.mouse {
-            crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+        let setup = (|| -> io::Result<()> {
+            crossterm::execute!(
+                io::stdout(),
+                EnterAlternateScreen,
+                EnableBracketedPaste,
+                EnableFocusChange,
+            )?;
+            if mouse {
+                crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = setup {
+            // A later step failed after raw mode was enabled — roll back so we
+            // don't strand the terminal in raw mode / the alternate screen.
+            let _ = crossterm::execute!(
+                io::stdout(),
+                LeaveAlternateScreen,
+                DisableBracketedPaste,
+                DisableFocusChange,
+                cursor::Show,
+            );
+            let _ = disable_raw_mode();
+            return Err(e.into());
         }
 
         self.install_panic_hook();
@@ -187,6 +204,9 @@ impl Tui {
                             }
                             CrosstermEvent::Mouse(mouse) => {
                                 let _ = event_tx.send(Event::Mouse(mouse));
+                            }
+                            CrosstermEvent::Paste(text) => {
+                                let _ = event_tx.send(Event::Paste(text));
                             }
                             CrosstermEvent::Resize(w, h) => {
                                 let _ = event_tx.send(Event::Resize(w, h));

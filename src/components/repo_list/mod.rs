@@ -1,11 +1,8 @@
-use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
-    Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{ListItem, ListState},
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -13,10 +10,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::Component;
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
+
+mod render;
+#[cfg(test)]
+mod tests;
 
 /// Result of `RepoList::sync_paths` — the paths that newly appeared and the
 /// paths that vanished. Empty `added` and `removed` mean the set is unchanged
@@ -25,58 +25,6 @@ use crate::theme::Theme;
 pub(crate) struct SyncDiff {
     pub added: Vec<PathBuf>,
     pub removed: Vec<PathBuf>,
-}
-
-/// Half-open column ranges `[start, end)` of the subtree indicators rendered
-/// on a repo row. `None` means the indicator is not drawn for this entry.
-/// Used by the click handler to route a click to the right toggle.
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
-struct IndicatorColumns {
-    stash: Option<(u16, u16)>,
-    worktree: Option<(u16, u16)>,
-}
-
-/// Compute the column ranges of the stash and worktree indicators for a repo
-/// row, given the leftmost content column. Mirrors the layout in
-/// [`RepoList::render_repo_item`] — keep the two in sync.
-fn indicator_columns(entry: &RepoEntry, base_x: u16) -> IndicatorColumns {
-    let mut col = base_x;
-    // Dirty/git_op marker: always 2 columns ("* ", "~ ", or "  ").
-    col = col.saturating_add(2);
-
-    let mut out = IndicatorColumns::default();
-    let Some(status) = entry.status.as_ref() else {
-        return out;
-    };
-
-    // Branch field is left-padded to a minimum of 12 columns, then a space.
-    let branch_width = status.branch.chars().count().max(12).saturating_add(1);
-    col = col.saturating_add(branch_width as u16);
-
-    if status.ahead > 0 {
-        // "↑{N} " — chevron (1) + digits + trailing space.
-        col = col.saturating_add(2 + status.ahead.to_string().len() as u16);
-    }
-    if status.behind > 0 {
-        col = col.saturating_add(2 + status.behind.to_string().len() as u16);
-    }
-
-    if !status.stashes.is_empty() {
-        let start = col;
-        // "▶$N " — chevron (1) + '$' (1) + digits + trailing space.
-        let width = 3 + status.stash_count().to_string().len() as u16;
-        out.stash = Some((start, start.saturating_add(width)));
-        col = col.saturating_add(width);
-    }
-
-    if !status.worktree_info.is_empty() {
-        let start = col;
-        // "▶N " — chevron (1) + digits + trailing space.
-        let width = 2 + status.worktree_info.len().to_string().len() as u16;
-        out.worktree = Some((start, start.saturating_add(width)));
-    }
-
-    out
 }
 
 impl SyncDiff {
@@ -271,6 +219,21 @@ impl RepoList {
                 Some((RepoId(entry.path.clone()), wt))
             }
         }
+    }
+
+    /// Resolve a worktree row id to `(parent repo path, worktree path, branch)`,
+    /// independent of the current selection. Used by the path-bound context-menu
+    /// remove action.
+    pub fn worktree_remove_target(&self, id: &RepoId) -> Option<(PathBuf, PathBuf, String)> {
+        for entry in &self.repos {
+            let Some(status) = entry.status.as_ref() else {
+                continue;
+            };
+            if let Some(wt) = status.worktree_info.iter().find(|w| w.path == id.0) {
+                return Some((entry.path.clone(), wt.path.clone(), wt.branch.clone()));
+            }
+        }
+        None
     }
 
     /// The tmux pane sessions from the latest liveness probe.
@@ -585,7 +548,7 @@ impl RepoList {
 
         // Liveness marker (bare symbol; the session names are in the context
         // menu), after the repo name so it doesn't shift the name.
-        if crate::liveness::is_live(&entry.path, &self.live_panes) {
+        if crate::session::liveness::is_live(&entry.path, &self.live_panes) {
             spans.push(Span::styled(" \u{25c9}", Style::default().fg(t.live)));
         }
 
@@ -645,7 +608,7 @@ impl RepoList {
             ));
         }
 
-        if crate::liveness::is_live(&wt.path, &self.live_panes) {
+        if crate::session::liveness::is_live(&wt.path, &self.live_panes) {
             spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
 
@@ -664,482 +627,5 @@ impl RepoList {
             ),
         ];
         ListItem::new(Line::from(spans))
-    }
-}
-
-impl Component for RepoList {
-    fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
-        self.action_tx = Some(tx);
-        Ok(())
-    }
-
-    fn init(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                Ok(self.emit_selection_action())
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
-                Ok(self.emit_selection_action())
-            }
-            KeyCode::Char('w') => {
-                self.toggle_expand();
-                Ok(self.emit_selection_action())
-            }
-            KeyCode::Char('S') => {
-                self.toggle_stash_expand();
-                Ok(self.emit_selection_action())
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let content_y = self.render_area.y + 1;
-                if mouse.column >= self.render_area.x
-                    && mouse.column < self.render_area.x + self.render_area.width
-                    && mouse.row >= content_y
-                {
-                    let visual_row = (mouse.row - content_y) as usize;
-                    let idx = visual_row + self.state.offset();
-                    if idx < self.display_rows.len() {
-                        // Click on the already-selected repo row toggles a subtree.
-                        // When both worktrees and stashes are present we hit-test
-                        // the click column against each indicator's range so the
-                        // user can target either. A click elsewhere on the row
-                        // falls back to whichever subtree exists (worktrees first).
-                        if self.state.selected() == Some(idx)
-                            && let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx)
-                            && let Some(status) = self.repos[*i].status.as_ref()
-                        {
-                            let base_x = self.render_area.x + 1;
-                            let cols = indicator_columns(&self.repos[*i], base_x);
-                            let clicked_stash = cols
-                                .stash
-                                .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
-                            let clicked_worktree = cols
-                                .worktree
-                                .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
-                            if clicked_stash {
-                                self.toggle_stash_expand();
-                                return Ok(self.emit_selection_action());
-                            }
-                            if clicked_worktree {
-                                self.toggle_expand();
-                                return Ok(self.emit_selection_action());
-                            }
-                            if !status.worktree_info.is_empty() {
-                                self.toggle_expand();
-                                return Ok(self.emit_selection_action());
-                            }
-                            if !status.stashes.is_empty() {
-                                self.toggle_stash_expand();
-                                return Ok(self.emit_selection_action());
-                            }
-                        }
-                        self.state.select(Some(idx));
-                        return Ok(self.emit_selection_action());
-                    }
-                }
-                Ok(None)
-            }
-            MouseEventKind::Down(MouseButton::Right) => {
-                let content_y = self.render_area.y + 1;
-                if mouse.column >= self.render_area.x
-                    && mouse.column < self.render_area.x + self.render_area.width
-                    && mouse.row >= content_y
-                {
-                    let visual_row = (mouse.row - content_y) as usize;
-                    let idx = visual_row + self.state.offset();
-                    if idx < self.display_rows.len() {
-                        self.state.select(Some(idx));
-                        // Repo and worktree rows get a context menu. A worktree
-                        // menu targets the worktree's own path so pull/push act
-                        // on it directly. Stash rows have no menu.
-                        let menu = match self.display_rows.get(idx) {
-                            Some(DisplayRow::Repo(i)) => {
-                                Some((RepoId(self.repos[*i].path.clone()), false))
-                            }
-                            Some(DisplayRow::Worktree(ri, wi)) => self.repos[*ri]
-                                .status
-                                .as_ref()
-                                .and_then(|s| s.worktree_info.get(*wi))
-                                .map(|wt| (RepoId(wt.path.clone()), true)),
-                            _ => None,
-                        };
-                        if let Some((id, is_worktree)) = menu {
-                            return Ok(Some(Action::ShowContextMenu {
-                                id,
-                                row: mouse.row,
-                                col: mouse.column,
-                                is_worktree,
-                            }));
-                        }
-                    }
-                }
-                Ok(None)
-            }
-            MouseEventKind::ScrollUp => {
-                self.select_prev();
-                Ok(self.emit_selection_action())
-            }
-            MouseEventKind::ScrollDown => {
-                self.select_next();
-                Ok(self.emit_selection_action())
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        match action {
-            Action::SelectNextRepo => {
-                self.select_next();
-                Ok(self.emit_selection_action())
-            }
-            Action::SelectPrevRepo => {
-                self.select_prev();
-                Ok(self.emit_selection_action())
-            }
-            Action::RepoStatusUpdated { ref id, ref status } => {
-                if let Some(idx) = self.resolve_index(id) {
-                    self.update_status(idx, status.clone());
-                }
-                Ok(None)
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        self.render_area = area;
-        // Ensure display_rows is fresh
-        self.rebuild_display_rows();
-
-        let items: Vec<ListItem> = self
-            .display_rows
-            .iter()
-            .map(|row| match row {
-                DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], *i),
-                DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
-                DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
-            })
-            .collect();
-
-        let t = &self.theme.repo_list;
-        let border_color = if self.focused {
-            t.border_focused
-        } else {
-            t.border_unfocused
-        };
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title(" Repositories ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color)),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(t.selection_bg)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        frame.render_stateful_widget(list, area, &mut self.state);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::git::status::{RepoStatus, StashEntry, WorktreeEntry};
-
-    fn empty_status(branch: &str) -> RepoStatus {
-        RepoStatus {
-            branch: branch.to_string(),
-            head_oid: None,
-            files: Vec::new(),
-            ahead: 0,
-            behind: 0,
-            is_dirty: false,
-            worktree_info: Vec::new(),
-            has_submodules: false,
-            submodules: Vec::new(),
-            has_dirty_submodules: false,
-            has_unpushed_submodules: false,
-            fetch_failed: false,
-            stashes: Vec::new(),
-            refs: crate::git::status::RefsFingerprint::default(),
-        }
-    }
-
-    fn stash_entry(index: usize) -> StashEntry {
-        StashEntry {
-            index,
-            message: format!("WIP {index}"),
-            oid: format!("{index:040x}"),
-        }
-    }
-
-    fn worktree_entry(name: &str) -> WorktreeEntry {
-        WorktreeEntry {
-            name: name.to_string(),
-            path: PathBuf::from(format!("/wt/{name}")),
-            branch: name.to_string(),
-            ahead: 0,
-            behind: 0,
-            is_dirty: false,
-            file_count: 0,
-            has_dirty_submodules: false,
-            has_unpushed_submodules: false,
-        }
-    }
-
-    fn entry_with_status(path: &str, status: RepoStatus) -> RepoEntry {
-        RepoEntry {
-            path: PathBuf::from(path),
-            name: path.trim_start_matches('/').to_string(),
-            status: Some(status),
-            git_op: false,
-        }
-    }
-
-    fn make_list(paths: &[&str]) -> RepoList {
-        let theme = Arc::new(Theme::default());
-        RepoList::new(paths.iter().map(PathBuf::from).collect(), theme)
-    }
-
-    #[test]
-    fn sync_paths_noop_when_set_unchanged() {
-        let mut list = make_list(&["/a", "/b"]);
-        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
-        assert!(diff.is_empty());
-        assert_eq!(list.repos.len(), 2);
-    }
-
-    #[test]
-    fn sync_paths_reports_added_paths() {
-        let mut list = make_list(&["/a"]);
-        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
-        assert!(!diff.is_empty());
-        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
-        assert!(diff.removed.is_empty());
-        assert_eq!(list.repos.len(), 2);
-    }
-
-    #[test]
-    fn sync_paths_reports_removed_paths_and_prunes_expansion() {
-        let mut list = make_list(&["/a", "/b"]);
-        list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
-        list.expanded_stashes.insert(RepoId(PathBuf::from("/b")));
-
-        let diff = list.sync_paths(vec![PathBuf::from("/a")]);
-        assert_eq!(diff.removed, vec![PathBuf::from("/b")]);
-        assert!(diff.added.is_empty());
-        assert_eq!(list.repos.len(), 1);
-        assert!(!list.expanded_repos.contains(&RepoId(PathBuf::from("/b"))));
-        assert!(!list.expanded_stashes.contains(&RepoId(PathBuf::from("/b"))));
-    }
-
-    #[test]
-    fn sync_paths_preserves_existing_entry_status() {
-        let mut list = make_list(&["/a"]);
-        list.repos[0].git_op = true;
-        let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
-        assert_eq!(diff.added, vec![PathBuf::from("/b")]);
-        // Original entry kept its in-progress flag.
-        let a = list
-            .repos
-            .iter()
-            .find(|r| r.path == std::path::Path::new("/a"))
-            .unwrap();
-        assert!(a.git_op);
-        // Newly-added entry starts clean.
-        let b = list
-            .repos
-            .iter()
-            .find(|r| r.path == std::path::Path::new("/b"))
-            .unwrap();
-        assert!(!b.git_op);
-        assert!(b.status.is_none());
-    }
-
-    #[test]
-    fn indicator_columns_returns_none_when_neither_subtree_present() {
-        let entry = entry_with_status("/r", empty_status("main"));
-        let cols = indicator_columns(&entry, 0);
-        assert_eq!(cols.stash, None);
-        assert_eq!(cols.worktree, None);
-    }
-
-    #[test]
-    fn indicator_columns_locates_stash_then_worktree() {
-        let mut status = empty_status("main");
-        status.stashes.push(stash_entry(0));
-        status.worktree_info.push(worktree_entry("wt"));
-        let entry = entry_with_status("/r", status);
-
-        let cols = indicator_columns(&entry, 0);
-        // 2 (dirty marker) + 12 (branch pad for "main") + 1 (space) = 15 → stash start.
-        let (s_start, s_end) = cols.stash.expect("stash range");
-        let (w_start, w_end) = cols.worktree.expect("worktree range");
-        assert_eq!(s_start, 15);
-        // "▶$1 " = 4 columns.
-        assert_eq!(s_end, 19);
-        // Worktree starts immediately after stash.
-        assert_eq!(w_start, 19);
-        // "▶1 " = 3 columns.
-        assert_eq!(w_end, 22);
-    }
-
-    #[test]
-    fn indicator_columns_accounts_for_ahead_behind() {
-        let mut status = empty_status("main");
-        status.ahead = 3;
-        status.behind = 22;
-        status.stashes.push(stash_entry(0));
-        let entry = entry_with_status("/r", status);
-
-        let cols = indicator_columns(&entry, 0);
-        // 2 + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 22 → stash start.
-        let (s_start, _) = cols.stash.expect("stash range");
-        assert_eq!(s_start, 22);
-    }
-
-    #[test]
-    fn indicator_columns_respects_long_branch_name() {
-        let mut status = empty_status("feature/very-long-branch");
-        status.worktree_info.push(worktree_entry("wt"));
-        let entry = entry_with_status("/r", status);
-
-        let cols = indicator_columns(&entry, 0);
-        // 2 + 24 (branch chars) + 1 (space) = 27 → worktree start.
-        let (w_start, _) = cols.worktree.expect("worktree range");
-        assert_eq!(w_start, 27);
-    }
-
-    /// One repo with a linked worktree, expanded so the worktree row is
-    /// visible, with a render area set up for mouse hit-testing.
-    fn list_with_expanded_worktree() -> RepoList {
-        let mut list = make_list(&["/r"]);
-        let mut status = empty_status("main");
-        status.worktree_info.push(worktree_entry("feature"));
-        list.repos[0].status = Some(status);
-        list.expanded_repos.insert(RepoId(PathBuf::from("/r")));
-        list.rebuild_display_rows();
-        list.render_area = Rect::new(0, 0, 40, 10);
-        list
-    }
-
-    fn right_click(row: u16) -> MouseEvent {
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Right),
-            column: 5,
-            row,
-            modifiers: crossterm::event::KeyModifiers::empty(),
-        }
-    }
-
-    #[test]
-    fn resolve_target_maps_worktree_path_to_its_branch_and_parent() {
-        let list = list_with_expanded_worktree();
-        let target = list
-            .resolve_target(&RepoId(PathBuf::from("/wt/feature")))
-            .expect("worktree path resolves to a target");
-        assert_eq!(target.exec_path, PathBuf::from("/wt/feature"));
-        assert_eq!(target.branch, "feature");
-        assert_eq!(target.parent_index, 0);
-        // Submodule menu items stay hidden for worktree targets.
-        assert!(!target.has_submodules);
-    }
-
-    #[test]
-    fn resolve_target_maps_repo_path_to_itself() {
-        let list = list_with_expanded_worktree();
-        let target = list
-            .resolve_target(&RepoId(PathBuf::from("/r")))
-            .expect("repo path resolves to a target");
-        assert_eq!(target.exec_path, PathBuf::from("/r"));
-        assert_eq!(target.branch, "main");
-        assert_eq!(target.parent_index, 0);
-    }
-
-    #[test]
-    fn resolve_target_returns_none_for_unknown_path() {
-        let list = list_with_expanded_worktree();
-        assert!(
-            list.resolve_target(&RepoId(PathBuf::from("/nope")))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn right_click_on_worktree_row_opens_menu_targeting_the_worktree() {
-        let mut list = list_with_expanded_worktree();
-        // content_y = render_area.y + 1 = 1; display rows: 0 = repo, 1 = worktree,
-        // so the worktree row is at mouse.row 2.
-        let action = list
-            .handle_mouse_event(right_click(2))
-            .expect("handler ok")
-            .expect("worktree right-click yields an action");
-        match action {
-            Action::ShowContextMenu { id, .. } => {
-                assert_eq!(id, RepoId(PathBuf::from("/wt/feature")));
-            }
-            other => panic!("expected ShowContextMenu, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn right_click_on_repo_row_opens_menu_targeting_the_repo() {
-        let mut list = list_with_expanded_worktree();
-        let action = list
-            .handle_mouse_event(right_click(1))
-            .expect("handler ok")
-            .expect("repo right-click yields an action");
-        match action {
-            Action::ShowContextMenu { id, .. } => {
-                assert_eq!(id, RepoId(PathBuf::from("/r")));
-            }
-            other => panic!("expected ShowContextMenu, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn right_click_on_stash_row_opens_no_menu() {
-        let mut list = make_list(&["/r"]);
-        let mut status = empty_status("main");
-        status.stashes.push(stash_entry(0));
-        list.repos[0].status = Some(status);
-        list.expanded_stashes.insert(RepoId(PathBuf::from("/r")));
-        list.rebuild_display_rows();
-        list.render_area = Rect::new(0, 0, 40, 10);
-        // display rows: 0 = repo, 1 = stash → stash row is mouse.row 2.
-        let action = list.handle_mouse_event(right_click(2)).expect("handler ok");
-        assert!(action.is_none(), "stash rows have no context menu");
-    }
-
-    #[test]
-    fn selected_worktree_reports_worktree_when_worktree_row_is_selected() {
-        let mut list = list_with_expanded_worktree();
-        // display rows: 0 = repo, 1 = worktree.
-        list.state.select(Some(1));
-        let (repo_id, wt) = list.selected_worktree().expect("worktree selected");
-        assert_eq!(repo_id, RepoId(PathBuf::from("/r")));
-        assert_eq!(wt.path, PathBuf::from("/wt/feature"));
-        assert_eq!(wt.branch, "feature");
-
-        // A repo row selection is not a worktree.
-        list.state.select(Some(0));
-        assert!(list.selected_worktree().is_none());
     }
 }

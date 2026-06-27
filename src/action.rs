@@ -45,10 +45,16 @@ pub(crate) enum Action {
     /// configured `[open] command`. Resolves the selection in-app, like
     /// `ShowGitGraph`, so it carries no payload.
     OpenSelected,
+    /// Open a specific repo/worktree by id (from the context menu), bound to the
+    /// right-clicked row so an async row re-sort can't retarget it.
+    OpenAt(RepoId),
     /// Review the highlighted repo/worktree's diff vs its base branch in a new
     /// tmux window, via the `[review] command` (default `git diff {base}...HEAD`).
     /// Resolves the selection in-app, so it carries no payload.
     ReviewSelected,
+    /// Review a specific repo/worktree by id (from the context menu), bound to
+    /// the right-clicked row.
+    ReviewAt(RepoId),
     /// Open the branch-name input to create a new worktree for the given repo.
     OpenNewWorktree(RepoId),
     /// Create a worktree for `repo` on a new branch `branch`
@@ -58,8 +64,11 @@ pub(crate) enum Action {
         branch: String,
     },
     /// Resolve the highlighted worktree and open a confirmation to remove it.
-    /// Sent by the `d` key on a worktree row and the context-menu item.
+    /// Sent by the `d` key on a worktree row.
     RemoveWorktreeSelected,
+    /// Resolve a specific worktree by id (from the context menu) and confirm
+    /// removal, bound to the right-clicked row rather than the selection.
+    RemoveWorktreeAt(RepoId),
     /// Remove `worktree_path` from `repo` (`git worktree remove <path>`).
     RemoveWorktree {
         repo: std::path::PathBuf,
