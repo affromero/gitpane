@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -37,6 +38,13 @@ enum MenuAction {
     SubmoduleUpdate,
     SubmoduleSync,
     SubmoduleUpdateLatest,
+    // File-row actions (menu opened via `show_file`).
+    OpenFile,
+    RevealFile,
+    StageFile,
+    UnstageFile,
+    /// Discard a changed file; `bool` is `is_untracked` (delete vs restore).
+    DiscardFile(bool),
 }
 
 struct MenuItem {
@@ -64,9 +72,25 @@ pub(crate) struct MenuContext {
     pub goto_command: String,
 }
 
+/// File-row context that decides which file actions the menu offers.
+pub(crate) struct FileMenuContext {
+    pub path: PathBuf,
+    /// Index side dirty: offer Unstage.
+    pub staged: bool,
+    /// Worktree side dirty (or conflicted): offer Stage.
+    pub unstaged: bool,
+    /// Untracked file: Discard means delete, not restore.
+    pub is_untracked: bool,
+    /// Submodule row: no stage/unstage/discard (only Open / Open folder).
+    pub is_submodule: bool,
+}
+
 pub(crate) struct ContextMenu {
     pub visible: bool,
     pub repo_id: Option<RepoId>,
+    /// Set in file mode (`show_file`); the right-clicked file's repo-relative
+    /// path. `None` in repo mode (`show`).
+    pub file_path: Option<PathBuf>,
     pub position: (u16, u16), // (col, row)
     rows: Vec<MenuRow>,
     state: ListState,
@@ -80,6 +104,7 @@ impl ContextMenu {
         Self {
             visible: false,
             repo_id: None,
+            file_path: None,
             position: (0, 0),
             rows: Vec::new(),
             state: ListState::default(),
@@ -104,6 +129,7 @@ impl ContextMenu {
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
+        self.file_path = None;
         self.position = (col, row);
 
         let item = |label: String, action: MenuAction| MenuItem { label, action };
@@ -186,6 +212,64 @@ impl ContextMenu {
 
         self.rows.clear();
         for group in [launch, housekeeping, sync, worktree] {
+            if group.is_empty() {
+                continue;
+            }
+            if !self.rows.is_empty() {
+                self.rows.push(MenuRow::Separator);
+            }
+            self.rows.extend(group.into_iter().map(MenuRow::Item));
+        }
+
+        self.state.select(self.first_item_index());
+    }
+
+    /// Open the menu for a changed-file row. Mutation items are gated by what the
+    /// row supports (see [`FileMenuContext`]); Open / Open folder are always
+    /// available. The menu is path-bound, so an async row re-sort can't retarget.
+    pub fn show_file(&mut self, repo_id: RepoId, col: u16, row: u16, ctx: FileMenuContext) {
+        let FileMenuContext {
+            path,
+            staged,
+            unstaged,
+            is_untracked,
+            is_submodule,
+        } = ctx;
+        self.visible = true;
+        self.repo_id = Some(repo_id);
+        self.file_path = Some(path);
+        self.position = (col, row);
+
+        let item = |label: String, action: MenuAction| MenuItem { label, action };
+
+        // Mutations, gated. Submodule rows get none: staging a submodule pointer
+        // from the file menu would surprise more than help.
+        let mut mutate = Vec::new();
+        if !is_submodule {
+            if unstaged {
+                mutate.push(item("Stage".into(), MenuAction::StageFile));
+            }
+            if staged {
+                mutate.push(item("Unstage".into(), MenuAction::UnstageFile));
+            }
+            if staged || unstaged {
+                let label = if is_untracked {
+                    "Delete file"
+                } else {
+                    "Discard changes"
+                };
+                mutate.push(item(label.into(), MenuAction::DiscardFile(is_untracked)));
+            }
+        }
+
+        // Always available: inspect the file or its enclosing folder.
+        let inspect = vec![
+            item("Open".into(), MenuAction::OpenFile),
+            item("Open folder".into(), MenuAction::RevealFile),
+        ];
+
+        self.rows.clear();
+        for group in [mutate, inspect] {
             if group.is_empty() {
                 continue;
             }
@@ -282,6 +366,15 @@ impl ContextMenu {
             MenuAction::SubmoduleUpdate => Action::GitSubmoduleUpdate(id),
             MenuAction::SubmoduleSync => Action::GitSubmoduleSync(id),
             MenuAction::SubmoduleUpdateLatest => Action::GitSubmoduleUpdateLatest(id),
+            // File actions carry the right-clicked path; `?` makes them no-ops if
+            // the menu is somehow in repo mode (no file_path).
+            MenuAction::OpenFile => Action::OpenFile(id, self.file_path.clone()?),
+            MenuAction::RevealFile => Action::RevealFile(id, self.file_path.clone()?),
+            MenuAction::StageFile => Action::StageFile(id, self.file_path.clone()?),
+            MenuAction::UnstageFile => Action::UnstageFile(id, self.file_path.clone()?),
+            MenuAction::DiscardFile(is_untracked) => {
+                Action::DiscardFile(id, self.file_path.clone()?, is_untracked)
+            }
         };
         self.hide();
         Some(action)
@@ -414,5 +507,70 @@ impl Component for ContextMenu {
 
         frame.render_stateful_widget(list, rect, &mut self.state);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod file_menu_tests {
+    use super::*;
+
+    fn item_labels(menu: &ContextMenu) -> Vec<String> {
+        menu.rows
+            .iter()
+            .filter_map(|r| match r {
+                MenuRow::Item(i) => Some(i.label.clone()),
+                MenuRow::Separator => None,
+            })
+            .collect()
+    }
+
+    fn show(staged: bool, unstaged: bool, is_untracked: bool, is_submodule: bool) -> ContextMenu {
+        let mut menu = ContextMenu::new(Arc::new(Theme::default()));
+        menu.show_file(
+            RepoId(PathBuf::from("/repo")),
+            0,
+            0,
+            FileMenuContext {
+                path: PathBuf::from("a.txt"),
+                staged,
+                unstaged,
+                is_untracked,
+                is_submodule,
+            },
+        );
+        menu
+    }
+
+    #[test]
+    fn untracked_offers_stage_and_delete_but_not_unstage() {
+        let labels = item_labels(&show(false, true, true, false));
+        assert!(labels.contains(&"Stage".to_string()));
+        assert!(labels.contains(&"Delete file".to_string()));
+        assert!(!labels.iter().any(|l| l == "Unstage"));
+        assert!(!labels.iter().any(|l| l == "Discard changes"));
+        assert!(labels.contains(&"Open".to_string()));
+        assert!(labels.contains(&"Open folder".to_string()));
+    }
+
+    #[test]
+    fn staged_only_offers_unstage_not_stage() {
+        let labels = item_labels(&show(true, false, false, false));
+        assert!(labels.contains(&"Unstage".to_string()));
+        assert!(!labels.iter().any(|l| l == "Stage"));
+        assert!(labels.contains(&"Discard changes".to_string()));
+    }
+
+    #[test]
+    fn staged_and_unstaged_offers_both_plus_discard() {
+        let labels = item_labels(&show(true, true, false, false));
+        assert!(labels.contains(&"Stage".to_string()));
+        assert!(labels.contains(&"Unstage".to_string()));
+        assert!(labels.contains(&"Discard changes".to_string()));
+    }
+
+    #[test]
+    fn submodule_row_offers_only_inspect_items() {
+        let labels = item_labels(&show(false, true, false, true));
+        assert_eq!(labels, vec!["Open".to_string(), "Open folder".to_string()]);
     }
 }

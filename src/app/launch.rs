@@ -5,23 +5,36 @@ impl App {
     /// refreshing it on completion (via `GitOpComplete`). Used for worktree
     /// add/remove; mirrors the push/pull op flow.
     pub(super) fn spawn_repo_git_op(&mut self, repo_path: std::path::PathBuf, args: Vec<String>) {
-        let repo_id = RepoId(repo_path.clone());
-        if let Some(idx) = self.repo_list.resolve_index(&repo_id) {
+        let refresh_id = RepoId(repo_path.clone());
+        self.spawn_git_op_in(repo_path, refresh_id, args);
+    }
+
+    /// Run `git -C <exec_path> <args>` off-thread, then refresh `refresh_id` via
+    /// `GitOpComplete`. Splitting the working dir from the refresh target lets a
+    /// worktree's file ops run in the worktree while the parent repo row (which
+    /// owns the spinner and the changes panel) is the thing refreshed.
+    pub(super) fn spawn_git_op_in(
+        &mut self,
+        exec_path: std::path::PathBuf,
+        refresh_id: RepoId,
+        args: Vec<String>,
+    ) {
+        if let Some(idx) = self.repo_list.resolve_index(&refresh_id) {
             self.repo_list.repos[idx].git_op = true;
         }
         let tx = self.action_tx.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
+            let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
             let output = std::process::Command::new("git")
                 .arg("-C")
-                .arg(&repo_path)
+                .arg(&exec_path)
                 .args(&args)
                 .output();
             match output {
                 Ok(o) if o.status.success() => {
                     guard.complete();
                     let _ = tx.send(Action::GitOpComplete {
-                        id: repo_id,
+                        id: refresh_id,
                         message: format!("git {} succeeded", args.join(" ")),
                     });
                 }
@@ -38,7 +51,7 @@ impl App {
                         args.join(" "),
                         first_line
                     )));
-                    let _ = tx.send(Action::RefreshRepo(repo_id));
+                    let _ = tx.send(Action::RefreshRepo(refresh_id));
                 }
                 Err(e) => {
                     guard.complete();
@@ -47,10 +60,86 @@ impl App {
                         args.join(" "),
                         crate::git::describe_spawn_error(&e)
                     )));
-                    let _ = tx.send(Action::RefreshRepo(repo_id));
+                    let _ = tx.send(Action::RefreshRepo(refresh_id));
                 }
             }
         });
+    }
+
+    /// Working directory for the changed-files box's current target: the active
+    /// worktree's path when one is selected, else the repo's own path. Mirrors
+    /// `ShowDiff` so file ops act on the same tree the diffs come from.
+    pub(super) fn file_op_dir(&self, id: &RepoId) -> Option<std::path::PathBuf> {
+        let idx = self.repo_list.resolve_index(id)?;
+        Some(
+            self.active_worktree
+                .as_ref()
+                .map(|aw| aw.path.clone())
+                .unwrap_or_else(|| self.repo_list.repos[idx].path.clone()),
+        )
+    }
+
+    /// Spawn an OS opener (`open` / `xdg-open`) detached. Shares the launch
+    /// machinery used by `[open]`/`[review]`, just without a config template.
+    pub(super) fn os_open(&self, argv: Vec<String>, cwd: std::path::PathBuf, label: &'static str) {
+        spawn_detached(argv, cwd, self.action_tx.clone(), label);
+    }
+
+    /// Open a changed file: via the configured `[open]` command when set (so
+    /// editor templates like `cursor {path}` work), else the OS default app.
+    pub(super) fn open_file_external(
+        &mut self,
+        id: &RepoId,
+        rel: &std::path::Path,
+        tui: &mut Tui,
+    ) -> Result<()> {
+        let Some(abs) = self.file_op_dir(id).map(|d| d.join(rel)) else {
+            return Ok(());
+        };
+        if self.config.open.command.is_some() {
+            self.launch_open(abs, tui)?;
+        } else {
+            let opener = if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            };
+            let cwd = abs
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| abs.clone());
+            self.os_open(
+                vec![opener.to_string(), abs.to_string_lossy().into_owned()],
+                cwd,
+                "open",
+            );
+        }
+        Ok(())
+    }
+
+    /// Reveal a changed file in the OS file manager: Finder selects it on macOS
+    /// (`open -R`); elsewhere open the enclosing folder (`xdg-open <dir>`).
+    pub(super) fn reveal_file_external(&self, id: &RepoId, rel: &std::path::Path) {
+        let Some(abs) = self.file_op_dir(id).map(|d| d.join(rel)) else {
+            return;
+        };
+        let parent = abs
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| abs.clone());
+        let argv = if cfg!(target_os = "macos") {
+            vec![
+                "open".to_string(),
+                "-R".to_string(),
+                abs.to_string_lossy().into_owned(),
+            ]
+        } else {
+            vec![
+                "xdg-open".to_string(),
+                parent.to_string_lossy().into_owned(),
+            ]
+        };
+        self.os_open(argv, parent, "reveal");
     }
     /// Execute a [`crate::session::launcher::LaunchPlan`] for a verb (`open`/`review`)
     /// targeting `dir`. Needs `tui` so an `Inline` plan can suspend the TUI,

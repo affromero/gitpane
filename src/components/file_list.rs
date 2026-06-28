@@ -405,6 +405,39 @@ impl Component for FileList {
                 }
                 Ok(None)
             }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                let click_area = if self.viewing_diff() {
+                    self.file_list_area
+                } else {
+                    self.render_area
+                };
+                if click_area.contains(pos) {
+                    let content_y = click_area.y + 1; // +1 for border
+                    if mouse.row >= content_y {
+                        let idx = (mouse.row - content_y) as usize + self.state.offset();
+                        if let (Some(entry), Some(repo_id)) =
+                            (self.files.get(idx), self.repo_id.clone())
+                        {
+                            self.state.select(Some(idx));
+                            let conflicted = entry.status == FileStatus::Conflicted;
+                            return Ok(Some(Action::ShowFileContextMenu {
+                                id: repo_id,
+                                path: entry.path.clone(),
+                                row: mouse.row,
+                                col: mouse.column,
+                                staged: entry.staged,
+                                // A conflicted row counts as stageable: `git add`
+                                // marks it resolved and Discard restores it.
+                                unstaged: entry.unstaged || conflicted,
+                                is_untracked: entry.status == FileStatus::Untracked,
+                                is_submodule: entry.is_submodule,
+                            }));
+                        }
+                    }
+                }
+                Ok(None)
+            }
             MouseEventKind::ScrollUp => {
                 if self.viewing_diff() {
                     let pos = ratatui::layout::Position::new(mouse.column, mouse.row);

@@ -64,6 +64,67 @@ impl App {
             Action::HideContextMenu => {
                 self.context_menu.hide();
             }
+            Action::ShowFileContextMenu {
+                ref id,
+                ref path,
+                row,
+                col,
+                staged,
+                unstaged,
+                is_untracked,
+                is_submodule,
+            } => {
+                self.context_menu.show_file(
+                    id.clone(),
+                    col,
+                    row,
+                    crate::components::context_menu::FileMenuContext {
+                        path: path.clone(),
+                        staged,
+                        unstaged,
+                        is_untracked,
+                        is_submodule,
+                    },
+                );
+            }
+            Action::RevealFile(ref id, ref path) => {
+                self.reveal_file_external(id, path);
+            }
+            Action::DiscardFile(ref id, ref path, is_untracked) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let message = if is_untracked {
+                    format!("Delete untracked '{name}'? This cannot be undone.")
+                } else {
+                    format!("Discard changes to '{name}'? This cannot be undone.")
+                };
+                self.confirm_dialog.show(
+                    message,
+                    Action::DiscardFileConfirmed(id.clone(), path.clone(), is_untracked),
+                );
+            }
+            Action::StageFile(ref id, ref path)
+            | Action::UnstageFile(ref id, ref path)
+            | Action::DiscardFileConfirmed(ref id, ref path, _) => {
+                if let Some(dir) = self.file_op_dir(id) {
+                    let mut args: Vec<String> = match action {
+                        Action::StageFile(..) => vec!["add".into(), "-A".into()],
+                        Action::UnstageFile(..) => vec!["reset".into(), "-q".into()],
+                        Action::DiscardFileConfirmed(_, _, true) => {
+                            vec!["clean".into(), "-fdq".into()]
+                        }
+                        Action::DiscardFileConfirmed(_, _, false) => {
+                            vec!["restore".into(), "--staged".into(), "--worktree".into()]
+                        }
+                        _ => unreachable!(),
+                    };
+                    args.push("--".into());
+                    args.push(path.to_string_lossy().into_owned());
+                    self.spawn_git_op_in(dir, id.clone(), args);
+                }
+            }
             Action::CopyPath(ref id) => {
                 if let Some(target) = self.repo_list.resolve_target(id) {
                     let path_str = target.exec_path.to_string_lossy().to_string();

@@ -465,6 +465,11 @@ impl App {
                 self.picker.hide();
                 self.pending_pick = None;
             }
+            Action::OpenFile(ref id, ref path) => {
+                // Lives here (not handle_action_rest) because launch_open needs
+                // the Tui to suspend/restore for an inline editor.
+                self.open_file_external(id, path, tui)?;
+            }
             other => self.handle_action_rest(other)?,
         }
         Ok(())
