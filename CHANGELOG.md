@@ -2,6 +2,14 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.8.1] - 2026-06-29
+
+### Added
+- Right-click a file in the Changes panel to open a context menu with Stage, Unstage, Discard, Open, and Open folder. Stage and Unstage are gated by what the file actually supports: a worktree change can be staged, a staged change can be unstaged, and a partially staged file offers both. Discard is confirmation gated and restores a tracked file (or deletes an untracked one). Open launches the file through the configured `[open]` command, or the OS default app when none is set, and Open folder reveals the file in the system file manager. File operations run against the active worktree's tree when a worktree is selected, mirroring the diff view, while the parent repository row refreshes afterward. Submodule rows offer only Open and Open folder.
+
+### Fixed
+- Releasing no longer fails to reach crates.io silently. The publish step swallowed every error (including an expired token's 403 Forbidden) yet still reported success, so v0.7.15 and v0.8.0 were tagged and built but never published. The step now fails the job on real errors and treats only an already-published version as a skippable no-op.
+
 ## [0.8.0] - 2026-06-26
 
 ### Added
