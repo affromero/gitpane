@@ -134,12 +134,19 @@ jobs:
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        # Only an already-published version is a non-error (idempotent re-runs);
-        # real failures (e.g. 403 auth) must fail the job, not be swallowed.
+        # Capture cargo's real exit via PIPESTATUS (the runner's bash has no
+        # pipefail, so a bare pipe would hide failures), and keep the log file
+        # OUTSIDE the repo so it can't dirty the tree and trip cargo publish's
+        # own uncommitted-changes guard. Only an already-published version is a
+        # non-error; real failures (e.g. 403 auth) must fail the job.
         run: |
-          if cargo publish 2>&1 | tee publish.log; then
+          set +e
+          cargo publish 2>&1 | tee "$RUNNER_TEMP/publish.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
             echo "Published."
-          elif grep -qiE "already (uploaded|exists)|is already uploaded" publish.log; then
+          elif grep -qiE "already (uploaded|exists)|is already uploaded" "$RUNNER_TEMP/publish.log"; then
             echo "Version already on crates.io; skipping."
           else
             echo "::error::cargo publish failed (see log above)"
