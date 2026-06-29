@@ -129,6 +129,12 @@ pub(crate) struct StashEntry {
 pub(crate) struct FileEntry {
     pub path: PathBuf,
     pub status: FileStatus,
+    /// Index/staged side is dirty (any `is_index_*`); the row can be unstaged.
+    pub staged: bool,
+    /// Worktree/unstaged side is dirty (any `is_wt_*`, including untracked); the
+    /// row can be staged. `status` collapses both sides for display; these two
+    /// keep them apart so a context menu can offer Stage vs Unstage correctly.
+    pub unstaged: bool,
     pub is_submodule: bool,
     pub submodule_state: Option<SubmoduleState>,
     pub submodule_warn: SubmoduleWarn,

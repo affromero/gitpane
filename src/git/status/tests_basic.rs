@@ -247,6 +247,8 @@ fn test_file_entry_submodule_fields() {
     let entry = FileEntry {
         path: PathBuf::from("my-submodule"),
         status: FileStatus::Modified,
+        staged: false,
+        unstaged: true,
         is_submodule: true,
         submodule_state: Some(SubmoduleState::Modified),
         submodule_warn: SubmoduleWarn::default(),
@@ -263,6 +265,8 @@ fn test_file_entry_submodule_fields() {
     let plain = FileEntry {
         path: PathBuf::from("src/main.rs"),
         status: FileStatus::Modified,
+        staged: false,
+        unstaged: true,
         is_submodule: false,
         submodule_state: None,
         submodule_warn: SubmoduleWarn::default(),
@@ -271,6 +275,52 @@ fn test_file_entry_submodule_fields() {
     assert!(!plain.is_submodule);
     assert_eq!(plain.submodule_state, None);
     assert_eq!(plain.submodule_head, None);
+}
+
+#[test]
+fn test_staged_and_unstaged_flags_distinguished() {
+    let (tmp, repo) = init_temp_repo();
+
+    // Commit an initial file.
+    let file_path = tmp.path().join("test.txt");
+    fs::write(&file_path, "one").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("test.txt")).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "Add file", &tree, &[&head])
+        .unwrap();
+
+    // Stage a change, then modify again on disk: the index differs from HEAD
+    // (staged) and the worktree differs from the index (unstaged).
+    fs::write(&file_path, "two").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("test.txt")).unwrap();
+    index.write().unwrap();
+    fs::write(&file_path, "three").unwrap();
+
+    // An untracked file is unstaged-only.
+    fs::write(tmp.path().join("new.txt"), "new").unwrap();
+
+    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+
+    let tracked = status
+        .files
+        .iter()
+        .find(|f| f.path == Path::new("test.txt"))
+        .expect("tracked file present");
+    assert!(tracked.staged && tracked.unstaged);
+
+    let untracked = status
+        .files
+        .iter()
+        .find(|f| f.path == Path::new("new.txt"))
+        .expect("untracked file present");
+    assert_eq!(untracked.status, FileStatus::Untracked);
+    assert!(untracked.unstaged && !untracked.staged);
 }
 
 #[test]

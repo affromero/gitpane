@@ -111,6 +111,28 @@ pub(crate) enum Action {
     },
     HideContextMenu,
     CopyPath(RepoId),
+    /// Right-click on a changed-file row: open the file context menu. `id` is the
+    /// changed-files box's repo id (the parent repo, even for worktree files).
+    ShowFileContextMenu {
+        id: RepoId,
+        path: std::path::PathBuf,
+        row: u16,
+        col: u16,
+        staged: bool,
+        unstaged: bool,
+        is_untracked: bool,
+        is_submodule: bool,
+    },
+    /// Open a file in the configured `[open]` command, or the OS default app.
+    OpenFile(RepoId, std::path::PathBuf),
+    /// Reveal a file in the OS file manager (Finder on macOS).
+    RevealFile(RepoId, std::path::PathBuf),
+    StageFile(RepoId, std::path::PathBuf),
+    UnstageFile(RepoId, std::path::PathBuf),
+    /// Prompt before discarding. The `bool` is `is_untracked` (delete vs restore).
+    DiscardFile(RepoId, std::path::PathBuf, bool),
+    /// Run the discard after the confirm dialog accepts.
+    DiscardFileConfirmed(RepoId, std::path::PathBuf, bool),
     GitPush(RepoId),
     GitPull(RepoId),
     GitPullRebase(RepoId),

@@ -57,6 +57,16 @@ pub(super) fn collect_change_summary(
         files.push(FileEntry {
             path: file_path,
             status: file_status,
+            staged: s.is_index_new()
+                || s.is_index_modified()
+                || s.is_index_deleted()
+                || s.is_index_renamed()
+                || s.is_index_typechange(),
+            unstaged: s.is_wt_new()
+                || s.is_wt_modified()
+                || s.is_wt_deleted()
+                || s.is_wt_renamed()
+                || s.is_wt_typechange(),
             is_submodule: false,
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
@@ -152,6 +162,10 @@ pub(super) fn collect_change_summary(
                 files.push(FileEntry {
                     path: sub_path,
                     status: FileStatus::Modified,
+                    // A dirty submodule is a worktree-side signal; staging is
+                    // gated off for submodule rows anyway.
+                    staged: false,
+                    unstaged: true,
                     is_submodule: true,
                     submodule_state: state,
                     submodule_warn: warn,
