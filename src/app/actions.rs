@@ -330,20 +330,26 @@ impl App {
                 // the other context-menu items; a repo row loads the
                 // repo's own graph.
                 self.context_menu.hide();
-                let worktree = self
-                    .repo_list
-                    .selected_worktree()
-                    .map(|(repo_id, wt)| (repo_id, wt.path.clone(), wt.branch.clone()));
-                if let Some((repo_id, worktree_path, worktree_branch)) = worktree {
-                    self.action_tx.send(Action::SelectWorktree {
-                        repo_id,
-                        worktree_path,
-                        worktree_branch,
-                    })?;
-                } else if let Some(entry) = self.repo_list.selected_repo() {
-                    let path = entry.path.clone();
-                    let name = entry.name.clone();
-                    self.git_graph.load_repo(path, &name);
+                // A submodule/worktree context owns the graph: refresh from its
+                // path rather than reloading the selected parent repo over it.
+                if self.active_worktree.is_some() {
+                    self.refresh_active_worktree();
+                } else {
+                    let worktree = self
+                        .repo_list
+                        .selected_worktree()
+                        .map(|(repo_id, wt)| (repo_id, wt.path.clone(), wt.branch.clone()));
+                    if let Some((repo_id, worktree_path, worktree_branch)) = worktree {
+                        self.action_tx.send(Action::SelectWorktree {
+                            repo_id,
+                            worktree_path,
+                            worktree_branch,
+                        })?;
+                    } else if let Some(entry) = self.repo_list.selected_repo() {
+                        let path = entry.path.clone();
+                        let name = entry.name.clone();
+                        self.git_graph.load_repo(path, &name);
+                    }
                 }
                 self.focus = FocusPanel::Graph;
             }
