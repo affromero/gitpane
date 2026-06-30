@@ -427,6 +427,14 @@ impl App {
     }
     /// Auto-load graph + file list for the selected repo.
     fn sync_selection(&mut self) {
+        // An active worktree/submodule context owns the detail panels. A sort,
+        // rescan, or discovery must refresh *that* path, not reload the selected
+        // parent row over it (a submodule is opened with the parent row still
+        // selected, so the selected row is not the active target).
+        if self.active_worktree.is_some() {
+            self.refresh_active_worktree();
+            return;
+        }
         if let Some(idx) = self.repo_list.selected_index()
             && let Some(entry) = self.repo_list.repos.get(idx)
         {
