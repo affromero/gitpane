@@ -2,6 +2,17 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.8.2] - 2026-06-30
+
+### Added
+- Right-click a changed submodule in the Changes panel and choose "Open in graph" to point both the changes and commit graph panels at the submodule's own repository. The graph then shows the submodule's history and the panel shows its own changed files, instead of staying pinned to the parent. An uninitialized submodule reports that it is not initialized rather than opening an empty graph, and selecting any repository row returns to the parent view. Submodule rows still offer only Open, Open folder, and Open in graph, never stage or discard.
+
+### Fixed
+- An active worktree or submodule context now stays in control of the detail panels during a sort, rescan, or graph reload. Previously these could reload the selected parent repository over the active context and leave the changes and graph panels showing different repositories.
+
+### Changed
+- Updated anyhow to 1.0.103 to clear RUSTSEC-2026-0190, an unsoundness advisory affecting `Error::downcast_mut`.
+
 ## [0.8.1] - 2026-06-29
 
 ### Added
