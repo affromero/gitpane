@@ -412,6 +412,46 @@ impl App {
             });
         }
     }
+    /// Point the detail panels (changes + graph) at `path` as the active
+    /// context, clearing the file list while a background status query loads
+    /// its changes. Shared by worktree and submodule selection — both retarget
+    /// the panels onto a git repo that is not the selected list row.
+    pub(super) fn activate_path_context(
+        &mut self,
+        path: std::path::PathBuf,
+        repo_id: RepoId,
+        display_name: String,
+    ) {
+        self.context_menu.hide();
+        self.active_worktree = Some(ActiveWorktree {
+            path: path.clone(),
+            repo_id: repo_id.clone(),
+            display_name: display_name.clone(),
+        });
+        // Clear the file list while loading (parent repo_id for resolve_index).
+        self.file_list
+            .set_files(Vec::new(), &display_name, repo_id.clone());
+        self.git_graph.load_repo(path.clone(), &display_name);
+
+        let tx = self.action_tx.clone();
+        let sub_cfg = self.config.submodules.clone();
+        tokio::task::spawn_blocking(move || {
+            match crate::git::status::query_status(&path, &sub_cfg) {
+                Ok(s) => {
+                    let _ = tx.send(Action::WorktreeFilesLoaded {
+                        repo_id,
+                        worktree_path: path,
+                        name: display_name,
+                        files: s.files,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::Error(format!("Status query: {}", e)));
+                }
+            }
+        });
+    }
+
     /// If a worktree is the active selection, refresh its graph and re-query
     /// its files so the changes panel updates live. Used by the local poll and
     /// after a git op completes on the worktree's parent repo (the parent

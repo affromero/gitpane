@@ -41,6 +41,8 @@ enum MenuAction {
     // File-row actions (menu opened via `show_file`).
     OpenFile,
     RevealFile,
+    /// Submodule row only: retarget the graph/changes panels onto the submodule.
+    OpenSubmoduleGraph,
     StageFile,
     UnstageFile,
     /// Discard a changed file; `bool` is `is_untracked` (delete vs restore).
@@ -263,10 +265,14 @@ impl ContextMenu {
         }
 
         // Always available: inspect the file or its enclosing folder.
-        let inspect = vec![
+        let mut inspect = vec![
             item("Open".into(), MenuAction::OpenFile),
             item("Open folder".into(), MenuAction::RevealFile),
         ];
+        // A submodule is its own repo: offer to browse its graph in the panels.
+        if is_submodule {
+            inspect.push(item("Open in graph".into(), MenuAction::OpenSubmoduleGraph));
+        }
 
         self.rows.clear();
         for group in [mutate, inspect] {
@@ -370,6 +376,10 @@ impl ContextMenu {
             // the menu is somehow in repo mode (no file_path).
             MenuAction::OpenFile => Action::OpenFile(id, self.file_path.clone()?),
             MenuAction::RevealFile => Action::RevealFile(id, self.file_path.clone()?),
+            MenuAction::OpenSubmoduleGraph => Action::SelectSubmodule {
+                repo_id: id,
+                sub_path: self.file_path.clone()?,
+            },
             MenuAction::StageFile => Action::StageFile(id, self.file_path.clone()?),
             MenuAction::UnstageFile => Action::UnstageFile(id, self.file_path.clone()?),
             MenuAction::DiscardFile(is_untracked) => {
@@ -569,8 +579,17 @@ mod file_menu_tests {
     }
 
     #[test]
-    fn submodule_row_offers_only_inspect_items() {
+    fn submodule_row_offers_inspect_and_graph_no_mutations() {
         let labels = item_labels(&show(false, true, false, true));
-        assert_eq!(labels, vec!["Open".to_string(), "Open folder".to_string()]);
+        // A submodule is its own repo: inspect + browse its graph, never
+        // stage/unstage/discard the pointer.
+        assert_eq!(
+            labels,
+            vec![
+                "Open".to_string(),
+                "Open folder".to_string(),
+                "Open in graph".to_string(),
+            ]
+        );
     }
 }

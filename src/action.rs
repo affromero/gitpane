@@ -20,6 +20,12 @@ pub(crate) enum Action {
         worktree_path: std::path::PathBuf,
         worktree_branch: String,
     },
+    /// Retarget the changes + graph panels onto a changed submodule's own repo.
+    /// `sub_path` is the submodule's repo-relative path (the changed-files row).
+    SelectSubmodule {
+        repo_id: RepoId,
+        sub_path: std::path::PathBuf,
+    },
     /// Carries the result of a worktree status query back to the UI.
     WorktreeFilesLoaded {
         repo_id: RepoId,

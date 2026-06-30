@@ -65,50 +65,39 @@ impl App {
                 ref worktree_path,
                 ref worktree_branch,
             } => {
-                self.context_menu.hide();
-
                 let repo_name = self
                     .repo_list
                     .resolve_index(repo_id)
                     .map(|i| self.repo_list.repos[i].name.clone())
                     .unwrap_or_default();
                 let display_name = format!("{}:{}", repo_name, worktree_branch);
-
-                self.active_worktree = Some(ActiveWorktree {
-                    path: worktree_path.clone(),
-                    repo_id: repo_id.clone(),
-                    display_name: display_name.clone(),
-                });
-
-                // Clear file list while loading (use parent repo_id for resolve_index)
-                self.file_list
-                    .set_files(Vec::new(), &display_name, repo_id.clone());
-
-                // Load graph from worktree path
-                self.git_graph
-                    .load_repo(worktree_path.clone(), &display_name);
-
-                // Query worktree status in background
-                let wt_path = worktree_path.clone();
-                let parent_id = repo_id.clone();
-                let name = display_name;
-                let tx = self.action_tx.clone();
-                let sub_cfg = self.config.submodules.clone();
-                tokio::task::spawn_blocking(move || {
-                    match crate::git::status::query_status(&wt_path, &sub_cfg) {
-                        Ok(s) => {
-                            let _ = tx.send(Action::WorktreeFilesLoaded {
-                                repo_id: parent_id,
-                                worktree_path: wt_path,
-                                name,
-                                files: s.files,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Action::Error(format!("Worktree status: {}", e)));
-                        }
+                self.activate_path_context(worktree_path.clone(), repo_id.clone(), display_name);
+            }
+            Action::SelectSubmodule {
+                ref repo_id,
+                ref sub_path,
+            } => {
+                if let Some(idx) = self.repo_list.resolve_index(repo_id) {
+                    let entry = &self.repo_list.repos[idx];
+                    let repo_name = entry.name.clone();
+                    let sub_abs = entry.path.join(sub_path);
+                    // Uninitialized submodules have no checked-out repo to graph.
+                    let uninitialized = entry
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.submodules.iter().find(|sm| sm.path == *sub_path))
+                        .and_then(|sm| sm.state.clone())
+                        == Some(crate::git::status::SubmoduleState::Uninitialized);
+                    if uninitialized {
+                        self.action_tx.send(Action::Error(format!(
+                            "Submodule {} is not initialized",
+                            sub_path.display()
+                        )))?;
+                    } else {
+                        let display_name = format!("{}/{}", repo_name, sub_path.display());
+                        self.activate_path_context(sub_abs, repo_id.clone(), display_name);
                     }
-                });
+                }
             }
             Action::WorktreeFilesLoaded {
                 ref repo_id,
