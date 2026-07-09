@@ -10,6 +10,18 @@ impl Default for SubmoduleConfig {
     }
 }
 
+impl Default for GithubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_github_enabled(),
+        }
+    }
+}
+
+pub(super) fn default_github_enabled() -> bool {
+    true
+}
+
 impl Default for OpenConfig {
     fn default() -> Self {
         Self {
@@ -175,6 +187,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
+            github: GithubConfig::default(),
             open: OpenConfig::default(),
             review: ReviewConfig::default(),
             worktree: WorktreeConfig::default(),

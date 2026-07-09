@@ -200,6 +200,32 @@ pub(crate) enum Action {
     StatusQueryDone(RepoId),
     /// Open the in-app theme picker overlay.
     OpenThemePicker,
+    /// The selection settled after debouncing; fetch GitHub data for it if due.
+    /// The `u64` is the selection generation, so a stale fire is ignored.
+    GithubSelectionSettled(u64),
+    /// Result of a `gh` issue/PR fetch for `repo_id`. Applied only when
+    /// `generation` still matches the repo's latest request (staleness latch).
+    GitHubFetched {
+        repo_id: RepoId,
+        generation: u64,
+        result: Result<crate::git::github::GithubData, String>,
+    },
+    /// Open a URL in the OS browser (an issue/PR web link).
+    OpenUrl(String),
+    /// Cycle the GitHub panel's state filter (open → all → closed) and refetch.
+    CycleGithubStateFilter,
+    /// Load the body + comments of a github item into the panel's detail pane.
+    /// `generation` latches out results for a superseded selection.
+    ShowGithubItem {
+        url: String,
+        is_pr: bool,
+        generation: u64,
+    },
+    /// Result of a [`Action::ShowGithubItem`] fetch.
+    GithubItemLoaded {
+        generation: u64,
+        result: Result<crate::git::github::ItemDetail, String>,
+    },
     /// Apply a theme transiently (live preview), no persistence.
     PreviewTheme(String),
     /// Apply a theme and write `theme = "<name>"` to the active config file.

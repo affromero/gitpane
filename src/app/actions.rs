@@ -37,6 +37,7 @@ impl App {
                     self.git_graph.load_repo(path, &name);
                     self.repo_list.select_repo_row(idx);
                 }
+                self.github_touch_selection();
             }
             Action::FocusRepoDetails(ref id) => {
                 // Same panel refresh as SelectRepo but without
@@ -59,6 +60,7 @@ impl App {
                     self.file_list.set_files(files, &name, repo_id);
                     self.git_graph.load_repo(path, &name);
                 }
+                self.github_touch_selection();
             }
             Action::SelectWorktree {
                 ref repo_id,
@@ -72,6 +74,7 @@ impl App {
                     .unwrap_or_default();
                 let display_name = format!("{}:{}", repo_name, worktree_branch);
                 self.activate_path_context(worktree_path.clone(), repo_id.clone(), display_name);
+                self.github_touch_selection();
             }
             Action::SelectSubmodule {
                 ref repo_id,
@@ -96,6 +99,7 @@ impl App {
                     } else {
                         let display_name = format!("{}/{}", repo_name, sub_path.display());
                         self.activate_path_context(sub_abs, repo_id.clone(), display_name);
+                        self.github_touch_selection();
                     }
                 }
             }

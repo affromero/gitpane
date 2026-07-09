@@ -69,9 +69,13 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => {
-                // If viewing diff, close it instead of quitting
+                // If viewing a diff or the GitHub detail, close it instead of quitting.
                 if self.focus == FocusPanel::Changes && self.file_list.viewing_diff() {
                     self.file_list.handle_key_event(key)?;
+                    return Ok(());
+                }
+                if self.focus == FocusPanel::GitHub && self.github_panel.has_detail() {
+                    self.github_panel.handle_key_event(key)?;
                     return Ok(());
                 }
                 self.action_tx.send(Action::Quit)?;
@@ -82,8 +86,11 @@ impl App {
                     self.file_list.handle_key_event(key)?;
                 } else if self.focus == FocusPanel::Graph && self.git_graph.has_detail() {
                     self.git_graph.handle_key_event(key)?;
+                } else if self.focus == FocusPanel::GitHub && self.github_panel.has_detail() {
+                    self.github_panel.handle_key_event(key)?;
                 } else {
                     match self.focus {
+                        FocusPanel::GitHub => self.focus = FocusPanel::Graph,
                         FocusPanel::Graph => self.focus = FocusPanel::Changes,
                         FocusPanel::Changes => self.focus = FocusPanel::Repos,
                         FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
@@ -91,19 +98,23 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                // Cycle focus right
+                // Cycle focus right, skipping the GitHub panel when it's hidden.
                 self.focus = match self.focus {
                     FocusPanel::Repos => FocusPanel::Changes,
                     FocusPanel::Changes => FocusPanel::Graph,
+                    FocusPanel::Graph if self.github_visible => FocusPanel::GitHub,
                     FocusPanel::Graph => FocusPanel::Repos,
+                    FocusPanel::GitHub => FocusPanel::Repos,
                 };
             }
             KeyCode::BackTab => {
-                // Cycle focus left
+                // Cycle focus left, skipping the GitHub panel when it's hidden.
                 self.focus = match self.focus {
+                    FocusPanel::Repos if self.github_visible => FocusPanel::GitHub,
                     FocusPanel::Repos => FocusPanel::Graph,
                     FocusPanel::Changes => FocusPanel::Repos,
                     FocusPanel::Graph => FocusPanel::Changes,
+                    FocusPanel::GitHub => FocusPanel::Graph,
                 };
             }
             KeyCode::Char('r') => {
@@ -117,6 +128,9 @@ impl App {
             }
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
+            }
+            KeyCode::Char('p') => {
+                self.toggle_github_panel();
             }
             KeyCode::Char('G') => {
                 self.action_tx.send(Action::GotoSessionSelected)?;
@@ -155,6 +169,7 @@ impl App {
                         .map(|e| e.path.to_string_lossy().to_string()),
                     FocusPanel::Changes => self.file_list.selected_path(),
                     FocusPanel::Graph => self.git_graph.selected_text(),
+                    FocusPanel::GitHub => self.github_panel.selected_url(),
                 };
                 if let Some(text) = text {
                     use std::io::Write;
@@ -178,6 +193,11 @@ impl App {
                     }
                     FocusPanel::Graph => {
                         if let Some(action) = self.git_graph.handle_key_event(key)? {
+                            self.action_tx.send(action)?;
+                        }
+                    }
+                    FocusPanel::GitHub => {
+                        if let Some(action) = self.github_panel.handle_key_event(key)? {
                             self.action_tx.send(action)?;
                         }
                     }
@@ -213,36 +233,49 @@ impl App {
 
         // Border dragging for panel resize (works in both orientations)
         if self.repo_area.width > 0 {
-            // Compute border positions and mouse coordinate along the layout axis
-            let (border1, border2, mouse_pos, total, origin) = if self.horizontal_layout {
+            // Compute border positions and mouse coordinate along the layout
+            // axis. border3 (graph|github) only exists while the panel is shown.
+            let (border1, border2, border3, mouse_pos, total, origin) = if self.horizontal_layout {
                 (
                     self.repo_area.x + self.repo_area.width,
                     self.changes_area.x + self.changes_area.width,
+                    self.graph_area.x + self.graph_area.width,
                     mouse.column,
-                    self.repo_area.width + self.changes_area.width + self.graph_area.width,
+                    self.repo_area.width
+                        + self.changes_area.width
+                        + self.graph_area.width
+                        + self.github_area.width,
                     self.repo_area.x,
                 )
             } else {
                 (
                     self.repo_area.y + self.repo_area.height,
                     self.changes_area.y + self.changes_area.height,
+                    self.graph_area.y + self.graph_area.height,
                     mouse.row,
-                    self.repo_area.height + self.changes_area.height + self.graph_area.height,
+                    self.repo_area.height
+                        + self.changes_area.height
+                        + self.graph_area.height
+                        + self.github_area.height,
                     self.repo_area.y,
                 )
             };
 
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let d1 = mouse_pos.abs_diff(border1);
-                    let d2 = mouse_pos.abs_diff(border2);
-                    if d1 <= GRAB_ZONE && (d1 <= d2 || d2 > GRAB_ZONE) {
-                        self.dragging_border = Some(0);
-                    } else if d2 <= GRAB_ZONE {
-                        self.dragging_border = Some(1);
-                    } else {
-                        self.dragging_border = None;
+                    // Grab the nearest border within the hit zone.
+                    let mut candidates = vec![
+                        (0u8, mouse_pos.abs_diff(border1)),
+                        (1, mouse_pos.abs_diff(border2)),
+                    ];
+                    if self.github_visible {
+                        candidates.push((2, mouse_pos.abs_diff(border3)));
                     }
+                    self.dragging_border = candidates
+                        .into_iter()
+                        .filter(|(_, d)| *d <= GRAB_ZONE)
+                        .min_by_key(|(_, d)| *d)
+                        .map(|(id, _)| id);
                     // Don't return — let the click propagate to panels
                     // so items near borders remain clickable. The drag
                     // will only engage on MouseEventKind::Drag.
@@ -255,8 +288,17 @@ impl App {
                             self.border_frac[0] = rel.clamp(min_f, self.border_frac[1] - min_f);
                         }
                         Some(1) => {
-                            self.border_frac[1] =
-                                rel.clamp(self.border_frac[0] + min_f, 1.0 - min_f);
+                            // Cap at the graph/github split when the panel is shown.
+                            let upper = if self.github_visible {
+                                self.border_frac[2]
+                            } else {
+                                1.0
+                            } - min_f;
+                            self.border_frac[1] = rel.clamp(self.border_frac[0] + min_f, upper);
+                        }
+                        Some(2) => {
+                            self.border_frac[2] =
+                                rel.clamp(self.border_frac[1] + min_f, 1.0 - min_f);
                         }
                         _ => {}
                     }
@@ -278,6 +320,8 @@ impl App {
                 self.focus = FocusPanel::Changes;
             } else if self.graph_area.contains(pos) {
                 self.focus = FocusPanel::Graph;
+            } else if self.github_visible && self.github_area.contains(pos) {
+                self.focus = FocusPanel::GitHub;
             }
         }
 
@@ -290,8 +334,13 @@ impl App {
             if let Some(action) = self.file_list.handle_mouse_event(mouse)? {
                 self.action_tx.send(action)?;
             }
-        } else if self.graph_area.contains(pos)
-            && let Some(action) = self.git_graph.handle_mouse_event(mouse)?
+        } else if self.graph_area.contains(pos) {
+            if let Some(action) = self.git_graph.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+        } else if self.github_visible
+            && self.github_area.contains(pos)
+            && let Some(action) = self.github_panel.handle_mouse_event(mouse)?
         {
             self.action_tx.send(action)?;
         }

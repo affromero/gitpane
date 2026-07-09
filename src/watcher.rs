@@ -512,12 +512,25 @@ mod tests {
         // defaults to true), so we actually `git init` rather than fake `.git`.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
-        let initialized = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(root)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let mut init_cmd = std::process::Command::new("git");
+        init_cmd.args(["init", "-q"]).current_dir(root);
+        // This suite can run under the pre-push hook, whose injected git env
+        // (GIT_DIR, GIT_INDEX_FILE, …) would make `git init` target the outer
+        // repo instead of the temp dir, leaving it a non-repo where `ignore`
+        // then skips .gitignore. Strip that env.
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_PREFIX",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+        ] {
+            init_cmd.env_remove(var);
+        }
+        let initialized = init_cmd.status().map(|s| s.success()).unwrap_or(false);
         if !initialized {
             eprintln!("skipping watch_dirs_respects_gitignore: git is not available");
             return;
