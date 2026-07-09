@@ -2,6 +2,12 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Added
+- Custom keybindings. Define `[[keybindings]]` blocks in the config to bind a single key to a shell command that runs against the selected repository or worktree. Each binding takes a `key`, a `command` where `{path}` expands to the target directory, an optional `placement` that reuses the `[open]` vocabulary (`command`, `inline`, `ask`, `split-window`, `new-window`), and an optional `desc` shown in the `?` help overlay. Keys already claimed by the built-in global actions stay reserved, a key a panel uses for navigation can be bound but then stops navigating that panel, and `gitpane diagnostic` lists the bindings that were loaded so a key that does not fire is easy to trace.
+- CI status on GitHub pull request rows. Each PR in the GitHub panel now shows its rolled-up checks result, fetched through `gh`'s `statusCheckRollup`: a green `✓` when checks passed, a red `✗` when any failed, and a yellow `●` while checks are still running. A PR with no checks shows nothing, and issues are unaffected. Failure takes precedence over a still-running or passing check, matching how GitHub itself summarizes a mixed run.
+
 ## [0.9.0] - 2026-07-09
 
 ### Added

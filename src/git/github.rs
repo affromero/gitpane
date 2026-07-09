@@ -13,6 +13,20 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+/// Rolled-up CI/checks result for a pull request, from `gh`'s
+/// `statusCheckRollup`. `None` on an item means no checks (every issue, and a
+/// PR with an empty rollup).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CheckState {
+    /// At least one check succeeded and none failed or are still running.
+    Success,
+    /// At least one check failed, errored, timed out, was cancelled, or needs
+    /// action. Failure dominates: it wins over any pending or success.
+    Failure,
+    /// No failure, but at least one check is still queued or in progress.
+    Pending,
+}
+
 /// One issue or pull request, in the shape the panel renders.
 #[derive(Clone, Debug)]
 pub(crate) struct GhItem {
@@ -28,6 +42,8 @@ pub(crate) struct GhItem {
     pub updated_at: String,
     /// Web URL, opened in the browser on Enter.
     pub url: String,
+    /// Rolled-up CI/checks state for a PR; `None` for issues or an empty rollup.
+    pub checks: Option<CheckState>,
 }
 
 /// Open issues and PRs for one repo, returned by [`fetch`].
@@ -133,7 +149,7 @@ fn fetch_list(owner: &str, repo: &str, is_pr: bool, state: &str) -> Result<Vec<G
     let sub = if is_pr { "pr" } else { "issue" };
     // PRs carry `isDraft`; issues do not, so request the field only for PRs.
     let fields = if is_pr {
-        "number,title,state,author,updatedAt,url,isDraft"
+        "number,title,state,author,updatedAt,url,isDraft,statusCheckRollup"
     } else {
         "number,title,state,author,updatedAt,url"
     };
@@ -243,6 +259,76 @@ struct RawItem {
     url: String,
     #[serde(default)]
     is_draft: bool,
+    #[serde(default)]
+    status_check_rollup: Vec<RawCheck>,
+}
+
+/// One entry of a PR's `statusCheckRollup`. `gh` mixes two shapes: a modern
+/// `CheckRun` (a `status` that is `COMPLETED` etc., plus a `conclusion` once
+/// complete) and a legacy `StatusContext` (a single `state`). We read whichever
+/// fields are present; missing ones stay `None`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawCheck {
+    /// CheckRun lifecycle: QUEUED | IN_PROGRESS | COMPLETED | …
+    #[serde(default)]
+    status: Option<String>,
+    /// CheckRun result once COMPLETED: SUCCESS | FAILURE | NEUTRAL | …
+    #[serde(default)]
+    conclusion: Option<String>,
+    /// StatusContext result: SUCCESS | PENDING | FAILURE | ERROR | EXPECTED.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// Collapse a PR's check entries to a single [`CheckState`], mirroring GitHub's
+/// own rollup precedence: any failure ⇒ Failure, else any still-running ⇒
+/// Pending, else any success ⇒ Success, else `None` (empty, or only
+/// neutral/skipped checks).
+fn rollup_state(checks: &[RawCheck]) -> Option<CheckState> {
+    let mut any_pending = false;
+    let mut any_success = false;
+    for c in checks {
+        if let Some(state) = c.state.as_deref() {
+            // Legacy StatusContext.
+            match state.to_ascii_uppercase().as_str() {
+                "FAILURE" | "ERROR" => return Some(CheckState::Failure),
+                "PENDING" | "EXPECTED" => any_pending = true,
+                "SUCCESS" => any_success = true,
+                _ => {}
+            }
+        } else {
+            // Modern CheckRun: not COMPLETED means it is still running.
+            let completed = c
+                .status
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("COMPLETED"));
+            if !completed {
+                any_pending = true;
+                continue;
+            }
+            match c
+                .conclusion
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_uppercase()
+                .as_str()
+            {
+                "FAILURE" | "ERROR" | "TIMED_OUT" | "STARTUP_FAILURE" | "ACTION_REQUIRED"
+                | "CANCELLED" => return Some(CheckState::Failure),
+                "SUCCESS" => any_success = true,
+                // NEUTRAL / SKIPPED / STALE / unknown: not blocking, not counted.
+                _ => {}
+            }
+        }
+    }
+    if any_pending {
+        Some(CheckState::Pending)
+    } else if any_success {
+        Some(CheckState::Success)
+    } else {
+        None
+    }
 }
 
 impl RawItem {
@@ -255,6 +341,7 @@ impl RawItem {
             author: self.author.map(|a| a.login).unwrap_or_default(),
             updated_at: self.updated_at,
             url: self.url,
+            checks: rollup_state(&self.status_check_rollup),
         }
     }
 }
@@ -376,6 +463,69 @@ mod tests {
         assert!(!items[0].is_draft);
         assert_eq!(items[1].author, ""); // null author → empty
         assert!(items[1].is_draft);
+        // No statusCheckRollup field present ⇒ no checks.
+        assert_eq!(items[0].checks, None);
+        assert_eq!(items[1].checks, None);
+    }
+
+    fn rollup(json: &str) -> Option<CheckState> {
+        let checks: Vec<RawCheck> = serde_json::from_str(json).unwrap();
+        rollup_state(&checks)
+    }
+
+    #[test]
+    fn rollup_empty_is_none() {
+        assert_eq!(rollup("[]"), None);
+    }
+
+    #[test]
+    fn rollup_all_success_is_success() {
+        let json = r#"[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"StatusContext","state":"SUCCESS"}
+        ]"#;
+        assert_eq!(rollup(json), Some(CheckState::Success));
+    }
+
+    #[test]
+    fn rollup_any_failure_dominates_success_and_pending() {
+        // One failing check outranks a passing one and an in-progress one.
+        let json = r#"[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}
+        ]"#;
+        assert_eq!(rollup(json), Some(CheckState::Failure));
+    }
+
+    #[test]
+    fn rollup_running_check_is_pending_when_nothing_failed() {
+        let json = r#"[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","status":"QUEUED","conclusion":null}
+        ]"#;
+        assert_eq!(rollup(json), Some(CheckState::Pending));
+    }
+
+    #[test]
+    fn rollup_legacy_status_context_error_is_failure() {
+        assert_eq!(
+            rollup(r#"[{"__typename":"StatusContext","state":"ERROR"}]"#),
+            Some(CheckState::Failure)
+        );
+        assert_eq!(
+            rollup(r#"[{"__typename":"StatusContext","state":"PENDING"}]"#),
+            Some(CheckState::Pending)
+        );
+    }
+
+    #[test]
+    fn rollup_only_neutral_or_skipped_is_none() {
+        let json = r#"[
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}
+        ]"#;
+        assert_eq!(rollup(json), None);
     }
 
     #[test]

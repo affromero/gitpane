@@ -61,6 +61,9 @@ pub(crate) enum Action {
     /// Review a specific repo/worktree by id (from the context menu), bound to
     /// the right-clicked row.
     ReviewAt(RepoId),
+    /// Run the user-defined keybinding at this index in `config.keybindings`
+    /// against the selected repo/worktree. Sent by its bound key.
+    RunKeybinding(usize),
     /// Open the branch-name input to create a new worktree for the given repo.
     OpenNewWorktree(RepoId),
     /// Create a worktree for `repo` on a new branch `branch`

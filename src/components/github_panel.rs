@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::git::github::{GhItem, ItemDetail};
+use crate::git::github::{CheckState, GhItem, ItemDetail};
 use crate::theme::Theme;
 
 /// One selectable row: either an issue or a pull request.
@@ -260,6 +260,16 @@ impl GithubPanel {
             ),
             Span::styled(format!("{tag} "), Style::default().fg(tag_color)),
         ];
+        // CI/checks glyph for PRs: ✓ green passed, ✗ red failed, ● yellow
+        // running. Reuses the file-status palette for consistent semantics.
+        if let Some(check) = row.item.checks {
+            let (glyph, color) = match check {
+                CheckState::Success => ("\u{2713} ", f.status_added),
+                CheckState::Failure => ("\u{2717} ", f.status_deleted),
+                CheckState::Pending => ("\u{25cf} ", f.status_modified),
+            };
+            spans.push(Span::styled(glyph, Style::default().fg(color)));
+        }
         // Mark non-open rows, visible under the closed/all filter.
         if !row.item.state.eq_ignore_ascii_case("open") {
             let (label, color) = if row.item.state.eq_ignore_ascii_case("merged") {
@@ -556,11 +566,33 @@ mod tests {
             author: "octocat".into(),
             updated_at: "2026-01-02T03:04:05Z".into(),
             url: format!("https://github.com/o/r/issues/{n}"),
+            checks: None,
         }
     }
 
     fn panel() -> GithubPanel {
         GithubPanel::new(Arc::new(Theme::default()))
+    }
+
+    #[test]
+    fn pr_row_renders_check_glyph_by_state() {
+        let p = panel();
+        let glyph_for = |state: Option<CheckState>| -> String {
+            let mut item = item(5);
+            item.checks = state;
+            let line = p.row_line(&PanelRow { is_pr: true, item });
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        assert!(glyph_for(Some(CheckState::Success)).contains('\u{2713}')); // ✓
+        assert!(glyph_for(Some(CheckState::Failure)).contains('\u{2717}')); // ✗
+        assert!(glyph_for(Some(CheckState::Pending)).contains('\u{25cf}')); // ●
+        // No checks ⇒ none of the glyphs appear.
+        let plain = glyph_for(None);
+        assert!(
+            !plain.contains('\u{2713}')
+                && !plain.contains('\u{2717}')
+                && !plain.contains('\u{25cf}')
+        );
     }
 
     #[test]

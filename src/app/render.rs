@@ -369,6 +369,15 @@ impl App {
             }
         }
 
+        if !self.config.keybindings.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(section("Custom"));
+            for kb in &self.config.keybindings {
+                let label = kb.desc.as_deref().unwrap_or(&kb.command);
+                lines.push(Line::from(vec![key(&kb.key), desc(label)]));
+            }
+        }
+
         let height = (lines.len() as u16 + 2).min(area.height);
         let width = 42u16.min(area.width);
         let x = area.x + (area.width.saturating_sub(width)) / 2;

@@ -267,6 +267,53 @@ fn test_gitpane_config_writes_to_env_path_even_when_missing() {
 }
 
 #[test]
+fn test_keybindings_parse_with_defaults() {
+    let toml = r#"
+        [[keybindings]]
+        key = "b"
+        command = "gh repo view --web"
+        desc = "Open on github.com"
+
+        [[keybindings]]
+        key = "L"
+        command = "lazygit"
+        placement = "inline"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.keybindings.len(), 2);
+
+    let b = &config.keybindings[0];
+    assert_eq!(b.key, "b");
+    assert_eq!(b.command, "gh repo view --web");
+    // Placement is optional and defaults to `command`.
+    assert_eq!(b.placement, "command");
+    assert_eq!(b.desc.as_deref(), Some("Open on github.com"));
+
+    let l = &config.keybindings[1];
+    assert_eq!(l.placement, "inline");
+    assert_eq!(l.desc, None);
+}
+
+#[test]
+fn test_keybindings_default_empty() {
+    // A config with no [[keybindings]] blocks yields an empty list, not an error.
+    let config: Config = toml::from_str("scan_depth = 3").unwrap();
+    assert!(config.keybindings.is_empty());
+}
+
+#[test]
+fn test_key_matches_single_char_only() {
+    use super::key_matches;
+    // Exact single-char match fires; the wrong char and multi-char keys don't.
+    assert!(key_matches("b", 'b'));
+    assert!(key_matches("L", 'L'));
+    assert!(!key_matches("b", 'c'));
+    assert!(!key_matches("L", 'l')); // case-sensitive
+    assert!(!key_matches("ctrl+b", 'b')); // multi-char key is inert
+    assert!(!key_matches("", 'b'));
+}
+
+#[test]
 fn test_gitpane_config_exclusive_does_not_fall_through() {
     let tmp = tempfile::TempDir::new().unwrap();
     let lower_priority_path = tmp

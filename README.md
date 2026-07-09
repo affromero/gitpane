@@ -136,6 +136,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
+- **Custom keybindings**: Bind your own keys to shell commands with `[[keybindings]]`, each run against the selected repo/worktree with `{path}` substitution and the same placement options as `[open]`. Extend gitpane with your own verbs without waiting on a feature.
 - **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane open inside it, so at a glance you can see which parallel agents are actively working where. tmux only; toggle with `[ui] show_liveness`.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
@@ -174,6 +175,8 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 | `q` | Quit (or close diff if one is open) |
 | `Esc` | Navigate back through panels, then quit |
 
+Bind your own keys to shell commands on top of these, see [Custom keybindings](#custom-keybindings).
+
 ### Repos panel
 
 | Key | Action |
@@ -208,6 +211,8 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 ### GitHub panel
 
 Appears automatically when the selected repo's `github.com` origin has open issues or PRs (opt-out via `[github] enabled`); press `p` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
+
+Each pull request row shows its rolled-up CI status: a green `✓` when checks passed, a red `✗` when any failed, a yellow `●` while checks are still running, and nothing when a PR has no checks.
 
 | Key | Action |
 |-----|--------|
@@ -397,6 +402,26 @@ command = "wezterm cli spawn -- tmux attach -t {session}"
 ```
 
 **Adding a terminal:** append a row to the `TERMINAL_GOTOS` table in `src/config.rs` — the env var(s) that identify the terminal plus its new-tab/window command. The doc comment there explains the rules (prefer a tab, pass the tmux command as trailing argv, never `switch-client`).
+
+### Custom keybindings
+
+Beyond the built-in keys, bind any key to a shell command that runs against the selected repo/worktree. Each `[[keybindings]]` block adds one binding:
+
+```toml
+[[keybindings]]
+key = "b"                        # single character
+command = "gh repo view --web"   # {path} expands to the repo/worktree directory
+desc = "Open repo on github.com" # optional, shown in the ? help overlay
+
+[[keybindings]]
+key = "L"
+command = "lazygit"
+placement = "inline"             # suspend gitpane and run in the current terminal
+```
+
+`command` and `placement` work exactly like [`[open]`](#opening-a-repo-or-worktree): `{path}` is the target directory, the default `command` placement runs the command directly (so embed your own `tmux …` for a pane/window), and `split-window`/`new-window`/`inline`/`ask` place a plain command for you. Only `{path}` is substituted (there is no review base).
+
+Keys already used by the built-in **Global** actions (`o v G r R t g p q y a d s w S`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel uses for navigation (`j`/`k`/`Enter`/…) can be bound, but then it no longer navigates that panel. Run `gitpane diagnostic` to see the bindings gitpane loaded.
 
 ### Theming
 
