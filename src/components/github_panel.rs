@@ -612,4 +612,33 @@ mod tests {
         p.close_detail();
         assert!(!p.has_detail(), "closing clears the pane");
     }
+
+    #[test]
+    fn renders_title_and_rows_to_a_buffer() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut p = panel();
+        p.set_data(vec![item(1)], vec![item(2)], "myrepo", "open");
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                p.draw(f, f.area()).unwrap();
+            })
+            .unwrap();
+
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        for needle in ["GitHub", "myrepo", "open", "#1", "issue", "#2", "PR"] {
+            assert!(
+                text.contains(needle),
+                "expected {needle:?} in render: {text:?}"
+            );
+        }
+    }
 }
