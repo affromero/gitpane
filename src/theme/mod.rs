@@ -69,7 +69,7 @@ impl Default for RepoListTheme {
             live: Color::Indexed(48),
             border_focused: Color::Cyan,
             border_unfocused: Color::DarkGray,
-            selection_bg: Color::DarkGray,
+            selection_bg: Color::Indexed(237),
         }
     }
 }
@@ -156,7 +156,7 @@ impl Default for FileListTheme {
             status_conflicted: Color::LightRed,
             submodule_path: Color::LightMagenta,
             regular_path: Color::White,
-            selection_bg: Color::DarkGray,
+            selection_bg: Color::Indexed(237),
             diff_border: Color::Cyan,
             diff_added: Color::Green,
             diff_removed: Color::Red,
@@ -236,7 +236,7 @@ impl Default for GraphTheme {
             time: Color::DarkGray,
             addition: Color::Green,
             deletion: Color::Red,
-            selection_bg: Color::DarkGray,
+            selection_bg: Color::Indexed(237),
             commit_msg_border: Color::Cyan,
             commit_msg_text: Color::White,
             commit_files_border: Color::Cyan,
