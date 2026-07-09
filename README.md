@@ -212,6 +212,8 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 
 Appears automatically when the selected repo's `github.com` origin has open issues or PRs (opt-out via `[github] enabled`); press `p` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
 
+Each pull request row shows its rolled-up CI status: a green `✓` when checks passed, a red `✗` when any failed, a yellow `●` while checks are still running, and nothing when a PR has no checks.
+
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Next item / scroll preview |
