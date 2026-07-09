@@ -12,6 +12,7 @@ use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
+use crate::components::github_panel::GithubPanel;
 use crate::components::path_input::PathInput;
 use crate::components::picker::Picker;
 use crate::components::repo_list::RepoEntry;
@@ -32,6 +33,7 @@ use crate::watcher::RepoWatcher;
 
 mod actions;
 mod actions_extra;
+mod github;
 mod input;
 mod launch;
 mod render;
@@ -43,6 +45,7 @@ pub(crate) enum FocusPanel {
     Repos,
     Changes,
     Graph,
+    GitHub,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +141,7 @@ pub(crate) struct App {
     repo_list: RepoList,
     file_list: FileList,
     git_graph: GitGraph,
+    github_panel: GithubPanel,
     confirm_dialog: ConfirmDialog,
     context_menu: ContextMenu,
     path_input: PathInput,
@@ -153,6 +157,18 @@ pub(crate) struct App {
     repo_area: Rect,
     changes_area: Rect,
     graph_area: Rect,
+    /// Area of the optional 4th (GitHub) panel; `Rect::default()` when hidden.
+    github_area: Rect,
+    /// Cached issue/PR data per repo (see [`github::GithubState`]).
+    github_cache: HashMap<RepoId, github::GithubState>,
+    /// Manual override for the GitHub panel: `None` auto (show when the repo has
+    /// open items), `Some(true)`/`Some(false)` force open/closed. Reset on nav.
+    github_forced: Option<bool>,
+    /// Whether the GitHub panel was drawn last frame; gates focus cycling and
+    /// mouse focus so they never land on a hidden panel.
+    github_visible: bool,
+    /// Monotonic selection counter used to debounce GitHub fetches.
+    github_select_gen: u64,
     error_message: Option<(String, Instant)>,
     success_message: Option<(String, Instant)>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
@@ -309,6 +325,7 @@ impl App {
             repo_list: RepoList::new(repo_paths, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
+            github_panel: GithubPanel::new(theme.clone()),
             confirm_dialog: ConfirmDialog::new(theme.clone()),
             context_menu: ContextMenu::new(theme.clone()),
             path_input: PathInput::new(theme.clone()),
@@ -323,6 +340,11 @@ impl App {
             repo_area: Rect::default(),
             changes_area: Rect::default(),
             graph_area: Rect::default(),
+            github_area: Rect::default(),
+            github_cache: HashMap::new(),
+            github_forced: None,
+            github_visible: false,
+            github_select_gen: 0,
             error_message: None,
             success_message: None,
             dragging_border: None,
@@ -427,6 +449,8 @@ impl App {
     }
     /// Auto-load graph + file list for the selected repo.
     fn sync_selection(&mut self) {
+        // Retarget the GitHub panel onto the (new) selection, debounced.
+        self.github_touch_selection();
         // An active worktree/submodule context owns the detail panels. A sort,
         // rescan, or discovery must refresh *that* path, not reload the selected
         // parent row over it (a submodule is opened with the parent row still
@@ -457,6 +481,7 @@ impl App {
         self.repo_list.set_theme(theme.clone());
         self.file_list.set_theme(theme.clone());
         self.git_graph.set_theme(theme.clone());
+        self.github_panel.set_theme(theme.clone());
         self.confirm_dialog.set_theme(theme.clone());
         self.context_menu.set_theme(theme.clone());
         self.path_input.set_theme(theme.clone());

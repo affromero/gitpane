@@ -674,6 +674,7 @@ impl App {
                         .register_action_handler(self.action_tx.clone())?;
                     // Prune per-repo state for vanished repos so HashSets
                     // don't keep growing across the session.
+                    self.prune_github_cache(&diff.removed);
                     for path in &diff.removed {
                         let id = RepoId(path.clone());
                         self.pending_status.remove(&id);
@@ -707,6 +708,25 @@ impl App {
             }
             Action::UpdateAvailable(ref version) => {
                 self.update_version = Some(version.clone());
+            }
+            Action::GithubSelectionSettled(generation) => {
+                self.github_selection_settled(generation);
+            }
+            Action::GitHubFetched {
+                repo_id,
+                generation,
+                result,
+            } => {
+                self.github_fetched(repo_id, generation, result);
+            }
+            Action::OpenUrl(ref url) => {
+                let opener = if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                };
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
             }
             Action::Error(ref msg) => {
                 tracing::error!("{}", msg);

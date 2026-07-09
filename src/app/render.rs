@@ -1,5 +1,12 @@
 use super::*;
 
+/// Fixed extent (columns horizontal, rows vertical) for the GitHub panel:
+/// `desired`, shrunk so the other three panels keep at least `min_others`.
+/// Zero when there is no room, which collapses the panel away.
+fn github_extent(total: u16, desired: u16, min_others: u16) -> u16 {
+    desired.min(total.saturating_sub(min_others))
+}
+
 impl App {
     pub(super) fn clear_expired_messages(&mut self) -> bool {
         let had_error = self.error_message.is_some();
@@ -30,43 +37,79 @@ impl App {
         let main_area = outer[0];
         let status_area = outer[1];
 
-        // Three-panel layout — drag borders to resize in both orientations
+        // Three-panel layout (plus an optional 4th GitHub panel) — drag borders
+        // to resize the first three in both orientations.
         self.horizontal_layout = main_area.width >= 100;
-        let (repo_area, changes_area, graph_area) = if self.horizontal_layout {
+        let show_github = self.show_github_panel();
+        self.github_visible = show_github;
+        // Never leave focus on a panel that isn't drawn this frame.
+        if !show_github && self.focus == FocusPanel::GitHub {
+            self.focus = FocusPanel::Graph;
+        }
+
+        let (repo_area, changes_area, graph_area, github_area) = if self.horizontal_layout {
             let w = main_area.width as f64;
             let c1 = (self.border_frac[0] * w).round() as u16;
             let c2 = ((self.border_frac[1] - self.border_frac[0]) * w).round() as u16;
+            let mut constraints = vec![
+                Constraint::Length(c1),
+                Constraint::Length(c2),
+                Constraint::Min(8),
+            ];
+            // ponytail: fixed-width GitHub panel so the two draggable borders
+            // and their seam painting stay untouched. Make it draggable only if
+            // users ask for it.
+            let gh = show_github
+                .then(|| github_extent(main_area.width, 44, 80))
+                .filter(|w| *w > 0);
+            if let Some(gh) = gh {
+                constraints.push(Constraint::Length(gh));
+            }
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Length(c1),
-                    Constraint::Length(c2),
-                    Constraint::Min(8),
-                ])
+                .constraints(constraints)
                 .split(main_area);
-            (chunks[0], chunks[1], chunks[2])
+            let github_area = gh.map(|_| chunks[3]).unwrap_or_default();
+            (chunks[0], chunks[1], chunks[2], github_area)
         } else {
             let h = main_area.height as f64;
             let r1 = (self.border_frac[0] * h).round() as u16;
             let r2 = ((self.border_frac[1] - self.border_frac[0]) * h).round() as u16;
+            let mut constraints = vec![
+                Constraint::Length(r1),
+                Constraint::Length(r2),
+                Constraint::Min(3),
+            ];
+            let gh = show_github
+                .then(|| github_extent(main_area.height, 12, 18))
+                .filter(|h| *h > 0);
+            if let Some(gh) = gh {
+                constraints.push(Constraint::Length(gh));
+            }
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(r1),
-                    Constraint::Length(r2),
-                    Constraint::Min(3),
-                ])
+                .constraints(constraints)
                 .split(main_area);
-            (chunks[0], chunks[1], chunks[2])
+            let github_area = gh.map(|_| chunks[3]).unwrap_or_default();
+            (chunks[0], chunks[1], chunks[2], github_area)
         };
+        // Recompute: `github_extent` can return 0 on a tiny terminal even when
+        // `show_github` was true, so trust the actual rect.
+        let show_github = github_area.width > 0 && github_area.height > 0;
+        self.github_visible = show_github;
+        if !show_github && self.focus == FocusPanel::GitHub {
+            self.focus = FocusPanel::Graph;
+        }
 
         self.repo_area = repo_area;
         self.changes_area = changes_area;
         self.graph_area = graph_area;
+        self.github_area = github_area;
 
         self.repo_list.focused = self.focus == FocusPanel::Repos;
         self.file_list.focused = self.focus == FocusPanel::Changes;
         self.git_graph.focused = self.focus == FocusPanel::Graph;
+        self.github_panel.focused = self.focus == FocusPanel::GitHub;
 
         self.file_list.horizontal_layout = self.horizontal_layout;
         self.git_graph.horizontal_layout = self.horizontal_layout;
@@ -79,6 +122,9 @@ impl App {
         self.repo_list.draw(frame, repo_area)?;
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
+        if show_github {
+            self.github_panel.draw(frame, github_area)?;
+        }
 
         // Paint thick seam borders in horizontal mode to signal "draggable".
         // Vertical mode doesn't need this — the full-width horizontal borders
@@ -234,6 +280,7 @@ impl App {
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
             Line::from(vec![key("G"), desc("Attach live tmux session")]),
+            Line::from(vec![key("p"), desc("Toggle GitHub panel")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];
@@ -280,6 +327,13 @@ impl App {
                 lines.push(Line::from(vec![key("c"), desc("Collapse / expand branch")]));
                 lines.push(Line::from(vec![key("H"), desc("Expand all collapsed")]));
             }
+            FocusPanel::GitHub => {
+                lines.push(Line::from(""));
+                lines.push(section("GitHub"));
+                lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
+                lines.push(Line::from(vec![key("Enter"), desc("Open in browser")]));
+                lines.push(Line::from(vec![key("p"), desc("Hide panel")]));
+            }
         }
 
         let height = (lines.len() as u16 + 2).min(area.height);
@@ -292,6 +346,7 @@ impl App {
             FocusPanel::Repos => "Repos",
             FocusPanel::Changes => "Changes",
             FocusPanel::Graph => "Graph",
+            FocusPanel::GitHub => "GitHub",
         };
         let block = Block::default()
             .title(format!(" Keybindings \u{2014} {panel_name} "))

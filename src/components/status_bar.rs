@@ -142,6 +142,7 @@ impl Component for StatusBar {
                 FocusPanel::Repos => "Repos",
                 FocusPanel::Changes => "Changes",
                 FocusPanel::Graph => "Graph",
+                FocusPanel::GitHub => "GitHub",
             };
             vec![
                 Span::styled(
@@ -158,6 +159,8 @@ impl Component for StatusBar {
                 Span::raw(" Diff  "),
                 key_span("g", s),
                 Span::raw(" Graph  "),
+                key_span("p", s),
+                Span::raw(" GitHub  "),
                 key_span("r", s),
                 Span::raw(" Refresh  "),
                 key_span("R", s),

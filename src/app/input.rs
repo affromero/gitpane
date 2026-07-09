@@ -84,6 +84,7 @@ impl App {
                     self.git_graph.handle_key_event(key)?;
                 } else {
                     match self.focus {
+                        FocusPanel::GitHub => self.focus = FocusPanel::Graph,
                         FocusPanel::Graph => self.focus = FocusPanel::Changes,
                         FocusPanel::Changes => self.focus = FocusPanel::Repos,
                         FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
@@ -91,19 +92,23 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                // Cycle focus right
+                // Cycle focus right, skipping the GitHub panel when it's hidden.
                 self.focus = match self.focus {
                     FocusPanel::Repos => FocusPanel::Changes,
                     FocusPanel::Changes => FocusPanel::Graph,
+                    FocusPanel::Graph if self.github_visible => FocusPanel::GitHub,
                     FocusPanel::Graph => FocusPanel::Repos,
+                    FocusPanel::GitHub => FocusPanel::Repos,
                 };
             }
             KeyCode::BackTab => {
-                // Cycle focus left
+                // Cycle focus left, skipping the GitHub panel when it's hidden.
                 self.focus = match self.focus {
+                    FocusPanel::Repos if self.github_visible => FocusPanel::GitHub,
                     FocusPanel::Repos => FocusPanel::Graph,
                     FocusPanel::Changes => FocusPanel::Repos,
                     FocusPanel::Graph => FocusPanel::Changes,
+                    FocusPanel::GitHub => FocusPanel::Graph,
                 };
             }
             KeyCode::Char('r') => {
@@ -117,6 +122,9 @@ impl App {
             }
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
+            }
+            KeyCode::Char('p') => {
+                self.toggle_github_panel();
             }
             KeyCode::Char('G') => {
                 self.action_tx.send(Action::GotoSessionSelected)?;
@@ -155,6 +163,7 @@ impl App {
                         .map(|e| e.path.to_string_lossy().to_string()),
                     FocusPanel::Changes => self.file_list.selected_path(),
                     FocusPanel::Graph => self.git_graph.selected_text(),
+                    FocusPanel::GitHub => self.github_panel.selected_url(),
                 };
                 if let Some(text) = text {
                     use std::io::Write;
@@ -178,6 +187,11 @@ impl App {
                     }
                     FocusPanel::Graph => {
                         if let Some(action) = self.git_graph.handle_key_event(key)? {
+                            self.action_tx.send(action)?;
+                        }
+                    }
+                    FocusPanel::GitHub => {
+                        if let Some(action) = self.github_panel.handle_key_event(key)? {
                             self.action_tx.send(action)?;
                         }
                     }
@@ -219,7 +233,10 @@ impl App {
                     self.repo_area.x + self.repo_area.width,
                     self.changes_area.x + self.changes_area.width,
                     mouse.column,
-                    self.repo_area.width + self.changes_area.width + self.graph_area.width,
+                    self.repo_area.width
+                        + self.changes_area.width
+                        + self.graph_area.width
+                        + self.github_area.width,
                     self.repo_area.x,
                 )
             } else {
@@ -227,7 +244,10 @@ impl App {
                     self.repo_area.y + self.repo_area.height,
                     self.changes_area.y + self.changes_area.height,
                     mouse.row,
-                    self.repo_area.height + self.changes_area.height + self.graph_area.height,
+                    self.repo_area.height
+                        + self.changes_area.height
+                        + self.graph_area.height
+                        + self.github_area.height,
                     self.repo_area.y,
                 )
             };
@@ -278,6 +298,8 @@ impl App {
                 self.focus = FocusPanel::Changes;
             } else if self.graph_area.contains(pos) {
                 self.focus = FocusPanel::Graph;
+            } else if self.github_visible && self.github_area.contains(pos) {
+                self.focus = FocusPanel::GitHub;
             }
         }
 
@@ -290,8 +312,13 @@ impl App {
             if let Some(action) = self.file_list.handle_mouse_event(mouse)? {
                 self.action_tx.send(action)?;
             }
-        } else if self.graph_area.contains(pos)
-            && let Some(action) = self.git_graph.handle_mouse_event(mouse)?
+        } else if self.graph_area.contains(pos) {
+            if let Some(action) = self.git_graph.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+        } else if self.github_visible
+            && self.github_area.contains(pos)
+            && let Some(action) = self.github_panel.handle_mouse_event(mouse)?
         {
             self.action_tx.send(action)?;
         }
