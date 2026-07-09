@@ -337,6 +337,10 @@ impl App {
                     desc("Preview, then open in browser"),
                 ]));
                 lines.push(Line::from(vec![key("Esc"), desc("Close preview")]));
+                lines.push(Line::from(vec![
+                    key("c"),
+                    desc("Cycle open / all / closed"),
+                ]));
                 lines.push(Line::from(vec![key("p"), desc("Hide panel")]));
             }
         }

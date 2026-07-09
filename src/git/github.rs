@@ -18,6 +18,9 @@ use serde::Deserialize;
 pub(crate) struct GhItem {
     pub number: u64,
     pub title: String,
+    /// "OPEN" | "CLOSED" | "MERGED" as reported by `gh`. Used to mark
+    /// non-open rows when the closed/all filter is active.
+    pub state: String,
     /// Only meaningful for pull requests; always false for issues.
     pub is_draft: bool,
     pub author: String,
@@ -127,9 +130,9 @@ fn fetch_list(owner: &str, repo: &str, is_pr: bool, state: &str) -> Result<Vec<G
     let sub = if is_pr { "pr" } else { "issue" };
     // PRs carry `isDraft`; issues do not, so request the field only for PRs.
     let fields = if is_pr {
-        "number,title,author,updatedAt,url,isDraft"
+        "number,title,state,author,updatedAt,url,isDraft"
     } else {
-        "number,title,author,updatedAt,url"
+        "number,title,state,author,updatedAt,url"
     };
     let repo_arg = format!("{owner}/{repo}");
     let output = Command::new("gh")
@@ -209,6 +212,8 @@ struct RawItem {
     #[serde(default)]
     title: String,
     #[serde(default)]
+    state: String,
+    #[serde(default)]
     author: Option<RawAuthor>,
     #[serde(default)]
     updated_at: String,
@@ -223,6 +228,7 @@ impl RawItem {
         GhItem {
             number: self.number,
             title: self.title,
+            state: self.state,
             is_draft: self.is_draft,
             author: self.author.map(|a| a.login).unwrap_or_default(),
             updated_at: self.updated_at,

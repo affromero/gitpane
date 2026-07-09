@@ -212,6 +212,8 @@ pub(crate) enum Action {
     },
     /// Open a URL in the OS browser (an issue/PR web link).
     OpenUrl(String),
+    /// Cycle the GitHub panel's state filter (open → all → closed) and refetch.
+    CycleGithubStateFilter,
     /// Load the body + comments of a github item into the panel's detail pane.
     /// `generation` latches out results for a superseded selection.
     ShowGithubItem {

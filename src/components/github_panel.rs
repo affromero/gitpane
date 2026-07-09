@@ -41,6 +41,8 @@ pub(crate) struct GithubPanel {
     pr_count: usize,
     state: ListState,
     repo_name: String,
+    /// Filter label shown in the title ("open" / "all" / "closed").
+    state_label: String,
     status: PanelStatus,
     pub focused: bool,
     /// Fed by `App` each frame: split direction follows the main layout.
@@ -68,6 +70,7 @@ impl GithubPanel {
             pr_count: 0,
             state: ListState::default(),
             repo_name: String::new(),
+            state_label: "open".to_string(),
             status: PanelStatus::Loading,
             focused: false,
             horizontal_layout: false,
@@ -89,9 +92,16 @@ impl GithubPanel {
 
     /// Replace the panel's data. Selection is preserved when the repo is
     /// unchanged (a refetch of the same repo), reset to the top otherwise.
-    pub fn set_data(&mut self, issues: Vec<GhItem>, prs: Vec<GhItem>, repo_name: &str) {
+    pub fn set_data(
+        &mut self,
+        issues: Vec<GhItem>,
+        prs: Vec<GhItem>,
+        repo_name: &str,
+        state_label: &str,
+    ) {
         let same_repo = self.repo_name == repo_name;
         let prev = self.state.selected();
+        self.state_label = state_label.to_string();
         self.issue_count = issues.len();
         self.pr_count = prs.len();
         self.rows = issues
@@ -241,7 +251,7 @@ impl GithubPanel {
             .unwrap_or(&row.item.updated_at)
             .to_string();
 
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 format!("#{} ", row.item.number),
                 Style::default()
@@ -249,12 +259,25 @@ impl GithubPanel {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("{tag} "), Style::default().fg(tag_color)),
-            Span::styled(row.item.title.clone(), Style::default().fg(f.regular_path)),
-            Span::styled(
-                format!("  {} \u{00b7} {}", row.item.author, date),
-                Style::default().fg(g.time),
-            ),
-        ])
+        ];
+        // Mark non-open rows, visible under the closed/all filter.
+        if !row.item.state.eq_ignore_ascii_case("open") {
+            let (label, color) = if row.item.state.eq_ignore_ascii_case("merged") {
+                ("merged ", f.submodule_path)
+            } else {
+                ("closed ", r.behind)
+            };
+            spans.push(Span::styled(label, Style::default().fg(color)));
+        }
+        spans.push(Span::styled(
+            row.item.title.clone(),
+            Style::default().fg(f.regular_path),
+        ));
+        spans.push(Span::styled(
+            format!("  {} \u{00b7} {}", row.item.author, date),
+            Style::default().fg(g.time),
+        ));
+        Line::from(spans)
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
@@ -270,8 +293,8 @@ impl GithubPanel {
             " GitHub ".to_string()
         } else {
             format!(
-                " GitHub \u{2014} {} ({} issues, {} PRs) ",
-                self.repo_name, self.issue_count, self.pr_count
+                " GitHub \u{2014} {} \u{00b7} {} ({} issues, {} PRs) ",
+                self.repo_name, self.state_label, self.issue_count, self.pr_count
             )
         };
 
@@ -411,6 +434,7 @@ impl Component for GithubPanel {
                 self.select_prev();
                 Ok(None)
             }
+            KeyCode::Char('c') => Ok(Some(Action::CycleGithubStateFilter)),
             KeyCode::Enter => Ok(self.open_selected_detail()),
             _ => Ok(None),
         }
@@ -494,6 +518,7 @@ mod tests {
         GhItem {
             number: n,
             title: format!("title {n}"),
+            state: "OPEN".into(),
             is_draft: false,
             author: "octocat".into(),
             updated_at: "2026-01-02T03:04:05Z".into(),
@@ -508,7 +533,7 @@ mod tests {
     #[test]
     fn set_data_orders_issues_before_prs_and_counts_each() {
         let mut p = panel();
-        p.set_data(vec![item(1), item(2)], vec![item(3)], "repo");
+        p.set_data(vec![item(1), item(2)], vec![item(3)], "repo", "open");
         assert_eq!(p.issue_count, 2);
         assert_eq!(p.pr_count, 1);
         assert_eq!(p.rows.len(), 3);
@@ -525,18 +550,18 @@ mod tests {
     #[test]
     fn selection_persists_on_same_repo_and_resets_on_a_new_one() {
         let mut p = panel();
-        p.set_data(vec![item(1), item(2), item(3)], vec![], "repo");
+        p.set_data(vec![item(1), item(2), item(3)], vec![], "repo", "open");
         p.state.select(Some(2));
-        p.set_data(vec![item(1), item(2), item(3)], vec![], "repo");
+        p.set_data(vec![item(1), item(2), item(3)], vec![], "repo", "open");
         assert_eq!(p.state.selected(), Some(2), "same repo keeps selection");
-        p.set_data(vec![item(9)], vec![], "other");
+        p.set_data(vec![item(9)], vec![], "other", "open");
         assert_eq!(p.state.selected(), Some(0), "new repo resets selection");
     }
 
     #[test]
     fn empty_result_clears_selection_and_url() {
         let mut p = panel();
-        p.set_data(vec![], vec![], "repo");
+        p.set_data(vec![], vec![], "repo", "open");
         assert_eq!(p.state.selected(), None);
         assert!(p.selected_url().is_none());
     }
@@ -544,7 +569,7 @@ mod tests {
     #[test]
     fn retargeting_to_a_new_repo_drops_stale_rows() {
         let mut p = panel();
-        p.set_data(vec![item(1)], vec![item(2)], "repo");
+        p.set_data(vec![item(1)], vec![item(2)], "repo", "open");
         p.set_loading("other");
         assert!(p.rows.is_empty(), "loading a new repo clears old rows");
         assert_eq!(p.issue_count, 0);
@@ -564,7 +589,7 @@ mod tests {
     #[test]
     fn detail_opens_loads_and_discards_stale_results() {
         let mut p = panel();
-        p.set_data(vec![item(1)], vec![], "repo");
+        p.set_data(vec![item(1)], vec![], "repo", "open");
         let generation = match p.open_selected_detail().expect("enter yields an action") {
             Action::ShowGithubItem {
                 generation, is_pr, ..

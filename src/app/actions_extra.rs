@@ -742,6 +742,9 @@ impl App {
             Action::GithubItemLoaded { generation, result } => {
                 self.github_panel.set_detail(generation, result);
             }
+            Action::CycleGithubStateFilter => {
+                self.cycle_github_state_filter();
+            }
             Action::Error(ref msg) => {
                 tracing::error!("{}", msg);
                 // Sanitize: single line, max 120 chars for status bar

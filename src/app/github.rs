@@ -10,6 +10,43 @@ const GITHUB_COOLDOWN: Duration = Duration::from_secs(60);
 /// through the repo list doesn't spawn a `gh` process for every transient row.
 const GITHUB_SELECT_DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// Which issues/PRs the panel lists. Cycled with `c`; reset to `Open` on nav.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum GithubStateFilter {
+    #[default]
+    Open,
+    All,
+    Closed,
+}
+
+impl GithubStateFilter {
+    fn next(self) -> Self {
+        match self {
+            Self::Open => Self::All,
+            Self::All => Self::Closed,
+            Self::Closed => Self::Open,
+        }
+    }
+
+    /// The `--state` argument passed to `gh`.
+    fn gh_state(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::All => "all",
+            Self::Closed => "closed",
+        }
+    }
+
+    /// Short label shown in the panel title.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::All => "all",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 /// Cached GitHub state for one repo. Lives on `App` (not `RepoStatus`, which is
 /// rebuilt on every 5s poll, nor `RepoEntry`, which is recreated on rescan) so
 /// it survives polls and rescans; `RepoId` is path-stable.
@@ -25,6 +62,9 @@ pub(super) struct GithubState {
     fetched_at: Option<Instant>,
     issues: Vec<GhItem>,
     prs: Vec<GhItem>,
+    /// Open-item count from the last `open`-filter fetch. Drives auto-show, and
+    /// stays put while the user browses closed/all so the panel doesn't collapse.
+    open_count: usize,
     /// First stderr line of the last failed fetch, if any.
     error: Option<String>,
 }
@@ -48,10 +88,12 @@ impl App {
     }
 
     /// Open-item count for the selected repo, from the cache. Drives auto-show.
+    /// Uses the cached open count (not the displayed rows) so viewing closed/all
+    /// items never changes whether the panel auto-shows.
     fn selected_github_open_count(&self) -> usize {
         self.github_target()
             .and_then(|(id, _, _)| self.github_cache.get(&id))
-            .map(|s| s.issues.len() + s.prs.len())
+            .map(|s| s.open_count)
             .unwrap_or(0)
     }
 
@@ -75,6 +117,7 @@ impl App {
             return;
         }
         self.github_forced = None;
+        self.github_state_filter = GithubStateFilter::Open;
         self.github_select_gen = self.github_select_gen.wrapping_add(1);
         let generation = self.github_select_gen;
         let tx = self.action_tx.clone();
@@ -123,6 +166,7 @@ impl App {
         let Some((id, path, _)) = self.github_target() else {
             return;
         };
+        let state = self.github_state_filter.gh_state();
         let now = Instant::now();
         let entry = self.github_cache.entry(id.clone()).or_default();
         if entry.loading {
@@ -148,7 +192,7 @@ impl App {
         let generation = entry.generation;
         let tx = self.action_tx.clone();
         tokio::task::spawn_blocking(move || {
-            let result = github::fetch(&owner, &repo, "open");
+            let result = github::fetch(&owner, &repo, state);
             let _ = tx.send(Action::GitHubFetched {
                 repo_id: id,
                 generation,
@@ -165,6 +209,9 @@ impl App {
         generation: u64,
         result: Result<github::GithubData, String>,
     ) {
+        // Only an `open` fetch refreshes the auto-show count, so browsing
+        // closed/all leaves it untouched and the panel stays put.
+        let is_open_filter = self.github_state_filter == GithubStateFilter::Open;
         if let Some(entry) = self.github_cache.get_mut(&repo_id) {
             if entry.generation != generation {
                 return;
@@ -173,6 +220,9 @@ impl App {
             entry.fetched_at = Some(Instant::now());
             match result {
                 Ok(data) => {
+                    if is_open_filter {
+                        entry.open_count = data.issues.len() + data.prs.len();
+                    }
                     entry.issues = data.issues;
                     entry.prs = data.prs;
                     entry.error = None;
@@ -198,6 +248,7 @@ impl App {
                 .set_error(&name, "gh CLI not found on PATH".to_string());
             return;
         }
+        let label = self.github_state_filter.label();
         match self.github_cache.get(&id) {
             None => self.github_panel.set_loading(&name),
             Some(s) if s.loading && s.fetched_at.is_none() => self.github_panel.set_loading(&name),
@@ -209,8 +260,19 @@ impl App {
                 .set_error(&name, s.error.clone().unwrap_or_default()),
             Some(s) => self
                 .github_panel
-                .set_data(s.issues.clone(), s.prs.clone(), &name),
+                .set_data(s.issues.clone(), s.prs.clone(), &name, label),
         }
+    }
+
+    /// Cycle the panel's state filter (open → all → closed) and refetch. Sent by
+    /// `c` in the panel. The auto-show count is unaffected (see `github_fetched`).
+    pub(super) fn cycle_github_state_filter(&mut self) {
+        if !self.config.github.enabled {
+            return;
+        }
+        self.github_state_filter = self.github_state_filter.next();
+        self.request_github(true);
+        self.refresh_github_panel();
     }
 
     /// Drop cached GitHub state for repos that vanished from the list, mirroring

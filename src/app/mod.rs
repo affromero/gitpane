@@ -169,6 +169,8 @@ pub(crate) struct App {
     github_visible: bool,
     /// Monotonic selection counter used to debounce GitHub fetches.
     github_select_gen: u64,
+    /// Which issues/PRs the panel lists (open/all/closed); reset on nav.
+    github_state_filter: github::GithubStateFilter,
     error_message: Option<(String, Instant)>,
     success_message: Option<(String, Instant)>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
@@ -345,6 +347,7 @@ impl App {
             github_forced: None,
             github_visible: false,
             github_select_gen: 0,
+            github_state_filter: github::GithubStateFilter::default(),
             error_message: None,
             success_message: None,
             dragging_border: None,
