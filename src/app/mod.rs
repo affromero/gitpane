@@ -173,12 +173,14 @@ pub(crate) struct App {
     github_state_filter: github::GithubStateFilter,
     error_message: Option<(String, Instant)>,
     success_message: Option<(String, Instant)>,
-    /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph
+    /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph,
+    /// 2 = graph|github (only when the 4th panel is shown).
     dragging_border: Option<u8>,
-    /// Fraction of the layout axis for each border (0.0..1.0).
-    /// Index 0 is the repos/changes split. Index 1 is the changes/graph split.
-    /// Applies to width in horizontal mode, height in vertical mode.
-    border_frac: [f64; 2],
+    /// Fraction of the layout axis for each border (0.0..1.0). Index 0 is the
+    /// repos/changes split, 1 the changes/graph split, and 2 the graph/github
+    /// split (live only when the GitHub panel is shown). Applies to width in
+    /// horizontal mode, height in vertical mode.
+    border_frac: [f64; 3],
     /// True when the layout is horizontal (side-by-side panels)
     horizontal_layout: bool,
     /// Newer version available (set by background update check)
@@ -351,7 +353,7 @@ impl App {
             error_message: None,
             success_message: None,
             dragging_border: None,
-            border_frac: [0.25, 0.50],
+            border_frac: [0.25, 0.50, 0.78],
             horizontal_layout: false,
             update_version: None,
             update_position,

@@ -233,11 +233,13 @@ impl App {
 
         // Border dragging for panel resize (works in both orientations)
         if self.repo_area.width > 0 {
-            // Compute border positions and mouse coordinate along the layout axis
-            let (border1, border2, mouse_pos, total, origin) = if self.horizontal_layout {
+            // Compute border positions and mouse coordinate along the layout
+            // axis. border3 (graph|github) only exists while the panel is shown.
+            let (border1, border2, border3, mouse_pos, total, origin) = if self.horizontal_layout {
                 (
                     self.repo_area.x + self.repo_area.width,
                     self.changes_area.x + self.changes_area.width,
+                    self.graph_area.x + self.graph_area.width,
                     mouse.column,
                     self.repo_area.width
                         + self.changes_area.width
@@ -249,6 +251,7 @@ impl App {
                 (
                     self.repo_area.y + self.repo_area.height,
                     self.changes_area.y + self.changes_area.height,
+                    self.graph_area.y + self.graph_area.height,
                     mouse.row,
                     self.repo_area.height
                         + self.changes_area.height
@@ -260,15 +263,19 @@ impl App {
 
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let d1 = mouse_pos.abs_diff(border1);
-                    let d2 = mouse_pos.abs_diff(border2);
-                    if d1 <= GRAB_ZONE && (d1 <= d2 || d2 > GRAB_ZONE) {
-                        self.dragging_border = Some(0);
-                    } else if d2 <= GRAB_ZONE {
-                        self.dragging_border = Some(1);
-                    } else {
-                        self.dragging_border = None;
+                    // Grab the nearest border within the hit zone.
+                    let mut candidates = vec![
+                        (0u8, mouse_pos.abs_diff(border1)),
+                        (1, mouse_pos.abs_diff(border2)),
+                    ];
+                    if self.github_visible {
+                        candidates.push((2, mouse_pos.abs_diff(border3)));
                     }
+                    self.dragging_border = candidates
+                        .into_iter()
+                        .filter(|(_, d)| *d <= GRAB_ZONE)
+                        .min_by_key(|(_, d)| *d)
+                        .map(|(id, _)| id);
                     // Don't return — let the click propagate to panels
                     // so items near borders remain clickable. The drag
                     // will only engage on MouseEventKind::Drag.
@@ -281,8 +288,17 @@ impl App {
                             self.border_frac[0] = rel.clamp(min_f, self.border_frac[1] - min_f);
                         }
                         Some(1) => {
-                            self.border_frac[1] =
-                                rel.clamp(self.border_frac[0] + min_f, 1.0 - min_f);
+                            // Cap at the graph/github split when the panel is shown.
+                            let upper = if self.github_visible {
+                                self.border_frac[2]
+                            } else {
+                                1.0
+                            } - min_f;
+                            self.border_frac[1] = rel.clamp(self.border_frac[0] + min_f, upper);
+                        }
+                        Some(2) => {
+                            self.border_frac[2] =
+                                rel.clamp(self.border_frac[1] + min_f, 1.0 - min_f);
                         }
                         _ => {}
                     }

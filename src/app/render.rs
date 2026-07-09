@@ -1,12 +1,5 @@
 use super::*;
 
-/// Fixed extent (columns horizontal, rows vertical) for the GitHub panel:
-/// `desired`, shrunk so the other three panels keep at least `min_others`.
-/// Zero when there is no room, which collapses the panel away.
-fn github_extent(total: u16, desired: u16, min_others: u16) -> u16 {
-    desired.min(total.saturating_sub(min_others))
-}
-
 impl App {
     pub(super) fn clear_expired_messages(&mut self) -> bool {
         let had_error = self.error_message.is_some();
@@ -37,8 +30,8 @@ impl App {
         let main_area = outer[0];
         let status_area = outer[1];
 
-        // Three-panel layout (plus an optional 4th GitHub panel) — drag borders
-        // to resize the first three in both orientations.
+        // Three-panel layout (plus an optional 4th GitHub panel). Every border
+        // drags to resize in both orientations.
         self.horizontal_layout = main_area.width >= 100;
         let show_github = self.show_github_panel();
         self.github_visible = show_github;
@@ -47,59 +40,78 @@ impl App {
             self.focus = FocusPanel::Graph;
         }
 
+        // Keep the graph/github split right of the changes/graph split so the
+        // panel never inverts if the first two borders were dragged while the
+        // GitHub panel was hidden.
+        if show_github {
+            let axis = if self.horizontal_layout {
+                main_area.width
+            } else {
+                main_area.height
+            };
+            let min_gap = 3.0 / (axis.max(1) as f64);
+            self.border_frac[2] =
+                self.border_frac[2].clamp(self.border_frac[1] + min_gap, 1.0 - min_gap);
+        }
+
         let (repo_area, changes_area, graph_area, github_area) = if self.horizontal_layout {
             let w = main_area.width as f64;
             let c1 = (self.border_frac[0] * w).round() as u16;
             let c2 = ((self.border_frac[1] - self.border_frac[0]) * w).round() as u16;
-            let mut constraints = vec![
-                Constraint::Length(c1),
-                Constraint::Length(c2),
-                Constraint::Min(8),
-            ];
-            // ponytail: fixed-width GitHub panel so the two draggable borders
-            // and their seam painting stay untouched. Make it draggable only if
-            // users ask for it.
-            let gh = show_github
-                .then(|| github_extent(main_area.width, 44, 80))
-                .filter(|w| *w > 0);
-            if let Some(gh) = gh {
-                constraints.push(Constraint::Length(gh));
+            if show_github {
+                // graph is fraction-sized; github takes the remainder, so
+                // dragging the graph/github border resizes them together (as the
+                // changes/graph border does for changes + graph).
+                let c3 = ((self.border_frac[2] - self.border_frac[1]) * w).round() as u16;
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Length(c1),
+                        Constraint::Length(c2),
+                        Constraint::Length(c3),
+                        Constraint::Min(8),
+                    ])
+                    .split(main_area);
+                (chunks[0], chunks[1], chunks[2], chunks[3])
+            } else {
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Length(c1),
+                        Constraint::Length(c2),
+                        Constraint::Min(8),
+                    ])
+                    .split(main_area);
+                (chunks[0], chunks[1], chunks[2], Rect::default())
             }
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(constraints)
-                .split(main_area);
-            let github_area = gh.map(|_| chunks[3]).unwrap_or_default();
-            (chunks[0], chunks[1], chunks[2], github_area)
         } else {
             let h = main_area.height as f64;
             let r1 = (self.border_frac[0] * h).round() as u16;
             let r2 = ((self.border_frac[1] - self.border_frac[0]) * h).round() as u16;
-            let mut constraints = vec![
-                Constraint::Length(r1),
-                Constraint::Length(r2),
-                Constraint::Min(3),
-            ];
-            let gh = show_github
-                .then(|| github_extent(main_area.height, 12, 18))
-                .filter(|h| *h > 0);
-            if let Some(gh) = gh {
-                constraints.push(Constraint::Length(gh));
+            if show_github {
+                let r3 = ((self.border_frac[2] - self.border_frac[1]) * h).round() as u16;
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(r1),
+                        Constraint::Length(r2),
+                        Constraint::Length(r3),
+                        Constraint::Min(3),
+                    ])
+                    .split(main_area);
+                (chunks[0], chunks[1], chunks[2], chunks[3])
+            } else {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(r1),
+                        Constraint::Length(r2),
+                        Constraint::Min(3),
+                    ])
+                    .split(main_area);
+                (chunks[0], chunks[1], chunks[2], Rect::default())
             }
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(constraints)
-                .split(main_area);
-            let github_area = gh.map(|_| chunks[3]).unwrap_or_default();
-            (chunks[0], chunks[1], chunks[2], github_area)
         };
-        // Recompute: `github_extent` can return 0 on a tiny terminal even when
-        // `show_github` was true, so trust the actual rect.
-        let show_github = github_area.width > 0 && github_area.height > 0;
-        self.github_visible = show_github;
-        if !show_github && self.focus == FocusPanel::GitHub {
-            self.focus = FocusPanel::Graph;
-        }
 
         self.repo_area = repo_area;
         self.changes_area = changes_area;
@@ -134,7 +146,7 @@ impl App {
             use ratatui::style::Style;
 
             let buf = frame.buffer_mut();
-            for (dragging, x_a, x_b) in [
+            let mut seams = vec![
                 (
                     self.dragging_border == Some(0),
                     repo_area.x + repo_area.width.saturating_sub(1),
@@ -145,7 +157,15 @@ impl App {
                     changes_area.x + changes_area.width.saturating_sub(1),
                     graph_area.x,
                 ),
-            ] {
+            ];
+            if show_github {
+                seams.push((
+                    self.dragging_border == Some(2),
+                    graph_area.x + graph_area.width.saturating_sub(1),
+                    github_area.x,
+                ));
+            }
+            for (dragging, x_a, x_b) in seams {
                 let color = if dragging {
                     self.theme.overlay.border_drag_active
                 } else {
@@ -165,10 +185,14 @@ impl App {
             use ratatui::style::Style;
             let style = Style::default().fg(self.theme.overlay.border_drag_active);
             let buf = frame.buffer_mut();
-            for (dragging, y) in [
+            let mut seams = vec![
                 (self.dragging_border == Some(0), changes_area.y),
                 (self.dragging_border == Some(1), graph_area.y),
-            ] {
+            ];
+            if show_github {
+                seams.push((self.dragging_border == Some(2), github_area.y));
+            }
+            for (dragging, y) in seams {
                 if !dragging {
                     continue;
                 }
