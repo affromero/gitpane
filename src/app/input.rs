@@ -1,6 +1,16 @@
 use super::*;
 
 impl App {
+    /// Index of the first user keybinding whose `key` is exactly the character
+    /// `c`, or `None`. Keys are single characters; a multi-char `key` never
+    /// matches (so it is inert rather than an error).
+    fn custom_keybinding_index(&self, c: char) -> Option<usize> {
+        self.config
+            .keybindings
+            .iter()
+            .position(|kb| crate::config::key_matches(&kb.key, c))
+    }
+
     pub(super) fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         // Ctrl+C always quits, before any overlay or focus-specific routing.
         // Raw mode clears ISIG, so the terminal never raises SIGINT for Ctrl+C
@@ -179,6 +189,18 @@ impl App {
                 }
             }
             _ => {
+                // A user-defined keybinding (config `[[keybindings]]`) fires
+                // before panel routing, so it can shadow a panel-local key. It
+                // never reaches keys claimed by the built-in globals above,
+                // which are matched first and return — those stay reserved.
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                    && let Some(idx) = self.custom_keybinding_index(c)
+                {
+                    self.action_tx.send(Action::RunKeybinding(idx))?;
+                    return Ok(());
+                }
                 // Route to focused panel
                 match self.focus {
                     FocusPanel::Repos => {

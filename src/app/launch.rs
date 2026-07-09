@@ -225,6 +225,34 @@ impl App {
         }
         Ok(())
     }
+    /// Run the user keybinding at `idx` against `path` via the shared launcher.
+    /// Mirrors [`Self::launch_open`]; only `{path}` is substituted (there is no
+    /// review base), and `ask` placement routes through the placement picker.
+    pub(super) fn launch_keybinding(
+        &mut self,
+        idx: usize,
+        path: std::path::PathBuf,
+        tui: &mut Tui,
+    ) -> Result<()> {
+        let Some(kb) = self.config.keybindings.get(idx) else {
+            return Ok(());
+        };
+        let command = kb.command.clone();
+        let placement = kb.placement.clone();
+        let plan = crate::session::launcher::plan(
+            Some(&command),
+            &placement,
+            &path.to_string_lossy(),
+            None,
+            std::env::var_os("TMUX").is_some(),
+        );
+        if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
+            self.start_placement_picker(path, Some(command), None, "keybinding");
+        } else {
+            self.run_launch_plan(plan, path, "keybinding", tui)?;
+        }
+        Ok(())
+    }
     /// Review `path`'s diff vs its base ref via the `[review]` launcher. The base
     /// is explicit `[review] base`, else the repo's resolved default branch — no
     /// silent fallback, a doomed `git diff origin/HEAD...HEAD` errors clearly.

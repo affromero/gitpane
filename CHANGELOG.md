@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Added
+- Custom keybindings. Define `[[keybindings]]` blocks in the config to bind a single key to a shell command that runs against the selected repository or worktree. Each binding takes a `key`, a `command` where `{path}` expands to the target directory, an optional `placement` that reuses the `[open]` vocabulary (`command`, `inline`, `ask`, `split-window`, `new-window`), and an optional `desc` shown in the `?` help overlay. Keys already claimed by the built-in global actions stay reserved, a key a panel uses for navigation can be bound but then stops navigating that panel, and `gitpane diagnostic` lists the bindings that were loaded so a key that does not fire is easy to trace.
+
 ## [0.9.0] - 2026-07-09
 
 ### Added

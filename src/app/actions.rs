@@ -369,6 +369,11 @@ impl App {
                     self.launch_review(path, tui)?;
                 }
             }
+            Action::RunKeybinding(idx) => {
+                if let Some(path) = self.selected_launch_path() {
+                    self.launch_keybinding(idx, path, tui)?;
+                }
+            }
             Action::OpenNewWorktree(ref repo_id) => {
                 self.path_input.show_new_worktree(repo_id.clone());
             }

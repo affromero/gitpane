@@ -70,6 +70,13 @@ pub(crate) fn render(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_
         &mut out,
         &format!("  excluded_repos: {}", config.excluded_repos.len()),
     );
+    let kb = if config.keybindings.is_empty() {
+        "0".to_string()
+    } else {
+        let keys: Vec<&str> = config.keybindings.iter().map(|k| k.key.as_str()).collect();
+        format!("{} ({})", config.keybindings.len(), keys.join(", "))
+    };
+    push_line(&mut out, &format!("  keybindings: {kb}"));
     out.push('\n');
 
     push_line(&mut out, "watch:");
@@ -256,6 +263,12 @@ mod tests {
         };
         config.watch.refresh_cooldown_ms = 5000;
         config.watch.max_concurrent_polls = 2;
+        config.keybindings.push(crate::config::Keybinding {
+            key: "b".to_string(),
+            command: "gh repo view --web".to_string(),
+            placement: "command".to_string(),
+            desc: None,
+        });
 
         let output = render(&config, &[], runtime());
 
@@ -265,6 +278,7 @@ mod tests {
         assert!(output.contains("refresh_cooldown_ms: 5000"));
         assert!(output.contains("watch_worktree_dirs: false"));
         assert!(output.contains("repos_discovered: 0"));
+        assert!(output.contains("keybindings: 1 (b)"));
         assert!(output.contains("warnings:\n  none"));
     }
 

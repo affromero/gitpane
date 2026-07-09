@@ -192,6 +192,7 @@ impl Default for Config {
             review: ReviewConfig::default(),
             worktree: WorktreeConfig::default(),
             goto: GotoConfig::default(),
+            keybindings: Vec::new(),
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,

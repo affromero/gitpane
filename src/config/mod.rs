@@ -47,6 +47,10 @@ pub(crate) struct Config {
     pub worktree: WorktreeConfig,
     #[serde(default)]
     pub goto: GotoConfig,
+    /// User-defined keybindings. Each binds a single key to a templated shell
+    /// command run against the selected repo/worktree. See [`Keybinding`].
+    #[serde(default)]
+    pub keybindings: Vec<Keybinding>,
     /// Name of the active theme. Built-in: "default" or "muted". Any other
     /// value loads `<config_dir>/gitpane/themes/<name>.toml`.
     #[serde(default = "default_theme_name", rename = "theme")]
@@ -210,6 +214,46 @@ pub(crate) struct WorktreeConfig {
     /// When unset, a worktree is created as a sibling of its repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
+}
+
+/// One user-defined keybinding: press `key` to run `command` against the
+/// selected repo/worktree. Configured as a `[[keybindings]]` array in
+/// `config.toml`, e.g.
+///
+/// ```toml
+/// [[keybindings]]
+/// key = "b"
+/// command = "gh repo view --web"
+/// placement = "command"
+/// desc = "Open repo on github.com"
+/// ```
+///
+/// `key` is a single character. Keys already bound to built-in actions
+/// (`o v G r R t g p q y a d s`, `Tab`, `Esc`, `?`) are reserved and cannot be
+/// rebound; a panel-local key (`j`/`k`/`Enter`/…) can be shadowed but then no
+/// longer navigates that panel. `command` uses the same `{path}` substitution
+/// and `placement` vocabulary as `[open]` (`command`/`inline`/`ask`/
+/// `split-window`/`new-window`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Keybinding {
+    /// The single character that triggers the command.
+    pub key: String,
+    /// Command template. `{path}` expands to the target directory.
+    pub command: String,
+    /// Where/how to launch, like `[open] placement`. Defaults to `command`
+    /// (run the command directly as its own launcher).
+    #[serde(default = "default_open_placement")]
+    pub placement: String,
+    /// Optional label shown in the help overlay; falls back to the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+}
+
+/// True when a keybinding's `key` is exactly the single character `c`. A
+/// multi-char `key` (e.g. `"ctrl+b"`) never matches, so it is inert rather
+/// than firing on `c`.
+pub(crate) fn key_matches(key: &str, c: char) -> bool {
+    key.chars().eq(std::iter::once(c))
 }
 
 impl Config {
