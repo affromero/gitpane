@@ -38,6 +38,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub submodules: SubmoduleConfig,
     #[serde(default)]
+    pub github: GithubConfig,
+    #[serde(default)]
     pub open: OpenConfig,
     #[serde(default)]
     pub review: ReviewConfig,
@@ -142,6 +144,17 @@ pub(crate) struct SubmoduleConfig {
     pub ignore_dirty: bool,
     #[serde(default = "default_warn_unpushed")]
     pub warn_unpushed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct GithubConfig {
+    /// Show the GitHub panel (open issues/PRs for the selected repo, fetched via
+    /// the `gh` CLI). Opt-out: enabled by default. The panel only appears for a
+    /// selected repo whose `origin` is a github.com remote and only when it has
+    /// open issues or PRs (press `p` to force it open otherwise). Requires `gh`
+    /// on PATH; absent, gitpane keeps the usual three panels with no error.
+    #[serde(default = "default_github_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

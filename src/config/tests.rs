@@ -482,6 +482,32 @@ fn test_submodule_config_parse() {
 }
 
 #[test]
+fn test_github_config_defaults() {
+    let config: Config = toml::from_str("").unwrap();
+    assert!(config.github.enabled);
+    assert!(Config::default().github.enabled);
+}
+
+#[test]
+fn test_github_config_roundtrip() {
+    let mut config = Config::default();
+    config.github.enabled = false;
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert!(!loaded.github.enabled);
+}
+
+#[test]
+fn test_github_config_parse() {
+    let toml_str = r#"
+        [github]
+        enabled = false
+    "#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert!(!config.github.enabled);
+}
+
+#[test]
 fn test_open_config_defaults() {
     let config: Config = toml::from_str("").unwrap();
     assert!(config.open.command.is_none());

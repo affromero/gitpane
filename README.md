@@ -91,22 +91,26 @@ On NetBSD, update through pkgsrc instead of `gitpane update`, which shells out t
 
 If you work across multiple repositories, such as microservices, monorepos with submodules, or a mix of projects, you know the pain of checking status one directory at a time. Existing TUI tools focus on **one repo at a time**:
 
-| Tool | Multi repo | Auto refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
-| [lazygit](https://github.com/jesseduffield/lazygit) | No | No | No | Yes | Yes | Yes | Yes |
-| [gitui](https://github.com/extrawurst/gitui) | No | No | No | Yes | Yes | Yes | Yes |
-| [tig](https://github.com/jonas/tig) | No | No | No | No | Yes | No | No |
-| [git-delta](https://github.com/dandavison/delta) | No | No | No | No | No | Yes (pager) | No |
-| [grv](https://github.com/rgburke/grv) | No | No | No | Yes | Yes | No | No |
-| [git-summary](https://github.com/MircoT/git-summary) | Yes (list only) | No | No | No | No | No | No |
-| [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No |
-| [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes |
-| [gitbatch](https://github.com/isacikgoz/gitbatch) | Yes (TUI) | No | No | No | No | No | Yes (batch) |
-| [gwq](https://github.com/d-kuro/gwq) | Yes (CLI) | No | Yes | No | No | No | No |
-| [Canopy](https://github.com/ashmitb95/canopy) | Yes (CLI) | No | Yes | No | No | No | No |
+| Tool | Multi repo | Auto refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull | Issues/PRs |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+| [lazygit](https://github.com/jesseduffield/lazygit) | No | No | No | Yes | Yes | Yes | Yes | No |
+| [gitui](https://github.com/extrawurst/gitui) | No | No | No | Yes | Yes | Yes | Yes | No |
+| [tig](https://github.com/jonas/tig) | No | No | No | No | Yes | No | No | No |
+| [git-delta](https://github.com/dandavison/delta) | No | No | No | No | No | Yes (pager) | No | No |
+| [grv](https://github.com/rgburke/grv) | No | No | No | Yes | Yes | No | No | No |
+| [git-summary](https://github.com/MircoT/git-summary) | Yes (list only) | No | No | No | No | No | No | No |
+| [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No | No |
+| [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes | No |
+| [gitbatch](https://github.com/isacikgoz/gitbatch) | Yes (TUI) | No | No | No | No | No | Yes (batch) | No |
+| [gwq](https://github.com/d-kuro/gwq) | Yes (CLI) | No | Yes | No | No | No | No | No |
+| [Canopy](https://github.com/ashmitb95/canopy) | Yes (CLI) | No | Yes | No | No | No | No | No |
+| [ghpeek](https://github.com/kimusan/ghpeek) | GitHub only | No | No | Yes | No | No | No | Yes |
+| [gh-dash](https://github.com/dlvhdr/gh-dash) | GitHub only | Yes | No | No | No | No | Partial | Yes |
 
 **lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
+
+**ghpeek** and **gh-dash** live on the other side, they are GitHub dashboards for issues and pull requests with no view of your local working copies. gitpane folds a lightweight version of that in: select a repo and, when it has open issues or PRs on its `github.com` origin, a fourth panel appears with the list, a preview (body plus comments), and open-in-browser, fetched on demand through the `gh` CLI. It is the only tool here that pairs the local multi-repo workspace with a GitHub peek.
 
 A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
 
@@ -269,6 +273,9 @@ update_position = "top-right" # Update notification position ("top-right" or "to
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
 label_max_len = 24       # Max length for branch/tag labels
 show_stats = true        # Show +N/-M diff stats per commit
+
+[github]
+enabled = true           # Show the GitHub issues/PRs panel (via `gh`); opt-out, on by default
 
 [open]
 # Command run by `o` to open the selected repo/worktree. `{path}` is replaced
