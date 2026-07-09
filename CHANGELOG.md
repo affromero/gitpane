@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.9.0] - 2026-07-09
+
+### Added
+- A GitHub panel that shows the selected repository's open issues and pull requests, fetched through the `gh` CLI so it reuses gh's authentication and needs no token of its own. It appears as an optional fourth panel only when the selected repository has a github.com origin with open items, and stays out of the way otherwise; press `p` to force it open on any repository, and turn it off entirely with `[github] enabled = false`. Select an item and press Enter to preview its body and comment thread, and for a pull request its file changes, then Enter again to open it in the browser. `c` cycles the list between open, all, and closed items, and the panel resizes by dragging its border like the others. When `gh` is missing, the origin is not on github.com, or the network is down, gitpane keeps its usual three panels with a clear message.
+
+### Changed
+- Darkened the selected-row background across the repository, changes, and GitHub panels so a selected row's title and dimmed metadata stay legible.
+- Updated crossbeam-epoch to 0.9.20 to clear RUSTSEC-2026-0204, an invalid pointer dereference advisory pulled in transitively through the directory walker.
+- Updated ratatui to 0.30.2 and the ignore crate to 0.4.27.
+
 ## [0.8.2] - 2026-06-30
 
 ### Added
