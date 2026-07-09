@@ -400,8 +400,41 @@ impl GithubPanel {
                 )));
             }
         }
+        // PR file changes (unified diff), colored like the changes-panel diff.
+        if let Some(diff) = &d.diff {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "\u{2500}\u{2500} Files changed \u{2500}\u{2500}",
+                Style::default()
+                    .fg(f.diff_border)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in diff.lines() {
+                lines.push(diff_line(line, f));
+            }
+        }
         lines
     }
+}
+
+/// Style one unified-diff line by its prefix (matches the changes panel).
+fn diff_line(line: &str, f: &crate::theme::FileListTheme) -> Line<'static> {
+    let color = if line.starts_with("+++")
+        || line.starts_with("---")
+        || line.starts_with("diff ")
+        || line.starts_with("index ")
+    {
+        f.diff_meta
+    } else if line.starts_with('+') {
+        f.diff_added
+    } else if line.starts_with('-') {
+        f.diff_removed
+    } else if line.starts_with("@@") {
+        f.diff_hunk
+    } else {
+        f.diff_context
+    };
+    Line::from(Span::styled(line.to_string(), Style::default().fg(color)))
 }
 
 impl Component for GithubPanel {
@@ -583,7 +616,21 @@ mod tests {
             author: "alice".into(),
             body: "body".into(),
             comments: vec![],
+            diff: None,
         }
+    }
+
+    #[test]
+    fn diff_line_colors_by_prefix() {
+        let f = crate::theme::FileListTheme::default();
+        // File headers are meta, not additions/removals, despite the +/- prefix.
+        let meta = |l: &str| diff_line(l, &f).spans[0].style.fg.unwrap();
+        assert_eq!(meta("+++ b/x"), f.diff_meta);
+        assert_eq!(meta("--- a/x"), f.diff_meta);
+        assert_eq!(meta("+added"), f.diff_added);
+        assert_eq!(meta("-removed"), f.diff_removed);
+        assert_eq!(meta("@@ -1 +1 @@"), f.diff_hunk);
+        assert_eq!(meta(" context"), f.diff_context);
     }
 
     #[test]

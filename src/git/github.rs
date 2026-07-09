@@ -54,6 +54,9 @@ pub(crate) struct ItemDetail {
     pub author: String,
     pub body: String,
     pub comments: Vec<GhComment>,
+    /// Unified diff of a PR's changed files (PRs only; `None` for issues or when
+    /// the diff can't be fetched).
+    pub diff: Option<String>,
 }
 
 /// Whether the `gh` executable is available on PATH. Probed once (via
@@ -196,7 +199,26 @@ pub(crate) fn fetch_detail(url: &str, is_pr: bool) -> Result<ItemDetail, String>
     }
 
     let raw: RawDetail = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
-    Ok(raw.into_detail())
+    let mut detail = raw.into_detail();
+    if is_pr {
+        detail.diff = pr_diff(url);
+    }
+    Ok(detail)
+}
+
+/// Best-effort unified diff for a PR (`gh pr diff <url>`). Returns `None` on any
+/// failure — the diff is a bonus shown under the body and comments.
+fn pr_diff(url: &str) -> Option<String> {
+    let output = Command::new("gh").args(["pr", "diff", url]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 #[derive(Deserialize)]
@@ -269,6 +291,7 @@ impl RawDetail {
             title: self.title,
             author: self.author.map(|a| a.login).unwrap_or_default(),
             body: self.body,
+            diff: None,
             comments: self
                 .comments
                 .into_iter()
