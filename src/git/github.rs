@@ -34,6 +34,25 @@ pub(crate) struct GithubData {
     pub prs: Vec<GhItem>,
 }
 
+/// One comment on an issue or PR, for the detail pane.
+#[derive(Clone, Debug)]
+pub(crate) struct GhComment {
+    pub author: String,
+    pub body: String,
+    /// ISO-8601 timestamp; the pane shows its date part.
+    pub created_at: String,
+}
+
+/// The body and comment thread of one issue or PR, fetched on demand.
+#[derive(Clone, Debug)]
+pub(crate) struct ItemDetail {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub body: String,
+    pub comments: Vec<GhComment>,
+}
+
 /// Whether the `gh` executable is available on PATH. Probed once (via
 /// `gh --version`) and cached for the process lifetime, mirroring
 /// [`crate::git::git_available`]. When absent, gitpane keeps its three panels
@@ -141,6 +160,42 @@ fn fetch_list(owner: &str, repo: &str, is_pr: bool, state: &str) -> Result<Vec<G
     Ok(raw.into_iter().map(RawItem::into_item).collect())
 }
 
+/// Fetch the body and comment thread of one issue/PR by its web URL. `is_pr`
+/// picks the `gh issue view` vs `gh pr view` subcommand; both accept the URL.
+pub(crate) fn fetch_detail(url: &str, is_pr: bool) -> Result<ItemDetail, String> {
+    let sub = if is_pr { "pr" } else { "issue" };
+    let output = Command::new("gh")
+        .args([
+            sub,
+            "view",
+            url,
+            "--json",
+            "number,title,author,body,comments",
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "gh is not installed or not on PATH".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("gh failed")
+            .trim()
+            .to_string();
+        return Err(msg);
+    }
+
+    let raw: RawDetail = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    Ok(raw.into_detail())
+}
+
 #[derive(Deserialize)]
 struct RawAuthor {
     #[serde(default)]
@@ -172,6 +227,51 @@ impl RawItem {
             author: self.author.map(|a| a.login).unwrap_or_default(),
             updated_at: self.updated_at,
             url: self.url,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDetail {
+    number: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    author: Option<RawAuthor>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    comments: Vec<RawComment>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawComment {
+    #[serde(default)]
+    author: Option<RawAuthor>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+}
+
+impl RawDetail {
+    fn into_detail(self) -> ItemDetail {
+        ItemDetail {
+            number: self.number,
+            title: self.title,
+            author: self.author.map(|a| a.login).unwrap_or_default(),
+            body: self.body,
+            comments: self
+                .comments
+                .into_iter()
+                .map(|c| GhComment {
+                    author: c.author.map(|a| a.login).unwrap_or_default(),
+                    body: c.body,
+                    created_at: c.created_at,
+                })
+                .collect(),
         }
     }
 }
@@ -247,5 +347,27 @@ mod tests {
         assert!(!items[0].is_draft);
         assert_eq!(items[1].author, ""); // null author → empty
         assert!(items[1].is_draft);
+    }
+
+    #[test]
+    fn deserializes_detail_shape() {
+        let json = r#"{
+            "number": 12,
+            "title": "A bug",
+            "author": {"login": "alice"},
+            "body": "It broke.",
+            "comments": [
+                {"author": {"login": "bob"}, "body": "Confirmed", "createdAt": "2026-02-01T00:00:00Z"},
+                {"author": null, "body": "ghost", "createdAt": "2026-02-02T00:00:00Z"}
+            ]
+        }"#;
+        let raw: RawDetail = serde_json::from_str(json).unwrap();
+        let detail = raw.into_detail();
+        assert_eq!(detail.number, 12);
+        assert_eq!(detail.author, "alice");
+        assert_eq!(detail.body, "It broke.");
+        assert_eq!(detail.comments.len(), 2);
+        assert_eq!(detail.comments[0].author, "bob");
+        assert_eq!(detail.comments[1].author, ""); // null author → empty
     }
 }

@@ -69,9 +69,13 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => {
-                // If viewing diff, close it instead of quitting
+                // If viewing a diff or the GitHub detail, close it instead of quitting.
                 if self.focus == FocusPanel::Changes && self.file_list.viewing_diff() {
                     self.file_list.handle_key_event(key)?;
+                    return Ok(());
+                }
+                if self.focus == FocusPanel::GitHub && self.github_panel.has_detail() {
+                    self.github_panel.handle_key_event(key)?;
                     return Ok(());
                 }
                 self.action_tx.send(Action::Quit)?;
@@ -82,6 +86,8 @@ impl App {
                     self.file_list.handle_key_event(key)?;
                 } else if self.focus == FocusPanel::Graph && self.git_graph.has_detail() {
                     self.git_graph.handle_key_event(key)?;
+                } else if self.focus == FocusPanel::GitHub && self.github_panel.has_detail() {
+                    self.github_panel.handle_key_event(key)?;
                 } else {
                     match self.focus {
                         FocusPanel::GitHub => self.focus = FocusPanel::Graph,

@@ -113,6 +113,7 @@ impl App {
 
         self.file_list.horizontal_layout = self.horizontal_layout;
         self.git_graph.horizontal_layout = self.horizontal_layout;
+        self.github_panel.horizontal_layout = self.horizontal_layout;
 
         // Start each render from a blank buffer. Split panels can collapse,
         // logs may have written into the terminal before raw mode, and shorter
@@ -330,8 +331,12 @@ impl App {
             FocusPanel::GitHub => {
                 lines.push(Line::from(""));
                 lines.push(section("GitHub"));
-                lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
-                lines.push(Line::from(vec![key("Enter"), desc("Open in browser")]));
+                lines.push(Line::from(vec![key("j / k"), desc("Move / scroll")]));
+                lines.push(Line::from(vec![
+                    key("Enter"),
+                    desc("Preview, then open in browser"),
+                ]));
+                lines.push(Line::from(vec![key("Esc"), desc("Close preview")]));
                 lines.push(Line::from(vec![key("p"), desc("Hide panel")]));
             }
         }

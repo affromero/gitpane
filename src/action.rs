@@ -212,6 +212,18 @@ pub(crate) enum Action {
     },
     /// Open a URL in the OS browser (an issue/PR web link).
     OpenUrl(String),
+    /// Load the body + comments of a github item into the panel's detail pane.
+    /// `generation` latches out results for a superseded selection.
+    ShowGithubItem {
+        url: String,
+        is_pr: bool,
+        generation: u64,
+    },
+    /// Result of a [`Action::ShowGithubItem`] fetch.
+    GithubItemLoaded {
+        generation: u64,
+        result: Result<crate::git::github::ItemDetail, String>,
+    },
     /// Apply a theme transiently (live preview), no persistence.
     PreviewTheme(String),
     /// Apply a theme and write `theme = "<name>"` to the active config file.

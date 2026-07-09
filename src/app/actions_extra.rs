@@ -728,6 +728,20 @@ impl App {
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
                 self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
             }
+            Action::ShowGithubItem {
+                url,
+                is_pr,
+                generation,
+            } => {
+                let tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::git::github::fetch_detail(&url, is_pr);
+                    let _ = tx.send(Action::GithubItemLoaded { generation, result });
+                });
+            }
+            Action::GithubItemLoaded { generation, result } => {
+                self.github_panel.set_detail(generation, result);
+            }
             Action::Error(ref msg) => {
                 tracing::error!("{}", msg);
                 // Sanitize: single line, max 120 chars for status bar
