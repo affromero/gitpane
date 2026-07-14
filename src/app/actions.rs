@@ -20,6 +20,18 @@ impl App {
                 tui.terminal
                     .resize(ratatui::layout::Rect::new(0, 0, w, h))?;
             }
+            Action::CopyText(ref text) => {
+                match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
+                    Ok(()) => {
+                        self.success_message =
+                            Some(("Copied to clipboard".to_string(), Instant::now()));
+                    }
+                    Err(error) => {
+                        self.error_message =
+                            Some((format!("clipboard failed: {error}"), Instant::now()));
+                    }
+                }
+            }
             Action::SelectRepo(ref id) => {
                 self.context_menu.hide();
                 self.active_worktree = None;

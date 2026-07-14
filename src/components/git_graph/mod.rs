@@ -1,12 +1,13 @@
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{layout::Rect, widgets::ListState};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::git::graph::{BranchSegment, GraphBuilder, GraphOptions, GraphRow};
+use crate::git::graph::{BranchSegment, GraphBuilder, GraphFilters, GraphOptions, GraphRow};
 use crate::theme::Theme;
 
 mod component;
@@ -98,8 +99,12 @@ const MAX_CONSECUTIVE_ABORTS: u8 = 2;
 pub(crate) struct GitGraph {
     /// Display rows (may contain collapsed placeholders).
     rows: Vec<GraphRow>,
-    /// Full rows from the graph builder (never filtered).
+    /// Rows from the current graph build, before branch-collapse display logic.
     all_rows: Vec<GraphRow>,
+    /// Known filter values for the current repository. They accumulate across
+    /// filtered reloads so deselected values remain available to re-enable.
+    filter_branches: BTreeSet<String>,
+    filter_authors: BTreeSet<String>,
     /// Branches currently collapsed in the view.
     collapsed_branches: std::collections::HashSet<String>,
     /// DAG-computed branch segments (non-trunk groups of commits).
@@ -143,6 +148,8 @@ impl GitGraph {
         Self {
             rows: Vec::new(),
             all_rows: Vec::new(),
+            filter_branches: BTreeSet::new(),
+            filter_authors: BTreeSet::new(),
             collapsed_branches: std::collections::HashSet::new(),
             segments: Vec::new(),
             row_to_segment: Vec::new(),
@@ -198,6 +205,8 @@ impl GitGraph {
             self.needs_reload = false;
             self.consecutive_aborts = 0;
             self.search.clear();
+            self.filter_branches.clear();
+            self.filter_authors.clear();
             self.collapsed_branches.clear();
             self.segments.clear();
             self.row_to_segment.clear();
@@ -215,6 +224,12 @@ impl GitGraph {
             // before either terminal action below is sent.
             let guard = GraphLoadGuard::new(load_gen, tx.clone());
             let builder = GraphBuilder::new();
+            if let Ok(branches) = GraphBuilder::branch_names(&path, &options.branch_filter) {
+                let _ = tx.send(Action::GraphFilterBranchesLoaded {
+                    generation: load_gen,
+                    branches,
+                });
+            }
             match builder.build(&path, &options) {
                 Ok(rows) => {
                     let oids: Vec<git2::Oid> = rows.iter().map(|r| r.oid).collect();
@@ -271,6 +286,14 @@ impl GitGraph {
                 }
             }
         }
+        self.filter_branches.extend(
+            rows.iter()
+                .flat_map(|row| row.labels.iter())
+                .filter(|label| !label.is_tag && !label.is_stash)
+                .map(|label| label.name.clone()),
+        );
+        self.filter_authors
+            .extend(rows.iter().map(|row| row.author.clone()));
         self.all_rows = rows;
         self.loading = false;
         self.load_in_flight = false;
@@ -287,6 +310,10 @@ impl GitGraph {
         if std::mem::take(&mut self.needs_reload) {
             self.reload_graph();
         }
+    }
+
+    pub fn set_filter_branches(&mut self, branches: Vec<String>) {
+        self.filter_branches.extend(branches);
     }
 
     pub fn set_diff_stats(&mut self, stats: Vec<(git2::Oid, crate::git::graph::DiffStat)>) {
@@ -369,6 +396,84 @@ impl GitGraph {
 
     pub fn current_detail_generation(&self) -> u64 {
         self.detail_generation
+    }
+
+    pub fn filters(&self) -> GraphFilters {
+        self.graph_options.filters.clone()
+    }
+
+    pub fn filter_branches(&self) -> Vec<String> {
+        self.filter_branches.iter().cloned().collect()
+    }
+
+    pub fn filter_authors(&self) -> Vec<String> {
+        self.filter_authors.iter().cloned().collect()
+    }
+
+    pub fn set_filters(&mut self, filters: GraphFilters) {
+        if self.graph_options.filters == filters {
+            return;
+        }
+        self.graph_options.filters = filters;
+        self.collapsed_branches.clear();
+        self.search.clear();
+        self.reload_graph();
+    }
+
+    pub fn first_parent(&self) -> bool {
+        self.graph_options.first_parent
+    }
+
+    pub fn selected_commit_menu_data(&self) -> Option<(String, String, String)> {
+        let row = self.display_rows().get(self.state.selected()?)?;
+        Some((
+            row.oid.to_string(),
+            row.short_id.clone(),
+            row.message.clone(),
+        ))
+    }
+
+    pub fn can_toggle_selected_branch(&self) -> bool {
+        let Some(index) = self.state.selected() else {
+            return false;
+        };
+        let Some(row) = self.display_rows().get(index) else {
+            return false;
+        };
+        if row.collapsed.is_some() {
+            return true;
+        }
+        self.all_rows
+            .iter()
+            .position(|candidate| candidate.oid == row.oid)
+            .and_then(|index| self.row_to_segment.get(index))
+            .is_some_and(Option::is_some)
+    }
+
+    pub fn open_selected_commit_files(&mut self) -> Option<Action> {
+        self.try_show_commit_files()
+    }
+
+    pub fn open_search(&mut self) {
+        self.search.visible = true;
+        self.search.input.clear();
+        self.search.matches.clear();
+        self.search.current_match = None;
+    }
+
+    pub fn toggle_selected_branch(&mut self) {
+        self.toggle_collapse_selected();
+    }
+
+    pub fn expand_all(&mut self) {
+        self.expand_all_branches();
+    }
+
+    pub fn set_first_parent(&mut self, enabled: bool) {
+        if self.graph_options.first_parent != enabled {
+            self.graph_options.first_parent = enabled;
+            self.reload_graph();
+        }
     }
 
     /// Toggle collapse on the selected row's branch (or expand a collapsed group).

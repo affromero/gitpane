@@ -1,4 +1,5 @@
 use git2::{Oid, Repository, Sort};
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::config::BranchFilter;
@@ -33,6 +34,7 @@ pub(crate) struct GraphOptions {
     pub label_max_len: usize,
     pub first_parent: bool,
     pub show_stats: bool,
+    pub filters: GraphFilters,
 }
 
 impl Default for GraphOptions {
@@ -42,6 +44,49 @@ impl Default for GraphOptions {
             label_max_len: 24,
             first_parent: false,
             show_stats: true,
+            filters: GraphFilters::default(),
+        }
+    }
+}
+
+/// Optional include lists for the graph. `None` means every value in the
+/// category is included; an empty set deliberately produces an empty graph.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GraphFilters {
+    pub branches: Option<BTreeSet<String>>,
+    pub authors: Option<BTreeSet<String>>,
+    pub refs: GraphRefFilters,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GraphRefFilters {
+    pub local: bool,
+    pub remote: bool,
+    pub tags: bool,
+    pub stashes: bool,
+}
+
+impl Default for GraphRefFilters {
+    fn default() -> Self {
+        Self {
+            local: true,
+            remote: true,
+            tags: true,
+            stashes: true,
+        }
+    }
+}
+
+impl GraphRefFilters {
+    fn includes(&self, label: &BranchLabel) -> bool {
+        if label.is_stash {
+            self.stashes
+        } else if label.is_tag {
+            self.tags
+        } else if label.is_remote {
+            self.remote
+        } else {
+            self.local
         }
     }
 }
@@ -107,10 +152,56 @@ impl GraphBuilder {
         let mut ref_map = resolve_refs(&repo, &options.branch_filter);
         merge_stash_labels(&mut repo, &mut ref_map);
 
+        // A branch selection is the graph's root set. Keep this separate from
+        // label visibility: tags/stashes may decorate selected commits, but
+        // must not keep an otherwise empty branch selection alive.
+        let selected_branch_oids = options.filters.branches.as_ref().map(|branches| {
+            ref_map
+                .iter()
+                .filter(|(_, labels)| {
+                    labels.iter().any(|label| {
+                        !label.is_tag
+                            && !label.is_stash
+                            && options.filters.refs.includes(label)
+                            && branches.contains(&label.name)
+                    })
+                })
+                .map(|(oid, _)| *oid)
+                .collect::<HashSet<_>>()
+        });
+        if selected_branch_oids.as_ref().is_some_and(HashSet::is_empty) {
+            return Ok(Vec::new());
+        }
+
+        for labels in ref_map.values_mut() {
+            labels.retain(|label| options.filters.refs.includes(label));
+        }
+        ref_map.retain(|_, labels| !labels.is_empty());
+
+        if let Some(branches) = &options.filters.branches {
+            for labels in ref_map.values_mut() {
+                labels.retain(|label| {
+                    label.is_tag || label.is_stash || branches.contains(&label.name)
+                });
+            }
+            ref_map.retain(|_, labels| !labels.is_empty());
+        }
+
         let mut revwalk = repo.revwalk()?;
-        revwalk.push_head().ok(); // ok: handles unborn HEAD
-        for &oid in ref_map.keys() {
-            revwalk.push(oid).ok(); // git2 deduplicates
+        // An explicit branch selection owns the walk roots. Otherwise retain
+        // the usual HEAD root so detached HEAD and unborn repositories behave
+        // exactly as before.
+        if options.filters.branches.is_none() && options.filters.refs.local {
+            revwalk.push_head().ok(); // ok: handles unborn HEAD
+        }
+        if let Some(oids) = &selected_branch_oids {
+            for &oid in oids {
+                revwalk.push(oid).ok(); // git2 deduplicates
+            }
+        } else {
+            for &oid in ref_map.keys() {
+                revwalk.push(oid).ok(); // git2 deduplicates
+            }
         }
         revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
         if options.first_parent {
@@ -133,6 +224,17 @@ impl GraphBuilder {
             let author = commit.author().name().unwrap_or("").to_string();
             let time = commit.time().seconds();
 
+            // Still process excluded commits above so the lane state for later
+            // visible commits remains consistent with the repository DAG.
+            if options
+                .filters
+                .authors
+                .as_ref()
+                .is_some_and(|authors| !authors.contains(&author))
+            {
+                continue;
+            }
+
             rows.push(GraphRow {
                 commit_col,
                 lanes,
@@ -151,6 +253,24 @@ impl GraphBuilder {
         }
 
         Ok(rows)
+    }
+
+    /// Branch names available to the filter picker, independent of the active
+    /// graph filters. A filtered walk must not make deselected branches vanish
+    /// from the picker.
+    pub fn branch_names(
+        path: &Path,
+        branch_filter: &BranchFilter,
+    ) -> color_eyre::Result<Vec<String>> {
+        let repo = Repository::open(path)?;
+        let refs = resolve_refs(&repo, branch_filter);
+        let names = refs
+            .values()
+            .flat_map(|labels| labels.iter())
+            .filter(|label| !label.is_tag && !label.is_stash)
+            .map(|label| label.name.clone())
+            .collect::<BTreeSet<_>>();
+        Ok(names.into_iter().collect())
     }
 
     fn process_commit(

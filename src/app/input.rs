@@ -45,6 +45,20 @@ impl App {
             return Ok(());
         }
 
+        if self.graph_filter_picker.visible {
+            if let Some(action) = self.graph_filter_picker.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
+        if self.graph_context_menu.visible {
+            if let Some(action) = self.graph_context_menu.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         if self.picker.visible {
             if let Some(action) = self.picker.handle_key_event(key)? {
                 self.action_tx.send(action)?;
@@ -233,6 +247,20 @@ impl App {
 
         // Modal overlays swallow mouse input so a click can't leak through to a
         // panel or open a context menu hidden behind them.
+        if self.graph_context_menu.visible {
+            if let Some(action) = self.graph_context_menu.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
+        if self.graph_filter_picker.visible {
+            if let Some(action) = self.graph_filter_picker.handle_mouse_event(mouse)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         if self.picker.visible
             || self.theme_picker.visible
             || self.path_input.visible

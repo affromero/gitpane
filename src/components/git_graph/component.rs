@@ -16,9 +16,28 @@ use crate::git::graph_render;
 use super::*;
 
 impl GitGraph {
+    fn filter_summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(branches) = &self.graph_options.filters.branches {
+            parts.push(format!(
+                "branches {}/{}",
+                branches.len(),
+                self.filter_branches.len()
+            ));
+        }
+        if let Some(authors) = &self.graph_options.filters.authors {
+            parts.push(format!(
+                "authors {}/{}",
+                authors.len(),
+                self.filter_authors.len()
+            ));
+        }
+        (!parts.is_empty()).then(|| format!(" [{}]", parts.join(", ")))
+    }
+
     fn draw_graph_list(&mut self, frame: &mut Frame, area: Rect) {
         let collapsed_count = self.collapsed_branches.len();
-        let title = match (self.graph_options.first_parent, collapsed_count) {
+        let mut title = match (self.graph_options.first_parent, collapsed_count) {
             (true, 0) => format!(" Git Graph — {} [1st-parent] ", self.repo_name),
             (true, n) => format!(
                 " Git Graph — {} [1st-parent] ({n} collapsed) ",
@@ -27,6 +46,9 @@ impl GitGraph {
             (false, 0) => format!(" Git Graph — {} ", self.repo_name),
             (false, n) => format!(" Git Graph — {} ({n} collapsed) ", self.repo_name),
         };
+        if let Some(summary) = self.filter_summary() {
+            title.push_str(&summary);
+        }
         let t = &self.theme.graph;
         let border_color = if self.focused && self.commit_detail.is_none() {
             t.border_focused
@@ -502,7 +524,20 @@ impl Component for GitGraph {
                 self.h_scroll = self.h_scroll.saturating_add(4);
                 Ok(None)
             }
-            MouseEventKind::Down(MouseButton::Right) => Ok(None),
+            MouseEventKind::Down(MouseButton::Right) => {
+                let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if self.graph_list_area.contains(pos) {
+                    let content_y = self.graph_list_area.y + 1;
+                    if mouse.row >= content_y {
+                        let idx = (mouse.row - content_y) as usize + self.state.offset();
+                        if idx < self.display_rows().len() {
+                            self.state.select(Some(idx));
+                            return Ok(Some(Action::OpenGraphContextMenu));
+                        }
+                    }
+                }
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }

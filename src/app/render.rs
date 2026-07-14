@@ -218,6 +218,8 @@ impl App {
         self.path_input.draw(frame, area);
         self.confirm_dialog.draw(frame, area);
         self.theme_picker.draw(frame, area);
+        self.graph_context_menu.draw(frame, area);
+        self.graph_filter_picker.draw(frame, area);
         self.picker.draw(frame, area);
 
         // Update notification overlay
@@ -342,6 +344,7 @@ impl App {
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("h / l"), desc("Scroll left / right")]));
                 lines.push(Line::from(vec![key("Enter"), desc("Open commit files")]));
+                lines.push(Line::from(vec![key("Right click"), desc("Filter graph")]));
                 lines.push(Line::from(""));
                 lines.push(section("Search"));
                 lines.push(Line::from(vec![key("/"), desc("Search commits")]));
