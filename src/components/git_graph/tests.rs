@@ -1,6 +1,9 @@
 use super::*;
+use crate::components::Component;
 use crate::git::graph::{BranchLabel, GraphRow, LaneSegment};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use git2::Oid;
+use ratatui::layout::Rect;
 
 fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
     GraphRow {
@@ -18,6 +21,25 @@ fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
         diff_stat: None,
         collapsed: None,
     }
+}
+
+#[test]
+fn right_clicking_a_graph_row_opens_its_context_menu() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
+    graph.graph_list_area = Rect::new(0, 0, 80, 4);
+
+    let action = graph
+        .handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+
+    assert!(matches!(action, Some(Action::OpenGraphContextMenu)));
+    assert_eq!(graph.state.selected(), Some(0));
 }
 
 #[test]

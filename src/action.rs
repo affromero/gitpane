@@ -1,4 +1,4 @@
-use crate::git::graph::{DiffStat, GraphRow};
+use crate::git::graph::{DiffStat, GraphFilters, GraphRow};
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 
@@ -106,10 +106,26 @@ pub(crate) enum Action {
         generation: u64,
         rows: Vec<GraphRow>,
     },
+    GraphFilterBranchesLoaded {
+        generation: u64,
+        branches: Vec<String>,
+    },
     DiffStatsLoaded {
         generation: u64,
         stats: Vec<(git2::Oid, DiffStat)>,
     },
+    /// Open the graph filter overlay from a graph-row context click.
+    OpenGraphFilters,
+    OpenGraphContextMenu,
+    OpenGraphCommitFiles,
+    OpenGraphSearch,
+    ToggleGraphCollapse,
+    ExpandAllGraphBranches,
+    CopyText(String),
+    /// Replace graph filters and rebuild the graph from the selected refs.
+    SetGraphFilters(GraphFilters),
+    SetGraphFirstParent(bool),
+    ResetGraphFilters,
     ShowContextMenu {
         id: RepoId,
         row: u16,

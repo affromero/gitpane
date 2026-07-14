@@ -17,6 +17,14 @@ impl App {
                     self.git_graph.set_rows(rows);
                 }
             }
+            Action::GraphFilterBranchesLoaded {
+                generation,
+                branches,
+            } => {
+                if generation == self.git_graph.current_generation() {
+                    self.git_graph.set_filter_branches(branches);
+                }
+            }
             Action::DiffStatsLoaded { generation, stats } => {
                 if generation == self.git_graph.current_generation() {
                     self.git_graph.set_diff_stats(stats);
@@ -36,6 +44,49 @@ impl App {
                 if generation == self.git_graph.current_generation() {
                     self.git_graph.abort_load();
                 }
+            }
+            Action::OpenGraphFilters => {
+                self.graph_filter_picker.show(
+                    self.git_graph.filters(),
+                    self.git_graph.filter_branches(),
+                    self.git_graph.filter_authors(),
+                    self.git_graph.first_parent(),
+                );
+            }
+            Action::OpenGraphContextMenu => {
+                if let Some((full_hash, short_hash, message)) =
+                    self.git_graph.selected_commit_menu_data()
+                {
+                    self.graph_filter_picker.visible = false;
+                    self.graph_context_menu.show(
+                        full_hash,
+                        short_hash,
+                        message,
+                        self.git_graph.first_parent(),
+                        self.git_graph.can_toggle_selected_branch(),
+                    );
+                }
+            }
+            Action::OpenGraphCommitFiles => {
+                if let Some(action) = self.git_graph.open_selected_commit_files() {
+                    self.action_tx.send(action)?;
+                }
+            }
+            Action::OpenGraphSearch => {
+                self.git_graph.open_search();
+            }
+            Action::ToggleGraphCollapse => self.git_graph.toggle_selected_branch(),
+            Action::ExpandAllGraphBranches => self.git_graph.expand_all(),
+            Action::SetGraphFilters(filters) => {
+                self.git_graph.set_filters(filters);
+            }
+            Action::SetGraphFirstParent(enabled) => {
+                self.git_graph.set_first_parent(enabled);
+            }
+            Action::ResetGraphFilters => {
+                self.git_graph
+                    .set_filters(crate::git::graph::GraphFilters::default());
+                self.git_graph.set_first_parent(false);
             }
             Action::ShowContextMenu {
                 ref id,

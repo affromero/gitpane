@@ -13,6 +13,8 @@ use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
 use crate::components::git_graph::GitGraph;
 use crate::components::github_panel::GithubPanel;
+use crate::components::graph_menu::context_menu::GraphContextMenu;
+use crate::components::graph_menu::filter_picker::GraphFilterPicker;
 use crate::components::path_input::PathInput;
 use crate::components::picker::Picker;
 use crate::components::repo_list::RepoEntry;
@@ -141,6 +143,8 @@ pub(crate) struct App {
     repo_list: RepoList,
     file_list: FileList,
     git_graph: GitGraph,
+    graph_context_menu: GraphContextMenu,
+    graph_filter_picker: GraphFilterPicker,
     github_panel: GithubPanel,
     confirm_dialog: ConfirmDialog,
     context_menu: ContextMenu,
@@ -316,6 +320,7 @@ impl App {
             label_max_len: config.graph.label_max_len,
             first_parent: false,
             show_stats: config.graph.show_stats,
+            filters: crate::git::graph::GraphFilters::default(),
         };
 
         let update_position = config.ui.update_position;
@@ -329,6 +334,8 @@ impl App {
             repo_list: RepoList::new(repo_paths, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
+            graph_context_menu: GraphContextMenu::new(theme.clone()),
+            graph_filter_picker: GraphFilterPicker::new(theme.clone()),
             github_panel: GithubPanel::new(theme.clone()),
             confirm_dialog: ConfirmDialog::new(theme.clone()),
             context_menu: ContextMenu::new(theme.clone()),
@@ -486,6 +493,8 @@ impl App {
         self.repo_list.set_theme(theme.clone());
         self.file_list.set_theme(theme.clone());
         self.git_graph.set_theme(theme.clone());
+        self.graph_context_menu.set_theme(theme.clone());
+        self.graph_filter_picker.set_theme(theme.clone());
         self.github_panel.set_theme(theme.clone());
         self.confirm_dialog.set_theme(theme.clone());
         self.context_menu.set_theme(theme.clone());

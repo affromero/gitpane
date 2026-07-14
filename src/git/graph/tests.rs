@@ -3,11 +3,146 @@ use git2::{Repository, Signature};
 use tempfile::TempDir;
 
 fn create_commit(repo: &Repository, message: &str, parents: &[&git2::Commit]) -> Oid {
-    let sig = Signature::now("Test", "test@test.com").unwrap();
+    create_commit_as(repo, message, "Test", parents)
+}
+
+fn create_commit_as(
+    repo: &Repository,
+    message: &str,
+    author: &str,
+    parents: &[&git2::Commit],
+) -> Oid {
+    let sig = Signature::now(author, "test@test.com").unwrap();
     let tree_id = repo.index().unwrap().write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     repo.commit(Some("HEAD"), &sig, &sig, message, &tree, parents)
         .unwrap()
+}
+
+#[test]
+fn branch_filter_walks_from_the_selected_branch() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("feature", &root, false).unwrap();
+    create_commit(&repo, "main-only", &[&root]);
+
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some(["feature".to_string()].into_iter().collect()),
+            authors: None,
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+
+    assert_eq!(
+        rows.iter().map(|row| &row.message).collect::<Vec<_>>(),
+        ["root"]
+    );
+}
+
+#[test]
+fn branch_catalog_includes_refs_outside_the_active_walk() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("feature", &root, false).unwrap();
+    create_commit(&repo, "main-only", &[&root]);
+
+    let names = GraphBuilder::branch_names(tmp.path(), &crate::config::BranchFilter::All).unwrap();
+
+    assert!(names.iter().any(|name| name == "feature"));
+}
+
+#[test]
+fn branch_filter_hides_unselected_labels_at_a_shared_tip() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("feature", &root, false).unwrap();
+
+    let head_name = repo.head().unwrap().shorthand().unwrap().to_string();
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some([head_name].into_iter().collect()),
+            authors: None,
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].labels.iter().all(|label| label.name != "feature"));
+
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some(["feature".to_string()].into_iter().collect()),
+            authors: None,
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+    assert!(rows[0].labels.iter().any(|label| label.name == "feature"));
+}
+
+#[test]
+fn empty_branch_selection_hides_history_even_when_tags_are_enabled() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.tag_lightweight("v1.0.0", root.as_object(), false)
+        .unwrap();
+
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some(Default::default()),
+            authors: None,
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+
+    assert!(
+        GraphBuilder::new()
+            .build(tmp.path(), &options)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn author_filter_only_returns_selected_authors() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit_as(&repo, "keep", "Alice", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    create_commit_as(&repo, "skip", "Bob", &[&root]);
+
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: None,
+            authors: Some(["Alice".to_string()].into_iter().collect()),
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].message, "keep");
 }
 
 #[test]
