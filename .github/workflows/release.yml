@@ -115,7 +115,7 @@ jobs:
           echo "------------------------"
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.1
         with:
           files: artifacts/*
           body_path: release-notes.md
