@@ -77,6 +77,8 @@ jobs:
         with:
           name: gitpane-${{ matrix.target }}
           path: gitpane-${{ matrix.target }}.${{ matrix.archive }}
+          # Handoff to the release job only; binaries live permanently on the GitHub Release.
+          retention-days: 1
 
   release:
     name: Upload Assets

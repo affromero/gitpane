@@ -41,3 +41,4 @@ jobs:
           name: lcov
           path: lcov.info
           if-no-files-found: error
+          retention-days: 1
