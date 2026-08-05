@@ -5,7 +5,7 @@ All notable changes to gitpane are documented here.
 ## [Unreleased]
 
 ### Added
-- Status-bar toasts now pulse. For its first moment a toast flashes its accent color twice, then settles and stays readable for the rest of its lifetime, so an `OK` or `ERROR` message no longer appears motionless in the bar and slips by unnoticed.
+- Status-bar toasts now pulse. A toast flashes its accent color every 300ms for its whole lifetime, so an `OK` or `ERROR` message no longer appears motionless in the bar and slips by unnoticed.
 - A reverse-alphabetical sort mode. `s` now cycles A-Z, Z-A, then dirty-first, and every press shows a "sort: ..." toast in the status bar so the active mode is never a guess (previously the only indicator was a small label buried in the hint line, which truncates on narrow windows).
 - Path completion in the add-repo input now shows its candidates. The first Tab extends what you typed to the longest common prefix and opens a menu above the input listing every matching directory; Tab and the arrow keys then move a visible selection through the list, and Esc closes the menu before it closes the input. Previously Tab silently replaced the input with the first match and cycled through the rest blindly.
 
