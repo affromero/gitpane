@@ -5,7 +5,11 @@ All notable changes to gitpane are documented here.
 ## [Unreleased]
 
 ### Added
+- A reverse-alphabetical sort mode. `s` now cycles A-Z, Z-A, then dirty-first, and every press shows a "sort: ..." toast in the status bar so the active mode is never a guess (previously the only indicator was a small label buried in the hint line, which truncates on narrow windows).
 - Path completion in the add-repo input now shows its candidates. The first Tab extends what you typed to the longest common prefix and opens a menu above the input listing every matching directory; Tab and the arrow keys then move a visible selection through the list, and Esc closes the menu before it closes the input. Previously Tab silently replaced the input with the first match and cycled through the rest blindly.
+
+### Changed
+- Sorting now applies to the whole list. Manually added (pinned) repos used to stay grouped at the top in every sort mode, which read as sorting being broken for them, and made uppercase names like `Presentations` look like they were jumping the alphabetical queue. Pinning now only controls persistence (the repo survives rescans and restarts); position comes from the active sort, case-insensitively, like every other row.
 
 ### Fixed
 - Manually added repositories no longer vanish after a restart or rescan. A sparse config file earlier in the search order (for example a hand-created `~/.config/gitpane/config.toml`) silently shadowed the full config holding `pinned_repos`; loading still picks one file and never merges, but `gitpane diagnostic` now lists any shadowed config and warns about it by name. Separately, a bare repository (`HEAD` at the top level, no `.git`) passed the add validation but was dropped by the next discovery pass; adding and discovery now share one predicate, so anything you can add survives every rescan. A failed config save also only reached the log file while the repo looked pinned; it now shows a "save failed" toast in the status bar.
