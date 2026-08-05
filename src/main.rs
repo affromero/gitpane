@@ -167,22 +167,28 @@ fn self_update() -> Result<()> {
         );
     }
 
-    if let Some(latest) = update_checker::check_latest() {
-        println!("New version available: v{latest}");
-    } else {
+    let Some(latest) = update_checker::check_latest() else {
         println!("Already up to date.");
         return Ok(());
-    }
+    };
+    println!("New version available: v{latest}");
 
-    println!("Running: cargo install gitpane");
+    // Pin the version the checker announced. The checker reads the GitHub
+    // release, which exists minutes before the crates.io publish lands; a
+    // bare `cargo install gitpane` in that window quietly no-ops on the
+    // already-installed version while we'd still claim success.
+    println!("Running: cargo install gitpane --version {latest}");
     let status = std::process::Command::new("cargo")
-        .args(["install", "gitpane"])
+        .args(["install", "gitpane", "--version", &latest])
         .status();
 
     match status {
-        Ok(s) if s.success() => println!("Updated successfully."),
+        Ok(s) if s.success() => println!("Updated to v{latest}."),
         Ok(s) => {
             eprintln!("cargo install exited with {s}");
+            eprintln!(
+                "If v{latest} was tagged in the last few minutes it may still be propagating to crates.io; try again shortly."
+            );
             std::process::exit(1);
         }
         Err(e) => {

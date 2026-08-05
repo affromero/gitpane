@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Fixed
+- `gitpane update` no longer claims success without updating. The version check reads the GitHub release, which appears minutes before the matching crates.io publish lands; in that window a bare `cargo install gitpane` silently kept the old version while the command printed "Updated successfully". The install now pins the announced version, so it either installs exactly that version or fails with a note that the release may still be propagating.
+
 ## [0.10.1] - 2026-08-05
 
 ### Fixed
