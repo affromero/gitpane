@@ -96,9 +96,16 @@ pub(crate) struct RepoList {
 /// outside every root (e.g. pinned paths). The relative path instead of the
 /// bare basename keeps same-named repos distinguishable and makes the list
 /// read like the workspace tree.
+///
+/// A root can also *be* a repo — `~/Code` with its own `.git` is the case
+/// `scanner::test_discover_skips_phantom_dot_git_at_root` describes. Stripping
+/// the root off itself leaves nothing, so an empty relative path falls through
+/// to the basename rather than rendering a nameless row.
 pub(crate) fn display_path(path: &Path, roots: &[PathBuf]) -> String {
     for root in roots {
-        if let Ok(rel) = path.strip_prefix(root) {
+        if let Ok(rel) = path.strip_prefix(root)
+            && !rel.as_os_str().is_empty()
+        {
             return rel.to_string_lossy().to_string();
         }
     }

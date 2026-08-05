@@ -313,6 +313,15 @@ fn display_path_keeps_basename_for_top_level_repo() {
     );
 }
 
+/// A configured root that is itself a repo (the `~/Code` case) strips to an
+/// empty relative path, which would render as a blank, unclickable-looking
+/// row. It falls back to the basename instead.
+#[test]
+fn display_path_names_a_root_that_is_itself_a_repo() {
+    let roots = vec![PathBuf::from("/ws")];
+    assert_eq!(display_path(&PathBuf::from("/ws"), &roots), "ws");
+}
+
 #[test]
 fn middle_ellipsize_keeps_head_and_tail() {
     assert_eq!(middle_ellipsize("hbre/camsys", 30), "hbre/camsys");
