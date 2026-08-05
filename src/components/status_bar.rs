@@ -39,11 +39,11 @@ impl StatusBar {
     }
 }
 
-/// Whether a toast is in the "on" half of its attention pulse: for its first
-/// 1.2s the style flips every 300ms (two visible flashes at the default
-/// 10fps), then holds steady for the rest of its lifetime.
+/// Whether a toast is in the "on" half of its attention pulse: the style
+/// flips every 300ms for the toast's whole lifetime, so it keeps drawing the
+/// eye until it expires.
 fn pulse_on(elapsed_ms: u128) -> bool {
-    elapsed_ms < 1200 && (elapsed_ms / 300).is_multiple_of(2)
+    (elapsed_ms / 300).is_multiple_of(2)
 }
 
 /// Toast line with the pulse applied: while the pulse is on, the message
@@ -236,13 +236,13 @@ mod tests {
     use super::pulse_on;
 
     #[test]
-    fn pulse_flashes_twice_then_holds_steady() {
+    fn pulse_alternates_for_the_whole_lifetime() {
         assert!(pulse_on(0));
         assert!(!pulse_on(300));
         assert!(pulse_on(600));
         assert!(!pulse_on(900));
-        // After 1.2s the toast stops flashing and stays readable.
-        assert!(!pulse_on(1200));
-        assert!(!pulse_on(2500));
+        // No settle point: the pulse keeps going until the toast expires.
+        assert!(pulse_on(1200));
+        assert!(!pulse_on(4500));
     }
 }
