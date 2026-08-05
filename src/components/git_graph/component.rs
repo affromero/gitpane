@@ -270,8 +270,13 @@ impl GitGraph {
             return;
         };
 
+        let title = if detail.diff_focused {
+            " Commit Diff (Esc to leave) "
+        } else {
+            " Commit Diff (Enter to scroll) "
+        };
         let block = Block::default()
-            .title(" Commit Diff (Esc to close) ")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.commit_diff_border));
 
@@ -311,12 +316,13 @@ impl Component for GitGraph {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // When detail is open, Esc/keys are layered
         if let Some(ref mut detail) = self.commit_detail {
-            if detail.diff_content.is_some() {
-                // Viewing commit diff
+            // The diff pane only takes the keys once it is focused; while it is
+            // merely following the highlighted file, `j`/`k` keep walking the
+            // file list.
+            if detail.diff_focused {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
-                        detail.diff_content = None;
-                        detail.diff_scroll = 0;
+                        detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         detail.diff_scroll = detail.diff_scroll.saturating_add(1);
@@ -347,7 +353,8 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    return Ok(None);
+                    // The Diff pane follows the highlight, after the debounce.
+                    return Ok(self.schedule_commit_diff());
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if !detail.files.is_empty() {
@@ -358,9 +365,12 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    return Ok(None);
+                    return Ok(self.schedule_commit_diff());
                 }
                 KeyCode::Enter => {
+                    // Hand the keyboard to the diff so it can be scrolled, and
+                    // ask for it now rather than waiting out the debounce.
+                    detail.diff_focused = true;
                     return Ok(self.try_show_commit_diff());
                 }
                 _ => return Ok(None),
@@ -430,22 +440,40 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.display_rows().len() {
-                            // Click on already-selected row opens commit files
-                            if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
-                                return Ok(self.try_show_commit_files());
+                            // Clicking the commit that is already open is a
+                            // no-op: reloading its files would throw away the
+                            // file the user picked, and a terminal double click
+                            // arrives as two of these.
+                            if self.is_detail_open_for(idx) {
+                                return Ok(None);
                             }
                             self.state.select(Some(idx));
                             self.commit_detail = None;
                             if std::mem::take(&mut self.needs_reload) {
                                 self.reload_graph();
                             }
+                            // A single click selects the commit and opens its
+                            // changed files (and, via CommitFilesLoaded, the
+                            // highlighted file's diff), so no second click is
+                            // needed to see the detail.
+                            return Ok(self.try_show_commit_files());
                         }
                     }
                     return Ok(None);
                 }
 
+                // Click inside the diff hands it the keyboard, the mouse
+                // counterpart of Enter on a file row.
+                if let Some(ref mut detail) = self.commit_detail
+                    && detail.diff_content.is_some()
+                    && self.diff_area.contains(pos)
+                {
+                    detail.diff_focused = true;
+                    return Ok(None);
+                }
+
                 // Click in commit files area (use file_list_area, not files_area)
-                let mut open_file_diff = false;
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail
                     && detail.file_list_area.contains(pos)
                 {
@@ -454,22 +482,24 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + detail.file_state.offset();
                         if idx < detail.files.len() {
-                            if detail.file_state.selected() == Some(idx) {
-                                open_file_diff = true;
-                            } else {
-                                detail.file_state.select(Some(idx));
-                            }
+                            // Highlighting a file (mouse or keys) shows its
+                            // diff in the Diff pane, and returns the keyboard
+                            // to the file list.
+                            detail.file_state.select(Some(idx));
+                            detail.diff_focused = false;
+                            file_highlight_moved = true;
                         }
                     }
                 }
-                if open_file_diff {
-                    return Ok(self.try_show_commit_diff());
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
 
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
                         detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
@@ -486,14 +516,18 @@ impl Component for GitGraph {
                             .map(|i| i.saturating_sub(1))
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
-                        return Ok(None);
+                        file_highlight_moved = true;
                     }
+                }
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
                 self.select_prev();
                 Ok(None)
             }
             MouseEventKind::ScrollDown => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
                         detail.diff_scroll = detail.diff_scroll.saturating_add(1);
@@ -510,8 +544,11 @@ impl Component for GitGraph {
                             .map(|i| (i + 1).min(detail.files.len() - 1))
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
-                        return Ok(None);
+                        file_highlight_moved = true;
                     }
+                }
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
                 self.select_next();
                 Ok(None)

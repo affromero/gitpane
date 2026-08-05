@@ -127,7 +127,7 @@ Click a changed file (or press Enter) to see its diff side by side. File list st
 <img src="assets/screenshot-diff.png" alt="Split diff view" width="800">
 
 ### Commit detail drill down
-Click a commit in the graph to see its files. Click a file to see the commit diff. Layered Esc dismissal: diff → files → graph.
+Click a commit in the graph to see its files, and the diff follows whichever file is highlighted as you move through the list. Press Enter (or click inside the diff) to focus it for scrolling. Layered Esc dismissal: leave the diff → close files → graph.
 
 <img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
@@ -140,7 +140,7 @@ Click a commit in the graph to see its files. Click a file to see the commit dif
 - **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane open inside it, so at a glance you can see which parallel agents are actively working where. tmux only; toggle with `[ui] show_liveness`.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
-- **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files and per file diffs.
+- **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them.
 - **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere.
 - **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state. Explicit `origin <branch>` is used for reliability.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
@@ -197,11 +197,11 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Next commit / file |
-| `k` / `↑` | Previous commit / file |
+| `j` / `↓` | Next commit / file, or scroll a focused diff down |
+| `k` / `↑` | Previous commit / file, or scroll a focused diff up |
 | `h` / `l` | Scroll graph left / right |
-| `Enter` | Open commit files / file diff |
-| `Esc` | Close diff → close files → back |
+| `Enter` | Open commit files, then focus the diff to scroll it |
+| `Esc` | Leave diff → close files → back |
 | `/` | Search commits (message, author, short ID) |
 | `n` / `N` | Next / previous search match |
 | `f` | Toggle first parent mode |

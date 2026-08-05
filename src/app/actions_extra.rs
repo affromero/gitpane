@@ -1,5 +1,10 @@
 use super::*;
 
+/// How long the graph's file highlight must sit still before its diff is read.
+/// Walking the file list is a per-row `Repository::open` plus a tree-to-tree
+/// diff, so only the row the user lands on is worth paying for.
+const COMMIT_DIFF_DEBOUNCE: Duration = Duration::from_millis(200);
+
 impl App {
     pub(super) fn handle_action_rest(&mut self, action: Action) -> Result<()> {
         match action {
@@ -574,9 +579,24 @@ impl App {
                 ref message,
                 ref files,
             } => {
-                if generation == self.git_graph.current_detail_generation() {
-                    self.git_graph
-                        .set_commit_files(oid.clone(), message.clone(), files.clone());
+                if generation == self.git_graph.current_detail_generation()
+                    && let Some(action) =
+                        self.git_graph
+                            .set_commit_files(oid.clone(), message.clone(), files.clone())
+                {
+                    self.action_tx.send(action)?;
+                }
+            }
+            Action::ScheduleCommitDiff { generation } => {
+                let tx = self.action_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(COMMIT_DIFF_DEBOUNCE).await;
+                    let _ = tx.send(Action::CommitDiffSettled { generation });
+                });
+            }
+            Action::CommitDiffSettled { generation } => {
+                if let Some(action) = self.git_graph.commit_diff_settled(generation) {
+                    self.action_tx.send(action)?;
                 }
             }
             Action::ShowCommitDiff {

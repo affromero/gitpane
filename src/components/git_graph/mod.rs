@@ -59,6 +59,11 @@ struct CommitDetail {
     file_state: ListState,
     diff_content: Option<String>,
     diff_scroll: u16,
+    /// True while the diff pane owns the keyboard, so `j`/`k` scroll the diff
+    /// instead of moving the file highlight. The diff shows itself as soon as a
+    /// file is highlighted, so its presence alone must not capture the keys;
+    /// only `Enter` on a file row or a click inside the diff focuses it.
+    diff_focused: bool,
     msg_scroll: u16,
     /// Rendered rect for the commit message block (set during draw).
     msg_area: Rect,
@@ -140,6 +145,9 @@ pub(crate) struct GitGraph {
     load_generation: u64,
     /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
     detail_generation: u64,
+    /// Bumped every time the file highlight moves, so the debounced diff request
+    /// of a highlight the user has already moved past is dropped.
+    diff_select_generation: u64,
     theme: Arc<Theme>,
 }
 
@@ -174,6 +182,7 @@ impl GitGraph {
             consecutive_aborts: 0,
             load_generation: 0,
             detail_generation: 0,
+            diff_select_generation: 0,
             theme,
         }
     }
@@ -326,7 +335,16 @@ impl GitGraph {
         self.recompute_collapsed_rows();
     }
 
-    pub fn set_commit_files(&mut self, oid: String, message: String, files: Vec<(String, String)>) {
+    /// Open the detail pane for a loaded commit. Returns the request for the
+    /// first file's diff so the Diff pane fills in without a second keypress;
+    /// `None` when the commit changed nothing.
+    #[must_use]
+    pub fn set_commit_files(
+        &mut self,
+        oid: String,
+        message: String,
+        files: Vec<(String, String)>,
+    ) -> Option<Action> {
         let mut file_state = ListState::default();
         if !files.is_empty() {
             file_state.select(Some(0));
@@ -338,10 +356,12 @@ impl GitGraph {
             file_state,
             diff_content: None,
             diff_scroll: 0,
+            diff_focused: false,
             msg_scroll: 0,
             msg_area: Rect::default(),
             file_list_area: Rect::default(),
         });
+        self.try_show_commit_diff()
     }
 
     pub fn set_commit_diff(&mut self, content: String) {
@@ -719,11 +739,45 @@ impl GitGraph {
         Some(Action::ShowCommitFiles { repo_path, oid })
     }
 
+    /// Whether the detail pane already shows the commit on display row `idx`.
+    fn is_detail_open_for(&self, idx: usize) -> bool {
+        let Some(detail) = self.commit_detail.as_ref() else {
+            return false;
+        };
+        self.display_rows()
+            .get(idx)
+            .is_some_and(|row| row.oid.to_string() == detail.oid)
+    }
+
+    /// The file highlight moved: ask the app to start the debounce instead of
+    /// diffing now, so holding `j` through a long file list doesn't open the
+    /// repository and diff two trees for every row it passes.
+    fn schedule_commit_diff(&mut self) -> Option<Action> {
+        self.commit_detail.as_ref()?;
+        self.diff_select_generation = self.diff_select_generation.wrapping_add(1);
+        Some(Action::ScheduleCommitDiff {
+            generation: self.diff_select_generation,
+        })
+    }
+
+    /// The debounce for `generation` elapsed: request the highlighted file's
+    /// diff, unless the highlight has moved on since.
+    pub fn commit_diff_settled(&mut self, generation: u64) -> Option<Action> {
+        if generation != self.diff_select_generation {
+            return None;
+        }
+        self.try_show_commit_diff()
+    }
+
+    /// Request the highlighted file's diff now. Bumping the highlight counter
+    /// drops any debounce still in flight, so an immediate request (`Enter`, a
+    /// freshly opened commit) is not followed by a duplicate one.
     fn try_show_commit_diff(&mut self) -> Option<Action> {
         let detail = self.commit_detail.as_ref()?;
         let file_idx = detail.file_state.selected()?;
         let (_, file_path) = detail.files.get(file_idx)?;
         let repo_path = self.repo_path.clone()?;
+        self.diff_select_generation = self.diff_select_generation.wrapping_add(1);
         self.detail_generation += 1;
         Some(Action::ShowCommitDiff {
             repo_path,

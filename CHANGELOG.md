@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- The commit diff now follows the highlighted file in the graph panel. Clicking a commit opens its changed files and shows the first one's diff immediately, and moving through that list with `j`/`k`, a click, or the scroll wheel brings each file's diff along, once the highlight has been still briefly so holding a key does not read a diff for every file it passes. The diff pane takes the keyboard only after you focus it with `Enter` or a click inside it, so `j`/`k` keep moving between files while it is merely on screen; `Esc` then leaves the diff first, and dismisses the file list and the pane after that. Clicking the commit that is already open no longer reloads it, so a double click keeps the file you picked.
+
 ### Fixed
 - Copying from the graph context menu no longer dies immediately on Wayland or X11. `App` now keeps a long-lived `arboard::Clipboard` alive between copies instead of dropping it after each call, so the platform backend keeps serving the selection until something else replaces it.
 
