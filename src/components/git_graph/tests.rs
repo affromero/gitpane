@@ -471,6 +471,14 @@ fn left_click(graph: &mut GitGraph, column: u16, row: u16) -> Option<Action> {
         .unwrap()
 }
 
+/// The debounce generation of a deferred diff request.
+fn deferred_generation(action: Option<Action>) -> u64 {
+    match action {
+        Some(Action::ScheduleCommitDiff { generation }) => generation,
+        other => panic!("expected a deferred diff request, got {other:?}"),
+    }
+}
+
 /// The file a diff request targets.
 fn requested_file(action: Option<Action>) -> String {
     match action {
@@ -548,11 +556,39 @@ fn moving_through_files_while_a_diff_shows_keeps_moving_files() {
     graph.set_commit_diff("diff --git a/a.rs".to_string());
 
     // The auto-shown diff must not capture the keys: `j` still walks files.
-    let action = graph
-        .handle_key_event(KeyEvent::from(KeyCode::Char('j')))
-        .unwrap();
+    let generation = deferred_generation(
+        graph
+            .handle_key_event(KeyEvent::from(KeyCode::Char('j')))
+            .unwrap(),
+    );
     assert_eq!(selected_file(&graph), Some(1));
-    assert_eq!(requested_file(action), "b.rs");
+    assert_eq!(
+        requested_file(graph.commit_diff_settled(generation)),
+        "b.rs"
+    );
+}
+
+#[test]
+fn walking_past_a_file_drops_its_pending_diff() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs", "c.rs"]);
+
+    let passed = deferred_generation(
+        graph
+            .handle_key_event(KeyEvent::from(KeyCode::Down))
+            .unwrap(),
+    );
+    let landed = deferred_generation(
+        graph
+            .handle_key_event(KeyEvent::from(KeyCode::Down))
+            .unwrap(),
+    );
+
+    // Only where the highlight came to rest is worth a diff.
+    assert!(
+        graph.commit_diff_settled(passed).is_none(),
+        "the file the highlight passed through must not be diffed"
+    );
+    assert_eq!(requested_file(graph.commit_diff_settled(landed)), "c.rs");
 }
 
 #[test]
@@ -560,7 +596,7 @@ fn focusing_the_diff_scrolls_it_instead_of_moving_files() {
     let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
     graph.set_commit_diff("line\n".repeat(50));
 
-    // Enter hands the keyboard to the diff.
+    // Enter hands the keyboard to the diff, and asks for it right away.
     assert_eq!(
         requested_file(
             graph
@@ -605,11 +641,16 @@ fn esc_leaves_the_diff_before_closing_the_commit() {
         .handle_key_event(KeyEvent::from(KeyCode::Esc))
         .unwrap();
     assert!(graph.has_detail());
-    let action = graph
-        .handle_key_event(KeyEvent::from(KeyCode::Down))
-        .unwrap();
+    let generation = deferred_generation(
+        graph
+            .handle_key_event(KeyEvent::from(KeyCode::Down))
+            .unwrap(),
+    );
     assert_eq!(selected_file(&graph), Some(1));
-    assert_eq!(requested_file(action), "b.rs");
+    assert_eq!(
+        requested_file(graph.commit_diff_settled(generation)),
+        "b.rs"
+    );
 
     // The next Esc dismisses the commit detail itself.
     graph
@@ -623,7 +664,31 @@ fn clicking_a_file_row_asks_for_its_diff() {
     let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
 
     // Click the second file row (content_y = area.y + 1 = 1 → row 2 is idx 1).
-    let action = left_click(&mut graph, FILE_COL, 2);
+    let generation = deferred_generation(left_click(&mut graph, FILE_COL, 2));
     assert_eq!(selected_file(&graph), Some(1));
-    assert_eq!(requested_file(action), "b.rs");
+    assert_eq!(
+        requested_file(graph.commit_diff_settled(generation)),
+        "b.rs"
+    );
+}
+
+#[test]
+fn scrolling_the_file_list_asks_for_the_settled_files_diff() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+
+    let generation = deferred_generation(
+        graph
+            .handle_mouse_event(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: FILE_COL,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            })
+            .unwrap(),
+    );
+    assert_eq!(selected_file(&graph), Some(1));
+    assert_eq!(
+        requested_file(graph.commit_diff_settled(generation)),
+        "b.rs"
+    );
 }

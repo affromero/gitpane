@@ -194,6 +194,17 @@ pub(crate) enum Action {
         message: String,
         files: Vec<(String, String)>,
     },
+    /// The graph's file highlight moved. The app waits out the debounce and
+    /// answers with [`Action::CommitDiffSettled`], so walking a file list runs
+    /// one diff for where the highlight lands, not one per row it passes.
+    ScheduleCommitDiff {
+        generation: u64,
+    },
+    /// The file highlight has been still for the debounce window; diff it unless
+    /// `generation` has been superseded by a later move.
+    CommitDiffSettled {
+        generation: u64,
+    },
     ShowCommitDiff {
         repo_path: std::path::PathBuf,
         oid: String,

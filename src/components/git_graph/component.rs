@@ -353,8 +353,8 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    // Highlighting a file shows its diff in the Diff pane.
-                    return Ok(self.try_show_commit_diff());
+                    // The Diff pane follows the highlight, after the debounce.
+                    return Ok(self.schedule_commit_diff());
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if !detail.files.is_empty() {
@@ -365,10 +365,11 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    return Ok(self.try_show_commit_diff());
+                    return Ok(self.schedule_commit_diff());
                 }
                 KeyCode::Enter => {
-                    // Hand the keyboard to the diff so it can be scrolled.
+                    // Hand the keyboard to the diff so it can be scrolled, and
+                    // ask for it now rather than waiting out the debounce.
                     detail.diff_focused = true;
                     return Ok(self.try_show_commit_diff());
                 }
@@ -472,7 +473,7 @@ impl Component for GitGraph {
                 }
 
                 // Click in commit files area (use file_list_area, not files_area)
-                let mut open_file_diff = false;
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail
                     && detail.file_list_area.contains(pos)
                 {
@@ -486,18 +487,19 @@ impl Component for GitGraph {
                             // to the file list.
                             detail.file_state.select(Some(idx));
                             detail.diff_focused = false;
-                            open_file_diff = true;
+                            file_highlight_moved = true;
                         }
                     }
                 }
-                if open_file_diff {
-                    return Ok(self.try_show_commit_diff());
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
 
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
                         detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
@@ -514,14 +516,18 @@ impl Component for GitGraph {
                             .map(|i| i.saturating_sub(1))
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
-                        return Ok(None);
+                        file_highlight_moved = true;
                     }
+                }
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
                 self.select_prev();
                 Ok(None)
             }
             MouseEventKind::ScrollDown => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
                         detail.diff_scroll = detail.diff_scroll.saturating_add(1);
@@ -538,8 +544,11 @@ impl Component for GitGraph {
                             .map(|i| (i + 1).min(detail.files.len() - 1))
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
-                        return Ok(None);
+                        file_highlight_moved = true;
                     }
+                }
+                if file_highlight_moved {
+                    return Ok(self.schedule_commit_diff());
                 }
                 self.select_next();
                 Ok(None)

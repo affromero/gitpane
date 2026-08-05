@@ -145,6 +145,9 @@ pub(crate) struct GitGraph {
     load_generation: u64,
     /// Monotonic counter to discard stale CommitFilesLoaded/CommitDiffLoaded results.
     detail_generation: u64,
+    /// Bumped every time the file highlight moves, so the debounced diff request
+    /// of a highlight the user has already moved past is dropped.
+    diff_select_generation: u64,
     theme: Arc<Theme>,
 }
 
@@ -179,6 +182,7 @@ impl GitGraph {
             consecutive_aborts: 0,
             load_generation: 0,
             detail_generation: 0,
+            diff_select_generation: 0,
             theme,
         }
     }
@@ -745,11 +749,35 @@ impl GitGraph {
             .is_some_and(|row| row.oid.to_string() == detail.oid)
     }
 
+    /// The file highlight moved: ask the app to start the debounce instead of
+    /// diffing now, so holding `j` through a long file list doesn't open the
+    /// repository and diff two trees for every row it passes.
+    fn schedule_commit_diff(&mut self) -> Option<Action> {
+        self.commit_detail.as_ref()?;
+        self.diff_select_generation = self.diff_select_generation.wrapping_add(1);
+        Some(Action::ScheduleCommitDiff {
+            generation: self.diff_select_generation,
+        })
+    }
+
+    /// The debounce for `generation` elapsed: request the highlighted file's
+    /// diff, unless the highlight has moved on since.
+    pub fn commit_diff_settled(&mut self, generation: u64) -> Option<Action> {
+        if generation != self.diff_select_generation {
+            return None;
+        }
+        self.try_show_commit_diff()
+    }
+
+    /// Request the highlighted file's diff now. Bumping the highlight counter
+    /// drops any debounce still in flight, so an immediate request (`Enter`, a
+    /// freshly opened commit) is not followed by a duplicate one.
     fn try_show_commit_diff(&mut self) -> Option<Action> {
         let detail = self.commit_detail.as_ref()?;
         let file_idx = detail.file_state.selected()?;
         let (_, file_path) = detail.files.get(file_idx)?;
         let repo_path = self.repo_path.clone()?;
+        self.diff_select_generation = self.diff_select_generation.wrapping_add(1);
         self.detail_generation += 1;
         Some(Action::ShowCommitDiff {
             repo_path,
