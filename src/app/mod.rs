@@ -334,11 +334,14 @@ impl App {
         let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(
             config.watch.max_concurrent_polls,
         ));
+        // Roots are cloned before `config` moves into `Self` below; the repo
+        // list needs them to render each repo's relative display path.
+        let roots = config.root_dirs.clone();
 
-        Self {
+        let mut app = Self {
             config,
             should_quit: false,
-            repo_list: RepoList::new(repo_paths, theme.clone()),
+            repo_list: RepoList::new(repo_paths, roots, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
             graph_context_menu: GraphContextMenu::new(theme.clone()),
@@ -385,20 +388,38 @@ impl App {
             tui_event_tx: None,
             last_discovery: None,
             discovery_pending: false,
-        }
+        };
+        // `discover_repos` orders by basename, but rows are labelled and
+        // re-sorted by breadcrumb path. Sorting here means the list the user
+        // first sees already matches what the next rescan will produce.
+        app.sort_repos();
+        app
     }
+
+    /// Order the repo list by the current `sort_order`, keeping pinned repos
+    /// at the top — the position `scanner::discover_repos` hands them. A flat
+    /// sort drops a pin back into the alphabetical run, so the pin held only
+    /// until the first rescan. `App::new` calls this too, so the order at
+    /// startup is the order every later rescan reproduces.
     fn sort_repos(&mut self) {
+        // Discovery emits canonical paths while `AddRepo` pushes the path as
+        // the user typed it, so accept either spelling of a pinned repo.
+        let pinned: HashSet<_> = self
+            .config
+            .pinned_repos
+            .iter()
+            .flat_map(|p| [p.canonicalize().unwrap_or_else(|_| p.clone()), p.clone()])
+            .collect();
         match self.sort_order {
             SortOrder::Alphabetical => {
-                self.repo_list.repos.sort_by_key(|r| r.name.to_lowercase());
+                self.repo_list
+                    .repos
+                    .sort_by_cached_key(|r| (!pinned.contains(&r.path), r.display.to_lowercase()));
             }
             SortOrder::DirtyFirst => {
-                self.repo_list.repos.sort_by(|a, b| {
-                    let a_dirty = a.status.as_ref().map(|s| s.is_dirty).unwrap_or(false);
-                    let b_dirty = b.status.as_ref().map(|s| s.is_dirty).unwrap_or(false);
-                    b_dirty
-                        .cmp(&a_dirty)
-                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                self.repo_list.repos.sort_by_cached_key(|r| {
+                    let dirty = r.status.as_ref().is_some_and(|s| s.is_dirty);
+                    (!pinned.contains(&r.path), !dirty, r.display.to_lowercase())
                 });
             }
         }

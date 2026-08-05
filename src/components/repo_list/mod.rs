@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{ListItem, ListState},
 };
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -36,7 +36,13 @@ impl SyncDiff {
 #[derive(Clone, Debug)]
 pub(crate) struct RepoEntry {
     pub path: PathBuf,
+    /// Basename of the repo directory (used by titles / menus / sort).
     pub name: String,
+    /// Breadcrumb label shown in the repo list: the repo's path relative to
+    /// its workspace root (basename when it lives outside every root). Keeps
+    /// same-named repos distinguishable and makes the list read like the
+    /// workspace tree.
+    pub display: String,
     pub status: Option<RepoStatus>,
     /// True only during push/pull/rebase — shows animated spinner
     pub git_op: bool,
@@ -66,6 +72,10 @@ enum DisplayRow {
 
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
+    /// Workspace roots used to compute each repo's relative display path
+    /// (`display_path`), canonicalized in `new` to match the form discovery
+    /// emits. Needed at rescan time too, for repos added later.
+    roots: Vec<PathBuf>,
     pub state: ListState,
     pub render_area: Rect,
     pub focused: bool,
@@ -82,8 +92,121 @@ pub(crate) struct RepoList {
     theme: Arc<Theme>,
 }
 
+/// The label shown for a repo in the list: its path relative to the first
+/// workspace root that contains it, falling back to the basename for repos
+/// outside every root (e.g. pinned paths). The relative path instead of the
+/// bare basename keeps same-named repos distinguishable and makes the list
+/// read like the workspace tree.
+///
+/// A root can also *be* a repo — `~/Code` with its own `.git` is the case
+/// `scanner::test_discover_skips_phantom_dot_git_at_root` describes. Stripping
+/// the root off itself leaves nothing, so an empty relative path falls through
+/// to the basename rather than rendering a nameless row.
+fn display_path(path: &Path, roots: &[PathBuf]) -> String {
+    for root in roots {
+        if let Ok(rel) = path.strip_prefix(root)
+            && !rel.as_os_str().is_empty()
+        {
+            return rel.to_string_lossy().to_string();
+        }
+    }
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+/// Width of the fixed status block rendered to the right of the repo display
+/// name (branch, ahead/behind, stash/worktree toggles, submodule markers,
+/// fetch warning, file count). Mirrors `render_repo_item`; used to budget the
+/// name column so a long path never pushes the status indicators off-screen.
+fn status_block_width(entry: &RepoEntry) -> u16 {
+    let mut w: u16 = 0;
+    // The dirty/git-op marker is rendered before the name, so it isn't part
+    // of the trailing block; everything from the branch onward is.
+    let Some(status) = entry.status.as_ref() else {
+        return w;
+    };
+    // Branch is left-padded to a minimum of 12 columns, then a space.
+    w += status.branch.chars().count().max(12) as u16 + 1;
+    if status.ahead > 0 {
+        w += 2 + status.ahead.to_string().len() as u16;
+    }
+    if status.behind > 0 {
+        w += 2 + status.behind.to_string().len() as u16;
+    }
+    if !status.stashes.is_empty() {
+        w += 3 + status.stash_count().to_string().len() as u16;
+    }
+    if !status.worktree_info.is_empty() {
+        w += 2 + status.worktree_info.len().to_string().len() as u16;
+    }
+    if status.has_dirty_submodules {
+        w += 3;
+    }
+    if status.has_unpushed_submodules {
+        w += 3;
+    }
+    if status.fetch_failed {
+        w += 3;
+    }
+    if !status.files.is_empty() {
+        // "[N] "
+        w += 2 + status.files.len().to_string().len() as u16 + 1;
+    }
+    w
+}
+
+/// The repo's display label for the list row, middle-ellipsized to fit the
+/// panel. Reserves the leading dirty/git-op marker, a trailing liveness
+/// marker, and the fixed status block so the row never clips its indicators.
+fn rendered_name(entry: &RepoEntry, inner_width: u16) -> String {
+    let max = inner_width
+        .saturating_sub(2) // dirty/git-op marker
+        .saturating_sub(2) // liveness marker
+        .saturating_sub(1) // space after the name
+        .saturating_sub(status_block_width(entry))
+        .max(1);
+    middle_ellipsize(&entry.display, max as usize)
+}
+
+/// Collapse an over-long path to "head/…/tail", keeping the top-level group
+/// and the repo basename visible while hiding the middle of deep paths.
+/// Falls back to "…/tail" / "head/…" and finally a hard tail-truncation.
+fn middle_ellipsize(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let parts: Vec<&str> = s.split('/').collect();
+    let head = parts.first().copied().unwrap_or(s);
+    let tail = parts.last().copied().unwrap_or(s);
+    let head_tail = format!("{head}/…/{tail}");
+    if head_tail.chars().count() <= max {
+        return head_tail;
+    }
+    let tail_only = format!("…/{tail}");
+    if tail_only.chars().count() <= max {
+        return tail_only;
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>, roots: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
+        // Discovery canonicalizes every path it emits, but `config.root_dirs`
+        // is only tilde-expanded. Under a symlinked root (`~/work` ->
+        // `/mnt/data/work`) the two forms never prefix-match, so every label
+        // would quietly fall back to a basename and the breadcrumbs would
+        // vanish for the whole workspace. Resolve the roots once, here,
+        // instead of on every `display_path` call.
+        let roots: Vec<PathBuf> = roots
+            .into_iter()
+            .map(|root| root.canonicalize().unwrap_or(root))
+            .collect();
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -91,9 +214,11 @@ impl RepoList {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.to_string_lossy().to_string());
+                let display = display_path(&path, &roots);
                 RepoEntry {
                     path,
                     name,
+                    display,
                     status: None,
                     git_op: false,
                 }
@@ -107,6 +232,7 @@ impl RepoList {
 
         let mut list = Self {
             repos,
+            roots,
             state,
             render_area: Rect::default(),
             focused: true,
@@ -123,6 +249,14 @@ impl RepoList {
 
     pub fn set_theme(&mut self, theme: Arc<Theme>) {
         self.theme = theme;
+    }
+
+    /// The breadcrumb label for `path`. Callers that append a repo after
+    /// construction go through here rather than calling `display_path` with
+    /// `config.root_dirs`, so the new row is labelled against the same
+    /// canonicalized roots as every row already in the list.
+    pub fn display_for(&self, path: &Path) -> String {
+        display_path(path, &self.roots)
     }
 
     /// Recompute display_rows from repos + expansion state.
@@ -312,9 +446,11 @@ impl RepoList {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.to_string_lossy().to_string());
+                let display = display_path(path, &self.roots);
                 next.push(RepoEntry {
                     path: path.clone(),
                     name,
+                    display,
                     status: None,
                     git_op: false,
                 });
@@ -473,6 +609,16 @@ impl RepoList {
             spans.push(Span::raw("  "));
         }
 
+        // The repo's display name anchors the left of the row: its path
+        // relative to the workspace root, middle-ellipsized so deep paths
+        // can't push the status indicators off-screen.
+        let inner_width = self.render_area.width.saturating_sub(2);
+        spans.push(Span::styled(
+            rendered_name(entry, inner_width),
+            Style::default().fg(t.repo_name),
+        ));
+        spans.push(Span::raw(" "));
+
         if let Some(status) = &entry.status {
             spans.push(Span::styled(
                 format!("{:<12} ", status.branch),
@@ -541,13 +687,8 @@ impl RepoList {
             }
         }
 
-        spans.push(Span::styled(
-            entry.name.clone(),
-            Style::default().fg(t.repo_name),
-        ));
-
-        // Liveness marker (bare symbol; the session names are in the context
-        // menu), after the repo name so it doesn't shift the name.
+        // Liveness marker at the end of the row so it never shifts the name
+        // column (bare symbol; the session names are in the context menu).
         if crate::session::liveness::is_live(&entry.path, &self.live_panes) {
             spans.push(Span::styled(" \u{25c9}", Style::default().fg(t.live)));
         }

@@ -650,9 +650,11 @@ impl App {
                         tracing::error!("Failed to save config: {}", e);
                     }
                     let repo_id = RepoId(path.clone());
+                    let display = self.repo_list.display_for(&path);
                     self.repo_list.repos.push(RepoEntry {
                         path,
                         name,
+                        display,
                         status: None,
                         git_op: false,
                     });
@@ -709,7 +711,11 @@ impl App {
                     tracing::error!("Failed to save config: {}", e);
                 }
                 let repo_paths = scanner::discover_repos(&self.config);
-                self.repo_list = RepoList::new(repo_paths, self.theme.clone());
+                self.repo_list = RepoList::new(
+                    repo_paths,
+                    self.config.root_dirs.clone(),
+                    self.theme.clone(),
+                );
                 self.repo_list
                     .register_action_handler(self.action_tx.clone())?;
                 self.repo_list.init()?;

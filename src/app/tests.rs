@@ -133,3 +133,72 @@ fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
         refs: crate::git::status::RefsFingerprint::default(),
     }
 }
+
+/// Create a minimal repo (a `.git` directory with a `HEAD`) at `<root>/<rel>`
+/// and return its path. Matches what `scanner::is_real_git_dir` accepts.
+fn make_repo(root: &std::path::Path, rel: &str) -> std::path::PathBuf {
+    let repo = root.join(rel);
+    let dot_git = repo.join(".git");
+    std::fs::create_dir_all(&dot_git).unwrap();
+    std::fs::write(dot_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    repo
+}
+
+fn displays(app: &App) -> Vec<String> {
+    app.repo_list
+        .repos
+        .iter()
+        .map(|r| r.display.clone())
+        .collect()
+}
+
+/// The list must open in the order a later rescan reproduces. Discovery
+/// orders by basename while rows are labelled and re-sorted by breadcrumb
+/// path, so with the two out of step the list silently reshuffled the first
+/// time anything triggered a rescan.
+#[test]
+fn app_opens_with_the_repo_list_already_sorted() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // Basename order is (bravo, zulu); breadcrumb order is the reverse.
+    make_repo(tmp.path(), "alpha/zulu");
+    make_repo(tmp.path(), "zeta/bravo");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 3,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+
+    let at_startup = displays(&app);
+    assert_eq!(at_startup, ["alpha/zulu", "zeta/bravo"]);
+
+    app.sort_repos();
+    assert_eq!(
+        displays(&app),
+        at_startup,
+        "first rescan reshuffled the list"
+    );
+}
+
+/// A pinned repo holds the top of the list across sorts. `discover_repos`
+/// puts pins first, but a flat sort dropped them back into the alphabetical
+/// run, so a pin stopped meaning anything as soon as the list re-sorted.
+#[test]
+fn sort_repos_keeps_pinned_repos_on_top() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "aaa");
+    let pinned = make_repo(tmp.path(), "zzz");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![pinned],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    assert_eq!(displays(&app), ["zzz", "aaa"]);
+
+    app.sort_repos();
+    assert_eq!(displays(&app), ["zzz", "aaa"], "the pin was sorted away");
+}
