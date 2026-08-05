@@ -287,7 +287,7 @@ discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root di
 frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup
 update_position = "top-right" # Update notification position ("top-right" or "top-left")
-compact_repo_list = false    # true: pack repo rows with single spaces instead of aligned columns
+compact_repo_list = true     # default: pack repo rows with single spaces; false aligns name/branch columns
 
 [graph]
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
