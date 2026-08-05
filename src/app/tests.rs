@@ -1,5 +1,6 @@
 use super::*;
 use crate::git::status::StashEntry;
+use std::path::Path;
 
 #[test]
 fn refresh_decision_runs_without_previous_refresh() {
@@ -170,8 +171,11 @@ fn app_opens_with_the_repo_list_already_sorted() {
     };
     let mut app = App::new(config);
 
+    // Breadcrumb labels carry the platform's native separator.
+    let zulu = Path::new("alpha").join("zulu").display().to_string();
+    let bravo = Path::new("zeta").join("bravo").display().to_string();
     let at_startup = displays(&app);
-    assert_eq!(at_startup, ["alpha/zulu", "zeta/bravo"]);
+    assert_eq!(at_startup, [zulu, bravo]);
 
     app.sort_repos();
     assert_eq!(
