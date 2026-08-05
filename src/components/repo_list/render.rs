@@ -26,16 +26,22 @@ pub(super) struct IndicatorColumns {
 /// Compute the column ranges of the stash and worktree indicators for a repo
 /// row, given the leftmost content column. Mirrors the layout in
 /// [`RepoList::render_repo_item`] — keep the two in sync.
-pub(super) fn indicator_columns(entry: &RepoEntry, base_x: u16) -> IndicatorColumns {
+pub(super) fn indicator_columns(
+    entry: &RepoEntry,
+    base_x: u16,
+    name_width: u16,
+) -> IndicatorColumns {
     let mut col = base_x;
     // Dirty/git_op marker: always 2 columns ("* ", "~ ", or "  ").
     col = col.saturating_add(2);
+    // The repo display name (path relative to the workspace root) sits
+    // between the marker and the branch; it is variable width.
+    col = col.saturating_add(name_width);
 
     let mut out = IndicatorColumns::default();
     let Some(status) = entry.status.as_ref() else {
         return out;
     };
-
     // Branch field is left-padded to a minimum of 12 columns, then a space.
     let branch_width = status.branch.chars().count().max(12).saturating_add(1);
     col = col.saturating_add(branch_width as u16);
@@ -119,7 +125,10 @@ impl Component for RepoList {
                             && let Some(status) = self.repos[*i].status.as_ref()
                         {
                             let base_x = self.render_area.x + 1;
-                            let cols = indicator_columns(&self.repos[*i], base_x);
+                            let inner_width = self.render_area.width.saturating_sub(2);
+                            let name_width =
+                                rendered_name(&self.repos[*i], inner_width).chars().count() as u16;
+                            let cols = indicator_columns(&self.repos[*i], base_x, name_width);
                             let clicked_stash = cols
                                 .stash
                                 .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);

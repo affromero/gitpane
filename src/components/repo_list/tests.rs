@@ -49,6 +49,7 @@ fn entry_with_status(path: &str, status: RepoStatus) -> RepoEntry {
     RepoEntry {
         path: PathBuf::from(path),
         name: path.trim_start_matches('/').to_string(),
+        display: path.trim_start_matches('/').to_string(),
         status: Some(status),
         git_op: false,
     }
@@ -56,7 +57,11 @@ fn entry_with_status(path: &str, status: RepoStatus) -> RepoEntry {
 
 fn make_list(paths: &[&str]) -> RepoList {
     let theme = Arc::new(Theme::default());
-    RepoList::new(paths.iter().map(PathBuf::from).collect(), theme)
+    RepoList::new(
+        paths.iter().map(PathBuf::from).collect(),
+        vec![], // no roots: display falls back to the basename
+        theme,
+    )
 }
 
 #[test]
@@ -117,7 +122,7 @@ fn sync_paths_preserves_existing_entry_status() {
 #[test]
 fn indicator_columns_returns_none_when_neither_subtree_present() {
     let entry = entry_with_status("/r", empty_status("main"));
-    let cols = indicator_columns(&entry, 0);
+    let cols = indicator_columns(&entry, 0, 1);
     assert_eq!(cols.stash, None);
     assert_eq!(cols.worktree, None);
 }
@@ -129,17 +134,18 @@ fn indicator_columns_locates_stash_then_worktree() {
     status.worktree_info.push(worktree_entry("wt"));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0);
-    // 2 (dirty marker) + 12 (branch pad for "main") + 1 (space) = 15 → stash start.
+    let cols = indicator_columns(&entry, 0, 1);
+    // 2 (dirty marker) + 1 (name "r") + 12 (branch pad for "main") + 1 (space)
+    // = 16 → stash start.
     let (s_start, s_end) = cols.stash.expect("stash range");
     let (w_start, w_end) = cols.worktree.expect("worktree range");
-    assert_eq!(s_start, 15);
+    assert_eq!(s_start, 16);
     // "▶$1 " = 4 columns.
-    assert_eq!(s_end, 19);
+    assert_eq!(s_end, 20);
     // Worktree starts immediately after stash.
-    assert_eq!(w_start, 19);
+    assert_eq!(w_start, 20);
     // "▶1 " = 3 columns.
-    assert_eq!(w_end, 22);
+    assert_eq!(w_end, 23);
 }
 
 #[test]
@@ -150,10 +156,10 @@ fn indicator_columns_accounts_for_ahead_behind() {
     status.stashes.push(stash_entry(0));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0);
-    // 2 + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 22 → stash start.
+    let cols = indicator_columns(&entry, 0, 1);
+    // 2 + 1 (name) + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 23 → stash start.
     let (s_start, _) = cols.stash.expect("stash range");
-    assert_eq!(s_start, 22);
+    assert_eq!(s_start, 23);
 }
 
 #[test]
@@ -162,10 +168,10 @@ fn indicator_columns_respects_long_branch_name() {
     status.worktree_info.push(worktree_entry("wt"));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0);
-    // 2 + 24 (branch chars) + 1 (space) = 27 → worktree start.
+    let cols = indicator_columns(&entry, 0, 1);
+    // 2 + 1 (name) + 24 (branch chars) + 1 (space) = 28 → worktree start.
     let (w_start, _) = cols.worktree.expect("worktree range");
-    assert_eq!(w_start, 27);
+    assert_eq!(w_start, 28);
 }
 
 /// One repo with a linked worktree, expanded so the worktree row is
@@ -283,3 +289,74 @@ fn selected_worktree_reports_worktree_when_worktree_row_is_selected() {
     list.state.select(Some(0));
     assert!(list.selected_worktree().is_none());
 }
+
+#[test]
+fn display_path_uses_relative_path_under_a_root() {
+    let roots = vec![PathBuf::from("/ws")];
+    assert_eq!(display_path(&PathBuf::from("/ws/hbre/libmm"), &roots), "hbre/libmm");
+    // Outside every root → basename.
+    assert_eq!(display_path(&PathBuf::from("/elsewhere/pinned"), &roots), "pinned");
+}
+
+#[test]
+fn display_path_keeps_basename_for_top_level_repo() {
+    let roots = vec![PathBuf::from("/ws")];
+    assert_eq!(display_path(&PathBuf::from("/ws/kernel-6.12"), &roots), "kernel-6.12");
+}
+
+#[test]
+fn middle_ellipsize_keeps_head_and_tail() {
+    assert_eq!(middle_ellipsize("hbre/camsys", 30), "hbre/camsys");
+    let deep = "kernel-6.12/drivers/media/platform/horizon/camsys";
+    assert_eq!(middle_ellipsize(deep, 20), "kernel-6.12/…/camsys");
+    // Tight budget: prefer the disambiguating tail, then hard-truncate.
+    assert_eq!(middle_ellipsize(deep, 12), "…/camsys");
+    assert_eq!(middle_ellipsize(deep, 5), "kern…");
+    assert_eq!(middle_ellipsize(deep, 0), "");
+}
+
+/// Headless render check: the list shows each repo's path relative to the
+/// workspace root, so same-basename repos (e.g. three `camsys`) stay
+/// distinguishable, and deep paths are middle-ellipsized to the panel width.
+#[test]
+fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let theme = Arc::new(Theme::default());
+    let roots = vec![PathBuf::from("/ws")];
+    let mut list = RepoList::new(
+        vec![
+            PathBuf::from("/ws/hbre/camsys"),
+            PathBuf::from("/ws/kernel-6.1/drivers/media/platform/horizon/camsys"),
+            PathBuf::from("/ws/kernel-6.12/drivers/media/platform/horizon/camsys"),
+            PathBuf::from("/ws/build"),
+        ],
+        roots,
+        theme,
+    );
+    // Narrow enough that the deep kernel paths must be ellipsized.
+    list.render_area = Rect::new(0, 0, 40, 8);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    // Breadcrumb paths, not bare basenames — the three same-named repos are
+    // told apart by their parent path.
+    assert!(text.contains("hbre/camsys"), "got: {text}");
+    assert!(text.contains("kernel-6.1/…/camsys"), "got: {text}");
+    assert!(text.contains("kernel-6.12/…/camsys"), "got: {text}");
+    assert!(text.contains("build"), "got: {text}");
+}
+

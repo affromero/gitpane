@@ -327,11 +327,14 @@ impl App {
         let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(
             config.watch.max_concurrent_polls,
         ));
+        // Roots are cloned before `config` moves into `Self` below; the repo
+        // list needs them to render each repo's relative display path.
+        let roots = config.root_dirs.clone();
 
         Self {
             config,
             should_quit: false,
-            repo_list: RepoList::new(repo_paths, theme.clone()),
+            repo_list: RepoList::new(repo_paths, roots, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
             graph_context_menu: GraphContextMenu::new(theme.clone()),
@@ -382,7 +385,7 @@ impl App {
     fn sort_repos(&mut self) {
         match self.sort_order {
             SortOrder::Alphabetical => {
-                self.repo_list.repos.sort_by_key(|r| r.name.to_lowercase());
+                self.repo_list.repos.sort_by_key(|r| r.display.to_lowercase());
             }
             SortOrder::DirtyFirst => {
                 self.repo_list.repos.sort_by(|a, b| {
@@ -390,7 +393,7 @@ impl App {
                     let b_dirty = b.status.as_ref().map(|s| s.is_dirty).unwrap_or(false);
                     b_dirty
                         .cmp(&a_dirty)
-                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                        .then_with(|| a.display.to_lowercase().cmp(&b.display.to_lowercase()))
                 });
             }
         }
