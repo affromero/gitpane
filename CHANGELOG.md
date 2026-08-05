@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Repositories managed by Google's `repo` tool are now discovered. A configured root containing a `.repo/project.list` contributes every listed project to the repo list, re-read on each scan so the list tracks `repo sync`, with the `.repo` metadata tree itself excluded from the walk. Repo rows are now labeled with their path relative to the configured root that contains them, middle-ellipsized to fit, so identically named projects from different workspaces stay distinguishable, and both sort orders group rows by that path.
+
 ## [0.9.1] - 2026-07-14
 
 ### Added
