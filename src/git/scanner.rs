@@ -20,6 +20,11 @@ use walkdir::WalkDir;
 ///   `<superproject>/.git/modules/<name>`). Without this branch, pinning a
 ///   submodule would pass `AddRepo`'s `.git.exists()` check but then vanish on
 ///   the next FS-driven rescan, because discovery couldn't find its `HEAD`.
+///
+/// Only the first layout is reachable from the root-dir tree walk. The other
+/// two describe paths the user (or `repo sync`) named explicitly — a pinned
+/// submodule, a pinned worktree, a `.repo/project.list` entry — and the walk
+/// deliberately ignores them; see the `is_dir` check in [`discover_repos`].
 fn is_real_git_dir(dot_git: &Path) -> bool {
     if dot_git.join("HEAD").is_file() {
         return true;
@@ -134,10 +139,17 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
             .filter_entry(|e| e.file_name() != ".repo")
             .filter_map(|e| e.ok())
         {
-            // Accept any real gitdir: a `.git` directory with a `HEAD`, a
-            // `.git` symlink to one (Google `repo` working copies), or a
-            // `gitdir:` pointer file (submodules / linked worktrees).
-            if entry.file_name() == ".git" && is_real_git_dir(entry.path()) {
+            // The walk only ever promotes a real `.git` *directory*. A `.git`
+            // symlink or `gitdir:` pointer file belongs to something that
+            // already has an owner: a linked worktree (which gitpane creates
+            // as a sibling of its repo, so it would appear both here and
+            // nested under its parent), a submodule (which the parent repo
+            // renders inline), or a repo-workspace project. Those reach the
+            // list through `pinned_repos` or `.repo/project.list` instead.
+            if entry.file_name() == ".git"
+                && entry.file_type().is_dir()
+                && is_real_git_dir(entry.path())
+            {
                 let repo_path = entry
                     .path()
                     .parent()
@@ -378,6 +390,40 @@ mod tests {
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
         assert!(repos[0].ends_with("sub"));
+    }
+
+    /// Regression: a linked worktree that sits *beside* its repo must not
+    /// become a top-level row of its own. `worktree_path` puts new worktrees
+    /// in the repo's parent directory by default, i.e. directly under the
+    /// configured root, and their `.git` is a `gitdir:` pointer file. If the
+    /// walk promoted pointer files, every worktree gitpane creates would show
+    /// up twice: once as its own repo and once nested under its parent.
+    #[test]
+    fn test_sibling_worktree_is_not_a_top_level_repo() {
+        let tmp = TempDir::new().unwrap();
+        let repo = make_repo(tmp.path(), "proj");
+        // What `git worktree add ../proj-feature` leaves on disk: an admin
+        // dir under the repo, and a pointer file in the new working tree.
+        let admin = repo.join(".git").join("worktrees").join("feature");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        let worktree = tmp.path().join("proj-feature");
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+
+        let config = Config {
+            root_dirs: vec![tmp.path().to_path_buf()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(repos[0].ends_with("proj"));
     }
 
     #[test]
