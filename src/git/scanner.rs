@@ -404,13 +404,8 @@ mod tests {
     /// - the working copy at `<root>/<name>` gets its `.git` linked by `link`
     ///   (a symlink on unix — the layout real `repo sync` writes — or a
     ///   `gitdir:` pointer file, the portable equivalent).
-    fn make_repo_workspace(
-        root: &Path,
-        projects: &[&str],
-        link: impl Fn(&Path, &Path),
-    ) -> Vec<PathBuf> {
+    fn make_repo_workspace(root: &Path, projects: &[&str], link: impl Fn(&Path, &Path)) {
         fs::create_dir_all(root.join(".repo/projects")).unwrap();
-        let mut worktrees = Vec::new();
         for name in projects {
             let work = root.join(name);
             fs::create_dir_all(&work).unwrap();
@@ -418,14 +413,22 @@ mod tests {
             fs::create_dir_all(&gitdir).unwrap();
             fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
             link(&work, &gitdir);
-            worktrees.push(work);
         }
         fs::write(
             root.join(".repo").join("project.list"),
             format!("{}\n", projects.join("\n")),
         )
         .unwrap();
-        worktrees
+    }
+
+    /// Whether discovery returned a repo whose path ends with `suffix`.
+    ///
+    /// Discovery canonicalizes every path it emits, and on macOS the temp dir
+    /// canonicalizes from `/var/...` to `/private/var/...`, so comparing
+    /// against a `TempDir`-derived `PathBuf` never matches. Matching on the
+    /// trailing components is what the rest of this module does.
+    fn found(repos: &[PathBuf], suffix: &str) -> bool {
+        repos.iter().any(|r| r.ends_with(suffix))
     }
 
     /// A Google `repo` workspace where every project's `.git` is a symlink to
@@ -437,11 +440,10 @@ mod tests {
     fn test_repo_workspace_symlink_projects_are_discovered() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let projects = make_repo_workspace(
-            root,
-            &["kernel-6.12", "hbre/libmm", "app/qualitytest"],
-            |work, gitdir| std::os::unix::fs::symlink(gitdir, work.join(".git")).unwrap(),
-        );
+        let projects = ["kernel-6.12", "hbre/libmm", "app/qualitytest"];
+        make_repo_workspace(root, &projects, |work, gitdir| {
+            std::os::unix::fs::symlink(gitdir, work.join(".git")).unwrap()
+        });
 
         let config = Config {
             root_dirs: vec![root.to_path_buf()],
@@ -450,8 +452,8 @@ mod tests {
         };
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 3, "got {repos:?}");
-        for p in &projects {
-            assert!(repos.contains(p), "missing {p:?}");
+        for name in projects {
+            assert!(found(&repos, name), "missing {name}, got {repos:?}");
         }
     }
 
@@ -461,7 +463,8 @@ mod tests {
     fn test_repo_workspace_gitdir_file_projects_are_discovered() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let projects = make_repo_workspace(root, &["kernel-6.12", "hbre/libmm"], |work, gitdir| {
+        let projects = ["kernel-6.12", "hbre/libmm"];
+        make_repo_workspace(root, &projects, |work, gitdir| {
             fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
         });
 
@@ -472,8 +475,8 @@ mod tests {
         };
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 2, "got {repos:?}");
-        for p in &projects {
-            assert!(repos.contains(p), "missing {p:?}");
+        for name in projects {
+            assert!(found(&repos, name), "missing {name}, got {repos:?}");
         }
     }
 
@@ -483,7 +486,7 @@ mod tests {
     fn test_repo_workspace_skips_missing_worktrees() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let projects = make_repo_workspace(root, &["synced"], |work, gitdir| {
+        make_repo_workspace(root, &["synced"], |work, gitdir| {
             fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
         });
         // A second project that exists only in project.list, not on disk.
@@ -500,7 +503,7 @@ mod tests {
         };
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
-        assert!(repos.contains(&projects[0]));
+        assert!(found(&repos, "synced"), "got {repos:?}");
     }
 
     /// Native `.git` directories outside `.repo` must still be found alongside
@@ -511,7 +514,7 @@ mod tests {
     fn test_repo_workspace_mixes_native_and_managed() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let native = make_repo(root, "standalone");
+        make_repo(root, "standalone");
         make_repo_workspace(root, &["managed"], |work, gitdir| {
             std::os::unix::fs::symlink(gitdir, work.join(".git")).unwrap()
         });
@@ -536,9 +539,9 @@ mod tests {
         };
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 2, "got {repos:?}");
-        assert!(repos.contains(&native));
-        assert!(repos.contains(&root.join("managed")));
-        assert!(!repos.contains(&root.join(".repo/manifests")));
+        assert!(found(&repos, "standalone"), "got {repos:?}");
+        assert!(found(&repos, "managed"), "got {repos:?}");
+        assert!(!found(&repos, "manifests"), "got {repos:?}");
     }
 
     /// A repo workspace reached through a symlinked root (e.g. `~/work` ->
@@ -582,8 +585,11 @@ mod tests {
         assert_eq!(repos.len(), unique.len(), "duplicates: {repos:?}");
         assert_eq!(repos.len(), 3, "got {repos:?}");
         // Every path is canonical (real) form, so list display is consistent.
+        // The fixture root itself needs canonicalizing to compare: on macOS
+        // the temp dir lives under `/var`, which resolves to `/private/var`.
+        let canonical_root = real_root.canonicalize().unwrap();
         assert!(
-            repos.iter().all(|p| p.starts_with(&real_root)),
+            repos.iter().all(|p| p.starts_with(&canonical_root)),
             "non-canonical paths: {repos:?}"
         );
     }
