@@ -30,6 +30,7 @@ pub(crate) struct PathInput {
     completions: Vec<String>,
     completion_index: Option<usize>,
     purpose: InputPurpose,
+    error: Option<String>,
     theme: Arc<Theme>,
 }
 
@@ -42,6 +43,7 @@ impl PathInput {
             completions: Vec::new(),
             completion_index: None,
             purpose: InputPurpose::AddRepo,
+            error: None,
             theme,
         }
     }
@@ -66,7 +68,14 @@ impl PathInput {
         self.cursor = 0;
         self.completions.clear();
         self.completion_index = None;
+        self.error = None;
         self.purpose = purpose;
+    }
+
+    /// Show a validation error inline and keep the input open so the user can
+    /// fix the path instead of retyping it from scratch.
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.error = Some(message.into());
     }
 
     pub fn hide(&mut self) {
@@ -75,9 +84,17 @@ impl PathInput {
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // Any keypress dismisses a stale validation error.
+        self.error = None;
         match key.code {
             KeyCode::Esc => {
-                self.hide();
+                // First Esc dismisses an open completion menu, second one the input.
+                if !self.completions.is_empty() {
+                    self.completions.clear();
+                    self.completion_index = None;
+                } else {
+                    self.hide();
+                }
                 Ok(None)
             }
             KeyCode::Enter => {
@@ -85,15 +102,23 @@ impl PathInput {
                     self.hide();
                     return Ok(None);
                 }
-                let action = match &self.purpose {
-                    InputPurpose::AddRepo => Action::AddRepo(expand_tilde(&self.input)),
-                    InputPurpose::NewWorktree { repo } => Action::CreateWorktree {
-                        repo: repo.0.clone(),
-                        branch: self.input.trim().to_string(),
-                    },
-                };
-                self.hide();
-                Ok(Some(action))
+                match &self.purpose {
+                    InputPurpose::AddRepo => {
+                        // Stay open: the app hides the input on success or calls
+                        // `set_error` so a typo doesn't cost the whole path.
+                        self.completions.clear();
+                        self.completion_index = None;
+                        Ok(Some(Action::AddRepo(expand_tilde(&self.input))))
+                    }
+                    InputPurpose::NewWorktree { repo } => {
+                        let action = Action::CreateWorktree {
+                            repo: repo.0.clone(),
+                            branch: self.input.trim().to_string(),
+                        };
+                        self.hide();
+                        Ok(Some(action))
+                    }
+                }
             }
             KeyCode::Tab => {
                 // Path completion only makes sense when entering a path.
@@ -117,6 +142,20 @@ impl PathInput {
                     self.completions.clear();
                     self.completion_index = None;
                 }
+                Ok(None)
+            }
+            KeyCode::Down | KeyCode::Up if !self.completions.is_empty() => {
+                let len = self.completions.len();
+                let next = match (self.completion_index, key.code) {
+                    (Some(i), KeyCode::Down) => (i + 1) % len,
+                    (Some(i), KeyCode::Up) => (i + len - 1) % len,
+                    (None, KeyCode::Down) => 0,
+                    (None, _) => len - 1,
+                    _ => unreachable!(),
+                };
+                self.completion_index = Some(next);
+                self.input = self.completions[next].clone();
+                self.cursor = self.input.len();
                 Ok(None)
             }
             KeyCode::Left => {
@@ -165,6 +204,7 @@ impl PathInput {
         self.cursor += cleaned.len();
         self.completions.clear();
         self.completion_index = None;
+        self.error = None;
     }
 
     fn complete_path(&mut self) {
@@ -233,10 +273,15 @@ impl PathInput {
             self.input = matches[0].clone();
             self.cursor = self.input.len();
         } else if !matches.is_empty() {
-            self.completions = matches;
-            self.completion_index = Some(0);
-            self.input = self.completions[0].clone();
+            // Shell-style: extend to the longest common prefix and show the
+            // menu; Tab/arrows then cycle through the candidates.
+            let lcp = longest_common_prefix(&matches);
+            if lcp.len() > self.input.len() {
+                self.input = lcp;
+            }
             self.cursor = self.input.len();
+            self.completions = matches;
+            self.completion_index = None;
         }
     }
 
@@ -301,14 +346,97 @@ impl PathInput {
             ));
         }
 
+        let error_color = self.theme.status_bar.error_text;
+        if let Some(err) = &self.error {
+            spans.push(Span::styled(
+                format!("  ✗ {err}"),
+                Style::default()
+                    .fg(error_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let border_color = if self.error.is_some() {
+            error_color
+        } else {
+            t.path_input_border
+        };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(t.path_input_border))
+            .border_style(Style::default().fg(border_color))
             .title(title);
 
         let paragraph = Paragraph::new(Line::from(spans)).block(block);
         frame.render_widget(paragraph, input_area);
+
+        self.draw_completion_menu(frame, input_area);
     }
+
+    /// Popup listing completion candidates just above the input bar, so Tab
+    /// cycling picks from a visible menu instead of blind rotation.
+    fn draw_completion_menu(&self, frame: &mut Frame, input_area: Rect) {
+        if self.completions.is_empty() {
+            return;
+        }
+        let t = &self.theme.overlay;
+        let rows = self.completions.len().min(8);
+        let menu_h = rows as u16 + 2;
+        let menu_area = Rect::new(
+            input_area.x,
+            input_area.y.saturating_sub(menu_h),
+            input_area.width,
+            menu_h,
+        );
+        frame.render_widget(Clear, menu_area);
+
+        // Keep the selection in the visible window when the list overflows.
+        let start = match self.completion_index {
+            Some(i) if i + 1 > rows => i + 1 - rows,
+            _ => 0,
+        };
+        let lines: Vec<Line> = self
+            .completions
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(rows)
+            .map(|(i, c)| {
+                let span = if Some(i) == self.completion_index {
+                    Span::styled(
+                        format!(" {c} "),
+                        Style::default().add_modifier(Modifier::REVERSED),
+                    )
+                } else {
+                    Span::raw(format!(" {c} "))
+                };
+                Line::from(span)
+            })
+            .collect();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(t.path_input_border))
+            .title(format!(
+                " {} matches (Tab/↑↓: cycle, Esc: close) ",
+                self.completions.len()
+            ));
+        frame.render_widget(Paragraph::new(lines).block(block), menu_area);
+    }
+}
+
+/// Longest common prefix of `items`, cut on char boundaries.
+fn longest_common_prefix(items: &[String]) -> String {
+    let mut prefix = items[0].clone();
+    for s in &items[1..] {
+        let common: usize = prefix
+            .chars()
+            .zip(s.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a.len_utf8())
+            .sum();
+        prefix.truncate(common);
+    }
+    prefix
 }
 
 fn expand_tilde(input: &str) -> PathBuf {
@@ -377,6 +505,65 @@ mod tests {
         p.paste("/some/path\nwith-newline\r");
         assert_eq!(p.input, "/some/pathwith-newline");
         assert!(p.input.is_char_boundary(p.cursor));
+    }
+
+    #[test]
+    fn enter_keeps_add_repo_input_open_for_error_feedback() {
+        let mut p = input();
+        p.show();
+        for c in "/nope".chars() {
+            let _ = p.handle_key_event(key(c));
+        }
+        let action = p
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(action, Some(Action::AddRepo(_))));
+        // Stays open so the app can report an invalid path inline.
+        assert!(p.visible);
+        p.set_error("not a git repository");
+        assert!(p.error.is_some());
+        // Next keystroke clears the error.
+        let _ = p.handle_key_event(key('x'));
+        assert!(p.error.is_none());
+    }
+
+    #[test]
+    fn tab_with_multiple_matches_opens_menu_at_common_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("alpha-one")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha-two")).unwrap();
+        let mut p = input();
+        p.show();
+        for c in format!("{}/al", dir.path().display()).chars() {
+            let _ = p.handle_key_event(key(c));
+        }
+        press(&mut p, KeyCode::Tab);
+        // Extends to the common prefix without auto-picking a candidate.
+        assert!(p.input.ends_with("alpha-"), "input: {}", p.input);
+        assert_eq!(p.completions.len(), 2);
+        assert_eq!(p.completion_index, None);
+        // Tab cycles into the menu; Down/Up move the selection.
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(p.completion_index, Some(0));
+        assert!(p.input.ends_with("alpha-one/"), "input: {}", p.input);
+        press(&mut p, KeyCode::Down);
+        assert_eq!(p.completion_index, Some(1));
+        press(&mut p, KeyCode::Up);
+        assert_eq!(p.completion_index, Some(0));
+        // First Esc closes the menu, second hides the input.
+        press(&mut p, KeyCode::Esc);
+        assert!(p.completions.is_empty());
+        assert!(p.visible);
+        press(&mut p, KeyCode::Esc);
+        assert!(!p.visible);
+    }
+
+    #[test]
+    fn longest_common_prefix_cuts_on_char_boundary() {
+        let items = vec!["café-one/".to_string(), "café-two/".to_string()];
+        assert_eq!(longest_common_prefix(&items), "café-");
+        let single = vec!["only/".to_string()];
+        assert_eq!(longest_common_prefix(&single), "only/");
     }
 
     #[test]
