@@ -89,6 +89,9 @@ pub(crate) struct RepoList {
     live_panes: Vec<(String, PathBuf)>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
+    /// `[ui] compact_repo_list`: pack rows with single spaces instead of
+    /// padding names and branches into aligned columns.
+    compact: bool,
     theme: Arc<Theme>,
 }
 
@@ -119,15 +122,15 @@ fn display_path(path: &Path, roots: &[PathBuf]) -> String {
 /// name (branch, ahead/behind, stash/worktree toggles, submodule markers,
 /// fetch warning, file count). Mirrors `render_repo_item`; used to budget the
 /// name column so a long path never pushes the status indicators off-screen.
-fn status_block_width(entry: &RepoEntry) -> u16 {
+fn status_block_width(entry: &RepoEntry, branch_min: u16) -> u16 {
     let mut w: u16 = 0;
     // The dirty/git-op marker is rendered before the name, so it isn't part
     // of the trailing block; everything from the branch onward is.
     let Some(status) = entry.status.as_ref() else {
         return w;
     };
-    // Branch is left-padded to a minimum of 12 columns, then a space.
-    w += status.branch.chars().count().max(12) as u16 + 1;
+    // Branch is padded to at least `branch_min` columns, then a space.
+    w += status.branch.chars().count().max(branch_min as usize) as u16 + 1;
     if status.ahead > 0 {
         w += 2 + status.ahead.to_string().len() as u16;
     }
@@ -159,12 +162,12 @@ fn status_block_width(entry: &RepoEntry) -> u16 {
 /// The repo's display label for the list row, middle-ellipsized to fit the
 /// panel. Reserves the leading dirty/git-op marker, a trailing liveness
 /// marker, and the fixed status block so the row never clips its indicators.
-fn rendered_name(entry: &RepoEntry, inner_width: u16) -> String {
+fn rendered_name(entry: &RepoEntry, inner_width: u16, branch_min: u16) -> String {
     let max = inner_width
         .saturating_sub(2) // dirty/git-op marker
         .saturating_sub(2) // liveness marker
         .saturating_sub(1) // space after the name
-        .saturating_sub(status_block_width(entry))
+        .saturating_sub(status_block_width(entry, branch_min))
         .max(1);
     middle_ellipsize(&entry.display, max as usize)
 }
@@ -196,7 +199,12 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>, roots: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
+    pub fn new(
+        repo_paths: Vec<PathBuf>,
+        roots: Vec<PathBuf>,
+        compact: bool,
+        theme: Arc<Theme>,
+    ) -> Self {
         // Discovery canonicalizes every path it emits, but `config.root_dirs`
         // is only tilde-expanded. Under a symlinked root (`~/work` ->
         // `/mnt/data/work`) the two forms never prefix-match, so every label
@@ -241,6 +249,7 @@ impl RepoList {
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
             display_rows: Vec::new(),
+            compact,
             theme,
         };
         list.rebuild_display_rows();
@@ -249,6 +258,44 @@ impl RepoList {
 
     pub fn set_theme(&mut self, theme: Arc<Theme>) {
         self.theme = theme;
+    }
+
+    /// Shared column widths for repo rows: `(name_col, branch_col)`, the
+    /// widest display name and widest branch among the repos, so every row
+    /// pads to the same columns and the status blocks align vertically.
+    /// The name column is capped so the row with the widest status block
+    /// still fits its indicators. Compact mode returns `(0, 0)`: no
+    /// minimums, every field collapses to its own width.
+    pub(super) fn column_widths(&self, inner_width: u16) -> (u16, u16) {
+        if self.compact {
+            return (0, 0);
+        }
+        let branch_col = self
+            .repos
+            .iter()
+            .filter_map(|r| r.status.as_ref())
+            .map(|s| s.branch.chars().count())
+            .max()
+            .unwrap_or(0) as u16;
+        let max_block = self
+            .repos
+            .iter()
+            .map(|r| status_block_width(r, branch_col))
+            .max()
+            .unwrap_or(0);
+        let budget = inner_width
+            .saturating_sub(2) // dirty/git-op marker
+            .saturating_sub(2) // liveness marker
+            .saturating_sub(1) // space after the name
+            .saturating_sub(max_block)
+            .max(1);
+        let widest_name = self
+            .repos
+            .iter()
+            .map(|r| r.display.chars().count())
+            .max()
+            .unwrap_or(0) as u16;
+        (widest_name.min(budget), branch_col)
     }
 
     /// The breadcrumb label for `path`. Callers that append a repo after
@@ -597,7 +644,13 @@ impl RepoList {
         }
     }
 
-    fn render_repo_item(&self, entry: &RepoEntry, _repo_idx: usize) -> ListItem<'static> {
+    fn render_repo_item(
+        &self,
+        entry: &RepoEntry,
+        _repo_idx: usize,
+        name_col: u16,
+        branch_col: u16,
+    ) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let mut spans = Vec::new();
 
@@ -611,17 +664,26 @@ impl RepoList {
 
         // The repo's display name anchors the left of the row: its path
         // relative to the workspace root, middle-ellipsized so deep paths
-        // can't push the status indicators off-screen.
+        // can't push the status indicators off-screen. With a shared name
+        // column the name pads out to it, so every row's branch starts at
+        // the same x; compact mode (`name_col == 0`) keeps each field at
+        // its own width.
         let inner_width = self.render_area.width.saturating_sub(2);
-        spans.push(Span::styled(
-            rendered_name(entry, inner_width),
-            Style::default().fg(t.repo_name),
-        ));
+        let name = if name_col > 0 {
+            format!(
+                "{:<w$}",
+                middle_ellipsize(&entry.display, name_col as usize),
+                w = name_col as usize
+            )
+        } else {
+            rendered_name(entry, inner_width, 0)
+        };
+        spans.push(Span::styled(name, Style::default().fg(t.repo_name)));
         spans.push(Span::raw(" "));
 
         if let Some(status) = &entry.status {
             spans.push(Span::styled(
-                format!("{:<12} ", status.branch),
+                format!("{:<w$} ", status.branch, w = branch_col as usize),
                 Style::default().fg(t.branch),
             ));
 

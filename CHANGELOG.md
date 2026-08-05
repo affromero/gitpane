@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Fixed
+- Repo rows line up in columns again. Moving the breadcrumb label to the front of the row in 0.10.0 left the branch field padded to a fixed minimum that no longer aligned anything, so short branches dragged dead space and the status indicators landed at a different column on every row. The name and branch fields now pad to the widest visible name and branch, so branches and indicators form straight columns; set `[ui] compact_repo_list = true` to pack each row with single spaces instead. Clicking the stash/worktree toggles also hits exactly the drawn cells now (the hit-test ranges were one column left of the glyphs).
+
 ## [0.10.0] - 2026-08-05
 
 ### Added
