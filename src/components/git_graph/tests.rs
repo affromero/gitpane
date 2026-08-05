@@ -502,3 +502,41 @@ fn moving_through_files_requests_their_diff() {
         other => panic!("expected ShowCommitDiff, got {other:?}"),
     }
 }
+
+#[test]
+fn clicking_a_file_row_refreshes_its_diff() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_commit_files(
+        "abc1234".into(),
+        "first".into(),
+        vec![
+            ("M".into(), "a.rs".into()),
+            ("M".into(), "b.rs".into()),
+        ],
+    );
+    if let Some(detail) = graph.commit_detail.as_mut() {
+        detail.file_list_area = Rect::new(0, 0, 40, 10);
+    }
+
+    // Click the second file row (content_y = area.y + 1 = 1 → row 2 is idx 1).
+    let action = graph
+        .handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+    match action {
+        Some(Action::ShowCommitDiff { file_path, .. }) => {
+            assert_eq!(file_path, std::path::PathBuf::from("b.rs"));
+        }
+        other => panic!("expected ShowCommitDiff, got {other:?}"),
+    }
+    // The highlight moved to the clicked file too.
+    assert_eq!(
+        graph.commit_detail.as_ref().unwrap().file_state.selected(),
+        Some(1)
+    );
+}

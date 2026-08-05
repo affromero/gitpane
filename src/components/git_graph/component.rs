@@ -456,11 +456,11 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + detail.file_state.offset();
                         if idx < detail.files.len() {
-                            if detail.file_state.selected() == Some(idx) {
-                                open_file_diff = true;
-                            } else {
-                                detail.file_state.select(Some(idx));
-                            }
+                            // Highlighting a file (mouse or keys) shows its
+                            // diff in the Diff pane; re-clicking the same
+                            // file just re-requests it.
+                            detail.file_state.select(Some(idx));
+                            open_file_diff = true;
                         }
                     }
                 }
