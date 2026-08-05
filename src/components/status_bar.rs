@@ -39,6 +39,33 @@ impl StatusBar {
     }
 }
 
+/// Whether a toast is in the "on" half of its attention pulse: for its first
+/// 1.2s the style flips every 300ms (two visible flashes at the default
+/// 10fps), then holds steady for the rest of its lifetime.
+fn pulse_on(elapsed_ms: u128) -> bool {
+    elapsed_ms < 1200 && (elapsed_ms / 300).is_multiple_of(2)
+}
+
+/// Toast line with the pulse applied: while the pulse is on, the message
+/// swaps fg/bg (REVERSED), which flashes it in the accent color.
+fn toast_line<'a>(
+    label: &'a str,
+    label_style: Style,
+    msg: String,
+    msg_style: Style,
+    when: Instant,
+) -> Line<'a> {
+    let msg_style = if pulse_on(when.elapsed().as_millis()) {
+        msg_style.add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    } else {
+        msg_style
+    };
+    Line::from(vec![
+        Span::styled(label, label_style),
+        Span::styled(msg, msg_style),
+    ])
+}
+
 impl Component for StatusBar {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let s = &self.theme.status_bar;
@@ -57,16 +84,16 @@ impl Component for StatusBar {
 
         if let Some((ref msg, when)) = self.error {
             if when.elapsed().as_secs() < 5 {
-                let error_bar = Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        " ERROR ",
-                        Style::default()
-                            .fg(s.error_label_fg)
-                            .bg(s.error_label_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!(" {}", msg), Style::default().fg(s.error_text)),
-                ]));
+                let error_bar = Paragraph::new(toast_line(
+                    " ERROR ",
+                    Style::default()
+                        .fg(s.error_label_fg)
+                        .bg(s.error_label_bg)
+                        .add_modifier(Modifier::BOLD),
+                    format!(" {}", msg),
+                    Style::default().fg(s.error_text),
+                    when,
+                ));
                 frame.render_widget(error_bar, content_area);
                 return Ok(());
             } else {
@@ -76,16 +103,16 @@ impl Component for StatusBar {
 
         if let Some((ref msg, when)) = self.success {
             if when.elapsed().as_secs() < 3 {
-                let success_bar = Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        " OK ",
-                        Style::default()
-                            .fg(s.success_label_fg)
-                            .bg(s.success_label_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!(" {}", msg), Style::default().fg(s.success_text)),
-                ]));
+                let success_bar = Paragraph::new(toast_line(
+                    " OK ",
+                    Style::default()
+                        .fg(s.success_label_fg)
+                        .bg(s.success_label_bg)
+                        .add_modifier(Modifier::BOLD),
+                    format!(" {}", msg),
+                    Style::default().fg(s.success_text),
+                    when,
+                ));
                 frame.render_widget(success_bar, content_area);
                 return Ok(());
             } else {
@@ -202,4 +229,20 @@ fn key_span<'a>(key: &'a str, theme: &StatusBarTheme) -> Span<'a> {
             .bg(theme.key_hint_bg)
             .add_modifier(Modifier::BOLD),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pulse_on;
+
+    #[test]
+    fn pulse_flashes_twice_then_holds_steady() {
+        assert!(pulse_on(0));
+        assert!(!pulse_on(300));
+        assert!(pulse_on(600));
+        assert!(!pulse_on(900));
+        // After 1.2s the toast stops flashing and stays readable.
+        assert!(!pulse_on(1200));
+        assert!(!pulse_on(2500));
+    }
 }
