@@ -185,11 +185,12 @@ fn app_opens_with_the_repo_list_already_sorted() {
     );
 }
 
-/// A pinned repo holds the top of the list across sorts. `discover_repos`
-/// puts pins first, but a flat sort dropped them back into the alphabetical
-/// run, so a pin stopped meaning anything as soon as the list re-sorted.
+/// Sorting is flat: a pinned repo takes its alphabetical place like any other
+/// row. Pinning controls persistence (the repo survives rescans), not
+/// position — a pinned `zzz` grouped above `aaa` read as "sorting is broken
+/// for manually added repos".
 #[test]
-fn sort_repos_keeps_pinned_repos_on_top() {
+fn sort_repos_intermixes_pinned_repos() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "aaa");
     let pinned = make_repo(tmp.path(), "zzz");
@@ -201,8 +202,49 @@ fn sort_repos_keeps_pinned_repos_on_top() {
         ..Config::default()
     };
     let mut app = App::new(config);
-    assert_eq!(displays(&app), ["zzz", "aaa"]);
+    assert_eq!(
+        displays(&app),
+        ["aaa", "zzz"],
+        "pin was grouped, not sorted"
+    );
 
+    app.sort_order = SortOrder::ReverseAlphabetical;
     app.sort_repos();
-    assert_eq!(displays(&app), ["zzz", "aaa"], "the pin was sorted away");
+    assert_eq!(displays(&app), ["zzz", "aaa"]);
+}
+
+/// The sort key lowercases, so `Presentations` files between `aaa` and `zzz`
+/// instead of ASCII-sorting all uppercase names to the top; Z-A is the exact
+/// reverse.
+#[test]
+fn sort_repos_is_case_insensitive_in_both_directions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "zzz");
+    make_repo(tmp.path(), "Presentations");
+    make_repo(tmp.path(), "aaa");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    assert_eq!(displays(&app), ["aaa", "Presentations", "zzz"]);
+
+    app.sort_order = SortOrder::ReverseAlphabetical;
+    app.sort_repos();
+    assert_eq!(displays(&app), ["zzz", "Presentations", "aaa"]);
+}
+
+/// `s` must round-trip through every mode and come back to where it started.
+#[test]
+fn sort_order_cycles_through_all_modes() {
+    let mut order = SortOrder::Alphabetical;
+    let mut labels = Vec::new();
+    for _ in 0..3 {
+        labels.push(order.label());
+        order = order.next();
+    }
+    assert_eq!(labels, ["A-Z", "Z-A", "Dirty"]);
+    assert_eq!(order, SortOrder::Alphabetical);
 }
