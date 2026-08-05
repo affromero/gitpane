@@ -55,6 +55,40 @@ fn path(value: &str) -> PathBuf {
     }
 }
 
+/// Regression: a sparse `~/.config/gitpane/config.toml` silently shadowed the
+/// full config in the platform dir (macOS Application Support), making pinned
+/// repos "vanish" after an update. The ignored file must be reported.
+#[test]
+fn test_shadowed_config_paths_reports_ignored_files() {
+    let dot_config = path("/home/alice/.config/gitpane/config.toml");
+    let native = path("/native/gitpane/config.toml");
+    let env = MockEnv {
+        home_dir: Some(path("/home/alice")),
+        project_config_dir: Some(path("/native/gitpane")),
+        existing: HashSet::from([dot_config.clone(), native.clone()]),
+        ..MockEnv::default()
+    };
+
+    let config = Config {
+        loaded_path: Some(dot_config),
+        ..Config::default()
+    };
+    assert_eq!(config.shadowed_config_paths(&env), vec![native.clone()]);
+
+    // Single config file: nothing shadowed.
+    let config = Config {
+        loaded_path: Some(native.clone()),
+        ..Config::default()
+    };
+    let env_single = MockEnv {
+        home_dir: Some(path("/home/alice")),
+        project_config_dir: Some(path("/native/gitpane")),
+        existing: HashSet::from([native]),
+        ..MockEnv::default()
+    };
+    assert!(config.shadowed_config_paths(&env_single).is_empty());
+}
+
 #[test]
 fn test_resolution_prefers_gitpane_config() {
     let env = MockEnv {
