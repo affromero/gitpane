@@ -177,6 +177,13 @@ pub(crate) struct App {
     github_state_filter: github::GithubStateFilter,
     error_message: Option<(String, Instant)>,
     success_message: Option<(String, Instant)>,
+    /// Long-lived system clipboard. Kept alive so the platform backend's
+    /// selection-serving thread survives past a single copy. Creating and
+    /// dropping a `Clipboard` per copy kills that thread immediately, which on
+    /// Wayland (X11 fallback) or X11 without a clipboard manager leaves the
+    /// clipboard empty right after "Copied to clipboard". Lazily created on
+    /// first use; reset on error so a stale connection is retried fresh.
+    clipboard: Option<arboard::Clipboard>,
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph,
     /// 2 = graph|github (only when the 4th panel is shown).
     dragging_border: Option<u8>,
@@ -359,6 +366,7 @@ impl App {
             github_state_filter: github::GithubStateFilter::default(),
             error_message: None,
             success_message: None,
+            clipboard: None,
             dragging_border: None,
             border_frac: [0.25, 0.50, 0.78],
             horizontal_layout: false,
