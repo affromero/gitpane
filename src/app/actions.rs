@@ -486,33 +486,28 @@ impl App {
     /// so the platform backend keeps serving the selection (see the field
     /// docs on `App::clipboard`). A failed or stale backend is dropped so the
     /// next copy attempt retries with a fresh connection.
-    pub(super) fn copy_to_clipboard(&mut self, text: &str) {
+    fn copy_to_clipboard(&mut self, text: &str) {
         if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        let result = match self.clipboard.as_mut() {
-            Some(clipboard) => clipboard.set_text(text),
-            None => {
-                self.error_message = Some((
-                    "clipboard failed: no backend available".to_string(),
-                    Instant::now(),
-                ));
-                return;
+            match arboard::Clipboard::new() {
+                Ok(clipboard) => self.clipboard = Some(clipboard),
+                Err(error) => {
+                    self.error_message =
+                        Some((format!("clipboard failed: {error}"), Instant::now()));
+                    return;
+                }
             }
-        };
-        match result {
+        }
+        let clipboard = self.clipboard.as_mut().expect("just initialized above");
+        match clipboard.set_text(text) {
             Ok(()) => {
-                self.success_message =
-                    Some(("Copied to clipboard".to_string(), Instant::now()));
+                self.success_message = Some(("Copied to clipboard".to_string(), Instant::now()));
             }
             Err(error) => {
                 // The connection may be stale (e.g. compositor restarted);
                 // drop it so the next copy retries from scratch.
                 self.clipboard = None;
-                self.error_message =
-                    Some((format!("clipboard failed: {error}"), Instant::now()));
+                self.error_message = Some((format!("clipboard failed: {error}"), Instant::now()));
             }
         }
     }
 }
-
