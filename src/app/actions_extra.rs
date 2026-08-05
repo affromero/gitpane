@@ -636,7 +636,9 @@ impl App {
                 self.path_input.show();
             }
             Action::AddRepo(ref path) => {
-                if !path.join(".git").exists() && !path.join("HEAD").exists() {
+                // Same predicate as pinned discovery: anything accepted here
+                // must survive the next rescan (and vice versa).
+                if !scanner::is_repo_root(path) {
                     // Keep the input open so the path can be corrected in place.
                     self.path_input.set_error("not a git repository");
                 } else {
