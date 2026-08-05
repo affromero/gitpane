@@ -23,7 +23,12 @@ impl<'a> RuntimeInfo<'a> {
     }
 }
 
-pub(crate) fn render(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_>) -> String {
+pub(crate) fn render(
+    config: &Config,
+    repos: &[PathBuf],
+    shadowed_configs: &[PathBuf],
+    runtime: RuntimeInfo<'_>,
+) -> String {
     let mut out = String::new();
 
     push_line(&mut out, "gitpane diagnostic");
@@ -52,6 +57,10 @@ pub(crate) fn render(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_
             "  write_target: {}",
             display_optional_path(config.write_target_override.as_deref())
         ),
+    );
+    push_line(
+        &mut out,
+        &format!("  shadowed: {}", format_paths(shadowed_configs)),
     );
     push_line(
         &mut out,
@@ -148,7 +157,7 @@ pub(crate) fn render(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_
     );
     out.push('\n');
 
-    let warnings = warnings(config, repos, runtime);
+    let warnings = warnings(config, repos, shadowed_configs, runtime);
     push_line(&mut out, "warnings:");
     if warnings.is_empty() {
         push_line(&mut out, "  none");
@@ -161,8 +170,21 @@ pub(crate) fn render(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_
     out
 }
 
-fn warnings(config: &Config, repos: &[PathBuf], runtime: RuntimeInfo<'_>) -> Vec<String> {
+fn warnings(
+    config: &Config,
+    repos: &[PathBuf],
+    shadowed_configs: &[PathBuf],
+    runtime: RuntimeInfo<'_>,
+) -> Vec<String> {
     let mut warnings = Vec::new();
+
+    for path in shadowed_configs {
+        warnings.push(format!(
+            "config file ignored (shadowed by {}): {}",
+            display_optional_path(config.loaded_path.as_deref()),
+            path.display()
+        ));
+    }
 
     if config.watch.refresh_cooldown_ms < 1000 {
         warnings.push(format!(
@@ -270,9 +292,10 @@ mod tests {
             desc: None,
         });
 
-        let output = render(&config, &[], runtime());
+        let output = render(&config, &[], &[], runtime());
 
         assert!(output.contains("gitpane diagnostic"));
+        assert!(output.contains("shadowed: none"));
         assert!(output.contains("version: test"));
         assert!(output.contains("platform: test-os test-arch"));
         assert!(output.contains("refresh_cooldown_ms: 5000"));
@@ -280,6 +303,23 @@ mod tests {
         assert!(output.contains("repos_discovered: 0"));
         assert!(output.contains("keybindings: 1 (b)"));
         assert!(output.contains("warnings:\n  none"));
+    }
+
+    #[test]
+    fn render_warns_about_shadowed_config_files() {
+        let config = Config {
+            loaded_path: Some(PathBuf::from("/home/u/.config/gitpane/config.toml")),
+            ..Config::default()
+        };
+        let shadowed = vec![PathBuf::from("/home/u/native/gitpane/config.toml")];
+
+        let output = render(&config, &[], &shadowed, runtime());
+
+        assert!(output.contains("shadowed: /home/u/native/gitpane/config.toml"));
+        assert!(output.contains(
+            "config file ignored (shadowed by /home/u/.config/gitpane/config.toml): \
+             /home/u/native/gitpane/config.toml"
+        ));
     }
 
     #[test]
@@ -293,7 +333,7 @@ mod tests {
         let repos: Vec<PathBuf> = (0..60)
             .map(|i| PathBuf::from(format!("/repo-{i}")))
             .collect();
-        let output = render(&config, &repos, runtime());
+        let output = render(&config, &repos, &[], runtime());
 
         assert!(output.contains("watch.refresh_cooldown_ms=250"));
         assert!(output.contains("watch.watch_worktree_dirs=true"));

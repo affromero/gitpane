@@ -636,30 +636,45 @@ impl App {
                 self.path_input.show();
             }
             Action::AddRepo(ref path) => {
-                self.path_input.hide();
-                let path = path.clone();
-                if !path.join(".git").exists() && !path.join("HEAD").exists() {
-                    tracing::error!("Not a git repository: {}", path.display());
+                // Same predicate as pinned discovery: anything accepted here
+                // must survive the next rescan (and vice versa).
+                if !scanner::is_repo_root(path) {
+                    // Keep the input open so the path can be corrected in place.
+                    self.path_input.set_error("not a git repository");
                 } else {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.to_string_lossy().to_string());
-                    self.config.add_pinned_repo(path.clone());
-                    if let Err(e) = self.config.save() {
-                        tracing::error!("Failed to save config: {}", e);
+                    self.path_input.hide();
+                    // Canonicalize so the entry matches the paths discovery
+                    // emits — a symlinked or trailing-slash spelling would
+                    // otherwise duplicate the repo on the next rescan.
+                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if let Some(existing) = self.repo_list.repos.iter().find(|r| r.path == path) {
+                        self.success_message =
+                            Some(("already in list".to_string(), Instant::now()));
+                        self.action_tx
+                            .send(Action::SelectRepo(RepoId(existing.path.clone())))?;
+                    } else {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.to_string_lossy().to_string());
+                        self.config.add_pinned_repo(path.clone());
+                        if let Err(e) = self.config.save() {
+                            tracing::error!("Failed to save config: {}", e);
+                            self.error_message =
+                                Some((format!("save failed: {e}"), Instant::now()));
+                        }
+                        let repo_id = RepoId(path.clone());
+                        let display = self.repo_list.display_for(&path);
+                        self.repo_list.repos.push(RepoEntry {
+                            path,
+                            name,
+                            display,
+                            status: None,
+                            git_op: false,
+                        });
+                        self.action_tx.send(Action::RefreshRepo(repo_id.clone()))?;
+                        self.action_tx.send(Action::SelectRepo(repo_id))?;
                     }
-                    let repo_id = RepoId(path.clone());
-                    let display = self.repo_list.display_for(&path);
-                    self.repo_list.repos.push(RepoEntry {
-                        path,
-                        name,
-                        display,
-                        status: None,
-                        git_op: false,
-                    });
-                    self.action_tx.send(Action::RefreshRepo(repo_id.clone()))?;
-                    self.action_tx.send(Action::SelectRepo(repo_id))?;
                 }
             }
             Action::RemoveRepo(ref id) => {
@@ -679,6 +694,7 @@ impl App {
                     }
                     if let Err(e) = self.config.save() {
                         tracing::error!("Failed to save config: {}", e);
+                        self.error_message = Some((format!("save failed: {e}"), Instant::now()));
                     }
                     self.repo_list.repos.remove(idx);
                     // Fix selection
@@ -709,6 +725,7 @@ impl App {
                 self.config.excluded_repos.clear();
                 if let Err(e) = self.config.save() {
                     tracing::error!("Failed to save config: {}", e);
+                    self.error_message = Some((format!("save failed: {e}"), Instant::now()));
                 }
                 let repo_paths = scanner::discover_repos(&self.config);
                 self.repo_list = RepoList::new(

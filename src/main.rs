@@ -146,9 +146,11 @@ fn run_diagnostic(root: Option<PathBuf>, theme_override: Option<&str>) -> Result
         config.resolve_theme_with_env(&env);
     }
     let repos = git::scanner::discover_repos(&config);
+    let shadowed = config.shadowed_config_paths(&env);
     let report = diagnostic::render(
         &config,
         &repos,
+        &shadowed,
         diagnostic::RuntimeInfo::current(gitpane::VERSION),
     );
     print!("{report}");

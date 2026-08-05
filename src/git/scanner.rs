@@ -25,6 +25,15 @@ use walkdir::WalkDir;
 /// two describe paths the user (or `repo sync`) named explicitly — a pinned
 /// submodule, a pinned worktree, a `.repo/project.list` entry — and the walk
 /// deliberately ignores them; see the `is_dir` check in [`discover_repos`].
+/// Whether `path` is a repo gitpane can track: a working copy (`path/.git` is
+/// a real git dir, symlink, or `gitdir:` pointer) or a bare repository
+/// (`path` itself is the git dir, `HEAD` at top level). `AddRepo` validation
+/// and pinned-repo discovery share this predicate — if they diverge, a repo
+/// the user can add silently vanishes on the next rescan or restart.
+pub(crate) fn is_repo_root(path: &Path) -> bool {
+    is_real_git_dir(&path.join(".git")) || is_real_git_dir(path)
+}
+
 fn is_real_git_dir(dot_git: &Path) -> bool {
     if dot_git.join("HEAD").is_file() {
         return true;
@@ -128,7 +137,7 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
     // Pinned repos first
     for pinned in &config.pinned_repos {
         let canonical = pinned.canonicalize().unwrap_or_else(|_| pinned.clone());
-        if is_real_git_dir(&canonical.join(".git")) && seen.insert(canonical.clone()) {
+        if is_repo_root(&canonical) && seen.insert(canonical.clone()) {
             repos.push(canonical);
         }
     }
@@ -329,6 +338,47 @@ mod tests {
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
         assert!(repos[0].ends_with("ok"));
+    }
+
+    /// Regression: `AddRepo` accepts a bare repository (`HEAD` at top level,
+    /// no `.git`), so pinned discovery must too — previously it only checked
+    /// `<path>/.git`, and a pinned bare repo vanished on the next rescan or
+    /// restart.
+    #[test]
+    fn test_pinned_bare_repo_is_discovered() {
+        let tmp = TempDir::new().unwrap();
+        let bare = tmp.path().join("mirror.git");
+        fs::create_dir_all(&bare).unwrap();
+        fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let config = Config {
+            root_dirs: vec![],
+            pinned_repos: vec![bare.clone()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(repos[0].ends_with("mirror.git"));
+    }
+
+    #[test]
+    fn test_is_repo_root_matches_addable_shapes() {
+        let tmp = TempDir::new().unwrap();
+        let working = make_repo(tmp.path(), "working");
+        assert!(is_repo_root(&working));
+
+        let bare = tmp.path().join("bare.git");
+        fs::create_dir_all(&bare).unwrap();
+        fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(is_repo_root(&bare));
+
+        // An empty `.git` dir is not a repo — reject at add time instead of
+        // accepting it and dropping it on the next rescan.
+        let phantom = make_phantom_git_dir(tmp.path(), "phantom");
+        assert!(!is_repo_root(&phantom));
+        assert!(!is_repo_root(&tmp.path().join("missing")));
     }
 
     #[test]

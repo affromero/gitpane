@@ -11,7 +11,7 @@ mod terminal;
 mod tests;
 
 use defaults::*;
-use load::{LoadResolution, default_write_path, resolve_load};
+use load::{LoadResolution, candidate_search_paths, default_write_path, resolve_load};
 use terminal::default_goto_command;
 
 pub(crate) use load::{ConfigEnv, RealEnv, candidate_theme_dirs, worktree_path};
@@ -393,6 +393,17 @@ impl Config {
         let contents = toml::to_string_pretty(self)?;
         std::fs::write(&config_path, contents)?;
         Ok(())
+    }
+
+    /// Config files that exist on disk but are ignored because another file
+    /// won the first-match search (or a `GITPANE_CONFIG` override). Loading
+    /// never merges, so settings in these files silently do nothing — surface
+    /// them in diagnostics instead of letting pinned repos "vanish".
+    pub(crate) fn shadowed_config_paths(&self, env: &dyn ConfigEnv) -> Vec<PathBuf> {
+        candidate_search_paths(env)
+            .into_iter()
+            .filter(|p| env.file_exists(p) && Some(p.as_path()) != self.loaded_path.as_deref())
+            .collect()
     }
 
     pub fn add_pinned_repo(&mut self, path: PathBuf) {
