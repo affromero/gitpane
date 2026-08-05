@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Copying from the graph context menu no longer dies immediately on Wayland or X11. `App` now keeps a long-lived `arboard::Clipboard` alive between copies instead of dropping it after each call, so the platform backend keeps serving the selection until something else replaces it.
+
 ## [0.9.1] - 2026-07-14
 
 ### Added

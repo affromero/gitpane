@@ -21,16 +21,7 @@ impl App {
                     .resize(ratatui::layout::Rect::new(0, 0, w, h))?;
             }
             Action::CopyText(ref text) => {
-                match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
-                    Ok(()) => {
-                        self.success_message =
-                            Some(("Copied to clipboard".to_string(), Instant::now()));
-                    }
-                    Err(error) => {
-                        self.error_message =
-                            Some((format!("clipboard failed: {error}"), Instant::now()));
-                    }
-                }
+                self.copy_to_clipboard(text);
             }
             Action::SelectRepo(ref id) => {
                 self.context_menu.hide();
@@ -489,5 +480,34 @@ impl App {
             other => self.handle_action_rest(other)?,
         }
         Ok(())
+    }
+
+    /// Copy `text` to the system clipboard, reusing a long-lived `Clipboard`
+    /// so the platform backend keeps serving the selection (see the field
+    /// docs on `App::clipboard`). A failed or stale backend is dropped so the
+    /// next copy attempt retries with a fresh connection.
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(clipboard) => self.clipboard = Some(clipboard),
+                Err(error) => {
+                    self.error_message =
+                        Some((format!("clipboard failed: {error}"), Instant::now()));
+                    return;
+                }
+            }
+        }
+        let clipboard = self.clipboard.as_mut().expect("just initialized above");
+        match clipboard.set_text(text) {
+            Ok(()) => {
+                self.success_message = Some(("Copied to clipboard".to_string(), Instant::now()));
+            }
+            Err(error) => {
+                // The connection may be stale (e.g. compositor restarted);
+                // drop it so the next copy retries from scratch.
+                self.clipboard = None;
+                self.error_message = Some((format!("clipboard failed: {error}"), Instant::now()));
+            }
+        }
     }
 }
