@@ -719,7 +719,7 @@ impl GitGraph {
         Some(Action::ShowCommitFiles { repo_path, oid })
     }
 
-    fn try_show_commit_diff(&mut self) -> Option<Action> {
+    pub(crate) fn try_show_commit_diff(&mut self) -> Option<Action> {
         let detail = self.commit_detail.as_ref()?;
         let file_idx = detail.file_state.selected()?;
         let (_, file_path) = detail.files.get(file_idx)?;

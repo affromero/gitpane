@@ -428,3 +428,77 @@ fn test_set_rows_resets_abort_counter() {
     graph.set_rows(vec![mock_row("abc1234", "ok", "Alice")]);
     assert_eq!(graph.consecutive_aborts, 0);
 }
+
+#[test]
+fn clicking_a_commit_row_opens_its_files() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
+    graph.graph_list_area = Rect::new(0, 0, 80, 4);
+
+    // A single left click (not a second one) must open the commit's files.
+    let action = graph
+        .handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+    assert!(matches!(action, Some(Action::ShowCommitFiles { .. })));
+    assert_eq!(graph.state.selected(), Some(0));
+}
+
+#[test]
+fn highlighted_file_diff_is_requested_after_files_load() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
+    graph.state.select(Some(0));
+
+    // CommitFilesLoaded path: files arrive, first file is auto-highlighted.
+    graph.set_commit_files(
+        "abc1234".into(),
+        "first".into(),
+        vec![
+            ("M".into(), "src/main.rs".into()),
+            ("A".into(), "src/lib.rs".into()),
+        ],
+    );
+
+    // The App then asks for the highlighted file's diff automatically; the
+    // first file is selected, so the diff must target it.
+    let action = graph.try_show_commit_diff().expect("auto diff");
+    match action {
+        Action::ShowCommitDiff { oid, file_path, .. } => {
+            assert_eq!(oid, "abc1234");
+            assert_eq!(file_path, std::path::PathBuf::from("src/main.rs"));
+        }
+        other => panic!("expected ShowCommitDiff, got {other:?}"),
+    }
+}
+
+#[test]
+fn moving_through_files_requests_their_diff() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_commit_files(
+        "abc1234".into(),
+        "first".into(),
+        vec![
+            ("M".into(), "a.rs".into()),
+            ("M".into(), "b.rs".into()),
+        ],
+    );
+    // Detail open, file 0 selected; pressing Down moves to file 1 and must
+    // request its diff (no Enter needed).
+    let action = graph
+        .handle_key_event(KeyEvent::from(KeyCode::Down))
+        .unwrap();
+    match action {
+        Some(Action::ShowCommitDiff { file_path, .. }) => {
+            assert_eq!(file_path, std::path::PathBuf::from("b.rs"));
+        }
+        other => panic!("expected ShowCommitDiff, got {other:?}"),
+    }
+}

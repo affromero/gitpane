@@ -347,7 +347,8 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    return Ok(None);
+                    // Highlighting a file shows its diff in the Diff pane.
+                    return Ok(self.try_show_commit_diff());
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if !detail.files.is_empty() {
@@ -358,7 +359,7 @@ impl Component for GitGraph {
                             .unwrap_or(0);
                         detail.file_state.select(Some(i));
                     }
-                    return Ok(None);
+                    return Ok(self.try_show_commit_diff());
                 }
                 KeyCode::Enter => {
                     return Ok(self.try_show_commit_diff());
@@ -430,15 +431,16 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.display_rows().len() {
-                            // Click on already-selected row opens commit files
-                            if self.state.selected() == Some(idx) && self.commit_detail.is_none() {
-                                return Ok(self.try_show_commit_files());
-                            }
                             self.state.select(Some(idx));
                             self.commit_detail = None;
                             if std::mem::take(&mut self.needs_reload) {
                                 self.reload_graph();
                             }
+                            // A single click selects the commit and opens its
+                            // changed files (and, via CommitFilesLoaded, the
+                            // highlighted file's diff), so no second click is
+                            // needed to see the detail.
+                            return Ok(self.try_show_commit_files());
                         }
                     }
                     return Ok(None);
