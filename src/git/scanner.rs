@@ -72,24 +72,33 @@ fn discover_repo_workspace_projects(
         Ok(c) => c,
         Err(_) => return, // not a repo-managed workspace (or not synced yet)
     };
+    // Containment is decided in canonical form. `project.list` is generated
+    // from a manifest the workspace fetches from a remote, so its entries are
+    // untrusted: `root.join("../../etc/x")` keeps the `..` components
+    // verbatim, so a lexical `starts_with(root)` says yes while the path
+    // actually resolves outside the workspace.
+    let Ok(canonical_root) = root.canonicalize() else {
+        return;
+    };
     for line in contents.lines() {
         let rel = line.trim();
         if rel.is_empty() {
             continue;
         }
-        // Never let a listed path escape the workspace root.
-        let repo_path = root.join(rel);
-        if !repo_path.starts_with(root) {
+        // Canonicalizing also makes a symlinked root (e.g. `~/work` ->
+        // `/real/path`) produce the same string as the tree walk's paths.
+        // Without that, the same top-level repo would be added twice — once
+        // by the walk, once here — and `seen` couldn't tell them apart.
+        // A project whose working tree hasn't been synced yet doesn't
+        // resolve at all, and is skipped along with the escapees.
+        let Ok(canonical) = root.join(rel).canonicalize() else {
+            continue;
+        };
+        if !canonical.starts_with(&canonical_root) {
             continue;
         }
-        // Canonicalize so a symlinked root (e.g. `~/work` -> `/real/path`)
-        // produces the same string as the tree walk's canonicalized paths.
-        // Without this, the same top-level repo would be added twice — once
-        // by the walk, once here — and `seen` couldn't tell them apart.
-        let canonical = repo_path.canonicalize().unwrap_or(repo_path.clone());
         // The working copy's `.git` may be a symlink or a `gitdir:` file;
-        // is_real_git_dir handles both and rejects empty/phantom dirs. A
-        // project whose working tree hasn't been synced yet is skipped.
+        // is_real_git_dir handles both and rejects empty/phantom dirs.
         if is_real_git_dir(&canonical.join(".git"))
             && !is_excluded(&canonical, config)
             && seen.insert(canonical.clone())
@@ -550,6 +559,38 @@ mod tests {
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 1, "got {repos:?}");
         assert!(found(&repos, "synced"), "got {repos:?}");
+    }
+
+    /// `.repo/project.list` is generated from a manifest the workspace fetches
+    /// from a remote, so an entry can name a path outside the root. Rejecting
+    /// it has to happen after canonicalization: `<root>/../outside` still has
+    /// `<root>` as a lexical prefix, so the pre-canonical check waves it
+    /// through and discovery adopts a repo the user never configured.
+    #[test]
+    fn test_repo_workspace_rejects_paths_escaping_the_root() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("ws");
+        fs::create_dir_all(&root).unwrap();
+        // A real repo sitting just outside the workspace root.
+        make_repo(tmp.path(), "outside");
+        make_repo_workspace(&root, &["inside"], |work, gitdir| {
+            fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
+        });
+        fs::write(
+            root.join(".repo").join("project.list"),
+            "inside\n../outside\n",
+        )
+        .unwrap();
+
+        let config = Config {
+            root_dirs: vec![root.clone()],
+            scan_depth: 1,
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(found(&repos, "inside"), "got {repos:?}");
+        assert!(!found(&repos, "outside"), "got {repos:?}");
     }
 
     /// Native `.git` directories outside `.repo` must still be found alongside
