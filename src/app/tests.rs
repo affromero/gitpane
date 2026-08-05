@@ -248,3 +248,31 @@ fn sort_order_cycles_through_all_modes() {
     assert_eq!(labels, ["A-Z", "Z-A", "Dirty"]);
     assert_eq!(order, SortOrder::Alphabetical);
 }
+
+/// Regression: `s` dumped the selection onto the first row. A sort changes
+/// where rows live, never which row the user is on.
+#[test]
+fn sort_keeps_the_selected_repo() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "aaa");
+    make_repo(tmp.path(), "zzz");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    app.repo_list.select_repo_row(1); // zzz
+
+    app.sort_order = SortOrder::ReverseAlphabetical;
+    app.sort_repos();
+
+    let selected = app.repo_list.selected_repo().unwrap();
+    assert_eq!(selected.display, "zzz");
+    assert_eq!(
+        app.repo_list.selected_index(),
+        Some(0),
+        "zzz leads the Z-A order"
+    );
+}

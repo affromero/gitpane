@@ -461,3 +461,63 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
     assert!(text.contains("kernel-6.12/…/camsys"), "got: {text}");
     assert!(text.contains("build"), "got: {text}");
 }
+
+/// Regression: a status update that adds worktree subrows to an expanded repo
+/// above the selection used to shift every display index below it, silently
+/// moving the selection onto a different row.
+#[test]
+fn update_status_keeps_selection_when_subrows_appear_above() {
+    let mut list = make_list(&["/a", "/b"]);
+    list.expanded_repos.insert(RepoId(PathBuf::from("/a")));
+    list.select_repo_row(1);
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
+
+    // `/a`'s status arrives with two worktrees: two subrows appear above `/b`.
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one"), worktree_entry("two")];
+    list.update_status(0, status);
+
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
+}
+
+/// Regression: sorting reset the selection to the first row. `resync_rows`
+/// re-anchors the captured selection by repo path after any reorder.
+#[test]
+fn resync_rows_follows_the_selected_repo_across_a_reorder() {
+    let mut list = make_list(&["/a", "/b", "/c"]);
+    list.select_repo_row(2);
+
+    let keep = list.selected_row_id();
+    list.repos.reverse();
+    list.resync_rows(keep);
+
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/c"));
+    assert_eq!(list.selected_index(), Some(0), "/c moved to the top");
+}
+
+/// A selected worktree subrow survives a reorder; if the worktree later
+/// disappears, the selection falls back to its parent repo row.
+#[test]
+fn resync_rows_restores_worktree_subrow_then_falls_back_to_parent() {
+    let mut list = make_list(&["/a", "/b"]);
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
+    list.update_status(1, status);
+
+    // Select /b's worktree row (display rows: [/a, /b, /b's worktree]).
+    list.state.select(Some(2));
+    assert!(list.selected_worktree().is_some());
+
+    let keep = list.selected_row_id();
+    list.repos.swap(0, 1);
+    list.resync_rows(keep);
+    let (parent, wt) = list.selected_worktree().expect("worktree row survives");
+    assert_eq!(parent.0, PathBuf::from("/b"));
+    assert_eq!(wt.name, "one");
+
+    // The worktree vanishes on the next status: parent repo row takes over.
+    list.update_status(0, empty_status("main"));
+    assert!(list.selected_worktree().is_none());
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
+}

@@ -70,6 +70,16 @@ enum DisplayRow {
     Stash(usize, usize),    // (repo_index, stash_index_in_status.stashes)
 }
 
+/// A `DisplayRow` re-keyed by the parent repo's path instead of positional
+/// indices, so a captured selection survives sorts and rebuilds. See
+/// `selected_row_id` / `resync_rows`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RowId {
+    Repo(PathBuf),
+    Worktree(PathBuf, usize),
+    Stash(PathBuf, usize),
+}
+
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     /// Workspace roots used to compute each repo's relative display path
@@ -388,6 +398,59 @@ impl RepoList {
         self.selected_index().and_then(|i| self.repos.get(i))
     }
 
+    /// Stable identity of the selected row: the parent repo's path plus the
+    /// subrow's index within that repo. Unlike a `DisplayRow` (positional
+    /// indices) it survives list reorders and row-count changes in other
+    /// repos, so it is the right thing to capture before a sort or rebuild.
+    pub fn selected_row_id(&self) -> Option<RowId> {
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(i) => Some(RowId::Repo(self.repos.get(*i)?.path.clone())),
+            DisplayRow::Worktree(ri, wi) => {
+                Some(RowId::Worktree(self.repos.get(*ri)?.path.clone(), *wi))
+            }
+            DisplayRow::Stash(ri, si) => Some(RowId::Stash(self.repos.get(*ri)?.path.clone(), *si)),
+        }
+    }
+
+    /// Rebuild `display_rows` after `repos` was reordered or a status update
+    /// changed subrow counts, then restore the selection captured as `target`
+    /// beforehand. Falls back to the parent repo row when the exact subrow is
+    /// gone, and to the first row when the repo itself is gone (or nothing
+    /// was selected).
+    pub fn resync_rows(&mut self, target: Option<RowId>) {
+        self.rebuild_display_rows();
+        if self.display_rows.is_empty() {
+            self.state.select(None);
+            return;
+        }
+        let restored = target.and_then(|t| {
+            let path = match &t {
+                RowId::Repo(p) | RowId::Worktree(p, _) | RowId::Stash(p, _) => p,
+            };
+            let ri = self.repos.iter().position(|e| &e.path == path)?;
+            let want = match &t {
+                RowId::Repo(_) => DisplayRow::Repo(ri),
+                RowId::Worktree(_, wi) => DisplayRow::Worktree(ri, *wi),
+                RowId::Stash(_, si) => DisplayRow::Stash(ri, *si),
+            };
+            self.display_rows
+                .iter()
+                .position(|r| *r == want)
+                .or_else(|| {
+                    // Subrow gone (worktree removed, stash dropped): land on
+                    // the parent repo row instead of a random neighbor.
+                    self.display_rows
+                        .iter()
+                        .position(|r| matches!(r, DisplayRow::Repo(i) if *i == ri))
+                })
+        });
+        match restored {
+            Some(di) => self.state.select(Some(di)),
+            None => self.select_repo_row(0),
+        }
+    }
+
     /// If a worktree row is currently selected, returns the parent repo path
     /// and the worktree details. Returns None when a repo row is selected.
     pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
@@ -512,18 +575,23 @@ impl RepoList {
             self.expanded_stashes.remove(&id);
         }
 
+        let keep = self.selected_row_id();
         self.repos = next;
-        self.rebuild_display_rows();
+        self.resync_rows(keep);
 
         SyncDiff { added, removed }
     }
 
     pub fn update_status(&mut self, index: usize, repo_status: RepoStatus) {
+        // A status update can add or remove worktree/stash subrows in an
+        // expanded repo above the selection, shifting every display index
+        // below it — re-anchor the selection instead of keeping a raw index.
+        let keep = self.selected_row_id();
         if let Some(entry) = self.repos.get_mut(index) {
             entry.status = Some(repo_status);
             entry.git_op = false;
         }
-        self.rebuild_display_rows();
+        self.resync_rows(keep);
     }
 
     /// Build the action to emit for the current selection.
