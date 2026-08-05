@@ -712,6 +712,8 @@ impl App {
             }
             Action::CycleSortOrder => {
                 self.sort_order = self.sort_order.next();
+                self.success_message =
+                    Some((format!("sort: {}", self.sort_order.label()), Instant::now()));
                 self.sort_repos();
                 self.sync_selection();
             }

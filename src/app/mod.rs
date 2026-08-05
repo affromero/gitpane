@@ -53,13 +53,15 @@ pub(crate) enum FocusPanel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SortOrder {
     Alphabetical,
+    ReverseAlphabetical,
     DirtyFirst,
 }
 
 impl SortOrder {
     fn next(self) -> Self {
         match self {
-            Self::Alphabetical => Self::DirtyFirst,
+            Self::Alphabetical => Self::ReverseAlphabetical,
+            Self::ReverseAlphabetical => Self::DirtyFirst,
             Self::DirtyFirst => Self::Alphabetical,
         }
     }
@@ -67,6 +69,7 @@ impl SortOrder {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Alphabetical => "A-Z",
+            Self::ReverseAlphabetical => "Z-A",
             Self::DirtyFirst => "Dirty",
         }
     }
@@ -397,30 +400,27 @@ impl App {
         app
     }
 
-    /// Order the repo list by the current `sort_order`, keeping pinned repos
-    /// at the top — the position `scanner::discover_repos` hands them. A flat
-    /// sort drops a pin back into the alphabetical run, so the pin held only
-    /// until the first rescan. `App::new` calls this too, so the order at
-    /// startup is the order every later rescan reproduces.
+    /// Order the repo list by the current `sort_order`. The sort is flat and
+    /// case-insensitive: pinned repos take their alphabetical (or dirty)
+    /// place like every other row — pinning controls persistence, not
+    /// position. `App::new` calls this too, so the order at startup is the
+    /// order every later rescan reproduces.
     fn sort_repos(&mut self) {
-        // Discovery emits canonical paths while `AddRepo` pushes the path as
-        // the user typed it, so accept either spelling of a pinned repo.
-        let pinned: HashSet<_> = self
-            .config
-            .pinned_repos
-            .iter()
-            .flat_map(|p| [p.canonicalize().unwrap_or_else(|_| p.clone()), p.clone()])
-            .collect();
         match self.sort_order {
             SortOrder::Alphabetical => {
                 self.repo_list
                     .repos
-                    .sort_by_cached_key(|r| (!pinned.contains(&r.path), r.display.to_lowercase()));
+                    .sort_by_cached_key(|r| r.display.to_lowercase());
+            }
+            SortOrder::ReverseAlphabetical => {
+                self.repo_list
+                    .repos
+                    .sort_by_cached_key(|r| std::cmp::Reverse(r.display.to_lowercase()));
             }
             SortOrder::DirtyFirst => {
                 self.repo_list.repos.sort_by_cached_key(|r| {
                     let dirty = r.status.as_ref().is_some_and(|s| s.is_dirty);
-                    (!pinned.contains(&r.path), !dirty, r.display.to_lowercase())
+                    (!dirty, r.display.to_lowercase())
                 });
             }
         }
