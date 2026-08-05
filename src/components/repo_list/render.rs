@@ -30,20 +30,27 @@ pub(super) fn indicator_columns(
     entry: &RepoEntry,
     base_x: u16,
     name_width: u16,
+    branch_min: u16,
 ) -> IndicatorColumns {
     let mut col = base_x;
     // Dirty/git_op marker: always 2 columns ("* ", "~ ", or "  ").
     col = col.saturating_add(2);
     // The repo display name (path relative to the workspace root) sits
-    // between the marker and the branch; it is variable width.
-    col = col.saturating_add(name_width);
+    // between the marker and the branch, padded to the shared name column
+    // when one is in effect, then a space.
+    col = col.saturating_add(name_width).saturating_add(1);
 
     let mut out = IndicatorColumns::default();
     let Some(status) = entry.status.as_ref() else {
         return out;
     };
-    // Branch field is left-padded to a minimum of 12 columns, then a space.
-    let branch_width = status.branch.chars().count().max(12).saturating_add(1);
+    // Branch field is padded to at least `branch_min` columns, then a space.
+    let branch_width = status
+        .branch
+        .chars()
+        .count()
+        .max(branch_min as usize)
+        .saturating_add(1);
     col = col.saturating_add(branch_width as u16);
 
     if status.ahead > 0 {
@@ -126,9 +133,16 @@ impl Component for RepoList {
                         {
                             let base_x = self.render_area.x + 1;
                             let inner_width = self.render_area.width.saturating_sub(2);
-                            let name_width =
-                                rendered_name(&self.repos[*i], inner_width).chars().count() as u16;
-                            let cols = indicator_columns(&self.repos[*i], base_x, name_width);
+                            let (name_col, branch_col) = self.column_widths(inner_width);
+                            let name_width = if name_col > 0 {
+                                name_col
+                            } else {
+                                rendered_name(&self.repos[*i], inner_width, 0)
+                                    .chars()
+                                    .count() as u16
+                            };
+                            let cols =
+                                indicator_columns(&self.repos[*i], base_x, name_width, branch_col);
                             let clicked_stash = cols
                                 .stash
                                 .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
@@ -231,11 +245,15 @@ impl Component for RepoList {
         // Ensure display_rows is fresh
         self.rebuild_display_rows();
 
+        let inner_width = area.width.saturating_sub(2);
+        let (name_col, branch_col) = self.column_widths(inner_width);
         let items: Vec<ListItem> = self
             .display_rows
             .iter()
             .map(|row| match row {
-                DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], *i),
+                DisplayRow::Repo(i) => {
+                    self.render_repo_item(&self.repos[*i], *i, name_col, branch_col)
+                }
                 DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
                 DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
             })

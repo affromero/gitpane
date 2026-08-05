@@ -172,6 +172,7 @@ impl Default for UiConfig {
             check_for_updates: default_check_for_updates(),
             update_position: UpdatePosition::default(),
             show_liveness: default_show_liveness(),
+            compact_repo_list: false,
         }
     }
 }

@@ -120,6 +120,10 @@ pub(crate) struct UiConfig {
     /// Mark repos/worktrees that have a live tmux pane cwd'd inside them.
     #[serde(default = "default_show_liveness")]
     pub show_liveness: bool,
+    /// Pack each repo row with single spaces instead of padding names and
+    /// branches into vertically aligned columns.
+    #[serde(default)]
+    pub compact_repo_list: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

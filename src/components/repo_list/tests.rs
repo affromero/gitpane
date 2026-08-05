@@ -60,6 +60,7 @@ fn make_list(paths: &[&str]) -> RepoList {
     RepoList::new(
         paths.iter().map(PathBuf::from).collect(),
         vec![], // no roots: display falls back to the basename
+        false,
         theme,
     )
 }
@@ -122,7 +123,7 @@ fn sync_paths_preserves_existing_entry_status() {
 #[test]
 fn indicator_columns_returns_none_when_neither_subtree_present() {
     let entry = entry_with_status("/r", empty_status("main"));
-    let cols = indicator_columns(&entry, 0, 1);
+    let cols = indicator_columns(&entry, 0, 1, 12);
     assert_eq!(cols.stash, None);
     assert_eq!(cols.worktree, None);
 }
@@ -134,18 +135,18 @@ fn indicator_columns_locates_stash_then_worktree() {
     status.worktree_info.push(worktree_entry("wt"));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0, 1);
-    // 2 (dirty marker) + 1 (name "r") + 12 (branch pad for "main") + 1 (space)
-    // = 16 → stash start.
+    let cols = indicator_columns(&entry, 0, 1, 12);
+    // 2 (dirty marker) + 1 (name "r") + 1 (space) + 12 (branch col for
+    // "main") + 1 (space) = 17 → stash start.
     let (s_start, s_end) = cols.stash.expect("stash range");
     let (w_start, w_end) = cols.worktree.expect("worktree range");
-    assert_eq!(s_start, 16);
+    assert_eq!(s_start, 17);
     // "▶$1 " = 4 columns.
-    assert_eq!(s_end, 20);
+    assert_eq!(s_end, 21);
     // Worktree starts immediately after stash.
-    assert_eq!(w_start, 20);
+    assert_eq!(w_start, 21);
     // "▶1 " = 3 columns.
-    assert_eq!(w_end, 23);
+    assert_eq!(w_end, 24);
 }
 
 #[test]
@@ -156,10 +157,11 @@ fn indicator_columns_accounts_for_ahead_behind() {
     status.stashes.push(stash_entry(0));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0, 1);
-    // 2 + 1 (name) + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 23 → stash start.
+    let cols = indicator_columns(&entry, 0, 1, 12);
+    // 2 + 1 (name) + 1 (space) + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 24
+    // → stash start.
     let (s_start, _) = cols.stash.expect("stash range");
-    assert_eq!(s_start, 23);
+    assert_eq!(s_start, 24);
 }
 
 #[test]
@@ -168,10 +170,68 @@ fn indicator_columns_respects_long_branch_name() {
     status.worktree_info.push(worktree_entry("wt"));
     let entry = entry_with_status("/r", status);
 
-    let cols = indicator_columns(&entry, 0, 1);
-    // 2 + 1 (name) + 24 (branch chars) + 1 (space) = 28 → worktree start.
+    let cols = indicator_columns(&entry, 0, 1, 12);
+    // 2 + 1 (name) + 1 (space) + 24 (branch chars) + 1 (space) = 29
+    // → worktree start.
     let (w_start, _) = cols.worktree.expect("worktree range");
-    assert_eq!(w_start, 28);
+    assert_eq!(w_start, 29);
+}
+
+/// Rows with different name and branch lengths must start their status
+/// blocks at the same column: the widest name and widest branch define the
+/// shared columns every other row pads to.
+#[test]
+fn aligned_rows_start_indicators_at_the_same_column() {
+    let mut list = make_list(&["/r", "/long-repo-name"]);
+    let mut short = empty_status("main");
+    short.stashes.push(stash_entry(0));
+    let mut long = empty_status("feature/very-long-branch");
+    long.stashes.push(stash_entry(0));
+    list.repos[0].status = Some(short);
+    list.repos[1].status = Some(long);
+
+    let (name_col, branch_col) = list.column_widths(80);
+    assert_eq!(name_col, "long-repo-name".chars().count() as u16);
+    assert_eq!(
+        branch_col,
+        "feature/very-long-branch".chars().count() as u16
+    );
+
+    let starts: Vec<u16> = list
+        .repos
+        .iter()
+        .map(|r| {
+            let cols = indicator_columns(r, 0, name_col, branch_col);
+            cols.stash.expect("stash range").0
+        })
+        .collect();
+    assert_eq!(starts[0], starts[1], "status blocks are not column-aligned");
+}
+
+/// Compact mode opts out of the shared columns entirely: each field takes
+/// only its own width, so rows with shorter names start their status block
+/// further left instead of padding out to the widest row.
+#[test]
+fn compact_rows_pack_each_field_to_its_own_width() {
+    let theme = Arc::new(Theme::default());
+    let mut list = RepoList::new(
+        vec![PathBuf::from("/r"), PathBuf::from("/long-repo-name")],
+        vec![],
+        true,
+        theme,
+    );
+    let mut short = empty_status("main");
+    short.stashes.push(stash_entry(0));
+    let mut long = empty_status("feature/very-long-branch");
+    long.stashes.push(stash_entry(0));
+    list.repos[0].status = Some(short);
+    list.repos[1].status = Some(long);
+
+    assert_eq!(list.column_widths(80), (0, 0));
+
+    // "r": 2 (marker) + 1 (name) + 1 (space) + 4 ("main") + 1 = 9.
+    let cols = indicator_columns(&list.repos[0], 0, 1, 0);
+    assert_eq!(cols.stash.expect("stash range").0, 9);
 }
 
 /// One repo with a linked worktree, expanded so the worktree row is
@@ -339,6 +399,7 @@ fn breadcrumbs_survive_a_symlinked_root() {
     let list = RepoList::new(
         vec![repo.canonicalize().unwrap()],
         vec![alias],
+        false,
         Arc::new(Theme::default()),
     );
     assert_eq!(list.repos[0].display, "hbre/libmm");
@@ -372,6 +433,7 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
             PathBuf::from("/ws/build"),
         ],
         roots,
+        false,
         theme,
     );
     // Narrow enough that the deep kernel paths must be ellipsized.
