@@ -412,7 +412,13 @@ impl RepoList {
 
         let mut next: Vec<RepoEntry> = Vec::with_capacity(new_paths.len());
         let mut added: Vec<PathBuf> = Vec::new();
+        let mut seen_paths = HashSet::new();
         for path in &new_paths {
+            // A path can't appear twice in the list; discovery regressions or
+            // overlapping roots would otherwise render it as duplicate rows.
+            if !seen_paths.insert(path.clone()) {
+                continue;
+            }
             if let Some(existing) = by_path.remove(path) {
                 next.push(existing);
             } else {

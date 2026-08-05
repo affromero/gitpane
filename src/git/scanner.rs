@@ -77,14 +77,19 @@ fn discover_repo_workspace_projects(
         if !repo_path.starts_with(root) {
             continue;
         }
+        // Canonicalize so a symlinked root (e.g. `~/work` -> `/real/path`)
+        // produces the same string as the tree walk's canonicalized paths.
+        // Without this, the same top-level repo would be added twice — once
+        // by the walk, once here — and `seen` couldn't tell them apart.
+        let canonical = repo_path.canonicalize().unwrap_or(repo_path.clone());
         // The working copy's `.git` may be a symlink or a `gitdir:` file;
         // is_real_git_dir handles both and rejects empty/phantom dirs. A
         // project whose working tree hasn't been synced yet is skipped.
-        if is_real_git_dir(&repo_path.join(".git"))
-            && !is_excluded(&repo_path, config)
-            && seen.insert(repo_path.clone())
+        if is_real_git_dir(&canonical.join(".git"))
+            && !is_excluded(&canonical, config)
+            && seen.insert(canonical.clone())
         {
-            out.push(repo_path);
+            out.push(canonical);
         }
     }
 }
@@ -538,5 +543,52 @@ mod tests {
         assert!(repos.contains(&native));
         assert!(repos.contains(&root.join("managed")));
         assert!(!repos.contains(&root.join(".repo/manifests")));
+    }
+
+    /// A repo workspace reached through a symlinked root (e.g. `~/work` ->
+    /// `/real/path`) must not double-add the top-level projects: the tree
+    /// walk canonicalizes its paths while project.list used to keep the
+    /// symlinked form, so `seen` saw two different strings for the same repo.
+    #[cfg(unix)]
+    #[test]
+    fn test_repo_workspace_symlink_root_has_no_duplicates() {
+        let tmp = TempDir::new().unwrap();
+        let real_root = tmp.path().join("real");
+        fs::create_dir_all(real_root.join(".repo/projects")).unwrap();
+        let mut worktrees = Vec::new();
+        for name in ["build", "kernel-6.12", "hbre/libmm"] {
+            let work = real_root.join(name);
+            fs::create_dir_all(&work).unwrap();
+            let gitdir = real_root.join(".repo/projects").join(format!("{name}.git"));
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            std::os::unix::fs::symlink(&gitdir, work.join(".git")).unwrap();
+            worktrees.push(work);
+        }
+        fs::write(
+            real_root.join(".repo").join("project.list"),
+            "build\nkernel-6.12\nhbre/libmm\n",
+        )
+        .unwrap();
+
+        // Access the workspace through a symlink alias, as `~/work` would be.
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&real_root, &alias).unwrap();
+
+        let config = Config {
+            root_dirs: vec![alias],
+            scan_depth: 2,
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+
+        let unique: HashSet<&PathBuf> = repos.iter().collect();
+        assert_eq!(repos.len(), unique.len(), "duplicates: {repos:?}");
+        assert_eq!(repos.len(), 3, "got {repos:?}");
+        // Every path is canonical (real) form, so list display is consistent.
+        assert!(
+            repos.iter().all(|p| p.starts_with(&real_root)),
+            "non-canonical paths: {repos:?}"
+        );
     }
 }
