@@ -396,7 +396,11 @@ impl App {
         // `discover_repos` orders by basename, but rows are labelled and
         // re-sorted by breadcrumb path. Sorting here means the list the user
         // first sees already matches what the next rescan will produce.
+        // `sort_repos` preserves the selection `RepoList::new` put on the
+        // pre-sort first repo; at startup the user has selected nothing yet,
+        // so land on the first *sorted* row instead.
         app.sort_repos();
+        app.repo_list.select_repo_row(0);
         app
     }
 
@@ -404,8 +408,11 @@ impl App {
     /// case-insensitive: pinned repos take their alphabetical (or dirty)
     /// place like every other row — pinning controls persistence, not
     /// position. `App::new` calls this too, so the order at startup is the
-    /// order every later rescan reproduces.
+    /// order every later rescan reproduces. The selected row is captured
+    /// before the reorder and restored after — a sort changes where rows
+    /// live, never which row the user is on.
     fn sort_repos(&mut self) {
+        let keep = self.repo_list.selected_row_id();
         match self.sort_order {
             SortOrder::Alphabetical => {
                 self.repo_list
@@ -424,10 +431,7 @@ impl App {
                 });
             }
         }
-        // Reset selection to first
-        if !self.repo_list.repos.is_empty() {
-            self.repo_list.select_repo_row(0);
-        }
+        self.repo_list.resync_rows(keep);
     }
     /// Rebuild the filesystem watcher to match the current `repo_list.repos`
     /// and `config.root_dirs`. The new watcher is constructed before the old

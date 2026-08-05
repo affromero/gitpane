@@ -729,6 +729,10 @@ impl App {
                     tracing::error!("Failed to save config: {}", e);
                     self.error_message = Some((format!("save failed: {e}"), Instant::now()));
                 }
+                // The list is rebuilt from scratch, so carry the selection
+                // across by identity (a worktree subrow falls back to its
+                // parent repo row — the fresh list has no statuses yet).
+                let keep = self.repo_list.selected_row_id();
                 let repo_paths = scanner::discover_repos(&self.config);
                 self.repo_list = RepoList::new(
                     repo_paths,
@@ -742,6 +746,7 @@ impl App {
                 self.rebuild_watcher();
                 self.action_tx.send(Action::PollLocal)?;
                 self.sort_repos();
+                self.repo_list.resync_rows(keep);
                 self.sync_selection();
             }
             Action::DiscoverNewRepos => {
@@ -753,10 +758,6 @@ impl App {
                 self.discovery_pending = false;
                 self.last_discovery = Some(Instant::now());
                 let new_paths = scanner::discover_repos(&self.config);
-                let saved_selection: Option<RepoId> = self
-                    .repo_list
-                    .selected_repo()
-                    .map(|e| RepoId(e.path.clone()));
                 let diff = self.repo_list.sync_paths(new_paths);
                 if diff.is_empty() {
                     // No-op: discovered set matches the current list.
@@ -786,14 +787,9 @@ impl App {
                             self.active_worktree = None;
                         }
                     }
+                    // `sync_paths` and `sort_repos` each re-anchor the
+                    // selection by row identity, so no manual restore here.
                     self.sort_repos();
-                    // Restore selection by saved repo id; fall back to
-                    // first row if the previously-selected repo vanished.
-                    if let Some(id) = saved_selection
-                        && let Some(idx) = self.repo_list.resolve_index(&id)
-                    {
-                        self.repo_list.select_repo_row(idx);
-                    }
                     self.rebuild_watcher();
                     // Queue status for newly added repos.
                     for path in &diff.added {
