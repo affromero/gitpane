@@ -4,7 +4,12 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Path completion in the add-repo input now shows its candidates. The first Tab extends what you typed to the longest common prefix and opens a menu above the input listing every matching directory; Tab and the arrow keys then move a visible selection through the list, and Esc closes the menu before it closes the input. Previously Tab silently replaced the input with the first match and cycled through the rest blindly.
+
 ### Fixed
+- Manually added repositories no longer vanish after a restart or rescan. A sparse config file earlier in the search order (for example a hand-created `~/.config/gitpane/config.toml`) silently shadowed the full config holding `pinned_repos`; loading still picks one file and never merges, but `gitpane diagnostic` now lists any shadowed config and warns about it by name. Separately, a bare repository (`HEAD` at the top level, no `.git`) passed the add validation but was dropped by the next discovery pass; adding and discovery now share one predicate, so anything you can add survives every rescan. A failed config save also only reached the log file while the repo looked pinned; it now shows a "save failed" toast in the status bar.
+- Adding a repo gives feedback instead of failing silently. A path that is not a git repository keeps the input open with the error shown inline (previously the input closed and the error went to a log file nobody watches), an empty `.git` directory is rejected up front, adding an already-listed repo selects its row instead of creating a duplicate, and added paths are canonicalized so a symlinked or trailing-slash spelling cannot duplicate the repo on the next rescan.
 - `gitpane update` no longer claims success without updating. The version check reads the GitHub release, which appears minutes before the matching crates.io publish lands; in that window a bare `cargo install gitpane` silently kept the old version while the command printed "Updated successfully". The install now pins the announced version, so it either installs exactly that version or fails with a note that the release may still be propagating.
 
 ## [0.10.1] - 2026-08-05
