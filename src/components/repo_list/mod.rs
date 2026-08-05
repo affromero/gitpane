@@ -73,7 +73,8 @@ enum DisplayRow {
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
     /// Workspace roots used to compute each repo's relative display path
-    /// (`display_path`). Needed at rescan time too, for repos added later.
+    /// (`display_path`), canonicalized in `new` to match the form discovery
+    /// emits. Needed at rescan time too, for repos added later.
     roots: Vec<PathBuf>,
     pub state: ListState,
     pub render_area: Rect,
@@ -101,7 +102,7 @@ pub(crate) struct RepoList {
 /// `scanner::test_discover_skips_phantom_dot_git_at_root` describes. Stripping
 /// the root off itself leaves nothing, so an empty relative path falls through
 /// to the basename rather than rendering a nameless row.
-pub(crate) fn display_path(path: &Path, roots: &[PathBuf]) -> String {
+fn display_path(path: &Path, roots: &[PathBuf]) -> String {
     for root in roots {
         if let Ok(rel) = path.strip_prefix(root)
             && !rel.as_os_str().is_empty()
@@ -196,6 +197,16 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
 
 impl RepoList {
     pub fn new(repo_paths: Vec<PathBuf>, roots: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
+        // Discovery canonicalizes every path it emits, but `config.root_dirs`
+        // is only tilde-expanded. Under a symlinked root (`~/work` ->
+        // `/mnt/data/work`) the two forms never prefix-match, so every label
+        // would quietly fall back to a basename and the breadcrumbs would
+        // vanish for the whole workspace. Resolve the roots once, here,
+        // instead of on every `display_path` call.
+        let roots: Vec<PathBuf> = roots
+            .into_iter()
+            .map(|root| root.canonicalize().unwrap_or(root))
+            .collect();
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -238,6 +249,14 @@ impl RepoList {
 
     pub fn set_theme(&mut self, theme: Arc<Theme>) {
         self.theme = theme;
+    }
+
+    /// The breadcrumb label for `path`. Callers that append a repo after
+    /// construction go through here rather than calling `display_path` with
+    /// `config.root_dirs`, so the new row is labelled against the same
+    /// canonicalized roots as every row already in the list.
+    pub fn display_for(&self, path: &Path) -> String {
+        display_path(path, &self.roots)
     }
 
     /// Recompute display_rows from repos + expansion state.

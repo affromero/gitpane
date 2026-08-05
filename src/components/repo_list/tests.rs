@@ -322,6 +322,28 @@ fn display_path_names_a_root_that_is_itself_a_repo() {
     assert_eq!(display_path(&PathBuf::from("/ws"), &roots), "ws");
 }
 
+/// Breadcrumbs must survive a symlinked workspace root. Discovery hands the
+/// list canonical repo paths while the config keeps the root as the user
+/// wrote it, so the two only prefix-match once the root is canonicalized;
+/// otherwise every label in the workspace degrades to a bare basename.
+#[cfg(unix)]
+#[test]
+fn breadcrumbs_survive_a_symlinked_root() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let real = tmp.path().join("real");
+    let repo = real.join("hbre").join("libmm");
+    std::fs::create_dir_all(&repo).unwrap();
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let list = RepoList::new(
+        vec![repo.canonicalize().unwrap()],
+        vec![alias],
+        Arc::new(Theme::default()),
+    );
+    assert_eq!(list.repos[0].display, "hbre/libmm");
+}
+
 #[test]
 fn middle_ellipsize_keeps_head_and_tail() {
     assert_eq!(middle_ellipsize("hbre/camsys", 30), "hbre/camsys");
