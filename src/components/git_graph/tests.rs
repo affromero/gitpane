@@ -429,6 +429,60 @@ fn test_set_rows_resets_abort_counter() {
     assert_eq!(graph.consecutive_aborts, 0);
 }
 
+/// The commit id every `mock_row` carries, so a detail pane can be opened for
+/// the row the tests click on.
+const MOCK_OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/// A graph showing one commit, with its detail pane already open on `files`,
+/// laid out like the three-pane draw: graph | files | diff.
+fn graph_with_open_commit(files: &[&str]) -> GitGraph {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
+    graph.graph_list_area = Rect::new(0, 0, 40, 10);
+    graph.diff_area = Rect::new(70, 0, 30, 10);
+    let _ = graph.set_commit_files(
+        MOCK_OID.to_string(),
+        "first".to_string(),
+        files
+            .iter()
+            .map(|f| ("M".to_string(), (*f).to_string()))
+            .collect(),
+    );
+    if let Some(detail) = graph.commit_detail.as_mut() {
+        detail.file_list_area = Rect::new(40, 0, 30, 10);
+    }
+    graph
+}
+
+/// The column of a file row, and of a point inside the diff, in the layout
+/// `graph_with_open_commit` sets up. Row `n` of a bordered list is `n + 1`.
+const FILE_COL: u16 = 42;
+const DIFF_COL: u16 = 72;
+
+fn left_click(graph: &mut GitGraph, column: u16, row: u16) -> Option<Action> {
+    graph
+        .handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap()
+}
+
+/// The file a diff request targets.
+fn requested_file(action: Option<Action>) -> String {
+    match action {
+        Some(Action::ShowCommitDiff { file_path, .. }) => file_path,
+        other => panic!("expected ShowCommitDiff, got {other:?}"),
+    }
+}
+
+fn selected_file(graph: &GitGraph) -> Option<usize> {
+    graph.commit_detail.as_ref().unwrap().file_state.selected()
+}
+
 #[test]
 fn clicking_a_commit_row_opens_its_files() {
     let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
@@ -437,106 +491,139 @@ fn clicking_a_commit_row_opens_its_files() {
     graph.graph_list_area = Rect::new(0, 0, 80, 4);
 
     // A single left click (not a second one) must open the commit's files.
-    let action = graph
-        .handle_mouse_event(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 1,
-            row: 1,
-            modifiers: KeyModifiers::NONE,
-        })
-        .unwrap();
+    let action = left_click(&mut graph, 1, 1);
     assert!(matches!(action, Some(Action::ShowCommitFiles { .. })));
     assert_eq!(graph.state.selected(), Some(0));
 }
 
 #[test]
-fn highlighted_file_diff_is_requested_after_files_load() {
+fn clicking_the_open_commit_again_keeps_the_chosen_file() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+    let _ = graph
+        .handle_key_event(KeyEvent::from(KeyCode::Down))
+        .unwrap();
+    assert_eq!(selected_file(&graph), Some(1));
+
+    // A terminal sends a double click as two clicks; re-opening the commit
+    // would reload its files and throw the user back to the first one.
+    let action = left_click(&mut graph, 1, 1);
+    assert!(
+        action.is_none(),
+        "re-clicking the open commit must do nothing"
+    );
+    assert_eq!(selected_file(&graph), Some(1));
+}
+
+#[test]
+fn opening_a_commit_asks_for_the_first_files_diff() {
     let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
     graph.repo_path = Some(std::path::PathBuf::from("/repo"));
     graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
-    graph.state.select(Some(0));
 
-    // CommitFilesLoaded path: files arrive, first file is auto-highlighted.
-    graph.set_commit_files(
-        "abc1234".into(),
-        "first".into(),
+    // The Diff pane fills itself in as the files land, with no extra keypress.
+    let action = graph.set_commit_files(
+        MOCK_OID.to_string(),
+        "first".to_string(),
         vec![
-            ("M".into(), "src/main.rs".into()),
-            ("A".into(), "src/lib.rs".into()),
+            ("M".to_string(), "src/main.rs".to_string()),
+            ("A".to_string(), "src/lib.rs".to_string()),
         ],
     );
-
-    // The App then asks for the highlighted file's diff automatically; the
-    // first file is selected, so the diff must target it.
-    let action = graph.try_show_commit_diff().expect("auto diff");
-    match action {
-        Action::ShowCommitDiff { oid, file_path, .. } => {
-            assert_eq!(oid, "abc1234");
-            assert_eq!(file_path, std::path::PathBuf::from("src/main.rs"));
-        }
-        other => panic!("expected ShowCommitDiff, got {other:?}"),
-    }
+    assert_eq!(requested_file(action), "src/main.rs");
 }
 
 #[test]
-fn moving_through_files_requests_their_diff() {
+fn a_commit_that_changed_nothing_asks_for_no_diff() {
     let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
     graph.repo_path = Some(std::path::PathBuf::from("/repo"));
-    graph.set_commit_files(
-        "abc1234".into(),
-        "first".into(),
-        vec![
-            ("M".into(), "a.rs".into()),
-            ("M".into(), "b.rs".into()),
-        ],
+    graph.set_rows(vec![mock_row("abc1234", "empty", "Alice")]);
+
+    let action = graph.set_commit_files(MOCK_OID.to_string(), "empty".to_string(), Vec::new());
+    assert!(action.is_none());
+}
+
+#[test]
+fn moving_through_files_while_a_diff_shows_keeps_moving_files() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+    graph.set_commit_diff("diff --git a/a.rs".to_string());
+
+    // The auto-shown diff must not capture the keys: `j` still walks files.
+    let action = graph
+        .handle_key_event(KeyEvent::from(KeyCode::Char('j')))
+        .unwrap();
+    assert_eq!(selected_file(&graph), Some(1));
+    assert_eq!(requested_file(action), "b.rs");
+}
+
+#[test]
+fn focusing_the_diff_scrolls_it_instead_of_moving_files() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+    graph.set_commit_diff("line\n".repeat(50));
+
+    // Enter hands the keyboard to the diff.
+    assert_eq!(
+        requested_file(
+            graph
+                .handle_key_event(KeyEvent::from(KeyCode::Enter))
+                .unwrap()
+        ),
+        "a.rs"
     );
-    // Detail open, file 0 selected; pressing Down moves to file 1 and must
-    // request its diff (no Enter needed).
+
+    let action = graph
+        .handle_key_event(KeyEvent::from(KeyCode::Char('j')))
+        .unwrap();
+    assert!(action.is_none());
+    assert_eq!(selected_file(&graph), Some(0), "files must stay put");
+    assert_eq!(graph.commit_detail.as_ref().unwrap().diff_scroll, 1);
+}
+
+#[test]
+fn clicking_inside_the_diff_focuses_it() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+    graph.set_commit_diff("line\n".repeat(50));
+
+    assert!(left_click(&mut graph, DIFF_COL, 2).is_none());
+
+    graph
+        .handle_key_event(KeyEvent::from(KeyCode::Down))
+        .unwrap();
+    assert_eq!(graph.commit_detail.as_ref().unwrap().diff_scroll, 1);
+    assert_eq!(selected_file(&graph), Some(0));
+}
+
+#[test]
+fn esc_leaves_the_diff_before_closing_the_commit() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
+    graph.set_commit_diff("diff --git a/a.rs".to_string());
+    let _ = graph
+        .handle_key_event(KeyEvent::from(KeyCode::Enter))
+        .unwrap();
+
+    // First Esc only gives the keyboard back to the file list; the pane stays.
+    graph
+        .handle_key_event(KeyEvent::from(KeyCode::Esc))
+        .unwrap();
+    assert!(graph.has_detail());
     let action = graph
         .handle_key_event(KeyEvent::from(KeyCode::Down))
         .unwrap();
-    match action {
-        Some(Action::ShowCommitDiff { file_path, .. }) => {
-            assert_eq!(file_path, std::path::PathBuf::from("b.rs"));
-        }
-        other => panic!("expected ShowCommitDiff, got {other:?}"),
-    }
+    assert_eq!(selected_file(&graph), Some(1));
+    assert_eq!(requested_file(action), "b.rs");
+
+    // The next Esc dismisses the commit detail itself.
+    graph
+        .handle_key_event(KeyEvent::from(KeyCode::Esc))
+        .unwrap();
+    assert!(!graph.has_detail());
 }
 
 #[test]
-fn clicking_a_file_row_refreshes_its_diff() {
-    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
-    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
-    graph.set_commit_files(
-        "abc1234".into(),
-        "first".into(),
-        vec![
-            ("M".into(), "a.rs".into()),
-            ("M".into(), "b.rs".into()),
-        ],
-    );
-    if let Some(detail) = graph.commit_detail.as_mut() {
-        detail.file_list_area = Rect::new(0, 0, 40, 10);
-    }
+fn clicking_a_file_row_asks_for_its_diff() {
+    let mut graph = graph_with_open_commit(&["a.rs", "b.rs"]);
 
     // Click the second file row (content_y = area.y + 1 = 1 → row 2 is idx 1).
-    let action = graph
-        .handle_mouse_event(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 2,
-            modifiers: KeyModifiers::NONE,
-        })
-        .unwrap();
-    match action {
-        Some(Action::ShowCommitDiff { file_path, .. }) => {
-            assert_eq!(file_path, std::path::PathBuf::from("b.rs"));
-        }
-        other => panic!("expected ShowCommitDiff, got {other:?}"),
-    }
-    // The highlight moved to the clicked file too.
-    assert_eq!(
-        graph.commit_detail.as_ref().unwrap().file_state.selected(),
-        Some(1)
-    );
+    let action = left_click(&mut graph, FILE_COL, 2);
+    assert_eq!(selected_file(&graph), Some(1));
+    assert_eq!(requested_file(action), "b.rs");
 }

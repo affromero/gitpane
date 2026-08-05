@@ -574,16 +574,12 @@ impl App {
                 ref message,
                 ref files,
             } => {
-                if generation == self.git_graph.current_detail_generation() {
-                    self.git_graph
-                        .set_commit_files(oid.clone(), message.clone(), files.clone());
-                    // Auto-load the highlighted file's diff so the Diff pane
-                    // populates without an extra Enter/click on a file row.
-                    if !files.is_empty()
-                        && let Some(action) = self.git_graph.try_show_commit_diff()
-                    {
-                        self.action_tx.send(action)?;
-                    }
+                if generation == self.git_graph.current_detail_generation()
+                    && let Some(action) =
+                        self.git_graph
+                            .set_commit_files(oid.clone(), message.clone(), files.clone())
+                {
+                    self.action_tx.send(action)?;
                 }
             }
             Action::ShowCommitDiff {

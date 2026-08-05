@@ -270,8 +270,13 @@ impl GitGraph {
             return;
         };
 
+        let title = if detail.diff_focused {
+            " Commit Diff (Esc to leave) "
+        } else {
+            " Commit Diff (Enter to scroll) "
+        };
         let block = Block::default()
-            .title(" Commit Diff (Esc to close) ")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.commit_diff_border));
 
@@ -311,12 +316,13 @@ impl Component for GitGraph {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // When detail is open, Esc/keys are layered
         if let Some(ref mut detail) = self.commit_detail {
-            if detail.diff_content.is_some() {
-                // Viewing commit diff
+            // The diff pane only takes the keys once it is focused; while it is
+            // merely following the highlighted file, `j`/`k` keep walking the
+            // file list.
+            if detail.diff_focused {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
-                        detail.diff_content = None;
-                        detail.diff_scroll = 0;
+                        detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         detail.diff_scroll = detail.diff_scroll.saturating_add(1);
@@ -362,6 +368,8 @@ impl Component for GitGraph {
                     return Ok(self.try_show_commit_diff());
                 }
                 KeyCode::Enter => {
+                    // Hand the keyboard to the diff so it can be scrolled.
+                    detail.diff_focused = true;
                     return Ok(self.try_show_commit_diff());
                 }
                 _ => return Ok(None),
@@ -431,6 +439,13 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.display_rows().len() {
+                            // Clicking the commit that is already open is a
+                            // no-op: reloading its files would throw away the
+                            // file the user picked, and a terminal double click
+                            // arrives as two of these.
+                            if self.is_detail_open_for(idx) {
+                                return Ok(None);
+                            }
                             self.state.select(Some(idx));
                             self.commit_detail = None;
                             if std::mem::take(&mut self.needs_reload) {
@@ -446,6 +461,16 @@ impl Component for GitGraph {
                     return Ok(None);
                 }
 
+                // Click inside the diff hands it the keyboard, the mouse
+                // counterpart of Enter on a file row.
+                if let Some(ref mut detail) = self.commit_detail
+                    && detail.diff_content.is_some()
+                    && self.diff_area.contains(pos)
+                {
+                    detail.diff_focused = true;
+                    return Ok(None);
+                }
+
                 // Click in commit files area (use file_list_area, not files_area)
                 let mut open_file_diff = false;
                 if let Some(ref mut detail) = self.commit_detail
@@ -457,9 +482,10 @@ impl Component for GitGraph {
                         let idx = visual_row + detail.file_state.offset();
                         if idx < detail.files.len() {
                             // Highlighting a file (mouse or keys) shows its
-                            // diff in the Diff pane; re-clicking the same
-                            // file just re-requests it.
+                            // diff in the Diff pane, and returns the keyboard
+                            // to the file list.
                             detail.file_state.select(Some(idx));
+                            detail.diff_focused = false;
                             open_file_diff = true;
                         }
                     }
