@@ -461,13 +461,9 @@ mod tests {
     fn test_repo_workspace_gitdir_file_projects_are_discovered() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let projects = make_repo_workspace(
-            root,
-            &["kernel-6.12", "hbre/libmm"],
-            |work, gitdir| {
-                fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
-            },
-        );
+        let projects = make_repo_workspace(root, &["kernel-6.12", "hbre/libmm"], |work, gitdir| {
+            fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
+        });
 
         let config = Config {
             root_dirs: vec![root.to_path_buf()],

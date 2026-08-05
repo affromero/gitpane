@@ -293,15 +293,24 @@ fn selected_worktree_reports_worktree_when_worktree_row_is_selected() {
 #[test]
 fn display_path_uses_relative_path_under_a_root() {
     let roots = vec![PathBuf::from("/ws")];
-    assert_eq!(display_path(&PathBuf::from("/ws/hbre/libmm"), &roots), "hbre/libmm");
+    assert_eq!(
+        display_path(&PathBuf::from("/ws/hbre/libmm"), &roots),
+        "hbre/libmm"
+    );
     // Outside every root → basename.
-    assert_eq!(display_path(&PathBuf::from("/elsewhere/pinned"), &roots), "pinned");
+    assert_eq!(
+        display_path(&PathBuf::from("/elsewhere/pinned"), &roots),
+        "pinned"
+    );
 }
 
 #[test]
 fn display_path_keeps_basename_for_top_level_repo() {
     let roots = vec![PathBuf::from("/ws")];
-    assert_eq!(display_path(&PathBuf::from("/ws/kernel-6.12"), &roots), "kernel-6.12");
+    assert_eq!(
+        display_path(&PathBuf::from("/ws/kernel-6.12"), &roots),
+        "kernel-6.12"
+    );
 }
 
 #[test]
@@ -359,4 +368,3 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
     assert!(text.contains("kernel-6.12/…/camsys"), "got: {text}");
     assert!(text.contains("build"), "got: {text}");
 }
-

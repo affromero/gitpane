@@ -630,10 +630,8 @@ impl App {
                         tracing::error!("Failed to save config: {}", e);
                     }
                     let repo_id = RepoId(path.clone());
-                    let display = crate::components::repo_list::display_path(
-                        &path,
-                        &self.config.root_dirs,
-                    );
+                    let display =
+                        crate::components::repo_list::display_path(&path, &self.config.root_dirs);
                     self.repo_list.repos.push(RepoEntry {
                         path,
                         name,
