@@ -9,8 +9,12 @@ use walkdir::WalkDir;
 /// query, so we treat such paths as not-a-repo at discovery time. Anything
 /// produced by `git init` will have a `HEAD` file; that is what we look for.
 ///
-/// Two layouts are accepted:
+/// Three layouts are accepted:
 /// - A standard checkout, where `.git` is a directory containing `HEAD`.
+/// - A *symlink* to such a git directory. This is exactly what Google's
+///   `repo` tool writes for every project working copy (`.git ->`
+///   `.repo/projects/<name>.git`), and `Path::join("HEAD").is_file()`
+///   resolves the symlink transparently.
 /// - A submodule or linked worktree, where `.git` is a *file* of the form
 ///   `gitdir: <path>` pointing at the real git directory (e.g.
 ///   `<superproject>/.git/modules/<name>`). Without this branch, pinning a
@@ -26,6 +30,63 @@ fn is_real_git_dir(dot_git: &Path) -> bool {
         return gitdir.join("HEAD").is_file();
     }
     false
+}
+
+/// Whether a candidate repo path matches an `excluded_repos` pattern.
+/// Patterns match the repo's directory name or any path component.
+fn is_excluded(repo_path: &Path, config: &Config) -> bool {
+    let repo_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let path_str = repo_path.to_string_lossy();
+    config
+        .excluded_repos
+        .iter()
+        .any(|pattern| repo_name == *pattern || path_str.contains(pattern))
+}
+
+/// Google `repo` (git-repo) managed workspace discovery.
+///
+/// In such a workspace every project's working copy carries a `.git` that is
+/// a *symlink* (or `gitdir:` file) pointing into `.repo/projects/`, so the
+/// tree walk never sees them as directories. The authoritative list of
+/// managed projects is `.repo/project.list` — one relative path per line —
+/// which we enumerate instead. This is exact (matches what `repo sync`
+/// manages), scales to hundreds of projects, and automatically picks up
+/// projects added or removed by later `repo sync` runs because the file is
+/// re-read on every discovery pass. Workspaces not managed by `repo` (no
+/// `.repo/project.list`) are left untouched.
+fn discover_repo_workspace_projects(
+    root: &Path,
+    config: &Config,
+    seen: &mut HashSet<PathBuf>,
+    out: &mut Vec<PathBuf>,
+) {
+    let contents = match std::fs::read_to_string(root.join(".repo").join("project.list")) {
+        Ok(c) => c,
+        Err(_) => return, // not a repo-managed workspace (or not synced yet)
+    };
+    for line in contents.lines() {
+        let rel = line.trim();
+        if rel.is_empty() {
+            continue;
+        }
+        // Never let a listed path escape the workspace root.
+        let repo_path = root.join(rel);
+        if !repo_path.starts_with(root) {
+            continue;
+        }
+        // The working copy's `.git` may be a symlink or a `gitdir:` file;
+        // is_real_git_dir handles both and rejects empty/phantom dirs. A
+        // project whose working tree hasn't been synced yet is skipped.
+        if is_real_git_dir(&repo_path.join(".git"))
+            && !is_excluded(&repo_path, config)
+            && seen.insert(repo_path.clone())
+        {
+            out.push(repo_path);
+        }
+    }
 }
 
 /// Resolve a `gitdir: <path>` pointer file (used by submodules and linked
@@ -62,12 +123,16 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
             .max_depth(config.scan_depth)
             .follow_links(false)
             .into_iter()
+            // Don't descend into the repo tool's own metadata (`<root>/.repo`).
+            // Its gitdirs under `.repo/projects/` are not `.git` entries, but
+            // `.repo/manifests/.git` is a symlink that would otherwise match.
+            .filter_entry(|e| e.file_name() != ".repo")
             .filter_map(|e| e.ok())
         {
-            if entry.file_name() == ".git"
-                && entry.file_type().is_dir()
-                && is_real_git_dir(entry.path())
-            {
+            // Accept any real gitdir: a `.git` directory with a `HEAD`, a
+            // `.git` symlink to one (Google `repo` working copies), or a
+            // `gitdir:` pointer file (submodules / linked worktrees).
+            if entry.file_name() == ".git" && is_real_git_dir(entry.path()) {
                 let repo_path = entry
                     .path()
                     .parent()
@@ -75,23 +140,15 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
                     .canonicalize()
                     .unwrap_or_else(|_| entry.path().parent().unwrap().to_path_buf());
 
-                // Check exclusions
-                let repo_name = repo_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                let path_str = repo_path.to_string_lossy();
-                let excluded = config
-                    .excluded_repos
-                    .iter()
-                    .any(|pattern| repo_name == *pattern || path_str.contains(pattern));
-
-                if !excluded && seen.insert(repo_path.clone()) {
+                if !is_excluded(&repo_path, config) && seen.insert(repo_path.clone()) {
                     repos.push(repo_path);
                 }
             }
         }
+
+        // Google `repo` (git-repo) managed workspace: enumerate
+        // `.repo/project.list` for the projects the tree walk cannot see.
+        discover_repo_workspace_projects(root, config, &mut seen, &mut repos);
     }
 
     repos.sort_by(|a, b| {
@@ -334,5 +391,152 @@ mod tests {
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 2);
         assert!(repos[0].ends_with("z-repo"));
+    }
+
+    /// Build a Google `repo`-style workspace fixture under `root`:
+    /// - `.repo/project.list` lists `projects` (one relative path per line),
+    /// - each project's gitdir lives at `.repo/projects/<name>.git` with a HEAD,
+    /// - the working copy at `<root>/<name>` gets its `.git` linked by `link`
+    ///   (a symlink on unix — the layout real `repo sync` writes — or a
+    ///   `gitdir:` pointer file, the portable equivalent).
+    fn make_repo_workspace(
+        root: &Path,
+        projects: &[&str],
+        link: impl Fn(&Path, &Path),
+    ) -> Vec<PathBuf> {
+        fs::create_dir_all(root.join(".repo/projects")).unwrap();
+        let mut worktrees = Vec::new();
+        for name in projects {
+            let work = root.join(name);
+            fs::create_dir_all(&work).unwrap();
+            let gitdir = root.join(".repo/projects").join(format!("{name}.git"));
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            link(&work, &gitdir);
+            worktrees.push(work);
+        }
+        fs::write(
+            root.join(".repo").join("project.list"),
+            format!("{}\n", projects.join("\n")),
+        )
+        .unwrap();
+        worktrees
+    }
+
+    /// A Google `repo` workspace where every project's `.git` is a symlink to
+    /// `.repo/projects/<name>.git` — the layout `repo sync` actually writes on
+    /// unix. Before repo-aware discovery, all of these were invisible because
+    /// the walk's `is_dir()` check rejected symlinks.
+    #[cfg(unix)]
+    #[test]
+    fn test_repo_workspace_symlink_projects_are_discovered() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let projects = make_repo_workspace(
+            root,
+            &["kernel-6.12", "hbre/libmm", "app/qualitytest"],
+            |work, gitdir| std::os::unix::fs::symlink(gitdir, work.join(".git")).unwrap(),
+        );
+
+        let config = Config {
+            root_dirs: vec![root.to_path_buf()],
+            scan_depth: 1, // the walk sees nothing; project.list does the work
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 3, "got {repos:?}");
+        for p in &projects {
+            assert!(repos.contains(p), "missing {p:?}");
+        }
+    }
+
+    /// Same workspace layout but with `gitdir:` pointer files instead of
+    /// symlinks (portable; some repo versions/OSes write these).
+    #[test]
+    fn test_repo_workspace_gitdir_file_projects_are_discovered() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let projects = make_repo_workspace(
+            root,
+            &["kernel-6.12", "hbre/libmm"],
+            |work, gitdir| {
+                fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
+            },
+        );
+
+        let config = Config {
+            root_dirs: vec![root.to_path_buf()],
+            scan_depth: 1,
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 2, "got {repos:?}");
+        for p in &projects {
+            assert!(repos.contains(p), "missing {p:?}");
+        }
+    }
+
+    /// A project listed in `.repo/project.list` whose working tree hasn't been
+    /// synced yet must be skipped, not crash discovery.
+    #[test]
+    fn test_repo_workspace_skips_missing_worktrees() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let projects = make_repo_workspace(root, &["synced"], |work, gitdir| {
+            fs::write(work.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap()
+        });
+        // A second project that exists only in project.list, not on disk.
+        fs::write(
+            root.join(".repo").join("project.list"),
+            "synced\nnot-synced-yet\n",
+        )
+        .unwrap();
+
+        let config = Config {
+            root_dirs: vec![root.to_path_buf()],
+            scan_depth: 1,
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 1, "got {repos:?}");
+        assert!(repos.contains(&projects[0]));
+    }
+
+    /// Native `.git` directories outside `.repo` must still be found alongside
+    /// repo-managed projects, and the repo tool's own `.repo/manifests/.git`
+    /// symlink must NOT be picked up as a project.
+    #[cfg(unix)]
+    #[test]
+    fn test_repo_workspace_mixes_native_and_managed() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let native = make_repo(root, "standalone");
+        make_repo_workspace(root, &["managed"], |work, gitdir| {
+            std::os::unix::fs::symlink(gitdir, work.join(".git")).unwrap()
+        });
+        // Simulate repo's own tooling symlink inside `.repo/`.
+        fs::create_dir_all(root.join(".repo/manifests")).unwrap();
+        fs::create_dir_all(root.join(".repo/manifests-git")).unwrap();
+        fs::write(
+            root.join(".repo/manifests-git/HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            root.join(".repo/manifests-git"),
+            root.join(".repo/manifests").join(".git"),
+        )
+        .unwrap();
+
+        let config = Config {
+            root_dirs: vec![root.to_path_buf()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+        let repos = discover_repos(&config);
+        assert_eq!(repos.len(), 2, "got {repos:?}");
+        assert!(repos.contains(&native));
+        assert!(repos.contains(&root.join("managed")));
+        assert!(!repos.contains(&root.join(".repo/manifests")));
     }
 }
