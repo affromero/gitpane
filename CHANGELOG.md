@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.10.3] - 2026-08-06
+
+### Changed
+- Repo rows were redesigned around one aligned seam. Names and branches now form the only two aligned columns (the branch column sizes to the widest visible branch, capped to a third of the panel), and everything after the branch (stash and worktree toggles, ahead/behind arrows, submodule markers, fetch warning, live-session dot, changed-file count) packs tightly per row. A row's indicators sit right next to its branch instead of floating in reserved columns that most rows leave empty, and clicking the stash/worktree toggles still hits exactly the drawn cells.
+- The default branch is dimmed instead of loud. `main` and `master` now render in a new `branch_default` theme color (DarkGray by default, overridable in custom themes), so a clean repo on its default branch reads as a quiet row and only deviating branches carry the branch color.
+
+### Removed
+- The `[ui] compact_repo_list` option. The new layout packs rows by default while keeping names and branches aligned, which covers what both of the old modes were for; a leftover key in an existing config is ignored and disappears the next time gitpane saves the config.
+
 ## [0.10.2] - 2026-08-06
 
 ### Added
