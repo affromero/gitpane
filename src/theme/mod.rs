@@ -30,6 +30,9 @@ pub(crate) struct RepoListTheme {
     pub git_op_marker: Color,
     pub dirty_marker: Color,
     pub branch: Color,
+    /// Branch color when the repo sits on its default branch (main/master):
+    /// shown but dimmed, so only deviations carry color.
+    pub branch_default: Color,
     pub ahead: Color,
     pub behind: Color,
     pub worktree_count: Color,
@@ -54,6 +57,7 @@ impl Default for RepoListTheme {
             git_op_marker: Color::Cyan,
             dirty_marker: Color::Yellow,
             branch: Color::Cyan,
+            branch_default: Color::DarkGray,
             ahead: Color::Green,
             behind: Color::Red,
             worktree_count: Color::Indexed(214),

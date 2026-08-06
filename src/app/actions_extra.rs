@@ -746,7 +746,6 @@ impl App {
                 self.repo_list = RepoList::new(
                     repo_paths,
                     self.config.root_dirs.clone(),
-                    self.config.ui.compact_repo_list,
                     self.theme.clone(),
                 );
                 self.repo_list

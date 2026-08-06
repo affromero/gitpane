@@ -117,7 +117,7 @@ A newer category of **worktree dashboards** has grown up around parallel AI agen
 ## Screenshots
 
 ### Three panel overview
-Repos on the left show branch, dirty state (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodules (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and file count. Changes in the middle. Commit graph on the right.
+Repos on the left show dirty state (`*`), branch (dimmed on `main`/`master` so only deviations carry color), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodules (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and file count. Names and branches align into columns; the rest packs tight per row. Changes in the middle. Commit graph on the right.
 
 <img src="assets/screenshot-main.png" alt="Three panel overview" width="800">
 
@@ -133,7 +133,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 
 ## Features
 
-- **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows branch, dirty indicator (`*`), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
+- **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows dirty indicator (`*`), branch (dimmed on the default branch), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
 - **Custom keybindings**: Bind your own keys to shell commands with `[[keybindings]]`, each run against the selected repo/worktree with `{path}` substitution and the same placement options as `[open]`. Extend gitpane with your own verbs without waiting on a feature.
@@ -287,7 +287,6 @@ discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root di
 frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup
 update_position = "top-right" # Update notification position ("top-right" or "top-left")
-compact_repo_list = true     # default: pack repo rows with single spaces; false aligns name/branch columns
 
 [graph]
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"

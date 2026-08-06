@@ -340,12 +340,11 @@ impl App {
         // Roots are cloned before `config` moves into `Self` below; the repo
         // list needs them to render each repo's relative display path.
         let roots = config.root_dirs.clone();
-        let compact_repo_list = config.ui.compact_repo_list;
 
         let mut app = Self {
             config,
             should_quit: false,
-            repo_list: RepoList::new(repo_paths, roots, compact_repo_list, theme.clone()),
+            repo_list: RepoList::new(repo_paths, roots, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
             graph_context_menu: GraphContextMenu::new(theme.clone()),

@@ -14,9 +14,12 @@ use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
+mod layout;
 mod render;
 #[cfg(test)]
 mod tests;
+
+use layout::*;
 
 /// Result of `RepoList::sync_paths` — the paths that newly appeared and the
 /// paths that vanished. Empty `added` and `removed` mean the set is unchanged
@@ -99,9 +102,6 @@ pub(crate) struct RepoList {
     live_panes: Vec<(String, PathBuf)>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
-    /// `[ui] compact_repo_list`: pack rows with single spaces instead of
-    /// padding names and branches into aligned columns.
-    compact: bool,
     theme: Arc<Theme>,
 }
 
@@ -126,60 +126,6 @@ fn display_path(path: &Path, roots: &[PathBuf]) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
-}
-
-/// Width of the fixed status block rendered to the right of the repo display
-/// name (branch, ahead/behind, stash/worktree toggles, submodule markers,
-/// fetch warning, file count). Mirrors `render_repo_item`; used to budget the
-/// name column so a long path never pushes the status indicators off-screen.
-fn status_block_width(entry: &RepoEntry, branch_min: u16) -> u16 {
-    let mut w: u16 = 0;
-    // The dirty/git-op marker is rendered before the name, so it isn't part
-    // of the trailing block; everything from the branch onward is.
-    let Some(status) = entry.status.as_ref() else {
-        return w;
-    };
-    // Branch is padded to at least `branch_min` columns, then a space.
-    w += status.branch.chars().count().max(branch_min as usize) as u16 + 1;
-    if status.ahead > 0 {
-        w += 2 + status.ahead.to_string().len() as u16;
-    }
-    if status.behind > 0 {
-        w += 2 + status.behind.to_string().len() as u16;
-    }
-    if !status.stashes.is_empty() {
-        w += 3 + status.stash_count().to_string().len() as u16;
-    }
-    if !status.worktree_info.is_empty() {
-        w += 2 + status.worktree_info.len().to_string().len() as u16;
-    }
-    if status.has_dirty_submodules {
-        w += 3;
-    }
-    if status.has_unpushed_submodules {
-        w += 3;
-    }
-    if status.fetch_failed {
-        w += 3;
-    }
-    if !status.files.is_empty() {
-        // "[N] "
-        w += 2 + status.files.len().to_string().len() as u16 + 1;
-    }
-    w
-}
-
-/// The repo's display label for the list row, middle-ellipsized to fit the
-/// panel. Reserves the leading dirty/git-op marker, a trailing liveness
-/// marker, and the fixed status block so the row never clips its indicators.
-fn rendered_name(entry: &RepoEntry, inner_width: u16, branch_min: u16) -> String {
-    let max = inner_width
-        .saturating_sub(2) // dirty/git-op marker
-        .saturating_sub(2) // liveness marker
-        .saturating_sub(1) // space after the name
-        .saturating_sub(status_block_width(entry, branch_min))
-        .max(1);
-    middle_ellipsize(&entry.display, max as usize)
 }
 
 /// Collapse an over-long path to "head/…/tail", keeping the top-level group
@@ -209,12 +155,7 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
 }
 
 impl RepoList {
-    pub fn new(
-        repo_paths: Vec<PathBuf>,
-        roots: Vec<PathBuf>,
-        compact: bool,
-        theme: Arc<Theme>,
-    ) -> Self {
+    pub fn new(repo_paths: Vec<PathBuf>, roots: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
         // Discovery canonicalizes every path it emits, but `config.root_dirs`
         // is only tilde-expanded. Under a symlinked root (`~/work` ->
         // `/mnt/data/work`) the two forms never prefix-match, so every label
@@ -259,7 +200,6 @@ impl RepoList {
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
             display_rows: Vec::new(),
-            compact,
             theme,
         };
         list.rebuild_display_rows();
@@ -268,44 +208,6 @@ impl RepoList {
 
     pub fn set_theme(&mut self, theme: Arc<Theme>) {
         self.theme = theme;
-    }
-
-    /// Shared column widths for repo rows: `(name_col, branch_col)`, the
-    /// widest display name and widest branch among the repos, so every row
-    /// pads to the same columns and the status blocks align vertically.
-    /// The name column is capped so the row with the widest status block
-    /// still fits its indicators. Compact mode returns `(0, 0)`: no
-    /// minimums, every field collapses to its own width.
-    pub(super) fn column_widths(&self, inner_width: u16) -> (u16, u16) {
-        if self.compact {
-            return (0, 0);
-        }
-        let branch_col = self
-            .repos
-            .iter()
-            .filter_map(|r| r.status.as_ref())
-            .map(|s| s.branch.chars().count())
-            .max()
-            .unwrap_or(0) as u16;
-        let max_block = self
-            .repos
-            .iter()
-            .map(|r| status_block_width(r, branch_col))
-            .max()
-            .unwrap_or(0);
-        let budget = inner_width
-            .saturating_sub(2) // dirty/git-op marker
-            .saturating_sub(2) // liveness marker
-            .saturating_sub(1) // space after the name
-            .saturating_sub(max_block)
-            .max(1);
-        let widest_name = self
-            .repos
-            .iter()
-            .map(|r| r.display.chars().count())
-            .max()
-            .unwrap_or(0) as u16;
-        (widest_name.min(budget), branch_col)
     }
 
     /// The breadcrumb label for `path`. Callers that append a repo after
@@ -712,13 +614,7 @@ impl RepoList {
         }
     }
 
-    fn render_repo_item(
-        &self,
-        entry: &RepoEntry,
-        _repo_idx: usize,
-        name_col: u16,
-        branch_col: u16,
-    ) -> ListItem<'static> {
+    fn render_repo_item(&self, entry: &RepoEntry, layout: &RowLayout) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let mut spans = Vec::new();
 
@@ -730,97 +626,73 @@ impl RepoList {
             spans.push(Span::raw("  "));
         }
 
-        // The repo's display name anchors the left of the row: its path
-        // relative to the workspace root, middle-ellipsized so deep paths
-        // can't push the status indicators off-screen. With a shared name
-        // column the name pads out to it, so every row's branch starts at
-        // the same x; compact mode (`name_col == 0`) keeps each field at
-        // its own width.
-        let inner_width = self.render_area.width.saturating_sub(2);
-        let name = if name_col > 0 {
-            format!(
-                "{:<w$}",
-                middle_ellipsize(&entry.display, name_col as usize),
-                w = name_col as usize
-            )
-        } else {
-            rendered_name(entry, inner_width, 0)
-        };
+        let live = crate::session::liveness::is_live(&entry.path, &self.live_panes);
+
+        // Name column: packed left, ellipsized to the shared width. `x`
+        // tracks the current column so the aligned columns can fill up to
+        // their rails.
+        let name = middle_ellipsize(&entry.display, layout.name_col as usize);
+        let mut x = 2 + name.chars().count() as u16;
         spans.push(Span::styled(name, Style::default().fg(t.repo_name)));
-        spans.push(Span::raw(" "));
 
-        if let Some(status) = &entry.status {
-            spans.push(Span::styled(
-                format!("{:<w$} ", status.branch, w = branch_col as usize),
-                Style::default().fg(t.branch),
-            ));
+        // Status tail: this row's own indicators, packed tight — attention
+        // cells (the same segments `indicator_columns` hit-tests), then the
+        // liveness dot and file count. No space is reserved for absent ones.
+        let mut tail: Vec<(String, ratatui::style::Color)> = Vec::new();
 
-            if status.ahead > 0 {
-                spans.push(Span::styled(
-                    format!("\u{2191}{} ", status.ahead),
-                    Style::default().fg(t.ahead),
-                ));
-            }
-            if status.behind > 0 {
-                spans.push(Span::styled(
-                    format!("\u{2193}{} ", status.behind),
-                    Style::default().fg(t.behind),
-                ));
-            }
-
-            if !status.stashes.is_empty() {
-                let id = RepoId(entry.path.clone());
-                let expanded = self.expanded_stashes.contains(&id);
-                let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
-                spans.push(Span::styled(
-                    format!("{}${} ", icon, status.stash_count()),
-                    Style::default().fg(t.stash),
-                ));
+        if let Some(status) = entry.status.as_ref() {
+            // Branch column: always shown — a hidden branch reads as missing
+            // data — but dimmed on the default branch so only deviations
+            // carry color.
+            if layout.branch_col > 0 {
+                let fill = layout.branch_x().saturating_sub(x);
+                spans.push(Span::raw(" ".repeat(fill as usize)));
+                let branch = middle_ellipsize(&status.branch, layout.branch_col as usize);
+                let color = if is_default_branch(&status.branch) {
+                    t.branch_default
+                } else {
+                    t.branch
+                };
+                x += fill + branch.chars().count() as u16;
+                spans.push(Span::styled(branch, Style::default().fg(color)));
             }
 
-            if !status.worktree_info.is_empty() {
-                let id = RepoId(entry.path.clone());
-                let expanded = self.expanded_repos.contains(&id);
-                let icon = if expanded { "\u{25bc}" } else { "\u{25b6}" };
-                spans.push(Span::styled(
-                    format!("{}{} ", icon, status.worktree_info.len()),
-                    Style::default().fg(t.worktree_count),
-                ));
-            }
-
-            if status.has_dirty_submodules {
-                spans.push(Span::styled(
-                    "\u{25c8} ",
-                    Style::default().fg(t.dirty_submodule),
-                ));
-            }
-
-            if status.has_unpushed_submodules {
-                spans.push(Span::styled(
-                    "\u{21e1} ",
-                    Style::default().fg(t.unpushed_submodule),
-                ));
-            }
-
-            if status.fetch_failed {
-                spans.push(Span::styled(
-                    "\u{26a0} ",
-                    Style::default().fg(t.fetch_failed),
-                ));
-            }
-
-            if !status.files.is_empty() {
-                spans.push(Span::styled(
-                    format!("[{}] ", status.files.len()),
-                    Style::default().fg(t.file_count),
-                ));
+            let id = RepoId(entry.path.clone());
+            for (text, kind) in attention_cells(
+                status,
+                self.expanded_stashes.contains(&id),
+                self.expanded_repos.contains(&id),
+            ) {
+                let color = match kind {
+                    AttentionCell::Stash => t.stash,
+                    AttentionCell::Worktree => t.worktree_count,
+                    AttentionCell::Ahead => t.ahead,
+                    AttentionCell::Behind => t.behind,
+                    AttentionCell::DirtySub => t.dirty_submodule,
+                    AttentionCell::UnpushedSub => t.unpushed_submodule,
+                    AttentionCell::FetchWarn => t.fetch_failed,
+                };
+                tail.push((text, color));
             }
         }
+        if live {
+            tail.push(("\u{25c9}".to_string(), t.live));
+        }
+        if let Some(status) = entry.status.as_ref()
+            && !status.files.is_empty()
+        {
+            tail.push((format!("[{}]", status.files.len()), t.file_count));
+        }
 
-        // Liveness marker at the end of the row so it never shifts the name
-        // column (bare symbol; the session names are in the context menu).
-        if crate::session::liveness::is_live(&entry.path, &self.live_panes) {
-            spans.push(Span::styled(" \u{25c9}", Style::default().fg(t.live)));
+        if !tail.is_empty() {
+            let fill = layout.attention_x().saturating_sub(x).max(1);
+            spans.push(Span::raw(" ".repeat(fill as usize)));
+            for (i, (text, color)) in tail.into_iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(text, Style::default().fg(color)));
+            }
         }
 
         ListItem::new(Line::from(spans))

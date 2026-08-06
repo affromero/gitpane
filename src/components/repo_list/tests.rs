@@ -45,22 +45,11 @@ fn worktree_entry(name: &str) -> WorktreeEntry {
     }
 }
 
-fn entry_with_status(path: &str, status: RepoStatus) -> RepoEntry {
-    RepoEntry {
-        path: PathBuf::from(path),
-        name: path.trim_start_matches('/').to_string(),
-        display: path.trim_start_matches('/').to_string(),
-        status: Some(status),
-        git_op: false,
-    }
-}
-
 fn make_list(paths: &[&str]) -> RepoList {
     let theme = Arc::new(Theme::default());
     RepoList::new(
         paths.iter().map(PathBuf::from).collect(),
         vec![], // no roots: display falls back to the basename
-        false,
         theme,
     )
 }
@@ -122,66 +111,53 @@ fn sync_paths_preserves_existing_entry_status() {
 
 #[test]
 fn indicator_columns_returns_none_when_neither_subtree_present() {
-    let entry = entry_with_status("/r", empty_status("main"));
-    let cols = indicator_columns(&entry, 0, 1, 12);
+    let mut list = make_list(&["/r"]);
+    list.repos[0].status = Some(empty_status("main"));
+    let layout = row_layout(&list.repos, &[], 40);
+    let cols = indicator_columns(&list.repos[0], 0, &layout);
     assert_eq!(cols.stash, None);
     assert_eq!(cols.worktree, None);
 }
 
+/// The status tail starts one gap after the branch column: marker (2) +
+/// name "r" (1) + gap + branch "main" (4) + gap = column 9.
 #[test]
 fn indicator_columns_locates_stash_then_worktree() {
+    let mut list = make_list(&["/r"]);
     let mut status = empty_status("main");
     status.stashes.push(stash_entry(0));
     status.worktree_info.push(worktree_entry("wt"));
-    let entry = entry_with_status("/r", status);
+    list.repos[0].status = Some(status);
 
-    let cols = indicator_columns(&entry, 0, 1, 12);
-    // 2 (dirty marker) + 1 (name "r") + 1 (space) + 12 (branch col for
-    // "main") + 1 (space) = 17 → stash start.
-    let (s_start, s_end) = cols.stash.expect("stash range");
-    let (w_start, w_end) = cols.worktree.expect("worktree range");
-    assert_eq!(s_start, 17);
-    // "▶$1 " = 4 columns.
-    assert_eq!(s_end, 21);
-    // Worktree starts immediately after stash.
-    assert_eq!(w_start, 21);
-    // "▶1 " = 3 columns.
-    assert_eq!(w_end, 24);
+    let layout = row_layout(&list.repos, &[], 40);
+    let cols = indicator_columns(&list.repos[0], 0, &layout);
+    // "▶$1" = 3 columns at the rail start.
+    assert_eq!(cols.stash, Some((9, 12)));
+    // "▶1" = 2 columns after the separating space.
+    assert_eq!(cols.worktree, Some((13, 15)));
 }
 
+/// Toggles come first in the status tail; ahead/behind pack after them,
+/// so the stash toggle stays at the rail start.
 #[test]
 fn indicator_columns_accounts_for_ahead_behind() {
+    let mut list = make_list(&["/r"]);
     let mut status = empty_status("main");
     status.ahead = 3;
     status.behind = 22;
     status.stashes.push(stash_entry(0));
-    let entry = entry_with_status("/r", status);
+    list.repos[0].status = Some(status);
 
-    let cols = indicator_columns(&entry, 0, 1, 12);
-    // 2 + 1 (name) + 1 (space) + 13 (branch) + 3 ("↑3 ") + 4 ("↓22 ") = 24
-    // → stash start.
-    let (s_start, _) = cols.stash.expect("stash range");
-    assert_eq!(s_start, 24);
+    let layout = row_layout(&list.repos, &[], 40);
+    let cols = indicator_columns(&list.repos[0], 0, &layout);
+    assert_eq!(cols.stash, Some((9, 12)));
 }
 
+/// Rows share the same attention rail regardless of name and branch length:
+/// the name and branch columns are per-workspace maxima, so the stash toggle
+/// sits at the same x on every row.
 #[test]
-fn indicator_columns_respects_long_branch_name() {
-    let mut status = empty_status("feature/very-long-branch");
-    status.worktree_info.push(worktree_entry("wt"));
-    let entry = entry_with_status("/r", status);
-
-    let cols = indicator_columns(&entry, 0, 1, 12);
-    // 2 + 1 (name) + 1 (space) + 24 (branch chars) + 1 (space) = 29
-    // → worktree start.
-    let (w_start, _) = cols.worktree.expect("worktree range");
-    assert_eq!(w_start, 29);
-}
-
-/// Rows with different name and branch lengths must start their status
-/// blocks at the same column: the widest name and widest branch define the
-/// shared columns every other row pads to.
-#[test]
-fn aligned_rows_start_indicators_at_the_same_column() {
+fn rows_share_the_same_status_columns() {
     let mut list = make_list(&["/r", "/long-repo-name"]);
     let mut short = empty_status("main");
     short.stashes.push(stash_entry(0));
@@ -190,48 +166,30 @@ fn aligned_rows_start_indicators_at_the_same_column() {
     list.repos[0].status = Some(short);
     list.repos[1].status = Some(long);
 
-    let (name_col, branch_col) = list.column_widths(80);
-    assert_eq!(name_col, "long-repo-name".chars().count() as u16);
-    assert_eq!(
-        branch_col,
-        "feature/very-long-branch".chars().count() as u16
-    );
-
+    let layout = row_layout(&list.repos, &[], 90);
     let starts: Vec<u16> = list
         .repos
         .iter()
         .map(|r| {
-            let cols = indicator_columns(r, 0, name_col, branch_col);
-            cols.stash.expect("stash range").0
+            indicator_columns(r, 0, &layout)
+                .stash
+                .expect("stash range")
+                .0
         })
         .collect();
-    assert_eq!(starts[0], starts[1], "status blocks are not column-aligned");
+    assert_eq!(starts[0], starts[1], "attention rails are not aligned");
 }
 
-/// Compact mode opts out of the shared columns entirely: each field takes
-/// only its own width, so rows with shorter names start their status block
-/// further left instead of padding out to the widest row.
+/// A single outlier branch name can't squeeze every repo name off the panel:
+/// the branch column is capped to a third of the inner width.
 #[test]
-fn compact_rows_pack_each_field_to_its_own_width() {
-    let theme = Arc::new(Theme::default());
-    let mut list = RepoList::new(
-        vec![PathBuf::from("/r"), PathBuf::from("/long-repo-name")],
-        vec![],
-        true,
-        theme,
-    );
-    let mut short = empty_status("main");
-    short.stashes.push(stash_entry(0));
-    let mut long = empty_status("feature/very-long-branch");
-    long.stashes.push(stash_entry(0));
-    list.repos[0].status = Some(short);
-    list.repos[1].status = Some(long);
-
-    assert_eq!(list.column_widths(80), (0, 0));
-
-    // "r": 2 (marker) + 1 (name) + 1 (space) + 4 ("main") + 1 = 9.
-    let cols = indicator_columns(&list.repos[0], 0, 1, 0);
-    assert_eq!(cols.stash.expect("stash range").0, 9);
+fn branch_cell_is_capped_to_a_third_of_the_panel() {
+    let mut list = make_list(&["/r"]);
+    list.repos[0].status = Some(empty_status(
+        "codex/some-extremely-long-generated-branch-name",
+    ));
+    let layout = row_layout(&list.repos, &[], 30);
+    assert_eq!(layout.branch_col, 10);
 }
 
 /// One repo with a linked worktree, expanded so the worktree row is
@@ -399,7 +357,6 @@ fn breadcrumbs_survive_a_symlinked_root() {
     let list = RepoList::new(
         vec![repo.canonicalize().unwrap()],
         vec![alias],
-        false,
         Arc::new(Theme::default()),
     );
     assert_eq!(list.repos[0].display, "hbre/libmm");
@@ -433,7 +390,6 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
             PathBuf::from("/ws/build"),
         ],
         roots,
-        false,
         theme,
     );
     // Narrow enough that the deep kernel paths must be ellipsized.
@@ -460,6 +416,189 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
     assert!(text.contains("kernel-6.1/…/camsys"), "got: {text}");
     assert!(text.contains("kernel-6.12/…/camsys"), "got: {text}");
     assert!(text.contains("build"), "got: {text}");
+}
+
+/// Every row shows its branch — a hidden branch reads as missing data — but
+/// the default branch renders in the dimmed color while deviations keep the
+/// branch color.
+#[test]
+fn default_branch_shown_dimmed_deviating_branch_colored() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/a", "/b"]);
+    list.repos[0].status = Some(empty_status("main"));
+    list.repos[1].status = Some(empty_status("devel"));
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let row_fg_at = |row_y: usize, needle: &str| {
+        let row: String = buf.content[row_y * 40..(row_y + 1) * 40]
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        let at = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} not drawn in row {row_y}: {row}"));
+        // These rows are pure ASCII, so the byte offset is the column.
+        buf.content[row_y * 40 + at].style().fg
+    };
+
+    let t = &Theme::default().repo_list;
+    assert_eq!(row_fg_at(1, "main"), Some(t.branch_default));
+    assert_eq!(row_fg_at(2, "devel"), Some(t.branch));
+}
+
+/// Draw and hit-test must agree: the stash chevron is drawn at exactly the
+/// column `indicator_columns` reports clickable. Both sides walk the same
+/// `attention_cells` from the same rail — this pins them together (they
+/// drifted by one column in 0.10.0).
+#[test]
+fn stash_toggle_glyph_sits_where_the_hit_test_says() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/r"]);
+    let mut status = empty_status("main");
+    status.stashes.push(stash_entry(0));
+    list.repos[0].status = Some(status);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+
+    let buf = terminal.backend().buffer();
+    let row: String = buf.content[40..80].iter().map(|c| c.symbol()).collect();
+    let drawn = row
+        .chars()
+        .position(|c| c == '\u{25b6}')
+        .expect("chevron drawn") as u16;
+
+    // Same anchors the mouse handler uses: content starts one column in from
+    // the border, inner width excludes both borders.
+    let layout = row_layout(&list.repos, &[], 38);
+    let cols = indicator_columns(&list.repos[0], 1, &layout);
+    assert_eq!(drawn, cols.stash.expect("stash range").0);
+}
+
+/// The attention cell packs each row's own indicators against the shared
+/// rail — a row whose first indicator differs still starts at the same x,
+/// with no columns reserved for indicators it doesn't have.
+#[test]
+fn attention_cell_packs_per_row_without_reserved_columns() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/a", "/b"]);
+    let mut a = empty_status("main");
+    a.stashes.push(stash_entry(0)); // "▶$1 ↑4"
+    a.ahead = 4;
+    let mut b = empty_status("main");
+    b.behind = 1; // just "↓1"
+    list.repos[0].status = Some(a);
+    list.repos[1].status = Some(b);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let glyph_x = |row_y: usize, glyph: char| -> usize {
+        let row: String = buf.content[row_y * 40..(row_y + 1) * 40]
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        row.chars()
+            .position(|c| c == glyph)
+            .unwrap_or_else(|| panic!("{glyph} not drawn in row {row_y}"))
+    };
+
+    let rail = 1 + row_layout(&list.repos, &[], 38).attention_x() as usize;
+    assert_eq!(glyph_x(1, '\u{25b6}'), rail, "row a starts at the rail");
+    assert_eq!(glyph_x(2, '\u{2193}'), rail, "row b starts at the rail too");
+}
+
+/// On a wide panel the attention rail hugs the widest name (one gap after
+/// "long-repo-name") instead of drifting to the far edge; on a narrow panel
+/// the name column gives way and the rail lands flush against the border.
+/// Both rows share the rail either way.
+#[test]
+fn status_block_hugs_widest_name_and_clamps_to_the_edge() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/r", "/long-repo-name"]);
+    let mut short = empty_status("main");
+    short.stashes.push(stash_entry(0));
+    let mut long = empty_status("main");
+    long.stashes.push(stash_entry(0));
+    list.repos[0].status = Some(short);
+    list.repos[1].status = Some(long);
+
+    let stash_cell = |list: &mut RepoList, width: u16, at: usize| -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                list.draw(f, f.area()).unwrap();
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        [1usize, 2]
+            .iter()
+            .map(|row_y| {
+                let chars: Vec<char> = buf.content
+                    [row_y * width as usize..(row_y + 1) * width as usize]
+                    .iter()
+                    .flat_map(|c| c.symbol().chars())
+                    .collect();
+                chars[at..at + 3].iter().collect()
+            })
+            .collect()
+    };
+
+    // Wide: marker (2) + widest name (14) + gap + branch "main" (4) + gap =
+    // column 22; +1 for the panel border → 23. Far short of the right edge.
+    for cell in stash_cell(&mut list, 40, 23) {
+        assert_eq!(cell, "\u{25b6}$1");
+    }
+    // Narrow: the name column caps at 7 (inner 18 minus marker, gap, branch
+    // column, and the 3-wide tail), putting the rail at 15; +1 border → 16,
+    // flush against the right border at column 19.
+    for cell in stash_cell(&mut list, 20, 16) {
+        assert_eq!(cell, "\u{25b6}$1");
+    }
+}
+
+/// A panel dragged down to a sliver must degrade (clip) rather than panic on
+/// the zone arithmetic.
+#[test]
+fn narrow_panel_renders_without_panic() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/long-repo-name"]);
+    let mut status = empty_status("feature/very-long-branch");
+    status.ahead = 3;
+    status.stashes.push(stash_entry(0));
+    status.worktree_info.push(worktree_entry("wt"));
+    list.repos[0].status = Some(status);
+
+    for width in 3..=6u16 {
+        let mut terminal = Terminal::new(TestBackend::new(width, 4)).unwrap();
+        terminal
+            .draw(|f| {
+                list.draw(f, f.area()).unwrap();
+            })
+            .unwrap();
+        let inner = width.saturating_sub(2);
+        let layout = row_layout(&list.repos, &[], inner);
+        let _ = indicator_columns(&list.repos[0], 1, &layout);
+    }
 }
 
 /// Regression: a status update that adds worktree subrows to an expanded repo

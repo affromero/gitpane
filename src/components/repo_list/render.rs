@@ -23,59 +23,30 @@ pub(super) struct IndicatorColumns {
     pub(super) worktree: Option<(u16, u16)>,
 }
 
-/// Compute the column ranges of the stash and worktree indicators for a repo
-/// row, given the leftmost content column. Mirrors the layout in
-/// [`RepoList::render_repo_item`] — keep the two in sync.
+/// Compute the absolute column ranges of the stash and worktree toggle
+/// segments for a repo row, given the leftmost content column. Both this
+/// hit-test and [`RepoList::render_repo_item`] walk the same
+/// [`attention_cells`] from [`RowLayout::attention_x`] — keep the two in
+/// sync.
 pub(super) fn indicator_columns(
     entry: &RepoEntry,
     base_x: u16,
-    name_width: u16,
-    branch_min: u16,
+    layout: &RowLayout,
 ) -> IndicatorColumns {
-    let mut col = base_x;
-    // Dirty/git_op marker: always 2 columns ("* ", "~ ", or "  ").
-    col = col.saturating_add(2);
-    // The repo display name (path relative to the workspace root) sits
-    // between the marker and the branch, padded to the shared name column
-    // when one is in effect, then a space.
-    col = col.saturating_add(name_width).saturating_add(1);
-
     let mut out = IndicatorColumns::default();
     let Some(status) = entry.status.as_ref() else {
         return out;
     };
-    // Branch field is padded to at least `branch_min` columns, then a space.
-    let branch_width = status
-        .branch
-        .chars()
-        .count()
-        .max(branch_min as usize)
-        .saturating_add(1);
-    col = col.saturating_add(branch_width as u16);
-
-    if status.ahead > 0 {
-        // "↑{N} " — chevron (1) + digits + trailing space.
-        col = col.saturating_add(2 + status.ahead.to_string().len() as u16);
+    let mut x = base_x.saturating_add(layout.attention_x());
+    for (text, kind) in attention_cells(status, false, false) {
+        let width = text.chars().count() as u16;
+        match kind {
+            AttentionCell::Stash => out.stash = Some((x, x + width)),
+            AttentionCell::Worktree => out.worktree = Some((x, x + width)),
+            _ => {}
+        }
+        x += width + 1;
     }
-    if status.behind > 0 {
-        col = col.saturating_add(2 + status.behind.to_string().len() as u16);
-    }
-
-    if !status.stashes.is_empty() {
-        let start = col;
-        // "▶$N " — chevron (1) + '$' (1) + digits + trailing space.
-        let width = 3 + status.stash_count().to_string().len() as u16;
-        out.stash = Some((start, start.saturating_add(width)));
-        col = col.saturating_add(width);
-    }
-
-    if !status.worktree_info.is_empty() {
-        let start = col;
-        // "▶N " — chevron (1) + digits + trailing space.
-        let width = 2 + status.worktree_info.len().to_string().len() as u16;
-        out.worktree = Some((start, start.saturating_add(width)));
-    }
-
     out
 }
 
@@ -133,16 +104,8 @@ impl Component for RepoList {
                         {
                             let base_x = self.render_area.x + 1;
                             let inner_width = self.render_area.width.saturating_sub(2);
-                            let (name_col, branch_col) = self.column_widths(inner_width);
-                            let name_width = if name_col > 0 {
-                                name_col
-                            } else {
-                                rendered_name(&self.repos[*i], inner_width, 0)
-                                    .chars()
-                                    .count() as u16
-                            };
-                            let cols =
-                                indicator_columns(&self.repos[*i], base_x, name_width, branch_col);
+                            let layout = row_layout(&self.repos, &self.live_panes, inner_width);
+                            let cols = indicator_columns(&self.repos[*i], base_x, &layout);
                             let clicked_stash = cols
                                 .stash
                                 .is_some_and(|(s, e)| mouse.column >= s && mouse.column < e);
@@ -246,14 +209,12 @@ impl Component for RepoList {
         self.rebuild_display_rows();
 
         let inner_width = area.width.saturating_sub(2);
-        let (name_col, branch_col) = self.column_widths(inner_width);
+        let layout = row_layout(&self.repos, &self.live_panes, inner_width);
         let items: Vec<ListItem> = self
             .display_rows
             .iter()
             .map(|row| match row {
-                DisplayRow::Repo(i) => {
-                    self.render_repo_item(&self.repos[*i], *i, name_col, branch_col)
-                }
+                DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], &layout),
                 DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
                 DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
             })
