@@ -181,6 +181,15 @@ impl App {
                     self.spawn_git_op_in(dir, id.clone(), args);
                 }
             }
+            Action::CopyFilePath(ref id, ref path) => {
+                if let Some(abs) = self.file_op_dir(id).map(|d| d.join(path)) {
+                    let path_str = abs.to_string_lossy().to_string();
+                    use std::io::Write;
+                    let encoded = base64_encode(path_str.as_bytes());
+                    let _ = write!(std::io::stdout(), "\x1b]52;c;{}\x1b\\", encoded);
+                    let _ = std::io::stdout().flush();
+                }
+            }
             Action::CopyPath(ref id) => {
                 if let Some(target) = self.repo_list.resolve_target(id) {
                     let path_str = target.exec_path.to_string_lossy().to_string();

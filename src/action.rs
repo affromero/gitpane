@@ -152,6 +152,8 @@ pub(crate) enum Action {
     OpenFile(RepoId, std::path::PathBuf),
     /// Reveal a file in the OS file manager (Finder on macOS).
     RevealFile(RepoId, std::path::PathBuf),
+    /// Copy a changed file's absolute path to the clipboard.
+    CopyFilePath(RepoId, std::path::PathBuf),
     StageFile(RepoId, std::path::PathBuf),
     UnstageFile(RepoId, std::path::PathBuf),
     /// Prompt before discarding. The `bool` is `is_untracked` (delete vs restore).

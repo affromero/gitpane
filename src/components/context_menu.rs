@@ -41,6 +41,7 @@ enum MenuAction {
     // File-row actions (menu opened via `show_file`).
     OpenFile,
     RevealFile,
+    CopyFilePath,
     /// Submodule row only: retarget the graph/changes panels onto the submodule.
     OpenSubmoduleGraph,
     StageFile,
@@ -268,6 +269,7 @@ impl ContextMenu {
         let mut inspect = vec![
             item("Open".into(), MenuAction::OpenFile),
             item("Open folder".into(), MenuAction::RevealFile),
+            item("Copy path".into(), MenuAction::CopyFilePath),
         ];
         // A submodule is its own repo: offer to browse its graph in the panels.
         if is_submodule {
@@ -376,6 +378,7 @@ impl ContextMenu {
             // the menu is somehow in repo mode (no file_path).
             MenuAction::OpenFile => Action::OpenFile(id, self.file_path.clone()?),
             MenuAction::RevealFile => Action::RevealFile(id, self.file_path.clone()?),
+            MenuAction::CopyFilePath => Action::CopyFilePath(id, self.file_path.clone()?),
             MenuAction::OpenSubmoduleGraph => Action::SelectSubmodule {
                 repo_id: id,
                 sub_path: self.file_path.clone()?,
@@ -588,6 +591,7 @@ mod file_menu_tests {
             vec![
                 "Open".to_string(),
                 "Open folder".to_string(),
+                "Copy path".to_string(),
                 "Open in graph".to_string(),
             ]
         );
