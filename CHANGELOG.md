@@ -2,9 +2,10 @@
 
 All notable changes to gitpane are documented here.
 
-## [Unreleased]
+## [0.10.2] - 2026-08-06
 
 ### Added
+- The file context menu gained "Copy path". Right-clicking a changed file now offers copying its absolute path (resolved against the active worktree, like Open folder) to the clipboard via OSC 52, so it works over SSH too.
 - Status-bar toasts now pulse. A toast flashes its accent color every 150ms for its whole lifetime, so an `OK` or `ERROR` message no longer appears motionless in the bar and slips by unnoticed.
 - A reverse-alphabetical sort mode. `s` now cycles A-Z, Z-A, then dirty-first, and every press shows a "sort: ..." toast in the status bar so the active mode is never a guess (previously the only indicator was a small label buried in the hint line, which truncates on narrow windows).
 - Path completion in the add-repo input now shows its candidates. The first Tab extends what you typed to the longest common prefix and opens a menu above the input listing every matching directory; Tab and the arrow keys then move a visible selection through the list, and Esc closes the menu before it closes the input. Previously Tab silently replaced the input with the first match and cycled through the rest blindly.
