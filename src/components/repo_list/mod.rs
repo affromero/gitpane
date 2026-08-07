@@ -763,12 +763,12 @@ impl RepoList {
         let t = &self.theme.repo_list;
         let stash = &entry.status.as_ref().unwrap().stashes[stash_idx];
         let label = format!("    $ stash@{{{}}} ", stash.index);
+        // Default fg, not DarkGray: a hardcoded gray message is
+        // indistinguishable from focus-mode's DIM rows, so brightness must
+        // come from the row-level dimming alone.
         let spans = vec![
             Span::styled(label, Style::default().fg(t.stash)),
-            Span::styled(
-                stash.message.clone(),
-                Style::default().fg(t.worktree_subtree_icon),
-            ),
+            Span::raw(stash.message.clone()),
         ];
         ListItem::new(Line::from(spans))
     }
