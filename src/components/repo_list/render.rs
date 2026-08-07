@@ -210,13 +210,25 @@ impl Component for RepoList {
 
         let inner_width = area.width.saturating_sub(2);
         let layout = row_layout(&self.repos, &self.live_panes, inner_width);
+        let selected = self.state.selected();
         let items: Vec<ListItem> = self
             .display_rows
             .iter()
-            .map(|row| match row {
-                DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], &layout),
-                DisplayRow::Worktree(ri, wi) => self.render_worktree_item(&self.repos[*ri], *wi),
-                DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
+            .enumerate()
+            .map(|(idx, row)| {
+                let item = match row {
+                    DisplayRow::Repo(i) => self.render_repo_item(&self.repos[*i], &layout),
+                    DisplayRow::Worktree(ri, wi) => {
+                        self.render_worktree_item(&self.repos[*ri], *wi)
+                    }
+                    DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
+                };
+                // Dim everything but the selected row so the active repo pops.
+                if selected.is_some_and(|s| s != idx) {
+                    item.style(Style::default().add_modifier(Modifier::DIM))
+                } else {
+                    item
+                }
             })
             .collect();
 
