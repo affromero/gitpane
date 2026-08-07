@@ -102,6 +102,8 @@ pub(crate) struct RepoList {
     live_panes: Vec<(String, PathBuf)>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
+    /// Focus mode: dim every row except the selected one. Toggled with `f`.
+    pub focus_mode: bool,
     theme: Arc<Theme>,
 }
 
@@ -200,6 +202,7 @@ impl RepoList {
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
             display_rows: Vec::new(),
+            focus_mode: true,
             theme,
         };
         list.rebuild_display_rows();

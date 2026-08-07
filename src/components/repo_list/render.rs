@@ -78,6 +78,10 @@ impl Component for RepoList {
                 self.toggle_stash_expand();
                 Ok(self.emit_selection_action())
             }
+            KeyCode::Char('f') => {
+                self.focus_mode = !self.focus_mode;
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -223,8 +227,9 @@ impl Component for RepoList {
                     }
                     DisplayRow::Stash(ri, si) => self.render_stash_item(&self.repos[*ri], *si),
                 };
-                // Dim everything but the selected row so the active repo pops.
-                if selected.is_some_and(|s| s != idx) {
+                // Focus mode: dim everything but the selected row so the
+                // active repo pops.
+                if self.focus_mode && selected.is_some_and(|s| s != idx) {
                     item.style(Style::default().add_modifier(Modifier::DIM))
                 } else {
                     item

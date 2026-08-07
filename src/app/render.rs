@@ -288,7 +288,7 @@ impl App {
         use ratatui::widgets::{Block, Borders, Paragraph};
 
         let t = &self.theme.overlay;
-        let key = |k: &str| Span::styled(format!("  {k:<10}"), Style::default().fg(t.help_key));
+        let key = |k: &str| Span::styled(format!("  {k:<12} "), Style::default().fg(t.help_key));
         let desc = |d: &str| Span::raw(d.to_string());
         let section = |title: &str| {
             Line::from(Span::styled(
@@ -304,6 +304,7 @@ impl App {
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
             Line::from(vec![key("Esc"), desc("Close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
+            Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
             Line::from(vec![key("G"), desc("Attach live tmux session")]),
@@ -324,8 +325,13 @@ impl App {
                 ]));
                 lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
                 lines.push(Line::from(vec![key("w"), desc("Toggle worktrees")]));
+                lines.push(Line::from(vec![key("S"), desc("Toggle stashes")]));
                 lines.push(Line::from(vec![
-                    key("right-click"),
+                    key("f"),
+                    desc("Focus mode (dim unselected)"),
+                ]));
+                lines.push(Line::from(vec![
+                    key("Right-click"),
                     desc("Menu: new worktree, push/pull, …"),
                 ]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
@@ -344,7 +350,7 @@ impl App {
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("h / l"), desc("Scroll left / right")]));
                 lines.push(Line::from(vec![key("Enter"), desc("Open commit files")]));
-                lines.push(Line::from(vec![key("Right click"), desc("Filter graph")]));
+                lines.push(Line::from(vec![key("Right-click"), desc("Filter graph")]));
                 lines.push(Line::from(""));
                 lines.push(section("Search"));
                 lines.push(Line::from(vec![key("/"), desc("Search commits")]));
@@ -382,7 +388,10 @@ impl App {
         }
 
         let height = (lines.len() as u16 + 2).min(area.height);
-        let width = 42u16.min(area.width);
+        // Size the popup to its widest line (+2 borders, +2 right padding) so
+        // no description gets clipped.
+        let content_width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+        let width = (content_width + 4).min(area.width);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
         let help_area = Rect::new(x, y, width, height);
