@@ -62,6 +62,19 @@ fn sync_paths_noop_when_set_unchanged() {
     assert_eq!(list.repos.len(), 2);
 }
 
+/// Same set in a different order must not reorder the list: the caller only
+/// re-sorts on a non-empty diff, so adopting discovery order here would
+/// silently override the user's sort (pinned repos jumped to the top on
+/// every watcher-driven rescan).
+#[test]
+fn sync_paths_ignores_discovery_order() {
+    let mut list = make_list(&["/a", "/b"]);
+    let diff = list.sync_paths(vec![PathBuf::from("/b"), PathBuf::from("/a")]);
+    assert!(diff.is_empty());
+    assert_eq!(list.repos[0].path, PathBuf::from("/a"));
+    assert_eq!(list.repos[1].path, PathBuf::from("/b"));
+}
+
 #[test]
 fn sync_paths_reports_added_paths() {
     let mut list = make_list(&["/a"]);

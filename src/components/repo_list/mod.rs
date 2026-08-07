@@ -434,17 +434,15 @@ impl RepoList {
     /// vanished entries are dropped along with their expansion state. Returns
     /// the paths that were added and removed so the caller can prune related
     /// per-repo state (pending status queries, dirty markers, active worktree).
-    /// Returns an empty diff (and skips the rebuild) when the set is unchanged.
+    /// Returns an empty diff (and skips the rebuild) when the *set* is
+    /// unchanged — discovery order is ignored on purpose. The caller re-sorts
+    /// only on a non-empty diff, so adopting `new_paths` order here would
+    /// silently override the user's sort until the next explicit re-sort.
     pub fn sync_paths(&mut self, new_paths: Vec<PathBuf>) -> SyncDiff {
         let current: HashSet<PathBuf> = self.repos.iter().map(|r| r.path.clone()).collect();
         let desired: HashSet<PathBuf> = new_paths.iter().cloned().collect();
 
-        if current == desired
-            && new_paths
-                .iter()
-                .zip(self.repos.iter())
-                .all(|(p, e)| p == &e.path)
-        {
+        if current == desired {
             return SyncDiff::default();
         }
 
