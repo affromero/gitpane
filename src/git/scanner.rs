@@ -186,33 +186,14 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
         discover_repo_workspace_projects(root, config, &mut seen, &mut repos);
     }
 
+    // Pinning controls persistence, not position: `App::sort_repos` owns the
+    // final order, so pinned repos sort like every other row here.
     repos.sort_by(|a, b| {
         a.file_name()
             .unwrap_or_default()
             .to_ascii_lowercase()
             .cmp(&b.file_name().unwrap_or_default().to_ascii_lowercase())
     });
-
-    // Re-prepend pinned repos at the top (they were sorted away)
-    let pinned_set: HashSet<PathBuf> = config
-        .pinned_repos
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .collect();
-
-    if !pinned_set.is_empty() {
-        let mut pinned: Vec<PathBuf> = repos
-            .iter()
-            .filter(|r| pinned_set.contains(*r))
-            .cloned()
-            .collect();
-        let rest: Vec<PathBuf> = repos
-            .into_iter()
-            .filter(|r| !pinned_set.contains(r))
-            .collect();
-        pinned.extend(rest);
-        repos = pinned;
-    }
 
     repos
 }
@@ -485,8 +466,12 @@ mod tests {
         assert!(repos[0].ends_with("proj"));
     }
 
+    /// Pinning controls persistence, not position: a pinned repo takes its
+    /// alphabetical place. Prepending pinned repos here made discovery order
+    /// diverge from `App::sort_repos`, and a watcher-driven rescan then
+    /// silently snapped the sorted list back to pinned-first.
     #[test]
-    fn test_pinned_repos_appear_first() {
+    fn test_pinned_repos_sort_alphabetically() {
         let tmp = TempDir::new().unwrap();
         let z_repo = make_repo(tmp.path(), "z-repo");
         make_repo(tmp.path(), "a-repo");
@@ -500,7 +485,8 @@ mod tests {
 
         let repos = discover_repos(&config);
         assert_eq!(repos.len(), 2);
-        assert!(repos[0].ends_with("z-repo"));
+        assert!(repos[0].ends_with("a-repo"));
+        assert!(repos[1].ends_with("z-repo"));
     }
 
     /// Build a Google `repo`-style workspace fixture under `root`:
