@@ -614,18 +614,20 @@ fn narrow_panel_renders_without_panic() {
     }
 }
 
-/// Focus mode dims by repo, not by row: the selected repo's worktree
-/// subrows stay bright with it, and only the other repos dim. Selecting
-/// the worktree subrow itself keeps its parent repo bright too.
+/// Focus mode dims by repo, not by row: the selected repo's worktree and
+/// stash subrows stay bright with it, and only the other repos dim.
+/// Selecting a subrow itself keeps the whole repo bright too.
 #[test]
-fn focus_mode_keeps_selected_repos_worktrees_bright() {
+fn focus_mode_keeps_selected_repos_subrows_bright() {
     use ratatui::style::Modifier;
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut list = make_list(&["/a", "/b"]);
     let mut status = empty_status("main");
     status.worktree_info.push(worktree_entry("feature"));
+    status.stashes.push(stash_entry(0));
     list.expanded_repos.insert(RepoId(PathBuf::from("/a")));
+    list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
     list.update_status(0, status);
     list.repos[1].status = Some(empty_status("devel"));
     list.select_repo_row(0);
@@ -643,16 +645,20 @@ fn focus_mode_keeps_selected_repos_worktrees_bright() {
             .contains(Modifier::DIM)
     };
 
-    // Display rows: 1 = /a, 2 = /a's worktree, 3 = /b.
+    // Display rows: 1 = /a, 2 = /a's worktree, 3 = /a's stash, 4 = /b.
     assert!(!row_dimmed(&mut list, 1), "selected repo stays bright");
     assert!(!row_dimmed(&mut list, 2), "its worktree stays bright");
-    assert!(row_dimmed(&mut list, 3), "the other repo dims");
+    assert!(!row_dimmed(&mut list, 3), "its stash stays bright");
+    assert!(row_dimmed(&mut list, 4), "the other repo dims");
 
-    // Moving onto the worktree subrow keeps the whole repo bright.
-    list.state.select(Some(1));
-    assert!(!row_dimmed(&mut list, 1), "parent repo stays bright");
-    assert!(!row_dimmed(&mut list, 2), "selected worktree stays bright");
-    assert!(row_dimmed(&mut list, 3), "the other repo still dims");
+    // Moving onto a subrow keeps the whole repo bright.
+    for subrow in [1, 2] {
+        list.state.select(Some(subrow));
+        assert!(!row_dimmed(&mut list, 1), "parent repo stays bright");
+        assert!(!row_dimmed(&mut list, 2), "worktree stays bright");
+        assert!(!row_dimmed(&mut list, 3), "stash stays bright");
+        assert!(row_dimmed(&mut list, 4), "the other repo still dims");
+    }
 }
 
 /// Regression: a status update that adds worktree subrows to an expanded repo
