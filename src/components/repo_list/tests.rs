@@ -601,6 +601,47 @@ fn narrow_panel_renders_without_panic() {
     }
 }
 
+/// Focus mode dims by repo, not by row: the selected repo's worktree
+/// subrows stay bright with it, and only the other repos dim. Selecting
+/// the worktree subrow itself keeps its parent repo bright too.
+#[test]
+fn focus_mode_keeps_selected_repos_worktrees_bright() {
+    use ratatui::style::Modifier;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/a", "/b"]);
+    let mut status = empty_status("main");
+    status.worktree_info.push(worktree_entry("feature"));
+    list.expanded_repos.insert(RepoId(PathBuf::from("/a")));
+    list.update_status(0, status);
+    list.repos[1].status = Some(empty_status("devel"));
+    list.select_repo_row(0);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    let mut row_dimmed = |list: &mut RepoList, row_y: usize| {
+        terminal
+            .draw(|f| {
+                list.draw(f, f.area()).unwrap();
+            })
+            .unwrap();
+        terminal.backend().buffer().content[row_y * 40 + 2]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM)
+    };
+
+    // Display rows: 1 = /a, 2 = /a's worktree, 3 = /b.
+    assert!(!row_dimmed(&mut list, 1), "selected repo stays bright");
+    assert!(!row_dimmed(&mut list, 2), "its worktree stays bright");
+    assert!(row_dimmed(&mut list, 3), "the other repo dims");
+
+    // Moving onto the worktree subrow keeps the whole repo bright.
+    list.state.select(Some(1));
+    assert!(!row_dimmed(&mut list, 1), "parent repo stays bright");
+    assert!(!row_dimmed(&mut list, 2), "selected worktree stays bright");
+    assert!(row_dimmed(&mut list, 3), "the other repo still dims");
+}
+
 /// Regression: a status update that adds worktree subrows to an expanded repo
 /// above the selection used to shift every display index below it, silently
 /// moving the selection onto a different row.
