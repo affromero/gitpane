@@ -11,6 +11,7 @@ All notable changes to gitpane are documented here.
 - A–Z and Z–A sorting now remains stable when watcher-driven discovery runs. Pinned and nested repositories no longer jump back to scanner basename order several seconds after an explicit sort.
 - Repository discovery now preserves the selected repository when the discovered set changes instead of moving the selection to the first row.
 - Stash messages remain readable in focus mode instead of using the same hardcoded gray appearance as dimmed rows.
+- Updated `lru` to 0.18.2 to address RUSTSEC-2026-0253, a potential use-after-free in `LruCache::pop()` inherited through ratatui.
 
 ## [0.10.3] - 2026-08-06
 
