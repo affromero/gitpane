@@ -2,6 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.10.4] - 2026-08-12
+
+### Added
+- A repository focus mode, toggled with `f`, dims repositories other than the selected one while keeping the selected repository's worktree and stash rows bright. The help overlay now stays within the terminal when showing the additional command.
+
+### Fixed
+- A–Z and Z–A sorting now remains stable when watcher-driven discovery runs. Pinned and nested repositories no longer jump back to scanner basename order several seconds after an explicit sort.
+- Repository discovery now preserves the selected repository when the discovered set changes instead of moving the selection to the first row.
+- Stash messages remain readable in focus mode instead of using the same hardcoded gray appearance as dimmed rows.
+
 ## [0.10.3] - 2026-08-06
 
 ### Changed
