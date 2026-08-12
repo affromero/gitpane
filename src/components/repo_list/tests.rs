@@ -122,6 +122,22 @@ fn sync_paths_preserves_existing_entry_status() {
     assert!(b.status.is_none());
 }
 
+/// A discovery change rebuilds the backing repo vector in scanner order.
+/// The selected repo must stay selected even when that rebuild moves it.
+#[test]
+fn sync_paths_keeps_selection_when_repo_set_changes() {
+    let mut list = make_list(&["/a", "/b"]);
+    list.select_repo_row(1);
+
+    list.sync_paths(vec![
+        PathBuf::from("/new"),
+        PathBuf::from("/a"),
+        PathBuf::from("/b"),
+    ]);
+
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
+}
+
 #[test]
 fn indicator_columns_returns_none_when_neither_subtree_present() {
     let mut list = make_list(&["/r"]);

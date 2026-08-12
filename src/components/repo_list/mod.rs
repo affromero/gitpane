@@ -446,6 +446,7 @@ impl RepoList {
             return SyncDiff::default();
         }
 
+        let keep = self.selected_row_id();
         let mut by_path: std::collections::HashMap<PathBuf, RepoEntry> =
             self.repos.drain(..).map(|e| (e.path.clone(), e)).collect();
 
@@ -478,7 +479,6 @@ impl RepoList {
             self.expanded_stashes.remove(&id);
         }
 
-        let keep = self.selected_row_id();
         self.repos = next;
         self.resync_rows(keep);
 
