@@ -99,6 +99,15 @@ pub(crate) struct WatchConfig {
     /// a newly-cloned repo appears.
     #[serde(default = "default_discovery_cooldown_secs")]
     pub discovery_cooldown_secs: u64,
+    /// Stop periodic polls/fetches when this instance's tmux pane is hidden
+    /// (detached session, background window, or zoomed away) or the session
+    /// has been input-idle. Only the visible, active instance does work.
+    #[serde(default = "default_sleep_when_hidden")]
+    pub sleep_when_hidden: bool,
+    /// Seconds without tmux input before a visible pane stops polling and
+    /// relies on watcher events alone (it still refreshes on real changes).
+    #[serde(default = "default_doze_after_secs")]
+    pub doze_after_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

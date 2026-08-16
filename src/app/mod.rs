@@ -570,6 +570,10 @@ impl App {
             ))
             .poll_fetch_interval(std::time::Duration::from_secs(
                 self.config.watch.poll_fetch_secs,
+            ))
+            .sleep_when_hidden(self.config.watch.sleep_when_hidden)
+            .doze_after(std::time::Duration::from_secs(
+                self.config.watch.doze_after_secs,
             ));
         tui.enter()?;
 

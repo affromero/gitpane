@@ -24,4 +24,8 @@ pub(crate) enum Event {
     PollLocal,
     /// Remote fetch poll (updates ahead/behind)
     PollFetch,
+    /// tmux visibility/idleness changed (see [`session::visibility`]). The
+    /// event loop already gates its own timers; the app additionally gates
+    /// watcher-driven work and refreshes once on wake.
+    Power(crate::session::visibility::PowerState),
 }
