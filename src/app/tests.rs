@@ -276,3 +276,95 @@ fn sort_keeps_the_selected_repo() {
         "zzz leads the Z-A order"
     );
 }
+
+/// Drain every action queued so far. Events translate to actions
+/// synchronously, so this is the full observable outcome of `handle_event`.
+fn drain_actions(app: &mut App) -> Vec<Action> {
+    let mut actions = Vec::new();
+    while let Ok(a) = app.action_rx.try_recv() {
+        actions.push(a);
+    }
+    actions
+}
+
+fn power_test_app() -> App {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    App::new(config)
+}
+
+#[test]
+fn deep_sleep_drops_watcher_refreshes_and_wake_repaints() {
+    let mut app = power_test_app();
+    drain_actions(&mut app);
+
+    app.handle_event(Event::Power(PowerState::DeepSleep))
+        .unwrap();
+    app.handle_event(Event::RepoChanged("/some/repo".into()))
+        .unwrap();
+    assert!(
+        drain_actions(&mut app).is_empty(),
+        "a hidden pane must not refresh on watcher events"
+    );
+
+    app.handle_event(Event::Power(PowerState::Awake)).unwrap();
+    assert!(
+        drain_actions(&mut app)
+            .iter()
+            .any(|a| matches!(a, Action::Render)),
+        "waking must repaint the stale frame"
+    );
+}
+
+#[test]
+fn doze_still_refreshes_on_real_repo_changes() {
+    let mut app = power_test_app();
+    drain_actions(&mut app);
+
+    app.handle_event(Event::Power(PowerState::Doze)).unwrap();
+    app.handle_event(Event::RepoChanged("/some/repo".into()))
+        .unwrap();
+    assert!(
+        drain_actions(&mut app)
+            .iter()
+            .any(|a| matches!(a, Action::RefreshRepo(_))),
+        "a visible (dozing) pane must keep tracking real changes"
+    );
+}
+
+#[test]
+fn root_change_while_deep_asleep_is_replayed_once_on_wake() {
+    let mut app = power_test_app();
+    drain_actions(&mut app);
+
+    app.handle_event(Event::Power(PowerState::DeepSleep))
+        .unwrap();
+    app.handle_event(Event::ReposRootChanged).unwrap();
+    app.handle_event(Event::ReposRootChanged).unwrap();
+    assert!(
+        drain_actions(&mut app).is_empty(),
+        "no discovery walk while nobody can see the pane"
+    );
+
+    app.handle_event(Event::Power(PowerState::Awake)).unwrap();
+    let discoveries = drain_actions(&mut app)
+        .iter()
+        .filter(|a| matches!(a, Action::DiscoverNewRepos))
+        .count();
+    assert_eq!(discoveries, 1, "deferred root changes coalesce into one");
+}
+
+#[test]
+fn doze_to_awake_does_not_replay_or_repaint() {
+    let mut app = power_test_app();
+    drain_actions(&mut app);
+
+    // Doze never deferred anything, so resuming from it is a no-op.
+    app.handle_event(Event::Power(PowerState::Doze)).unwrap();
+    app.handle_event(Event::Power(PowerState::Awake)).unwrap();
+    assert!(drain_actions(&mut app).is_empty());
+}

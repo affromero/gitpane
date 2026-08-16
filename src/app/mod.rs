@@ -29,6 +29,7 @@ use crate::git::graph::GraphOptions;
 use crate::git::scanner;
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
+use crate::session::visibility::PowerState;
 use crate::theme::{Theme, discover_all_theme_names, load_theme};
 use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
@@ -235,6 +236,12 @@ pub(crate) struct App {
     /// trailing-edge `DiscoverNewRepos` that fires once cooldown expires.
     /// Prevents spawning a second deferred fire while one is already pending.
     discovery_pending: bool,
+    /// Current power state from the tmux visibility probe (`Awake` when not
+    /// under tmux). The Tui already gates its own timers; the app uses this
+    /// to gate watcher-driven work while deep asleep.
+    power: PowerState,
+    /// A `ReposRootChanged` arrived while deep asleep; replay it on wake.
+    discovery_deferred: bool,
 }
 
 #[derive(Clone)]
@@ -391,6 +398,8 @@ impl App {
             tui_event_tx: None,
             last_discovery: None,
             discovery_pending: false,
+            power: PowerState::Awake,
+            discovery_deferred: false,
         };
         // `discover_repos` orders by basename, but rows are labelled and
         // re-sorted by breadcrumb path. Sorting here means the list the user
@@ -678,10 +687,21 @@ impl App {
                 self.action_tx.send(Action::Resize(w, h))?;
             }
             Event::RepoChanged(ref path) => {
-                self.action_tx
-                    .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                // Deep asleep: nobody can see the pane, and the wake-time
+                // PollLocal rescans every repo anyway. (Doze still refreshes:
+                // a visible dashboard must track real changes.)
+                if self.power != PowerState::DeepSleep {
+                    self.action_tx
+                        .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                }
             }
             Event::ReposRootChanged => {
+                // Deep asleep: remember that the root changed and replay on
+                // wake, instead of walking the root dirs for nobody.
+                if self.power == PowerState::DeepSleep {
+                    self.discovery_deferred = true;
+                    return Ok(());
+                }
                 // Leading-edge: fire immediately if outside cooldown.
                 // Trailing-edge: if events arrive during cooldown,
                 // schedule one deferred fire so we still pick up
@@ -715,6 +735,21 @@ impl App {
                 if let Some(entry) = self.repo_list.selected_repo() {
                     self.action_tx
                         .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
+                }
+            }
+            Event::Power(state) => {
+                let was_deep = self.power == PowerState::DeepSleep;
+                self.power = state;
+                if was_deep && state != PowerState::DeepSleep {
+                    // Waking from deep sleep: the Tui's re-enabled local
+                    // timer already fires an immediate PollLocal; here we
+                    // replay a deferred root change and repaint the stale
+                    // frame right away.
+                    if self.discovery_deferred {
+                        self.discovery_deferred = false;
+                        self.handle_event(Event::ReposRootChanged)?;
+                    }
+                    self.action_tx.send(Action::Render)?;
                 }
             }
             _ => {}

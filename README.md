@@ -282,6 +282,8 @@ watch_worktree_dirs = false   # Opt in to nested worktree watches; polling still
 poll_local_secs = 5           # Local status poll interval (catches missed watcher events)
 poll_fetch_secs = 30          # Remote fetch poll interval (updates ahead/behind from origin)
 discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root dir changes (new clones)
+sleep_when_hidden = true      # Under tmux, stop polling when the pane is hidden or the session is idle
+doze_after_secs = 120         # Input-idle seconds before a visible pane stops polling (watcher still refreshes)
 
 [ui]
 frame_rate = 10              # Terminal refresh rate (fps)
