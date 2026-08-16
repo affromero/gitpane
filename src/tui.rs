@@ -308,7 +308,10 @@ fn spawn_visibility_probe(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(VISIBILITY_PROBE_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last = PowerState::Awake;
+        // `None` so the first probe always delivers: after an inline-suspend
+        // re-entry the consumers' state may be stale, and only an
+        // unconditional first report is guaranteed to resync them.
+        let mut last: Option<PowerState> = None;
         loop {
             tokio::select! {
                 _ = token.cancelled() => break,
@@ -327,8 +330,8 @@ fn spawn_visibility_probe(
             let state = output
                 .and_then(|o| visibility::parse_power_state(&o, now_epoch, doze_after))
                 .unwrap_or(PowerState::Awake);
-            if state != last {
-                last = state;
+            if last != Some(state) {
+                last = Some(state);
                 if tx.send(state).is_err() {
                     break;
                 }
