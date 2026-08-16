@@ -24,23 +24,50 @@ pub(crate) enum PowerState {
 pub(crate) const PROBE_FORMAT: &str =
     "#{session_attached},#{window_active},#{pane_active},#{window_zoomed_flag},#{client_activity}";
 
-/// One `tmux display-message` roundtrip for `pane`. `None` when tmux is absent
-/// or errors. Blocking (a few ms) — call from `spawn_blocking`.
+/// How long one probe may run before we kill it. A healthy tmux answers in
+/// milliseconds; a wedged socket must not pile up stuck blocking threads.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// One `tmux display-message` roundtrip for `pane`. `None` when tmux is
+/// absent, errors, or hangs past [`PROBE_TIMEOUT`] (the hung process is
+/// killed). Blocking — call from `spawn_blocking`.
 pub(crate) fn probe(pane: &str) -> Option<String> {
-    let output = std::process::Command::new("tmux")
+    use std::io::Read;
+    use wait_timeout::ChildExt;
+
+    let mut child = std::process::Command::new("tmux")
         .args(["display-message", "-p", "-t", pane, PROBE_FORMAT])
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    match child.wait_timeout(PROBE_TIMEOUT) {
+        Ok(Some(status)) if status.success() => {
+            let mut out = String::new();
+            child.stdout.take()?.read_to_string(&mut out).ok()?;
+            Some(out.trim().to_string())
+        }
+        Ok(Some(_)) | Err(_) => None,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+    }
 }
 
 /// Interpret one probe output line. `now_epoch` is the current UNIX time in
 /// seconds; `doze_after` is how long the session may go without input before a
-/// visible pane drops to [`PowerState::Doze`]. `None` on any parse failure —
-/// the caller must fail open to `Awake` so a tmux quirk never freezes the UI.
+/// visible pane drops to [`PowerState::Doze`]. `None` only when the four
+/// server-side fields are malformed — the caller must fail open to `Awake` so
+/// a tmux quirk never freezes the UI.
+///
+/// `client_activity` is client-scoped: with no client attached anywhere on
+/// the server (the terminal app was quit) tmux expands it to empty. So the
+/// visibility verdict must come first, from the server-side fields alone —
+/// an invisible pane deep-sleeps no matter what the activity field holds,
+/// and a visible pane with an unreadable activity stays awake.
 pub(crate) fn parse_power_state(
     output: &str,
     now_epoch: u64,
@@ -52,14 +79,16 @@ pub(crate) fn parse_power_state(
     let window_active = next()?;
     let pane_active = next()?;
     let window_zoomed = next()?;
-    let client_activity = next()?;
 
     let zoomed_away = window_zoomed == 1 && pane_active == 0;
     let visible = session_attached >= 1 && window_active == 1 && !zoomed_away;
     if !visible {
         return Some(PowerState::DeepSleep);
     }
-    let idle = now_epoch.saturating_sub(client_activity) >= doze_after.as_secs();
+    let idle = match next() {
+        Some(client_activity) => now_epoch.saturating_sub(client_activity) >= doze_after.as_secs(),
+        None => false,
+    };
     Some(if idle {
         PowerState::Doze
     } else {
@@ -126,10 +155,34 @@ mod tests {
     }
 
     #[test]
-    fn garbage_and_short_output_fail_open_to_none() {
+    fn no_clients_anywhere_still_deep_sleeps() {
+        // With zero clients on the server (terminal app quit), tmux expands
+        // the client-scoped activity field to empty. The visibility verdict
+        // must not depend on it.
+        assert_eq!(
+            parse_power_state("0,1,0,0,", NOW, DOZE),
+            Some(PowerState::DeepSleep)
+        );
+    }
+
+    #[test]
+    fn visible_with_unreadable_activity_stays_awake() {
+        // Fail open: never doze off the back of a field we could not read.
+        assert_eq!(
+            parse_power_state("1,1,1,0,", NOW, DOZE),
+            Some(PowerState::Awake)
+        );
+        assert_eq!(
+            parse_power_state("1,1,1,0", NOW, DOZE),
+            Some(PowerState::Awake)
+        );
+    }
+
+    #[test]
+    fn garbage_server_fields_fail_open_to_none() {
         assert_eq!(parse_power_state("", NOW, DOZE), None);
         assert_eq!(parse_power_state("no tmux server", NOW, DOZE), None);
-        assert_eq!(parse_power_state("1,1,1,0", NOW, DOZE), None);
         assert_eq!(parse_power_state("1,x,1,0,9999", NOW, DOZE), None);
+        assert_eq!(parse_power_state("1,1", NOW, DOZE), None);
     }
 }

@@ -27,6 +27,13 @@ pub(crate) type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 /// socket roundtrip, so this costs nothing next to a status poll.
 const VISIBILITY_PROBE_INTERVAL: Duration = Duration::from_secs(3);
 
+/// Tick rate while dozing. The app's run loop only drains finished background
+/// work (status results, fetch completions) when an event arrives, so a
+/// visible-but-idle pane needs a slow heartbeat or watcher-triggered results
+/// would sit unrendered until the next keypress. One wakeup per second is
+/// noise power-wise; deep sleep has no tick at all.
+const DOZE_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
 pub(crate) struct Tui {
     pub terminal: Terminal,
     pub event_tx: UnboundedSender<Event>,
@@ -220,6 +227,7 @@ impl Tui {
             let mut power_rx = spawn_visibility_probe(probe_pane, doze_after, token.clone());
             let mut power = PowerState::Awake;
             let mut reset_fetch = false;
+            let mut retune_tick: Option<Duration> = None;
 
             let _ = event_tx.send(Event::Init);
 
@@ -228,7 +236,13 @@ impl Tui {
                     fetch_timer.reset();
                     reset_fetch = false;
                 }
+                if let Some(rate) = retune_tick.take() {
+                    tick_interval = tokio::time::interval(rate);
+                    tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                }
                 let awake = power == PowerState::Awake;
+                // Doze keeps a slow tick so background results still render.
+                let ticking = power != PowerState::DeepSleep;
                 let tick_delay = tick_interval.tick();
                 let local_delay = local_timer.tick();
                 let fetch_delay = fetch_timer.tick();
@@ -240,10 +254,17 @@ impl Tui {
                         if state == PowerState::Awake && power != PowerState::Awake {
                             reset_fetch = true;
                         }
+                        if state != power {
+                            retune_tick = Some(if state == PowerState::Awake {
+                                tick_rate
+                            } else {
+                                DOZE_TICK_INTERVAL
+                            });
+                        }
                         power = state;
                         let _ = event_tx.send(Event::Power(state));
                     }
-                    _ = tick_delay, if awake => {
+                    _ = tick_delay, if ticking => {
                         let _ = event_tx.send(Event::Tick);
                     }
                     _ = local_delay, if awake => {
