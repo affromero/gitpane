@@ -196,11 +196,13 @@ impl Tui {
     ///
     /// When under tmux (and `sleep_when_hidden` is on), a background probe
     /// tracks whether this pane is visible and the session recently touched.
-    /// Anything but [`PowerState::Awake`] disables the three periodic timers
-    /// at the source, so a hidden or idle instance schedules no timer wakeups
-    /// at all. On wake, `Skip` makes tick/local fire exactly once immediately
-    /// (instant refresh); the fetch timer is instead `reset()` so waking never
-    /// triggers a surprise fetch of every repo.
+    /// [`PowerState::Doze`] disables local/fetch polling but keeps a slow
+    /// [`DOZE_TICK_INTERVAL`] heartbeat so watcher-triggered results still
+    /// render; [`PowerState::DeepSleep`] disables every timer, so a hidden
+    /// instance schedules no timer wakeups at all. On wake, `Skip` makes
+    /// tick/local fire exactly once immediately (instant refresh); the fetch
+    /// timer is instead `reset()` so waking never triggers a surprise fetch
+    /// of every repo.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
         let poll_local = self.poll_local_interval;

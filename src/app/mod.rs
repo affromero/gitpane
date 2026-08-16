@@ -640,9 +640,17 @@ impl App {
                 self.handle_event(event)?;
             }
 
-            // Process actions
+            // Process actions. Rendering is decided *after* the drain, from
+            // what was actually consumed — deciding beforehand (the old
+            // `is_empty` peek in the Tick handler) raced with async results
+            // arriving mid-drain, which were then applied but never drawn.
+            let mut dirty = false;
             while let Ok(action) = self.action_rx.try_recv() {
+                dirty |= !matches!(action, Action::Tick | Action::Render);
                 self.handle_action(action, &mut tui)?;
+            }
+            if dirty {
+                self.handle_action(Action::Render, &mut tui)?;
             }
 
             if self.should_quit {
@@ -661,11 +669,9 @@ impl App {
                 self.action_tx.send(Action::Quit)?;
             }
             Event::Tick => {
-                let has_pending_actions = !self.action_rx.is_empty();
+                // Housekeeping only; the run loop renders after the drain
+                // whenever this tick flushed substantive background work.
                 self.action_tx.send(Action::Tick)?;
-                if has_pending_actions {
-                    self.action_tx.send(Action::Render)?;
-                }
             }
             Event::Render => {
                 self.action_tx.send(Action::Render)?;
