@@ -29,6 +29,7 @@ use crate::git::graph::GraphOptions;
 use crate::git::scanner;
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
+use crate::session::visibility::PowerState;
 use crate::theme::{Theme, discover_all_theme_names, load_theme};
 use crate::tui::Tui;
 use crate::watcher::RepoWatcher;
@@ -235,6 +236,12 @@ pub(crate) struct App {
     /// trailing-edge `DiscoverNewRepos` that fires once cooldown expires.
     /// Prevents spawning a second deferred fire while one is already pending.
     discovery_pending: bool,
+    /// Current power state from the tmux visibility probe (`Awake` when not
+    /// under tmux). The Tui already gates its own timers; the app uses this
+    /// to gate watcher-driven work while deep asleep.
+    power: PowerState,
+    /// A `ReposRootChanged` arrived while deep asleep; replay it on wake.
+    discovery_deferred: bool,
 }
 
 #[derive(Clone)]
@@ -391,6 +398,8 @@ impl App {
             tui_event_tx: None,
             last_discovery: None,
             discovery_pending: false,
+            power: PowerState::Awake,
+            discovery_deferred: false,
         };
         // `discover_repos` orders by basename, but rows are labelled and
         // re-sorted by breadcrumb path. Sorting here means the list the user
@@ -570,6 +579,10 @@ impl App {
             ))
             .poll_fetch_interval(std::time::Duration::from_secs(
                 self.config.watch.poll_fetch_secs,
+            ))
+            .sleep_when_hidden(self.config.watch.sleep_when_hidden)
+            .doze_after(std::time::Duration::from_secs(
+                self.config.watch.doze_after_secs,
             ));
         tui.enter()?;
 
@@ -624,90 +637,128 @@ impl App {
         loop {
             // Process events from TUI
             if let Some(event) = tui.event_rx.recv().await {
-                match event {
-                    Event::Quit => {
-                        self.action_tx.send(Action::Quit)?;
-                    }
-                    Event::Tick => {
-                        let has_pending_actions = !self.action_rx.is_empty();
-                        self.action_tx.send(Action::Tick)?;
-                        if has_pending_actions {
-                            self.action_tx.send(Action::Render)?;
-                        }
-                    }
-                    Event::Render => {
-                        self.action_tx.send(Action::Render)?;
-                    }
-                    Event::Key(key) => {
-                        self.handle_key_event(key)?;
-                    }
-                    Event::Mouse(mouse) => {
-                        self.handle_mouse_event(mouse)?;
-                    }
-                    Event::Paste(ref text) => {
-                        // Bracketed paste only targets the text input overlay.
-                        if self.path_input.visible {
-                            self.path_input.paste(text);
-                            self.action_tx.send(Action::Render)?;
-                        }
-                    }
-                    Event::Resize(w, h) => {
-                        self.action_tx.send(Action::Resize(w, h))?;
-                    }
-                    Event::RepoChanged(ref path) => {
-                        self.action_tx
-                            .send(Action::RefreshRepo(RepoId(path.clone())))?;
-                    }
-                    Event::ReposRootChanged => {
-                        // Leading-edge: fire immediately if outside cooldown.
-                        // Trailing-edge: if events arrive during cooldown,
-                        // schedule one deferred fire so we still pick up
-                        // repos that finished cloning mid-burst.
-                        let cooldown = std::time::Duration::from_secs(
-                            self.config.watch.discovery_cooldown_secs,
-                        );
-                        let now = Instant::now();
-                        let elapsed = self.last_discovery.map(|t| now.duration_since(t));
-                        let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
-                        if !in_cooldown {
-                            self.last_discovery = Some(now);
-                            self.discovery_pending = false;
-                            self.action_tx.send(Action::DiscoverNewRepos)?;
-                        } else if !self.discovery_pending {
-                            self.discovery_pending = true;
-                            let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
-                            let tx = self.action_tx.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(wait).await;
-                                let _ = tx.send(Action::DiscoverNewRepos);
-                            });
-                        }
-                    }
-                    Event::PollLocal => {
-                        self.action_tx.send(Action::PollLocal)?;
-                    }
-                    Event::PollFetch => {
-                        self.action_tx.send(Action::PollFetch)?;
-                    }
-                    Event::FocusGained => {
-                        if let Some(entry) = self.repo_list.selected_repo() {
-                            self.action_tx
-                                .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
-                        }
-                    }
-                    _ => {}
-                }
+                self.handle_event(event)?;
             }
 
-            // Process actions
+            // Process actions. Rendering is decided *after* the drain, from
+            // what was actually consumed — deciding beforehand (the old
+            // `is_empty` peek in the Tick handler) raced with async results
+            // arriving mid-drain, which were then applied but never drawn.
+            let mut dirty = false;
             while let Ok(action) = self.action_rx.try_recv() {
+                dirty |= !matches!(action, Action::Tick | Action::Render);
                 self.handle_action(action, &mut tui)?;
+            }
+            if dirty {
+                self.handle_action(Action::Render, &mut tui)?;
             }
 
             if self.should_quit {
                 tui.exit()?;
                 break;
             }
+        }
+        Ok(())
+    }
+
+    /// Translate one TUI event into actions. Kept free of `Tui` so tests can
+    /// feed events directly and assert on the resulting action stream.
+    fn handle_event(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::Quit => {
+                self.action_tx.send(Action::Quit)?;
+            }
+            Event::Tick => {
+                // Housekeeping only; the run loop renders after the drain
+                // whenever this tick flushed substantive background work.
+                self.action_tx.send(Action::Tick)?;
+            }
+            Event::Render => {
+                self.action_tx.send(Action::Render)?;
+            }
+            Event::Key(key) => {
+                self.handle_key_event(key)?;
+            }
+            Event::Mouse(mouse) => {
+                self.handle_mouse_event(mouse)?;
+            }
+            Event::Paste(ref text) => {
+                // Bracketed paste only targets the text input overlay.
+                if self.path_input.visible {
+                    self.path_input.paste(text);
+                    self.action_tx.send(Action::Render)?;
+                }
+            }
+            Event::Resize(w, h) => {
+                self.action_tx.send(Action::Resize(w, h))?;
+            }
+            Event::RepoChanged(ref path) => {
+                // Deep asleep: nobody can see the pane, and the wake-time
+                // PollLocal rescans every repo anyway. (Doze still refreshes:
+                // a visible dashboard must track real changes.)
+                if self.power != PowerState::DeepSleep {
+                    self.action_tx
+                        .send(Action::RefreshRepo(RepoId(path.clone())))?;
+                }
+            }
+            Event::ReposRootChanged => {
+                // Deep asleep: remember that the root changed and replay on
+                // wake, instead of walking the root dirs for nobody.
+                if self.power == PowerState::DeepSleep {
+                    self.discovery_deferred = true;
+                    return Ok(());
+                }
+                // Leading-edge: fire immediately if outside cooldown.
+                // Trailing-edge: if events arrive during cooldown,
+                // schedule one deferred fire so we still pick up
+                // repos that finished cloning mid-burst.
+                let cooldown =
+                    std::time::Duration::from_secs(self.config.watch.discovery_cooldown_secs);
+                let now = Instant::now();
+                let elapsed = self.last_discovery.map(|t| now.duration_since(t));
+                let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
+                if !in_cooldown {
+                    self.last_discovery = Some(now);
+                    self.discovery_pending = false;
+                    self.action_tx.send(Action::DiscoverNewRepos)?;
+                } else if !self.discovery_pending {
+                    self.discovery_pending = true;
+                    let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
+                    let tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(wait).await;
+                        let _ = tx.send(Action::DiscoverNewRepos);
+                    });
+                }
+            }
+            Event::PollLocal => {
+                self.action_tx.send(Action::PollLocal)?;
+            }
+            Event::PollFetch => {
+                self.action_tx.send(Action::PollFetch)?;
+            }
+            Event::FocusGained => {
+                if let Some(entry) = self.repo_list.selected_repo() {
+                    self.action_tx
+                        .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
+                }
+            }
+            Event::Power(state) => {
+                let was_deep = self.power == PowerState::DeepSleep;
+                self.power = state;
+                if was_deep && state != PowerState::DeepSleep {
+                    // Waking from deep sleep: the Tui's re-enabled local
+                    // timer already fires an immediate PollLocal; here we
+                    // replay a deferred root change and repaint the stale
+                    // frame right away.
+                    if self.discovery_deferred {
+                        self.discovery_deferred = false;
+                        self.handle_event(Event::ReposRootChanged)?;
+                    }
+                    self.action_tx.send(Action::Render)?;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }

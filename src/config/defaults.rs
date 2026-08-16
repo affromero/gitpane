@@ -161,8 +161,18 @@ impl Default for WatchConfig {
             max_concurrent_polls: default_max_concurrent_polls(),
             watch_exclude_dirs: default_watch_exclude_dirs(),
             discovery_cooldown_secs: default_discovery_cooldown_secs(),
+            sleep_when_hidden: default_sleep_when_hidden(),
+            doze_after_secs: default_doze_after_secs(),
         }
     }
+}
+
+pub(super) fn default_sleep_when_hidden() -> bool {
+    true
+}
+
+pub(super) fn default_doze_after_secs() -> u64 {
+    120
 }
 
 impl Default for UiConfig {

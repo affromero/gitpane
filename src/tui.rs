@@ -18,8 +18,21 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::event::Event;
+use crate::session::visibility::{self, PowerState};
 
 pub(crate) type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
+
+/// How often the tmux visibility probe runs. Short enough that switching to a
+/// sleeping pane wakes it within a beat; one probe is a single ~ms tmux
+/// socket roundtrip, so this costs nothing next to a status poll.
+const VISIBILITY_PROBE_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Tick rate while dozing. The app's run loop only drains finished background
+/// work (status results, fetch completions) when an event arrives, so a
+/// visible-but-idle pane needs a slow heartbeat or watcher-triggered results
+/// would sit unrendered until the next keypress. One wakeup per second is
+/// noise power-wise; deep sleep has no tick at all.
+const DOZE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Tui {
     pub terminal: Terminal,
@@ -30,6 +43,11 @@ pub(crate) struct Tui {
     tick_rate: Duration,
     poll_local_interval: Duration,
     poll_fetch_interval: Duration,
+    /// Gate periodic work on tmux pane visibility/idleness (see
+    /// [`visibility`]). Outside tmux this has no effect.
+    sleep_when_hidden: bool,
+    /// Input-idle time before a visible pane stops polling.
+    doze_after: Duration,
     mouse: bool,
 }
 
@@ -47,6 +65,8 @@ impl Tui {
             tick_rate: Duration::from_millis(250),
             poll_local_interval: Duration::from_secs(5),
             poll_fetch_interval: Duration::from_secs(60),
+            sleep_when_hidden: true,
+            doze_after: Duration::from_secs(120),
             mouse: false,
         })
     }
@@ -64,6 +84,16 @@ impl Tui {
 
     pub fn poll_fetch_interval(mut self, interval: Duration) -> Self {
         self.poll_fetch_interval = interval;
+        self
+    }
+
+    pub fn sleep_when_hidden(mut self, enabled: bool) -> Self {
+        self.sleep_when_hidden = enabled;
+        self
+    }
+
+    pub fn doze_after(mut self, idle: Duration) -> Self {
+        self.doze_after = idle;
         self
     }
 
@@ -163,10 +193,25 @@ impl Tui {
 
     /// Render-on-demand event loop: renders after input and background events.
     /// Ticks are kept for lightweight housekeeping only.
+    ///
+    /// When under tmux (and `sleep_when_hidden` is on), a background probe
+    /// tracks whether this pane is visible and the session recently touched.
+    /// [`PowerState::Doze`] disables local/fetch polling but keeps a slow
+    /// [`DOZE_TICK_INTERVAL`] heartbeat so watcher-triggered results still
+    /// render; [`PowerState::DeepSleep`] disables every timer, so a hidden
+    /// instance schedules no timer wakeups at all. On wake, `Skip` makes
+    /// tick/local fire exactly once immediately (instant refresh); the fetch
+    /// timer is instead `reset()` so waking never triggers a surprise fetch
+    /// of every repo.
     fn start_event_loop(&mut self) {
         let tick_rate = self.tick_rate;
         let poll_local = self.poll_local_interval;
         let poll_fetch = self.poll_fetch_interval;
+        let doze_after = self.doze_after;
+        let probe_pane = self
+            .sleep_when_hidden
+            .then(|| std::env::var("TMUX_PANE").ok())
+            .flatten();
         let event_tx = self.event_tx.clone();
         let token = self.cancellation_token.clone();
 
@@ -175,10 +220,31 @@ impl Tui {
             let mut tick_interval = tokio::time::interval(tick_rate);
             let mut local_timer = tokio::time::interval(poll_local);
             let mut fetch_timer = tokio::time::interval(poll_fetch);
+            // Skip, not the default Burst: a re-enabled timer fires once
+            // immediately instead of replaying every tick it slept through.
+            tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            local_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            fetch_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            let mut power_rx = spawn_visibility_probe(probe_pane, doze_after, token.clone());
+            let mut power = PowerState::Awake;
+            let mut reset_fetch = false;
+            let mut retune_tick: Option<Duration> = None;
 
             let _ = event_tx.send(Event::Init);
 
             loop {
+                if reset_fetch {
+                    fetch_timer.reset();
+                    reset_fetch = false;
+                }
+                if let Some(rate) = retune_tick.take() {
+                    tick_interval = tokio::time::interval(rate);
+                    tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                }
+                let awake = power == PowerState::Awake;
+                // Doze keeps a slow tick so background results still render.
+                let ticking = power != PowerState::DeepSleep;
                 let tick_delay = tick_interval.tick();
                 let local_delay = local_timer.tick();
                 let fetch_delay = fetch_timer.tick();
@@ -186,14 +252,28 @@ impl Tui {
 
                 tokio::select! {
                     _ = token.cancelled() => break,
-                    _ = tick_delay => {
+                    Some(state) = power_rx.recv() => {
+                        if state == PowerState::Awake && power != PowerState::Awake {
+                            reset_fetch = true;
+                        }
+                        if state != power {
+                            retune_tick = Some(if state == PowerState::Awake {
+                                tick_rate
+                            } else {
+                                DOZE_TICK_INTERVAL
+                            });
+                        }
+                        power = state;
+                        let _ = event_tx.send(Event::Power(state));
+                    }
+                    _ = tick_delay, if ticking => {
                         let _ = event_tx.send(Event::Tick);
                     }
-                    _ = local_delay => {
+                    _ = local_delay, if awake => {
                         let _ = event_tx.send(Event::PollLocal);
                         let _ = event_tx.send(Event::Render);
                     }
-                    _ = fetch_delay => {
+                    _ = fetch_delay, if awake => {
                         let _ = event_tx.send(Event::PollFetch);
                         let _ = event_tx.send(Event::Render);
                     }
@@ -232,4 +312,54 @@ impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.exit();
     }
+}
+
+/// Periodically probes tmux for this pane's visibility/idleness and emits
+/// [`PowerState`] transitions. With no pane (outside tmux, or the feature
+/// disabled) the sender is dropped immediately, so the receiver never yields
+/// and the event loop stays permanently awake. The probe subprocess runs on a
+/// blocking thread so a stalled tmux never delays input handling.
+fn spawn_visibility_probe(
+    pane: Option<String>,
+    doze_after: Duration,
+    token: CancellationToken,
+) -> UnboundedReceiver<PowerState> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let Some(pane) = pane else {
+        return rx;
+    };
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(VISIBILITY_PROBE_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // `None` so the first probe always delivers: after an inline-suspend
+        // re-entry the consumers' state may be stale, and only an
+        // unconditional first report is guaranteed to resync them.
+        let mut last: Option<PowerState> = None;
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = interval.tick() => {}
+            }
+            let pane_arg = pane.clone();
+            let output = tokio::task::spawn_blocking(move || visibility::probe(&pane_arg))
+                .await
+                .ok()
+                .flatten();
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // Fail open: any probe or parse hiccup keeps full behavior.
+            let state = output
+                .and_then(|o| visibility::parse_power_state(&o, now_epoch, doze_after))
+                .unwrap_or(PowerState::Awake);
+            if last != Some(state) {
+                last = Some(state);
+                if tx.send(state).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    rx
 }
