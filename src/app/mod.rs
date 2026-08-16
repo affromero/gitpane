@@ -624,79 +624,7 @@ impl App {
         loop {
             // Process events from TUI
             if let Some(event) = tui.event_rx.recv().await {
-                match event {
-                    Event::Quit => {
-                        self.action_tx.send(Action::Quit)?;
-                    }
-                    Event::Tick => {
-                        let has_pending_actions = !self.action_rx.is_empty();
-                        self.action_tx.send(Action::Tick)?;
-                        if has_pending_actions {
-                            self.action_tx.send(Action::Render)?;
-                        }
-                    }
-                    Event::Render => {
-                        self.action_tx.send(Action::Render)?;
-                    }
-                    Event::Key(key) => {
-                        self.handle_key_event(key)?;
-                    }
-                    Event::Mouse(mouse) => {
-                        self.handle_mouse_event(mouse)?;
-                    }
-                    Event::Paste(ref text) => {
-                        // Bracketed paste only targets the text input overlay.
-                        if self.path_input.visible {
-                            self.path_input.paste(text);
-                            self.action_tx.send(Action::Render)?;
-                        }
-                    }
-                    Event::Resize(w, h) => {
-                        self.action_tx.send(Action::Resize(w, h))?;
-                    }
-                    Event::RepoChanged(ref path) => {
-                        self.action_tx
-                            .send(Action::RefreshRepo(RepoId(path.clone())))?;
-                    }
-                    Event::ReposRootChanged => {
-                        // Leading-edge: fire immediately if outside cooldown.
-                        // Trailing-edge: if events arrive during cooldown,
-                        // schedule one deferred fire so we still pick up
-                        // repos that finished cloning mid-burst.
-                        let cooldown = std::time::Duration::from_secs(
-                            self.config.watch.discovery_cooldown_secs,
-                        );
-                        let now = Instant::now();
-                        let elapsed = self.last_discovery.map(|t| now.duration_since(t));
-                        let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
-                        if !in_cooldown {
-                            self.last_discovery = Some(now);
-                            self.discovery_pending = false;
-                            self.action_tx.send(Action::DiscoverNewRepos)?;
-                        } else if !self.discovery_pending {
-                            self.discovery_pending = true;
-                            let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
-                            let tx = self.action_tx.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(wait).await;
-                                let _ = tx.send(Action::DiscoverNewRepos);
-                            });
-                        }
-                    }
-                    Event::PollLocal => {
-                        self.action_tx.send(Action::PollLocal)?;
-                    }
-                    Event::PollFetch => {
-                        self.action_tx.send(Action::PollFetch)?;
-                    }
-                    Event::FocusGained => {
-                        if let Some(entry) = self.repo_list.selected_repo() {
-                            self.action_tx
-                                .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
-                        }
-                    }
-                    _ => {}
-                }
+                self.handle_event(event)?;
             }
 
             // Process actions
@@ -708,6 +636,84 @@ impl App {
                 tui.exit()?;
                 break;
             }
+        }
+        Ok(())
+    }
+
+    /// Translate one TUI event into actions. Kept free of `Tui` so tests can
+    /// feed events directly and assert on the resulting action stream.
+    fn handle_event(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::Quit => {
+                self.action_tx.send(Action::Quit)?;
+            }
+            Event::Tick => {
+                let has_pending_actions = !self.action_rx.is_empty();
+                self.action_tx.send(Action::Tick)?;
+                if has_pending_actions {
+                    self.action_tx.send(Action::Render)?;
+                }
+            }
+            Event::Render => {
+                self.action_tx.send(Action::Render)?;
+            }
+            Event::Key(key) => {
+                self.handle_key_event(key)?;
+            }
+            Event::Mouse(mouse) => {
+                self.handle_mouse_event(mouse)?;
+            }
+            Event::Paste(ref text) => {
+                // Bracketed paste only targets the text input overlay.
+                if self.path_input.visible {
+                    self.path_input.paste(text);
+                    self.action_tx.send(Action::Render)?;
+                }
+            }
+            Event::Resize(w, h) => {
+                self.action_tx.send(Action::Resize(w, h))?;
+            }
+            Event::RepoChanged(ref path) => {
+                self.action_tx
+                    .send(Action::RefreshRepo(RepoId(path.clone())))?;
+            }
+            Event::ReposRootChanged => {
+                // Leading-edge: fire immediately if outside cooldown.
+                // Trailing-edge: if events arrive during cooldown,
+                // schedule one deferred fire so we still pick up
+                // repos that finished cloning mid-burst.
+                let cooldown =
+                    std::time::Duration::from_secs(self.config.watch.discovery_cooldown_secs);
+                let now = Instant::now();
+                let elapsed = self.last_discovery.map(|t| now.duration_since(t));
+                let in_cooldown = elapsed.is_some_and(|d| d < cooldown);
+                if !in_cooldown {
+                    self.last_discovery = Some(now);
+                    self.discovery_pending = false;
+                    self.action_tx.send(Action::DiscoverNewRepos)?;
+                } else if !self.discovery_pending {
+                    self.discovery_pending = true;
+                    let wait = cooldown.saturating_sub(elapsed.unwrap_or_default());
+                    let tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(wait).await;
+                        let _ = tx.send(Action::DiscoverNewRepos);
+                    });
+                }
+            }
+            Event::PollLocal => {
+                self.action_tx.send(Action::PollLocal)?;
+            }
+            Event::PollFetch => {
+                self.action_tx.send(Action::PollFetch)?;
+            }
+            Event::FocusGained => {
+                if let Some(entry) = self.repo_list.selected_repo() {
+                    self.action_tx
+                        .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
