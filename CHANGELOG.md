@@ -2,7 +2,7 @@
 
 All notable changes to gitpane are documented here.
 
-## [Unreleased]
+## [0.11.0] - 2026-08-15
 
 ### Added
 - gitpane now sleeps when nobody is looking at it. Under tmux, a lightweight probe (one `tmux display-message` every 3 seconds) tracks whether the pane is visible and whether the session has seen input recently, and drives three states: awake (visible and recently touched: full polling), doze (visible but input-idle for `watch.doze_after_secs`, default 120: periodic local polls and fetches stop, while filesystem-watcher refreshes still land and a once-per-second heartbeat renders their results, so the display keeps tracking real changes), and deep sleep (detached session, background window, or zoomed away: everything stops, and watcher events are dropped or deferred). Waking refreshes immediately: the local poll fires at once, a root-directory change that happened while hidden is replayed, and the frame repaints; the fetch timer instead resumes on its normal cadence so switching to a pane never triggers a burst fetch of every repo. With many long-lived gitpane instances only the one on screen does any work, which cuts idle CPU (and battery) from a constant 15-20% per hidden instance to zero. Outside tmux behavior is unchanged; opt out with `watch.sleep_when_hidden = false`.
