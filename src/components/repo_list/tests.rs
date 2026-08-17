@@ -55,6 +55,42 @@ fn make_list(paths: &[&str]) -> RepoList {
 }
 
 #[test]
+fn selected_sync_target_id_resolves_repo_worktree_and_stash() {
+    let mut list = make_list(&["/a", "/b"]);
+
+    // Repo row: target is the repo's own path.
+    list.state.select(Some(0));
+    assert_eq!(
+        list.selected_sync_target_id(),
+        Some(RepoId(PathBuf::from("/a")))
+    );
+
+    // Worktree row: target is the worktree's path, mirroring the right-click menu.
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
+    list.update_status(1, status);
+    list.state.select(Some(2)); // display rows: [/a, /b, /b's worktree]
+    assert_eq!(
+        list.selected_sync_target_id(),
+        Some(RepoId(PathBuf::from("/wt/one")))
+    );
+
+    // Stash row: no sync target.
+    let mut stash_status = empty_status("main");
+    stash_status.stashes = vec![stash_entry(0)];
+    list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
+    list.update_status(0, stash_status);
+    let stash_row = list
+        .display_rows
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Stash(_, _)))
+        .expect("stash row present");
+    list.state.select(Some(stash_row));
+    assert_eq!(list.selected_sync_target_id(), None);
+}
+
+#[test]
 fn sync_paths_noop_when_set_unchanged() {
     let mut list = make_list(&["/a", "/b"]);
     let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);

@@ -308,7 +308,8 @@ impl App {
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
             Line::from(vec![key("G"), desc("Attach live tmux session")]),
-            Line::from(vec![key("p"), desc("Toggle GitHub panel")]),
+            Line::from(vec![key("p / P"), desc("Pull / push repo/worktree")]),
+            Line::from(vec![key("="), desc("Toggle GitHub panel")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];

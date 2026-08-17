@@ -318,6 +318,24 @@ impl RepoList {
         }
     }
 
+    /// The `RepoId` a sync action (`p` pull / `P` push) should target from the
+    /// current selection, mirroring the right-click menu: a worktree row
+    /// targets the worktree's own path (so pull/push act on it directly), a
+    /// repo row targets the repo. Stash rows have no target. `None` when
+    /// nothing is selected or the selection is a stash row.
+    pub fn selected_sync_target_id(&self) -> Option<RepoId> {
+        let di = self.state.selected()?;
+        match self.display_rows.get(di)? {
+            DisplayRow::Repo(i) => Some(RepoId(self.repos.get(*i)?.path.clone())),
+            DisplayRow::Worktree(ri, wi) => self.repos[*ri]
+                .status
+                .as_ref()
+                .and_then(|s| s.worktree_info.get(*wi))
+                .map(|wt| RepoId(wt.path.clone())),
+            DisplayRow::Stash(_, _) => None,
+        }
+    }
+
     /// Rebuild `display_rows` after `repos` was reordered or a status update
     /// changed subrow counts, then restore the selection captured as `target`
     /// beforehand. Falls back to the parent repo row when the exact subrow is
