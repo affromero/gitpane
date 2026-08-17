@@ -2,6 +2,7 @@ use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -119,8 +120,16 @@ struct GitOpGuard {
     completed: bool,
 }
 
+/// In-flight mutating git operations (pull/push/submodule/custom ops)
+/// across the whole process — one count per live [`GitOpGuard`]. Quit waits
+/// for this to reach zero: exiting would close the children's piped
+/// stdout/stderr and SIGPIPE a `git pull` mid-merge (see `main.rs`).
+/// Read-only status queries are not counted and stay abandonable.
+static MUTATING_GIT_OPS: AtomicUsize = AtomicUsize::new(0);
+
 impl GitOpGuard {
     fn new(id: RepoId, tx: UnboundedSender<Action>) -> Self {
+        MUTATING_GIT_OPS.fetch_add(1, Ordering::SeqCst);
         Self {
             id,
             tx,
@@ -135,6 +144,7 @@ impl GitOpGuard {
 
 impl Drop for GitOpGuard {
     fn drop(&mut self) {
+        MUTATING_GIT_OPS.fetch_sub(1, Ordering::SeqCst);
         if !self.completed {
             let _ = self.tx.send(Action::RefreshRepo(self.id.clone()));
         }
@@ -144,6 +154,8 @@ impl Drop for GitOpGuard {
 pub(crate) struct App {
     config: Config,
     should_quit: bool,
+    /// Second quit request: exit without waiting for in-flight git ops.
+    force_quit: bool,
     repo_list: RepoList,
     file_list: FileList,
     git_graph: GitGraph,
@@ -351,6 +363,7 @@ impl App {
         let mut app = Self {
             config,
             should_quit: false,
+            force_quit: false,
             repo_list: RepoList::new(repo_paths, roots, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
@@ -653,12 +666,21 @@ impl App {
                 self.handle_action(Action::Render, &mut tui)?;
             }
 
-            if self.should_quit {
+            if self.ready_to_exit() {
                 tui.exit()?;
                 break;
             }
         }
         Ok(())
+    }
+
+    /// Whether the run loop may exit now. Quitting waits for in-flight
+    /// mutating git operations (their piped stdio dies with the process,
+    /// SIGPIPE-ing the child mid-write) unless the user pressed quit a
+    /// second time. The loop re-checks on every tick, so completion of the
+    /// last operation exits within one tick.
+    fn ready_to_exit(&self) -> bool {
+        self.should_quit && (self.force_quit || MUTATING_GIT_OPS.load(Ordering::SeqCst) == 0)
     }
 
     /// Translate one TUI event into actions. Kept free of `Tui` so tests can

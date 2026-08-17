@@ -368,3 +368,27 @@ fn doze_to_awake_does_not_replay_or_repaint() {
     app.handle_event(Event::Power(PowerState::Awake)).unwrap();
     assert!(drain_actions(&mut app).is_empty());
 }
+
+#[tokio::test]
+async fn quit_waits_for_mutating_git_ops_and_force_quits_on_second_request() {
+    let mut app = power_test_app();
+    assert!(!app.ready_to_exit());
+
+    // Quit with nothing in flight exits immediately.
+    app.should_quit = true;
+    assert!(app.ready_to_exit());
+
+    // An in-flight mutating op (live GitOpGuard) defers the exit...
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let guard = GitOpGuard::new(RepoId(std::path::PathBuf::from("/tmp/repo")), tx);
+    assert!(!app.ready_to_exit());
+
+    // ...unless the user insists with a second quit request.
+    app.force_quit = true;
+    assert!(app.ready_to_exit());
+
+    // Completion of the op re-enables the normal exit path.
+    app.force_quit = false;
+    guard.complete();
+    assert!(app.ready_to_exit());
+}

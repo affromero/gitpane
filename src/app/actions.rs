@@ -4,7 +4,18 @@ impl App {
     pub(super) fn handle_action(&mut self, action: Action, tui: &mut Tui) -> Result<()> {
         match action {
             Action::Quit => {
-                self.should_quit = true;
+                if self.should_quit {
+                    // Second request: stop waiting for in-flight git ops.
+                    self.force_quit = true;
+                } else {
+                    self.should_quit = true;
+                    if MUTATING_GIT_OPS.load(Ordering::SeqCst) > 0 {
+                        self.action_tx.send(Action::Error(
+                            "waiting for a git operation to finish; press q again to quit now"
+                                .to_string(),
+                        ))?;
+                    }
+                }
             }
             Action::Tick => {
                 if self.clear_expired_messages() {
