@@ -302,23 +302,27 @@ fn query_status_inner(
 }
 
 /// Resolve the repository's default branch as a diff-able ref name in
-/// `origin/<branch>` form (so `git diff <base>...HEAD` works without a matching
-/// local branch): `origin/HEAD`'s symbolic target first, then `origin/main`,
-/// then `origin/master`. `None` when none resolve.
+/// `<remote>/<branch>` form (so `git diff <base>...HEAD` works without a
+/// matching local branch): the preferred remote's `HEAD` symbolic target
+/// first, then its `main`, then its `master`. `None` when none resolve.
+/// The remote comes from [`crate::git::preferred_remote`] so Gerrit/mirror
+/// workspaces without an `origin` still get a review base; repos with
+/// remote-tracking refs but no configured remotes fall back to `origin`.
 pub(crate) fn default_branch_name(repo: &Repository) -> Option<String> {
-    if let Ok(head_ref) = repo.find_reference("refs/remotes/origin/HEAD")
+    let remote = crate::git::preferred_remote(repo).unwrap_or_else(|| "origin".to_string());
+    if let Ok(head_ref) = repo.find_reference(&format!("refs/remotes/{remote}/HEAD"))
         && let Ok(Some(target_name)) = head_ref.symbolic_target()
         && repo.find_reference(target_name).is_ok()
         && let Some(short) = target_name.strip_prefix("refs/remotes/")
     {
         return Some(short.to_string());
     }
-    for (full, short) in [
-        ("refs/remotes/origin/main", "origin/main"),
-        ("refs/remotes/origin/master", "origin/master"),
-    ] {
-        if repo.find_reference(full).is_ok() {
-            return Some(short.to_string());
+    for branch in ["main", "master"] {
+        if repo
+            .find_reference(&format!("refs/remotes/{remote}/{branch}"))
+            .is_ok()
+        {
+            return Some(format!("{remote}/{branch}"));
         }
     }
     None

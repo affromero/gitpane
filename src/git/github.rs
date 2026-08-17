@@ -92,14 +92,30 @@ pub(crate) fn gh_available() -> bool {
     })
 }
 
-/// Resolve a repo's `origin` remote to `(owner, repo)` when it is a github.com
-/// remote, else `None`. Reads the remote URL through git2 (already a dep) and
-/// parses the common SSH/HTTPS forms.
-pub(crate) fn origin_owner_repo(path: &Path) -> Option<(String, String)> {
+/// Resolve a repo's github.com remote to `(owner, repo)`, else `None`.
+/// `origin` wins when it parses as github.com; otherwise the first (sorted)
+/// remote with a github.com URL — so a mirror workspace whose GitHub remote
+/// is named `github` still gets PR links and status checks. Reads the remote
+/// URL through git2 (already a dep) and parses the common SSH/HTTPS forms.
+pub(crate) fn github_owner_repo(path: &Path) -> Option<(String, String)> {
     let repo = git2::Repository::open(path).ok()?;
-    let remote = repo.find_remote("origin").ok()?;
-    let url = remote.url().ok()?;
-    parse_github_owner_repo(url)
+    if let Ok(remote) = repo.find_remote("origin")
+        && let Ok(url) = remote.url()
+        && let Some(pair) = parse_github_owner_repo(url)
+    {
+        return Some(pair);
+    }
+    let mut names: Vec<String> = repo
+        .remotes()
+        .ok()?
+        .iter()
+        .filter_map(|r| r.ok().flatten().map(|s| s.to_string()))
+        .collect();
+    names.sort();
+    names.iter().filter(|n| *n != "origin").find_map(|name| {
+        let remote = repo.find_remote(name).ok()?;
+        parse_github_owner_repo(remote.url().ok()?)
+    })
 }
 
 /// Parse `owner`/`repo` out of a github.com remote URL. Supports:

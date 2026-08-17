@@ -227,17 +227,22 @@ impl App {
                     let parent_id = RepoId(self.repo_list.repos[target.parent_index].path.clone());
                     self.repo_list.repos[target.parent_index].git_op = true;
                     let path = target.exec_path.clone();
+                    let is_push = matches!(action, Action::GitPush(_));
                     let tx = self.action_tx.clone();
                     tokio::task::spawn_blocking(move || {
                         // Resolve the remote here (blocking I/O) and append
                         // `<remote> <branch>` so pull/push work without an
-                        // upstream configured. When the repo has no remote at
-                        // all, omit it and let git use the repo's own
-                        // upstream (or report the missing remote).
+                        // upstream configured. Runs bare when git can resolve
+                        // the destination itself (configured upstream / push
+                        // remote) or the repo has no remote. `"HEAD"` is the
+                        // git2 shorthand for a detached HEAD — no branch to
+                        // sync, so run bare and let git report it.
                         let mut git_args = git_op;
                         if !branch.is_empty()
                             && branch != "(no branch)"
-                            && let Some(remote) = crate::git::resolve_remote_name(&path)
+                            && branch != "HEAD"
+                            && let Some(remote) =
+                                crate::git::resolve_sync_remote(&path, &branch, is_push)
                         {
                             git_args.push(remote);
                             git_args.push(branch);
@@ -301,10 +306,21 @@ impl App {
                             .map(|s| s.to_string())
                             .collect(),
                         Action::GitSubmoduleUpdateLatest(_) => {
-                            ["submodule", "foreach", "git", "pull", "origin", "HEAD"]
-                                .iter()
-                                .map(|s| s.to_string())
-                                .collect()
+                            // foreach runs the command through sh, so the
+                            // subshell picks each submodule's own remote
+                            // instead of a hard-coded `origin` (absent in
+                            // Gerrit/mirror workspaces).
+                            // ponytail: first-listed remote per submodule;
+                            // resolve_sync_remote per submodule if anyone
+                            // runs multi-remote submodules.
+                            [
+                                "submodule",
+                                "foreach",
+                                "git pull \"$(git remote | head -n1)\" HEAD",
+                            ]
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect()
                         }
                         _ => unreachable!(),
                     };

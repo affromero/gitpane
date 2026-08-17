@@ -394,3 +394,15 @@ fn test_submodule_state_priority_dirty_over_modified() {
     assert!(flags.is_wd_modified());
     // Our mapping logic checks dirty first, so this should map to Dirty
 }
+
+#[test]
+fn test_default_branch_name_uses_non_origin_remote() {
+    // Gerrit/mirror workspace: no origin, remote named `gerrit`.
+    let (_tmp, repo) = init_temp_repo();
+    repo.remote("gerrit", "https://example.com/repo.git")
+        .unwrap();
+    let oid = repo.head().unwrap().target().unwrap();
+    repo.reference("refs/remotes/gerrit/main", oid, true, "test")
+        .unwrap();
+    assert_eq!(default_branch_name(&repo).as_deref(), Some("gerrit/main"));
+}
