@@ -194,8 +194,12 @@ impl Tui {
     /// Render-on-demand event loop: renders after input and background events.
     /// Ticks are kept for lightweight housekeeping only.
     ///
-    /// When under tmux (and `sleep_when_hidden` is on), a background probe
-    /// tracks whether this pane is visible and the session recently touched.
+    /// When `sleep_when_hidden` is on, a background probe drives the power
+    /// state: under tmux it tracks whether this pane is visible and the
+    /// session recently touched; outside tmux an input-idle probe watches key
+    /// and mouse events instead, and escalates its idle verdict straight to
+    /// [`PowerState::DeepSleep`] (Doze is never emitted without visibility
+    /// information).
     /// [`PowerState::Doze`] disables local/fetch polling but keeps a slow
     /// [`DOZE_TICK_INTERVAL`] heartbeat so watcher-triggered results still
     /// render; [`PowerState::DeepSleep`] disables every timer, so a hidden

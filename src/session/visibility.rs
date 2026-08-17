@@ -1,7 +1,9 @@
-//! Decides how much background work this instance should do based on whether
-//! its tmux pane can currently be seen and whether the user is actively at the
-//! terminal. tmux-only: outside tmux (or on any probe/parse failure) the
-//! answer is `Awake`, i.e. behavior is unchanged.
+//! Decides how much background work this instance should do. Under tmux the
+//! verdict combines pane visibility with recent client activity; outside tmux
+//! (when `sleep_when_hidden` is on) [`input_idle_state`] falls back to input
+//! idleness alone, which the caller escalates to `DeepSleep` since idleness is
+//! the only signal available there. Probe or parse failure fails open to
+//! `Awake`.
 
 use std::time::{Duration, Instant};
 /// How much background work the instance should do right now.
