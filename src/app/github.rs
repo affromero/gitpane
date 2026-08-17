@@ -179,7 +179,7 @@ impl App {
             return;
         }
         if entry.owner_repo.is_none() {
-            entry.owner_repo = github::origin_owner_repo(&path);
+            entry.owner_repo = github::github_owner_repo(&path);
         }
         let Some((owner, repo)) = entry.owner_repo.clone() else {
             // Not a github.com repo: record the attempt so we don't re-probe the

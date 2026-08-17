@@ -39,42 +39,65 @@ pub(crate) fn git_available() -> bool {
     })
 }
 
-/// The remote to target for a `git pull` / `git push` against `path`.
-///
-/// gitpane passes an explicit `<remote> <branch>` so pull/push work even
-/// without an `upstream` configured, but it should not hard-code `origin`:
-/// Gerrit and mirror workspaces name their remote `gerrit` / `gitea_mirror`
-/// etc. and have no `origin` at all, which would make every pull/push fail
-/// with "fatal: 'origin' does not appear to be a git repository".
-///
-/// Resolution order: `origin` if present, else the sole remote, else the
-/// first remote in lexicographic order (stable even when config order is
-/// not). `None` when the repo has no remotes (the caller then omits the
-/// remote and lets `git pull` / `git push` use the repo's own upstream, or
-/// report the missing remote).
-///
-/// Blocking (opens the repo) — call from `spawn_blocking`.
-pub(crate) fn resolve_remote_name(path: &std::path::Path) -> Option<String> {
-    use git2::Repository;
-
-    let repo = Repository::open(path).ok()?;
+/// The remote gitpane should treat as canonical for `repo` when nothing more
+/// specific is configured: `origin` if present, else the lexicographically
+/// first remote (stable even when config order is not). Gerrit and mirror
+/// workspaces name their remote `gerrit` / `gitea_mirror` etc. and have no
+/// `origin` at all, so hard-coding `origin` breaks them. `None` when the repo
+/// has no remotes.
+pub(crate) fn preferred_remote(repo: &git2::Repository) -> Option<String> {
     let mut remotes: Vec<String> = repo
         .remotes()
         .ok()?
         .iter()
         .filter_map(|r| r.ok().flatten().map(|s| s.to_string()))
         .collect();
-    if remotes.is_empty() {
-        return None;
-    }
-    if let Some(pos) = remotes.iter().position(|r| r == "origin") {
-        return Some(remotes.swap_remove(pos));
-    }
-    if remotes.len() == 1 {
-        return Some(remotes.pop().unwrap());
+    if remotes.iter().any(|r| r == "origin") {
+        return Some("origin".into());
     }
     remotes.sort();
-    Some(remotes.into_iter().next().unwrap())
+    remotes.into_iter().next()
+}
+
+/// The explicit `<remote>` to append to a `git pull` / `git push` of `branch`
+/// at `path`, or `None` when the command should run bare.
+///
+/// `None` covers two cases the caller treats identically (append nothing):
+/// git can already resolve the destination itself — a configured upstream
+/// (`branch.<name>.remote` + `.merge`), or for pushes `branch.<name>.pushRemote`
+/// / `remote.pushDefault` — in which case a bare command also honors renamed
+/// upstream branches (local `main` tracking `gerrit/master`) that an explicit
+/// `<remote> <branch>` would break; or the repo has no remotes at all and git
+/// gets to report that.
+///
+/// Explicit fallback order: the branch's own `branch.<name>.remote` when it
+/// names a real remote (the user's intent even without a `.merge` ref), else
+/// [`preferred_remote`].
+///
+/// Blocking (opens the repo) — call from `spawn_blocking`.
+pub(crate) fn resolve_sync_remote(
+    path: &std::path::Path,
+    branch: &str,
+    push: bool,
+) -> Option<String> {
+    let repo = git2::Repository::open(path).ok()?;
+    let config = repo.config().ok()?;
+    let get = |key: &str| config.get_string(key).ok();
+
+    let upstream = get(&format!("branch.{branch}.remote"));
+    let has_merge = get(&format!("branch.{branch}.merge")).is_some();
+    let has_push_dest = push
+        && (get(&format!("branch.{branch}.pushremote")).is_some()
+            || get("remote.pushdefault").is_some());
+    if (upstream.is_some() && has_merge) || has_push_dest {
+        return None;
+    }
+    if let Some(remote) = upstream
+        && repo.find_remote(&remote).is_ok()
+    {
+        return Some(remote);
+    }
+    preferred_remote(&repo)
 }
 
 #[cfg(test)]
@@ -96,75 +119,91 @@ mod tests {
         assert_eq!(describe_spawn_error(&err), "permission denied");
     }
 
-    /// A real git repo (via `git init`) with remotes configured through
-    /// `git remote add`, so `resolve_remote_name` has a real config to read.
-    /// Returns `None` when `git` is unavailable so the suite degrades
-    /// gracefully under environments without git. The `TempDir` is returned
-    /// alongside the path so the repo outlives the test body.
-    fn repo_with_remotes(remotes: &[&str]) -> Option<(tempfile::TempDir, std::path::PathBuf)> {
-        let tmp = tempfile::TempDir::new().ok()?;
-        let init = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(tmp.path())
-            .status()
-            .ok()?;
-        if !init.success() {
-            return None;
-        }
+    /// A git2-native temp repo with the given remotes configured — no `git`
+    /// binary involved, so these tests never skip.
+    fn repo_with_remotes(remotes: &[&str]) -> (tempfile::TempDir, git2::Repository) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
         for (i, name) in remotes.iter().enumerate() {
-            let add = std::process::Command::new("git")
-                .args([
-                    "remote",
-                    "add",
-                    name,
-                    &format!("https://example.com/repo{i}.git"),
-                ])
-                .current_dir(tmp.path())
-                .status()
-                .ok()?;
-            if !add.success() {
-                return None;
-            }
+            repo.remote(name, &format!("https://example.com/repo{i}.git"))
+                .unwrap();
         }
-        let dir = tmp.path().to_path_buf();
-        Some((tmp, dir))
+        (tmp, repo)
     }
 
     #[test]
-    fn resolve_remote_prefers_origin() {
-        let Some((_tmp, dir)) = repo_with_remotes(&["origin", "gerrit"]) else {
-            eprintln!("skipping: git unavailable");
-            return;
-        };
-        assert_eq!(resolve_remote_name(&dir).as_deref(), Some("origin"));
+    fn sync_remote_prefers_origin_without_upstream() {
+        let (tmp, _repo) = repo_with_remotes(&["origin", "gerrit"]);
+        assert_eq!(
+            resolve_sync_remote(tmp.path(), "main", false).as_deref(),
+            Some("origin")
+        );
     }
 
     #[test]
-    fn resolve_remote_uses_sole_remote_when_no_origin() {
+    fn sync_remote_uses_sole_remote_when_no_origin() {
         // Gerrit/mirror workspaces: no origin, a single `gerrit` remote.
-        let Some((_tmp, dir)) = repo_with_remotes(&["gerrit"]) else {
-            eprintln!("skipping: git unavailable");
-            return;
-        };
-        assert_eq!(resolve_remote_name(&dir).as_deref(), Some("gerrit"));
+        let (tmp, _repo) = repo_with_remotes(&["gerrit"]);
+        assert_eq!(
+            resolve_sync_remote(tmp.path(), "main", false).as_deref(),
+            Some("gerrit")
+        );
     }
 
     #[test]
-    fn resolve_remote_picks_first_lexicographic_without_origin() {
-        let Some((_tmp, dir)) = repo_with_remotes(&["zzz", "gerrit"]) else {
-            eprintln!("skipping: git unavailable");
-            return;
-        };
+    fn sync_remote_picks_first_lexicographic_without_origin() {
+        let (tmp, _repo) = repo_with_remotes(&["zzz", "gerrit"]);
         // No origin → lexicographically first, not config order.
-        assert_eq!(resolve_remote_name(&dir).as_deref(), Some("gerrit"));
+        assert_eq!(
+            resolve_sync_remote(tmp.path(), "main", false).as_deref(),
+            Some("gerrit")
+        );
     }
 
     #[test]
-    fn resolve_remote_none_without_remotes() {
-        let Some((_tmp, dir)) = repo_with_remotes(&[]) else {
-            eprintln!("skipping: git unavailable");
-            return;
-        };
-        assert_eq!(resolve_remote_name(&dir), None);
+    fn sync_remote_none_without_remotes() {
+        let (tmp, _repo) = repo_with_remotes(&[]);
+        assert_eq!(resolve_sync_remote(tmp.path(), "main", false), None);
+    }
+
+    #[test]
+    fn sync_remote_defers_to_configured_upstream() {
+        // Renamed upstream (local main tracking gerrit/master): a bare
+        // `git pull` resolves it correctly; an explicit `gerrit main` would
+        // fetch a nonexistent ref, so the resolver must return None.
+        let (tmp, repo) = repo_with_remotes(&["origin", "gerrit"]);
+        let mut config = repo.config().unwrap();
+        config.set_str("branch.main.remote", "gerrit").unwrap();
+        config
+            .set_str("branch.main.merge", "refs/heads/master")
+            .unwrap();
+        assert_eq!(resolve_sync_remote(tmp.path(), "main", false), None);
+        assert_eq!(resolve_sync_remote(tmp.path(), "main", true), None);
+    }
+
+    #[test]
+    fn sync_remote_prefers_branch_remote_over_origin() {
+        // Partial upstream (remote without a merge ref): still the user's
+        // configured intent, so it beats the origin default.
+        let (tmp, repo) = repo_with_remotes(&["origin", "gerrit"]);
+        let mut config = repo.config().unwrap();
+        config.set_str("branch.main.remote", "gerrit").unwrap();
+        assert_eq!(
+            resolve_sync_remote(tmp.path(), "main", false).as_deref(),
+            Some("gerrit")
+        );
+    }
+
+    #[test]
+    fn sync_remote_defers_to_push_remote_only_for_push() {
+        let (tmp, repo) = repo_with_remotes(&["origin", "gerrit"]);
+        let mut config = repo.config().unwrap();
+        config.set_str("branch.main.pushremote", "gerrit").unwrap();
+        assert_eq!(resolve_sync_remote(tmp.path(), "main", true), None);
+        // Pull ignores push config and still gets an explicit remote.
+        assert_eq!(
+            resolve_sync_remote(tmp.path(), "main", false).as_deref(),
+            Some("origin")
+        );
     }
 }
