@@ -2,10 +2,16 @@
 
 All notable changes to gitpane are documented here.
 
-## [Unreleased]
+## [0.12.0] - 2026-08-17
 
-### Changed
-- Sleep-when-hidden now also applies outside tmux, superseding the v0.11.0 note that outside-tmux behavior was unchanged. With `watch.sleep_when_hidden = true` (the default), a session with no input for `watch.doze_after_secs` (default 120) drops to deep sleep: periodic polling, fetching, and watcher-driven refreshes all pause until the next input. Any deliberate input counts as presence (keys, mouse clicks and scrolls, paste, resize, focus changes), the idle timer wakes exactly once at the deadline instead of polling every 3 seconds, and the probe reports its state immediately on startup so a resumed session never sits stale.
+### Added
+- `p` pulls and `P` pushes the selected repo or worktree from anywhere, lazygit-style, and the GitHub panel toggle moved from `p` to `=`. Modified keys (Ctrl/Alt combinations) never trigger the repo-mutating shortcuts, and the reserved-key documentation covers the new bindings. Thanks @expoli.
+- Sleep-when-hidden now also applies outside tmux, superseding the v0.11.0 note that outside-tmux behavior was unchanged. With `watch.sleep_when_hidden = true` (the default), a session with no input for `watch.doze_after_secs` (default 120) drops to deep sleep: periodic polling, fetching, and watcher-driven refreshes all pause until the next input. Any deliberate input counts as presence (keys, mouse clicks and scrolls, paste, resize, focus changes), the idle timer wakes exactly once at the deadline instead of polling every 3 seconds, and the probe reports its state immediately on startup so a resumed session never sits stale. Thanks @expoli.
+
+### Fixed
+- Pull and push no longer hard-code `origin`. A branch with a configured upstream or push remote runs bare, so git's own config decides the destination, including renamed upstream branches; otherwise gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit and mirror setups). Submodule update-to-latest, GitHub owner/repo detection, and the review launcher's default-branch base follow the same resolution. Thanks @expoli.
+- Quitting no longer hangs for tens of seconds while in-flight status queries drain on a large workspace. Mutating operations (pull, push, submodule updates) still complete before exit, with a status-bar notice and a second `q` as the force-quit escape, and a panic no longer reintroduces the hang or interrupts an in-flight pull mid-write. Thanks @expoli.
+- Pasting no longer copies the clipboard content an extra time per paste event.
 
 ## [0.11.0] - 2026-08-15
 
