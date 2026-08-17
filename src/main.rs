@@ -46,10 +46,32 @@ enum Command {
     Diagnostic,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Run the app on an explicitly-owned multi-thread runtime, then drop it
+/// with `shutdown_background` so quitting never waits for in-flight
+/// `spawn_blocking` status queries to finish.
+///
+/// On a large workspace a poll can leave several libgit2 status queries
+/// queued in the blocking pool; tokio's `Runtime` Drop waits forever for
+/// `spawn_blocking` tasks to return, which made pressing `q` hang for tens
+/// of seconds while the last poll drained. `shutdown_background` unblocks
+/// shutdown immediately — still-running queries are reclaimed with the
+/// process (they only read `.git`, so dropping them mid-read is safe).
+fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let result = runtime.block_on(run());
+
+    // Do not wait for in-flight blocking-pool tasks (see doc above).
+    runtime.shutdown_background();
+
+    result
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -58,7 +80,6 @@ async fn main() -> Result<()> {
         Some(Command::Diagnostic) => return run_diagnostic(cli.root, cli.theme.as_deref()),
         None => {}
     }
-
     install_tracing()?;
 
     let mut config = config::Config::load()?;
