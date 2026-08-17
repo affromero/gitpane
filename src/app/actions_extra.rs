@@ -205,7 +205,11 @@ impl App {
             | Action::GitPullSubmodules(ref id) => {
                 if let Some(target) = self.repo_list.resolve_target(id) {
                     let branch = target.branch.clone();
-                    let mut git_args: Vec<String> = match action {
+                    // Subcommand only; the remote and branch are resolved
+                    // inside the blocking thread (reading the repo's remotes
+                    // is I/O) so the command targets the right remote even
+                    // when the workspace has no `origin` (e.g. Gerrit).
+                    let git_op: Vec<String> = match action {
                         Action::GitPush(_) => vec!["push".into()],
                         Action::GitPull(_) => vec!["pull".into()],
                         Action::GitPullRebase(_) => {
@@ -216,11 +220,6 @@ impl App {
                         }
                         _ => unreachable!(),
                     };
-                    // Add origin <branch> so pull/push works even without upstream config
-                    if !branch.is_empty() && branch != "(no branch)" {
-                        git_args.push("origin".into());
-                        git_args.push(branch);
-                    }
                     // The op runs in `exec_path` (the worktree's own
                     // directory when a worktree is targeted) but the
                     // parent repo's row shows the spinner and is
@@ -230,6 +229,19 @@ impl App {
                     let path = target.exec_path.clone();
                     let tx = self.action_tx.clone();
                     tokio::task::spawn_blocking(move || {
+                        // Resolve the remote here (blocking I/O) and append
+                        // `<remote> <branch>` so pull/push work without an
+                        // upstream configured. When the repo has no remote at
+                        // all, omit it and let git use the repo's own
+                        // upstream (or report the missing remote).
+                        let mut git_args = git_op;
+                        if !branch.is_empty()
+                            && branch != "(no branch)"
+                            && let Some(remote) = crate::git::resolve_remote_name(&path)
+                        {
+                            git_args.push(remote);
+                            git_args.push(branch);
+                        }
                         let guard = GitOpGuard::new(parent_id.clone(), tx.clone());
                         let output = std::process::Command::new("git")
                             .arg("-C")
