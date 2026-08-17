@@ -41,4 +41,5 @@ wait-timeout = "0.2.1"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
+tokio = { version = "1.23.1", features = ["full", "test-util"] }
 tempfile = "3"

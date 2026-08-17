@@ -1,11 +1,10 @@
 //! Decides how much background work this instance should do. Under tmux the
 //! verdict combines pane visibility with recent client activity; outside tmux
-//! (when `sleep_when_hidden` is on) [`input_idle_state`] falls back to input
-//! idleness alone, which the caller escalates to `DeepSleep` since idleness is
-//! the only signal available there. Probe or parse failure fails open to
-//! `Awake`.
-
-use std::time::{Duration, Instant};
+//! (when `sleep_when_hidden` is on) an input-idle probe in `tui.rs` drives
+//! the state from input events alone, escalating idle straight to `DeepSleep`
+//! since idleness is the only signal available there. Probe or parse failure
+//! fails open to `Awake`.
+use std::time::Duration;
 /// How much background work the instance should do right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum PowerState {
@@ -97,30 +96,6 @@ pub(crate) fn parse_power_state(
     })
 }
 
-/// Non-tmux fallback power state: without a tmux pane to probe, the instance's
-/// state is driven purely by how long it has been since the user last typed or
-/// clicked. `last_input` is the wall-clock of the most recent input event
-/// (`None` when none has been seen since start — treated as awake so a fresh
-/// instance polls normally).
-///
-/// This is the *input-idleness* verdict only: it returns [`PowerState::Doze`]
-/// after `doze_after` and never produces `DeepSleep`, because idleness alone
-/// cannot tell whether the pane is hidden. The caller decides the semantics of
-/// that idle verdict for its environment — the non-tmux probe (`tui.rs`)
-/// remaps `Doze` to `DeepSleep` since outside tmux idle means the user has
-/// left and watcher-driven refreshes must pause too.
-pub(crate) fn input_idle_state(
-    last_input: Option<Instant>,
-    now: Instant,
-    doze_after: Duration,
-) -> PowerState {
-    match last_input {
-        None => PowerState::Awake,
-        Some(last) if now.saturating_duration_since(last) >= doze_after => PowerState::Doze,
-        Some(_) => PowerState::Awake,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,55 +184,5 @@ mod tests {
         assert_eq!(parse_power_state("no tmux server", NOW, DOZE), None);
         assert_eq!(parse_power_state("1,x,1,0,9999", NOW, DOZE), None);
         assert_eq!(parse_power_state("1,1", NOW, DOZE), None);
-    }
-
-    #[test]
-    fn input_idle_state_awake_with_no_input_yet() {
-        // A fresh instance with no recorded input polls normally.
-        assert_eq!(
-            input_idle_state(None, Instant::now(), DOZE),
-            PowerState::Awake
-        );
-    }
-
-    #[test]
-    fn input_idle_state_awake_within_doze_window() {
-        let now = Instant::now();
-        let last = now - Duration::from_secs(10);
-        assert_eq!(input_idle_state(Some(last), now, DOZE), PowerState::Awake);
-    }
-
-    #[test]
-    fn input_idle_state_dozes_after_inactivity() {
-        let now = Instant::now();
-        let last = now - Duration::from_secs(121);
-        assert_eq!(input_idle_state(Some(last), now, DOZE), PowerState::Doze);
-    }
-
-    #[test]
-    fn input_idle_state_dozes_at_exact_threshold() {
-        let now = Instant::now();
-        let last = now - Duration::from_secs(120);
-        assert_eq!(input_idle_state(Some(last), now, DOZE), PowerState::Doze);
-    }
-
-    #[test]
-    fn input_idle_state_never_deep_sleeps() {
-        // Without visibility information we never assume the pane is hidden.
-        let now = Instant::now();
-        let last = now - Duration::from_secs(10_000);
-        assert_eq!(input_idle_state(Some(last), now, DOZE), PowerState::Doze);
-        assert_ne!(
-            input_idle_state(Some(last), now, DOZE),
-            PowerState::DeepSleep
-        );
-    }
-
-    #[test]
-    fn input_idle_state_clock_skew_does_not_underflow() {
-        // A last-input time in the future must not panic or count as idle.
-        let now = Instant::now();
-        let last = now + Duration::from_secs(5);
-        assert_eq!(input_idle_state(Some(last), now, DOZE), PowerState::Awake);
     }
 }

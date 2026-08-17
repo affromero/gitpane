@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Changed
+- Sleep-when-hidden now also applies outside tmux, superseding the v0.11.0 note that outside-tmux behavior was unchanged. With `watch.sleep_when_hidden = true` (the default), a session with no input for `watch.doze_after_secs` (default 120) drops to deep sleep: periodic polling, fetching, and watcher-driven refreshes all pause until the next input. Any deliberate input counts as presence (keys, mouse clicks and scrolls, paste, resize, focus changes), the idle timer wakes exactly once at the deadline instead of polling every 3 seconds, and the probe reports its state immediately on startup so a resumed session never sits stale.
+
 ## [0.11.0] - 2026-08-15
 
 ### Added
