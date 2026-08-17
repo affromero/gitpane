@@ -282,8 +282,12 @@ watch_worktree_dirs = false   # Opt in to nested worktree watches; polling still
 poll_local_secs = 5           # Local status poll interval (catches missed watcher events)
 poll_fetch_secs = 30          # Remote fetch poll interval (updates ahead/behind from origin)
 discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root dir changes (new clones)
-sleep_when_hidden = true      # Under tmux, stop polling when the pane is hidden or the session is idle
-doze_after_secs = 120         # Input-idle seconds before a visible pane stops polling (watcher still refreshes)
+sleep_when_hidden = true      # Stop polling when idle/hidden: under tmux when the pane is hidden or the
+                              # session is idle; outside tmux when the user has been input-idle (no pane
+                              # visibility to probe, so idle means the user has left: polling, fetching and
+                              # watcher-driven refreshes all pause until the next keypress/mouse action)
+doze_after_secs = 120         # Input-idle seconds before a visible pane stops polling (watcher still refreshes
+                              # under tmux Doze; outside tmux this gates everything until input wakes it)
 
 [ui]
 frame_rate = 10              # Terminal refresh rate (fps)
