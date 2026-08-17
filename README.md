@@ -110,7 +110,7 @@ If you work across multiple repositories, such as microservices, monorepos with 
 
 **lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
 
-**ghpeek** and **gh-dash** live on the other side, they are GitHub dashboards for issues and pull requests with no view of your local working copies. gitpane folds a lightweight version of that in: select a repo and, when it has open issues or PRs on its `github.com` origin, a fourth panel appears with the list, a preview (body plus comments), and open-in-browser, fetched on demand through the `gh` CLI. It is the only tool here that pairs the local multi-repo workspace with a GitHub peek.
+**ghpeek** and **gh-dash** live on the other side, they are GitHub dashboards for issues and pull requests with no view of your local working copies. gitpane folds a lightweight version of that in: select a repo and, when it has open issues or PRs on its `github.com` remote (`origin` preferred, else any remote pointing at github.com), a fourth panel appears with the list, a preview (body plus comments), and open-in-browser, fetched on demand through the `gh` CLI. It is the only tool here that pairs the local multi-repo workspace with a GitHub peek.
 
 A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
 
@@ -142,7 +142,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them.
 - **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere.
-- **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state. Explicit `origin <branch>` is used for reliability.
+- **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state, plus `p`/`P` pull/push shortcuts. A branch with a configured upstream is pulled/pushed bare so git's own config (including renamed upstream branches) decides the destination; without one, gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit/mirror setups) and passes `<remote> <branch>` explicitly.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
 - **Sort repos**: Cycle between alphabetical and dirty first with `s`.
 - **Copy to clipboard**: Press `y` to copy selected item from any panel (OSC 52).
@@ -174,7 +174,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
 | `y` | Copy selected item to clipboard |
-| `q` | Quit (or close diff if one is open) |
+| `q` | Quit (closes an open diff first; waits for an in-flight pull/push, press again to force) |
 | `Esc` | Navigate back through panels, then quit |
 
 Bind your own keys to shell commands on top of these, see [Custom keybindings](#custom-keybindings).
@@ -212,7 +212,7 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 
 ### GitHub panel
 
-Appears automatically when the selected repo's `github.com` origin has open issues or PRs (opt-out via `[github] enabled`); press `=` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
+Appears automatically when the selected repo's `github.com` remote has open issues or PRs (opt-out via `[github] enabled`); press `=` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
 
 Each pull request row shows its rolled-up CI status: a green `✓` when checks passed, a red `✗` when any failed, a yellow `●` while checks are still running, and nothing when a PR has no checks.
 
@@ -287,7 +287,7 @@ discovery_cooldown_secs = 5   # Min seconds between automatic rescans on root di
 sleep_when_hidden = true      # Stop polling when idle/hidden: under tmux when the pane is hidden or the
                               # session is idle; outside tmux when the user has been input-idle (no pane
                               # visibility to probe, so idle means the user has left: polling, fetching and
-                              # watcher-driven refreshes all pause until the next keypress/mouse action)
+                              # watcher-driven refreshes all pause until the next input: key, click, scroll, paste, resize, or focus change)
 doze_after_secs = 120         # Input-idle seconds before a visible pane stops polling (watcher still refreshes
                               # under tmux Doze; outside tmux this gates everything until input wakes it)
 
@@ -357,7 +357,7 @@ The selection drives the target: highlight a repo row and `o` opens the repo roo
 
 Press `v` (or pick `Review changes` from the right click menu) to review the highlighted repo or worktree's diff against its base branch, in a new tmux window. This is the "what did the agent actually do" view: select a worktree, press `v`, read the diff, close the window.
 
-By default it runs `git diff {base}...HEAD`, where `{base}` is the resolved default branch (`origin/HEAD`, falling back to `origin/main` / `origin/master`). Point it at a nicer viewer with `[review] command`:
+By default it runs `git diff {base}...HEAD`, where `{base}` is the resolved default branch: the preferred remote's `HEAD` (`origin` when present, else the workspace's own remote), falling back to its `main` / `master`. Point it at a nicer viewer with `[review] command`:
 
 ```toml
 [review]
@@ -429,7 +429,7 @@ placement = "inline"             # suspend gitpane and run in the current termin
 
 `command` and `placement` work exactly like [`[open]`](#opening-a-repo-or-worktree): `{path}` is the target directory, the default `command` placement runs the command directly (so embed your own `tmux …` for a pane/window), and `split-window`/`new-window`/`inline`/`ask` place a plain command for you. Only `{path}` is substituted (there is no review base).
 
-Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s w S =`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel uses for navigation (`j`/`k`/`Enter`/…) can be bound, but then it no longer navigates that panel. Run `gitpane diagnostic` to see the bindings gitpane loaded.
+Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s =`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel handles (`j`/`k`/`Enter`/…, and the repo panel's `w`/`S` subtree toggles) can be bound, but the custom binding then shadows that panel action. Run `gitpane diagnostic` to see the bindings gitpane loaded.
 
 ### Theming
 

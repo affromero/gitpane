@@ -229,6 +229,10 @@ impl App {
                     let path = target.exec_path.clone();
                     let is_push = matches!(action, Action::GitPush(_));
                     let tx = self.action_tx.clone();
+                    // Created before scheduling: a quit processed between
+                    // scheduling and closure start must still see the op in
+                    // flight — the counter gates the run loop's exit.
+                    let guard = GitOpGuard::new(parent_id.clone(), tx.clone());
                     tokio::task::spawn_blocking(move || {
                         // Resolve the remote here (blocking I/O) and append
                         // `<remote> <branch>` so pull/push work without an
@@ -247,7 +251,6 @@ impl App {
                             git_args.push(remote);
                             git_args.push(branch);
                         }
-                        let guard = GitOpGuard::new(parent_id.clone(), tx.clone());
                         let output = std::process::Command::new("git")
                             .arg("-C")
                             .arg(&path)
@@ -309,14 +312,14 @@ impl App {
                             // foreach runs the command through sh, so the
                             // subshell picks each submodule's own remote
                             // instead of a hard-coded `origin` (absent in
-                            // Gerrit/mirror workspaces).
-                            // ponytail: first-listed remote per submodule;
-                            // resolve_sync_remote per submodule if anyone
-                            // runs multi-remote submodules.
+                            // Gerrit/mirror workspaces): the branch's
+                            // configured upstream remote when set, else the
+                            // first listed remote (detached HEAD makes the
+                            // config lookup fail and take the fallback).
                             [
                                 "submodule",
                                 "foreach",
-                                "git pull \"$(git remote | head -n1)\" HEAD",
+                                "git pull \"$(git config --get branch.$(git symbolic-ref -q --short HEAD).remote 2>/dev/null || git remote | head -n1)\" HEAD",
                             ]
                             .iter()
                             .map(|s| s.to_string())
@@ -328,8 +331,9 @@ impl App {
                     let path = entry.path.clone();
                     let repo_id = id.clone();
                     let tx = self.action_tx.clone();
+                    // Pre-scheduling for the same quit-race reason as above.
+                    let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                     tokio::task::spawn_blocking(move || {
-                        let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                         let output = std::process::Command::new("git")
                             .arg("-C")
                             .arg(&path)

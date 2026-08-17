@@ -76,6 +76,18 @@ fn main() -> Result<()> {
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run())));
 
+    // A panic skipped the app's quit gating, so a mutating git child may
+    // still be running with piped stdio; give it a bounded window before
+    // shutdown closes the pipes. Normal exits reach here with the counter at
+    // zero (the run loop gates on it), and force-quit is the user's explicit
+    // choice to skip waiting.
+    if result.is_err() {
+        let waited = std::time::Instant::now();
+        while app::mutating_git_ops() > 0 && waited.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     // Do not wait for in-flight blocking-pool tasks (see doc above).
     runtime.shutdown_background();
 

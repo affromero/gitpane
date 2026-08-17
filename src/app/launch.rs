@@ -23,8 +23,10 @@ impl App {
             self.repo_list.repos[idx].git_op = true;
         }
         let tx = self.action_tx.clone();
+        // Created before scheduling so a quit between scheduling and closure
+        // start still counts this op as in flight.
+        let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
         tokio::task::spawn_blocking(move || {
-            let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
             let output = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&exec_path)

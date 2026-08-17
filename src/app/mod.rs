@@ -127,6 +127,13 @@ struct GitOpGuard {
 /// Read-only status queries are not counted and stay abandonable.
 static MUTATING_GIT_OPS: AtomicUsize = AtomicUsize::new(0);
 
+/// Number of in-flight mutating git operations. `main` consults this on the
+/// panic path to give running git children a bounded window before shutdown
+/// closes their pipes.
+pub(crate) fn mutating_git_ops() -> usize {
+    MUTATING_GIT_OPS.load(Ordering::SeqCst)
+}
+
 impl GitOpGuard {
     fn new(id: RepoId, tx: UnboundedSender<Action>) -> Self {
         MUTATING_GIT_OPS.fetch_add(1, Ordering::SeqCst);
@@ -648,8 +655,19 @@ impl App {
         self.sync_selection();
 
         loop {
-            // Process events from TUI
-            if let Some(event) = tui.event_rx.recv().await {
+            // Process events from TUI. While a quit is pending, poll with a
+            // short timeout instead of blocking: the completion that flips
+            // `ready_to_exit` arrives on the action channel, not this event
+            // channel, and a hidden (DeepSleep) pane emits no ticks to wake
+            // the loop otherwise.
+            let event = if self.should_quit {
+                tokio::time::timeout(Duration::from_millis(200), tui.event_rx.recv())
+                    .await
+                    .unwrap_or(None)
+            } else {
+                tui.event_rx.recv().await
+            };
+            if let Some(event) = event {
                 self.handle_event(event)?;
             }
 
