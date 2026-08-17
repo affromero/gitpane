@@ -10,7 +10,7 @@ use crossterm::{
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -212,6 +212,16 @@ impl Tui {
             .sleep_when_hidden
             .then(|| std::env::var("TMUX_PANE").ok())
             .flatten();
+        // Outside tmux (herdr, plain terminals) there is no pane to probe, so
+        // the input-idle fallback drives the power state instead — as long as
+        // the feature is enabled. Each key / meaningful mouse event is
+        // forwarded to the probe so it can wake the instance immediately.
+        let (input_tx, input_rx) = if probe_pane.is_none() && self.sleep_when_hidden {
+            let (tx, rx) = mpsc::unbounded_channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         let event_tx = self.event_tx.clone();
         let token = self.cancellation_token.clone();
 
@@ -226,7 +236,8 @@ impl Tui {
             local_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             fetch_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            let mut power_rx = spawn_visibility_probe(probe_pane, doze_after, token.clone());
+            let mut power_rx =
+                spawn_visibility_probe(probe_pane, input_rx, doze_after, token.clone());
             let mut power = PowerState::Awake;
             let mut reset_fetch = false;
             let mut retune_tick: Option<Duration> = None;
@@ -278,18 +289,30 @@ impl Tui {
                         let _ = event_tx.send(Event::Render);
                     }
                     Some(Ok(event)) = crossterm_event => {
-                        match event {
+                        // Forward input to the non-tmux idle probe so it can
+                        // wake the instance (no-op when not wired).
+                        match &event {
                             CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                                let _ = event_tx.send(Event::Key(key));
+                                let _ = event_tx.send(Event::Key(*key));
+                                if let Some(tx) = &input_tx {
+                                    let _ = tx.send(());
+                                }
                             }
                             CrosstermEvent::Mouse(mouse) => {
-                                let _ = event_tx.send(Event::Mouse(mouse));
+                                // Plain cursor moves should not count as the
+                                // user actively working; everything else does.
+                                let meaningful =
+                                    !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved);
+                                if meaningful && let Some(tx) = &input_tx {
+                                    let _ = tx.send(());
+                                }
+                                let _ = event_tx.send(Event::Mouse(*mouse));
                             }
                             CrosstermEvent::Paste(text) => {
-                                let _ = event_tx.send(Event::Paste(text));
+                                let _ = event_tx.send(Event::Paste(text.clone()));
                             }
                             CrosstermEvent::Resize(w, h) => {
-                                let _ = event_tx.send(Event::Resize(w, h));
+                                let _ = event_tx.send(Event::Resize(*w, *h));
                             }
                             CrosstermEvent::FocusGained => {
                                 let _ = event_tx.send(Event::FocusGained);
@@ -315,17 +338,31 @@ impl Drop for Tui {
 }
 
 /// Periodically probes tmux for this pane's visibility/idleness and emits
-/// [`PowerState`] transitions. With no pane (outside tmux, or the feature
-/// disabled) the sender is dropped immediately, so the receiver never yields
-/// and the event loop stays permanently awake. The probe subprocess runs on a
-/// blocking thread so a stalled tmux never delays input handling.
+/// [`PowerState`] transitions. With no pane and no input channel (outside
+/// tmux with the feature disabled) the sender is dropped immediately, so the
+/// receiver never yields and the event loop stays permanently awake. The
+/// probe subprocess runs on a blocking thread so a stalled tmux never delays
+/// input handling.
+///
+/// Outside tmux, when `sleep_when_hidden` is enabled, `input_rx` is wired to
+/// the event loop's key/mouse stream and an input-idle probe takes over:
+/// every input resets the idle clock and wakes the instance immediately, and
+/// after `doze_after` without input it drops to [`PowerState::Doze`]
+/// (`DeepSleep` is unreachable without visibility information).
 fn spawn_visibility_probe(
     pane: Option<String>,
+    input_rx: Option<UnboundedReceiver<()>>,
     doze_after: Duration,
     token: CancellationToken,
 ) -> UnboundedReceiver<PowerState> {
     let (tx, rx) = mpsc::unbounded_channel();
     let Some(pane) = pane else {
+        // Outside tmux: fall back to input-idle gating when the feature is on
+        // (input_rx wired); otherwise drop the sender to stay always awake.
+        let Some(input_rx) = input_rx else {
+            return rx;
+        };
+        spawn_input_idle_probe(input_rx, doze_after, VISIBILITY_PROBE_INTERVAL, token, tx);
         return rx;
     };
     tokio::spawn(async move {
@@ -362,4 +399,126 @@ fn spawn_visibility_probe(
         }
     });
     rx
+}
+
+/// Non-tmux fallback probe: there is no tmux pane to ask about visibility, so
+/// the [`PowerState`] is driven purely by input idleness. Every event on
+/// `input_rx` (a key press or a meaningful mouse action) marks the user active
+/// and immediately wakes the instance; after `doze_after` without any input the
+/// instance drops to [`PowerState::DeepSleep`] — everything pauses, including
+/// watcher-driven refreshes, until the next input.
+///
+/// Outside tmux we cannot tell whether the pane is actually visible, so input
+/// idleness is treated as "the user has left". Emitting `DeepSleep` (rather
+/// than the tmux-style `Doze`, where the watcher keeps refreshing) is
+/// deliberate: on large multi-repo workspaces the Doze semantics keep slow
+/// status queries in-flight forever and dirty-replay re-queues them into a
+/// self-sustaining refresh loop. DeepSleep gates the watcher too, breaking that
+/// loop, and reuses upstream's existing wake-and-refresh semantics.
+fn spawn_input_idle_probe(
+    input_rx: UnboundedReceiver<()>,
+    doze_after: Duration,
+    probe_interval: Duration,
+    token: CancellationToken,
+    tx: UnboundedSender<PowerState>,
+) {
+    tokio::spawn(async move {
+        // `None` so the first tick always delivers a state, resyncing any
+        // stale consumer state after an inline-suspend re-entry.
+        let mut last: Option<PowerState> = None;
+        // Start the idle clock at launch: a fresh instance polls normally,
+        // then DeepSleeps once `doze_after` elapses without any input. (`None`
+        // would keep the instance awake forever, since `input_idle_state`
+        // treats "no input recorded" as active.)
+        let mut last_input: Option<Instant> = Some(Instant::now());
+        let mut input_rx = input_rx;
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                Some(()) = input_rx.recv() => {
+                    // Any input marks the user active and wakes immediately.
+                    last_input = Some(Instant::now());
+                    if last != Some(PowerState::Awake) {
+                        last = Some(PowerState::Awake);
+                        if tx.send(PowerState::Awake).is_err() {
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(probe_interval) => {
+                    // Outside tmux there is no visibility signal: input idle
+                    // means the user has left, not merely paused. Emit
+                    // DeepSleep (not Doze) so the app gates watcher-driven
+                    // refreshes too — on huge workspaces the Doze semantics
+                    // (watcher keeps refreshing) would otherwise self-sustain
+                    // a refresh loop, since slow status queries stay
+                    // in-flight and dirty-replay keeps re-queuing them.
+                    let state =
+                        visibility::input_idle_state(last_input, Instant::now(), doze_after);
+                    let state = match state {
+                        PowerState::Doze => PowerState::DeepSleep,
+                        other => other,
+                    };
+                    if last != Some(state) {
+                        last = Some(state);
+                        if tx.send(state).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The input-idle probe emits `DeepSleep` after `doze_after` without
+    /// input (outside tmux there is no visibility signal, so idle == user
+    /// left), wakes to `Awake` immediately on input, and never emits `Doze`.
+    #[tokio::test]
+    async fn input_idle_probe_deep_sleeps_and_wakes_on_input() {
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (state_tx, mut state_rx) = mpsc::unbounded_channel();
+        let token = CancellationToken::new();
+
+        spawn_input_idle_probe(
+            input_rx,
+            Duration::from_millis(100),
+            Duration::from_millis(20),
+            token.clone(),
+            state_tx,
+        );
+
+        // No input ever arrives → the instance should drop to DeepSleep
+        // within a few probe ticks, and never emit an intermediate Doze.
+        let slept = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match state_rx.recv().await {
+                    Some(PowerState::DeepSleep) => return PowerState::DeepSleep,
+                    // Doze must never be emitted: outside tmux the probe
+                    // remaps it to DeepSleep (see the fn docs).
+                    Some(PowerState::Doze) => panic!("probe must not emit Doze"),
+                    Some(_) => continue,
+                    None => panic!("probe sender dropped"),
+                }
+            }
+        })
+        .await
+        .expect("probe should emit DeepSleep after idleness");
+        assert_eq!(slept, PowerState::DeepSleep);
+
+        // A single input event wakes it back to Awake immediately (before the
+        // next 100ms doze threshold).
+        input_tx.send(()).unwrap();
+        let wake = tokio::time::timeout(Duration::from_secs(1), state_rx.recv())
+            .await
+            .expect("probe should emit Awake on input")
+            .expect("probe sender dropped");
+        assert_eq!(wake, PowerState::Awake);
+
+        token.cancel();
+    }
 }
