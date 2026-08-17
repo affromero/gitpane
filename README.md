@@ -429,7 +429,7 @@ placement = "inline"             # suspend gitpane and run in the current termin
 
 `command` and `placement` work exactly like [`[open]`](#opening-a-repo-or-worktree): `{path}` is the target directory, the default `command` placement runs the command directly (so embed your own `tmux …` for a pane/window), and `split-window`/`new-window`/`inline`/`ask` place a plain command for you. Only `{path}` is substituted (there is no review base).
 
-Keys already used by the built-in **Global** actions (`o v G r R t g p q y a d s w S`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel uses for navigation (`j`/`k`/`Enter`/…) can be bound, but then it no longer navigates that panel. Run `gitpane diagnostic` to see the bindings gitpane loaded.
+Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s w S =`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel uses for navigation (`j`/`k`/`Enter`/…) can be bound, but then it no longer navigates that panel. Run `gitpane diagnostic` to see the bindings gitpane loaded.
 
 ### Theming
 

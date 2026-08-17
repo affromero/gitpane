@@ -375,7 +375,7 @@ impl App {
                     key("c"),
                     desc("Cycle open / all / closed"),
                 ]));
-                lines.push(Line::from(vec![key("p"), desc("Hide panel")]));
+                lines.push(Line::from(vec![key("="), desc("Hide panel")]));
             }
         }
 

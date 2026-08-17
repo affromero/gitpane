@@ -153,13 +153,23 @@ impl App {
             KeyCode::Char('g') => {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
-            KeyCode::Char('p') => {
+            // Pull/push mutate the repo, so a modified key (Ctrl-p, Alt-p)
+            // must not trigger them; unmatched, it falls through to `_`.
+            KeyCode::Char('p')
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 // lazygit-style: pull the selected repo/worktree.
                 if let Some(id) = self.repo_list.selected_sync_target_id() {
                     self.action_tx.send(Action::GitPull(id))?;
                 }
             }
-            KeyCode::Char('P') => {
+            KeyCode::Char('P')
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 // lazygit-style: push the selected repo/worktree.
                 if let Some(id) = self.repo_list.selected_sync_target_id() {
                     self.action_tx.send(Action::GitPush(id))?;

@@ -238,7 +238,7 @@ pub(crate) struct WorktreeConfig {
 /// ```
 ///
 /// `key` is a single character. Keys already bound to built-in actions
-/// (`o v G r R t g p q y a d s`, `Tab`, `Esc`, `?`) are reserved and cannot be
+/// (`o v G r R t g p P q y a d s =`, `Tab`, `Esc`, `?`) are reserved and cannot be
 /// rebound; a panel-local key (`j`/`k`/`Enter`/…) can be shadowed but then no
 /// longer navigates that panel. `command` uses the same `{path}` substitution
 /// and `placement` vocabulary as `[open]` (`command`/`inline`/`ask`/
