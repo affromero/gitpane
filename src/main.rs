@@ -54,8 +54,19 @@ enum Command {
 /// queued in the blocking pool; tokio's `Runtime` Drop waits forever for
 /// `spawn_blocking` tasks to return, which made pressing `q` hang for tens
 /// of seconds while the last poll drained. `shutdown_background` unblocks
-/// shutdown immediately — still-running queries are reclaimed with the
-/// process (they only read `.git`, so dropping them mid-read is safe).
+/// shutdown immediately. That is safe for everything that can still be in
+/// flight here: in-process status queries only read `.git`, and the status
+/// poll's `git fetch` child (spawned with null stdio) survives as an
+/// independent, crash-safe git process. Mutating operations (pull, push,
+/// submodule updates) hold piped stdio that would SIGPIPE the child
+/// mid-write, so the app instead gates quitting on their completion (see
+/// `GitOpGuard` in `app`); they only reach this line still running when the
+/// user force-quits with a second `q`.
+///
+/// `block_on` runs under `catch_unwind` so a panic inside the app also
+/// takes the `shutdown_background` path — unwinding through the runtime's
+/// normal Drop would block on the same spawn_blocking tasks and delay the
+/// panic report by up to the fetch timeout.
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -63,12 +74,15 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?;
 
-    let result = runtime.block_on(run());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run())));
 
     // Do not wait for in-flight blocking-pool tasks (see doc above).
     runtime.shutdown_background();
 
-    result
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 async fn run() -> Result<()> {
