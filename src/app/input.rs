@@ -154,6 +154,19 @@ impl App {
                 self.action_tx.send(Action::ShowGitGraph)?;
             }
             KeyCode::Char('p') => {
+                // lazygit-style: pull the selected repo/worktree.
+                if let Some(id) = self.repo_list.selected_sync_target_id() {
+                    self.action_tx.send(Action::GitPull(id))?;
+                }
+            }
+            KeyCode::Char('P') => {
+                // lazygit-style: push the selected repo/worktree.
+                if let Some(id) = self.repo_list.selected_sync_target_id() {
+                    self.action_tx.send(Action::GitPush(id))?;
+                }
+            }
+            KeyCode::Char('=') => {
+                // GitHub panel toggle, moved off `p` so pull can use it.
                 self.toggle_github_panel();
             }
             KeyCode::Char('G') => {

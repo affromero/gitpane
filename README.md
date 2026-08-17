@@ -164,7 +164,9 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 | `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
 | `v` | Review selected repo/worktree's diff vs its base branch (new tmux window) |
 | `G` | Attach the live tmux session(s) for the selected repo/worktree |
-| `p` | Toggle the GitHub panel (issues/PRs) for the selected repo |
+| `p` | Pull the selected repo/worktree |
+| `P` | Push the selected repo/worktree |
+| `=` | Toggle the GitHub panel (issues/PRs) for the selected repo |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
@@ -210,7 +212,7 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 
 ### GitHub panel
 
-Appears automatically when the selected repo's `github.com` origin has open issues or PRs (opt-out via `[github] enabled`); press `p` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
+Appears automatically when the selected repo's `github.com` origin has open issues or PRs (opt-out via `[github] enabled`); press `=` to force it open on any repo. Requires the `gh` CLI, whose auth it reuses.
 
 Each pull request row shows its rolled-up CI status: a green `✓` when checks passed, a red `✗` when any failed, a yellow `●` while checks are still running, and nothing when a PR has no checks.
 
