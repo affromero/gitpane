@@ -70,6 +70,12 @@ impl GraphCache {
         Some(entry.cached.clone())
     }
 
+    /// Whether an entry exists for `key`, without touching LRU recency.
+    #[cfg(test)]
+    pub(crate) fn contains(&self, key: &GraphCacheKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
     pub(crate) fn insert(&mut self, key: GraphCacheKey, cached: CachedGraph) {
         if self.entries.len() >= self.capacity && !self.entries.contains_key(&key) {
             self.evict_lru();

@@ -352,6 +352,15 @@ impl GitGraph {
         self.graph_cache.clear();
     }
 
+    /// Whether any graph snapshot is cached for `path`. Test seam: pins the
+    /// contract that a live-worktree refresh drops the worktree's cached
+    /// graph even when the reload is deferred.
+    #[cfg(test)]
+    pub fn has_cached_graph_for(&self, path: &Path) -> bool {
+        let key = self.cache_key(path);
+        self.graph_cache.contains(&key)
+    }
+
     pub fn set_error(&mut self, msg: String) {
         self.error = Some(msg);
         self.loading = false;
