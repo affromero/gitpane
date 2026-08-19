@@ -23,6 +23,12 @@ struct Cli {
     #[arg(long)]
     root: Option<PathBuf>,
 
+    /// Scan the current directory for repos for this run, without touching
+    /// the configured root_dirs. Prefer it to `--root` when you are already
+    /// standing where you want to scan; explicit paths stay with `--root`.
+    #[arg(long)]
+    cwd: bool,
+
     /// Override the active theme for this run (does not modify config.toml)
     #[arg(long)]
     theme: Option<String>,
@@ -103,7 +109,9 @@ async fn run() -> Result<()> {
     match cli.command {
         Some(Command::Update) => return self_update(),
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
-        Some(Command::Diagnostic) => return run_diagnostic(cli.root, cli.theme.as_deref()),
+        Some(Command::Diagnostic) => {
+            return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
+        }
         None => {}
     }
     install_tracing()?;
@@ -112,6 +120,14 @@ async fn run() -> Result<()> {
 
     if let Some(root) = cli.root {
         config.override_root(root);
+    }
+    // `--cwd` wins over `--root`: it is the more specific "I am here"
+    // intent. Resolving to `current_dir()` keeps the override absolute, so
+    // even if it ever leaked into a saved config it would not silently
+    // follow wherever the next run happens to start. Both overrides are
+    // run-local and never written back to config.toml.
+    if cli.cwd {
+        config.override_root(std::env::current_dir()?);
     }
     if let Some(theme_name) = cli.theme {
         // Apply as a session-only override so `config.save()` (triggered by
@@ -182,11 +198,14 @@ fn list_themes(cli_override: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_diagnostic(root: Option<PathBuf>, theme_override: Option<&str>) -> Result<()> {
+fn run_diagnostic(root: Option<PathBuf>, cwd: bool, theme_override: Option<&str>) -> Result<()> {
     let env = config::RealEnv;
     let mut config = config::Config::load()?;
     if let Some(root) = root {
         config.override_root(root);
+    }
+    if cwd {
+        config.override_root(std::env::current_dir()?);
     }
     if let Some(name) = theme_override {
         config.runtime_theme_override = Some(name.to_string());
@@ -248,4 +267,38 @@ fn self_update() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cwd_is_optional() {
+        let cli = Cli::try_parse_from(["gitpane"]).unwrap();
+        assert!(!cli.cwd);
+    }
+
+    #[test]
+    fn cwd_flag_scans_the_current_directory() {
+        let cli = Cli::try_parse_from(["gitpane", "--cwd"]).unwrap();
+        assert!(cli.cwd);
+    }
+
+    #[test]
+    fn cwd_does_not_consume_a_subcommand() {
+        // `--cwd` is a plain boolean, so a following subcommand is not
+        // swallowed as a path value.
+        let cli = Cli::try_parse_from(["gitpane", "--cwd", "diagnostic"]).unwrap();
+        assert!(cli.cwd);
+        assert!(matches!(cli.command, Some(Command::Diagnostic)));
+    }
+
+    #[test]
+    fn cwd_coexists_with_root() {
+        let cli = Cli::try_parse_from(["gitpane", "--root", "~/Code", "--cwd"]).unwrap();
+        assert_eq!(cli.root, Some(PathBuf::from("~/Code")));
+        assert!(cli.cwd);
+    }
 }

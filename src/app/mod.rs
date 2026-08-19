@@ -365,7 +365,7 @@ impl App {
         ));
         // Roots are cloned before `config` moves into `Self` below; the repo
         // list needs them to render each repo's relative display path.
-        let roots = config.root_dirs.clone();
+        let roots = config.effective_root_dirs().into_owned();
 
         let mut app = Self {
             config,
@@ -490,7 +490,7 @@ impl App {
             .iter()
             .map(|r| r.path.clone())
             .collect();
-        let root_dirs = self.config.root_dirs.clone();
+        let root_dirs = self.config.effective_root_dirs().into_owned();
         let debounce_ms = self.config.watch.debounce_ms;
         let exclude_dirs = self.config.watch.watch_exclude_dirs.clone();
         let watch_worktree_dirs = self.config.watch.watch_worktree_dirs;

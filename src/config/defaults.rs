@@ -206,6 +206,7 @@ impl Default for Config {
             theme_name: default_theme_name(),
             theme: Theme::default(),
             runtime_theme_override: None,
+            runtime_root_override: None,
             loaded_path: None,
             write_target_override: None,
         }

@@ -782,7 +782,7 @@ impl App {
                 let repo_paths = scanner::discover_repos(&self.config);
                 self.repo_list = RepoList::new(
                     repo_paths,
-                    self.config.root_dirs.clone(),
+                    self.config.effective_root_dirs().into_owned(),
                     self.theme.clone(),
                 );
                 self.repo_list
