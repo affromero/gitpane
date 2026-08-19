@@ -137,7 +137,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 ## Features
 
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows dirty indicator (`*`), branch (dimmed on the default branch), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
-- **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`). In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work.
+- **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`) and lists them under it. In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work. Worktrees show on startup; press `w` to collapse a repo you want quiet, or set `[ui] expand_worktrees = false` to start every repo collapsed.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
 - **Custom keybindings**: Bind your own keys to shell commands with `[[keybindings]]`, each run against the selected repo/worktree with `{path}` substitution and the same placement options as `[open]`. Extend gitpane with your own verbs without waiting on a feature.
 - **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane open inside it, so at a glance you can see which parallel agents are actively working where. tmux only; toggle with `[ui] show_liveness`.
@@ -173,7 +173,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
-| `w` | Toggle worktree subtree for the selected repo |
+| `w` | Toggle worktree subtree for the selected repo (shown by default) |
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
 | `y` | Copy selected item to clipboard |
@@ -298,6 +298,7 @@ doze_after_secs = 120         # Input-idle seconds before a visible pane stops p
 frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup
 update_position = "top-right" # Update notification position ("top-right" or "top-left")
+expand_worktrees = true      # List each repo's worktrees on startup (`w` toggles either way)
 
 [graph]
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
@@ -354,7 +355,7 @@ So "right of \<named\>" is `split-window -h -t <named>` and "below" is `split-wi
 
 Prefer to choose per launch? Set `placement = "ask"` and gitpane pops a small picker listing your tmux windows ("Right of …", "Below …", or "New window") each time you press `o`/`v`. The fast path stays a fixed config string; `ask` is there when you want it. (`inline` runs the command in the current terminal by suspending gitpane — handy outside tmux.)
 
-The selection drives the target: highlight a repo row and `o` opens the repo root; expand it with `w` and highlight a worktree row, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
+The selection drives the target: highlight a repo row and `o` opens the repo root; highlight one of the worktree rows listed under it, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
 
 ### Reviewing changes
 
@@ -385,7 +386,7 @@ The command runs via `sh -c` in the target directory, so pipes work; `{base}` an
 gitpane manages the worktree lifecycle for the parallel-agents workflow, so you can spin up and tear down task worktrees without leaving the dashboard.
 
 - **Create:** right click a repo row and pick `New worktree…`, type a branch name, press Enter. gitpane runs `git worktree add <dir> -b <branch>` and the new worktree appears under the repo.
-- **Remove:** select a worktree row (expand with `w`) and press `d`, or right click it and pick `Remove worktree`. After confirming, gitpane runs `git worktree remove`. A worktree with uncommitted changes is refused by git; commit or discard first.
+- **Remove:** select a worktree row and press `d`, or right click it and pick `Remove worktree`. After confirming, gitpane runs `git worktree remove`. A worktree with uncommitted changes is refused by git; commit or discard first.
 
 New worktrees are created as a sibling of the repo (`<repo>-<branch>`). Put them somewhere else with `[worktree] dir`:
 

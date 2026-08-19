@@ -46,10 +46,15 @@ fn worktree_entry(name: &str) -> WorktreeEntry {
 }
 
 fn make_list(paths: &[&str]) -> RepoList {
+    make_list_with_expand(paths, true)
+}
+
+fn make_list_with_expand(paths: &[&str], expand_worktrees: bool) -> RepoList {
     let theme = Arc::new(Theme::default());
     RepoList::new(
         paths.iter().map(PathBuf::from).collect(),
         vec![], // no roots: display falls back to the basename
+        expand_worktrees,
         theme,
     )
 }
@@ -68,7 +73,6 @@ fn selected_sync_target_id_resolves_repo_worktree_and_stash() {
     // Worktree row: target is the worktree's path, mirroring the right-click menu.
     let mut status = empty_status("main");
     status.worktree_info = vec![worktree_entry("one")];
-    list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
     list.update_status(1, status);
     list.state.select(Some(2)); // display rows: [/a, /b, /b's worktree]
     assert_eq!(
@@ -124,14 +128,18 @@ fn sync_paths_reports_added_paths() {
 #[test]
 fn sync_paths_reports_removed_paths_and_prunes_expansion() {
     let mut list = make_list(&["/a", "/b"]);
-    list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
+    list.worktrees_toggled.insert(RepoId(PathBuf::from("/b")));
     list.expanded_stashes.insert(RepoId(PathBuf::from("/b")));
 
     let diff = list.sync_paths(vec![PathBuf::from("/a")]);
     assert_eq!(diff.removed, vec![PathBuf::from("/b")]);
     assert!(diff.added.is_empty());
     assert_eq!(list.repos.len(), 1);
-    assert!(!list.expanded_repos.contains(&RepoId(PathBuf::from("/b"))));
+    assert!(
+        !list
+            .worktrees_toggled
+            .contains(&RepoId(PathBuf::from("/b")))
+    );
     assert!(!list.expanded_stashes.contains(&RepoId(PathBuf::from("/b"))));
 }
 
@@ -264,7 +272,6 @@ fn list_with_expanded_worktree() -> RepoList {
     let mut status = empty_status("main");
     status.worktree_info.push(worktree_entry("feature"));
     list.repos[0].status = Some(status);
-    list.expanded_repos.insert(RepoId(PathBuf::from("/r")));
     list.rebuild_display_rows();
     list.render_area = Rect::new(0, 0, 40, 10);
     list
@@ -422,6 +429,7 @@ fn breadcrumbs_survive_a_symlinked_root() {
     let list = RepoList::new(
         vec![repo.canonicalize().unwrap()],
         vec![alias],
+        true,
         Arc::new(Theme::default()),
     );
     assert_eq!(list.repos[0].display, "hbre/libmm");
@@ -467,6 +475,7 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
             PathBuf::from("/ws/build"),
         ],
         roots,
+        true,
         theme,
     );
     // Narrow enough that the deep kernel paths must be ellipsized.
@@ -509,6 +518,7 @@ fn renders_persistent_hint_for_missing_root_beside_normal_repos() {
     let mut list = RepoList::new(
         vec![existing.join("repo-a"), existing.join("repo-b")],
         vec![existing.clone(), missing.clone()],
+        true,
         theme,
     );
     list.render_area = Rect::new(0, 0, 40, 8);
@@ -552,6 +562,7 @@ fn missing_root_hint_reserves_space_for_the_label() {
     let mut list = RepoList::new(
         vec![existing.join("repo-a")],
         vec![existing.clone(), missing.clone()],
+        true,
         theme,
     );
     list.render_area = Rect::new(0, 0, 40, 8);
@@ -587,6 +598,7 @@ fn renders_no_hint_when_all_roots_exist() {
     let mut list = RepoList::new(
         vec![tmp.path().join("repo-a")],
         vec![tmp.path().to_path_buf()],
+        true,
         theme,
     );
     list.render_area = Rect::new(0, 0, 40, 8);
@@ -805,7 +817,6 @@ fn focus_mode_keeps_selected_repos_subrows_bright() {
     let mut status = empty_status("main");
     status.worktree_info.push(worktree_entry("feature"));
     status.stashes.push(stash_entry(0));
-    list.expanded_repos.insert(RepoId(PathBuf::from("/a")));
     list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
     list.update_status(0, status);
     list.repos[1].status = Some(empty_status("devel"));
@@ -846,7 +857,6 @@ fn focus_mode_keeps_selected_repos_subrows_bright() {
 #[test]
 fn update_status_keeps_selection_when_subrows_appear_above() {
     let mut list = make_list(&["/a", "/b"]);
-    list.expanded_repos.insert(RepoId(PathBuf::from("/a")));
     list.select_repo_row(1);
     assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
 
@@ -880,7 +890,6 @@ fn resync_rows_restores_worktree_subrow_then_falls_back_to_parent() {
     let mut list = make_list(&["/a", "/b"]);
     let mut status = empty_status("main");
     status.worktree_info = vec![worktree_entry("one")];
-    list.expanded_repos.insert(RepoId(PathBuf::from("/b")));
     list.update_status(1, status);
 
     // Select /b's worktree row (display rows: [/a, /b, /b's worktree]).
@@ -898,4 +907,73 @@ fn resync_rows_restores_worktree_subrow_then_falls_back_to_parent() {
     list.update_status(0, empty_status("main"));
     assert!(list.selected_worktree().is_none());
     assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/b"));
+}
+
+/// Press `w` on the currently selected row.
+fn press_w(list: &mut RepoList) {
+    use crossterm::event::{KeyCode, KeyEvent};
+    list.handle_key_event(KeyEvent::from(KeyCode::Char('w')))
+        .unwrap();
+}
+
+fn worktree_rows(list: &RepoList) -> usize {
+    list.display_rows
+        .iter()
+        .filter(|row| matches!(row, DisplayRow::Worktree(..)))
+        .count()
+}
+
+/// Issue 49: worktrees are visible as soon as the status lands, without
+/// anyone pressing `w` first.
+#[test]
+fn worktrees_show_by_default_once_status_arrives() {
+    let mut list = make_list(&["/a"]);
+    assert_eq!(worktree_rows(&list), 0, "no status yet, so no subrows");
+
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one"), worktree_entry("two")];
+    list.update_status(0, status);
+
+    assert_eq!(worktree_rows(&list), 2);
+}
+
+/// `ui.expand_worktrees = false` keeps the old collapsed startup, and `w`
+/// still toggles from there.
+#[test]
+fn expand_worktrees_disabled_starts_collapsed_and_still_toggles() {
+    let mut list = make_list_with_expand(&["/a"], false);
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.update_status(0, status);
+    assert_eq!(worktree_rows(&list), 0);
+
+    list.select_repo_row(0);
+    press_w(&mut list);
+    assert_eq!(worktree_rows(&list), 1);
+
+    press_w(&mut list);
+    assert_eq!(worktree_rows(&list), 0);
+}
+
+/// Collapsing with `w` sticks; creating a worktree in that repo brings the
+/// subrows back.
+#[test]
+fn expand_repo_reverses_a_session_collapse() {
+    let mut list = make_list(&["/a"]);
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.update_status(0, status);
+
+    list.select_repo_row(0);
+    press_w(&mut list);
+    assert_eq!(worktree_rows(&list), 0);
+
+    // A status refresh must not undo the collapse.
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.update_status(0, status);
+    assert_eq!(worktree_rows(&list), 0);
+
+    list.expand_repo(&PathBuf::from("/a"));
+    assert_eq!(worktree_rows(&list), 1);
 }

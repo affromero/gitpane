@@ -425,6 +425,9 @@ impl App {
                         "--".to_string(),
                         new_path.to_string_lossy().to_string(),
                     ];
+                    // The new row arrives with the next status poll; make
+                    // sure a collapsed repo is showing by the time it does.
+                    self.repo_list.expand_repo(repo);
                     self.spawn_repo_git_op(repo.clone(), args);
                 }
             }

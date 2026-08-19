@@ -98,8 +98,12 @@ pub(crate) struct RepoList {
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
-    /// Which repos have their worktree list expanded
-    expanded_repos: HashSet<RepoId>,
+    /// Repos whose worktree list is toggled away from `expand_worktrees`.
+    /// Storing the delta rather than the state means a repo discovered later
+    /// picks up the configured default with no bookkeeping.
+    worktrees_toggled: HashSet<RepoId>,
+    /// `ui.expand_worktrees`: whether worktrees show without pressing `w`.
+    expand_worktrees: bool,
     /// Which repos have their stash list expanded
     expanded_stashes: HashSet<RepoId>,
     /// `(session, pane_cwd)` from the liveness probe; a repo/worktree whose path
@@ -165,7 +169,12 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
 }
 
 impl RepoList {
-    pub fn new(repo_paths: Vec<PathBuf>, roots: Vec<PathBuf>, theme: Arc<Theme>) -> Self {
+    pub fn new(
+        repo_paths: Vec<PathBuf>,
+        roots: Vec<PathBuf>,
+        expand_worktrees: bool,
+        theme: Arc<Theme>,
+    ) -> Self {
         // Discovery canonicalizes every path it emits, but `config.root_dirs`
         // is only tilde-expanded. Under a symlinked root (`~/work` ->
         // `/mnt/data/work`) the two forms never prefix-match, so every label
@@ -215,7 +224,8 @@ impl RepoList {
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
-            expanded_repos: HashSet::new(),
+            worktrees_toggled: HashSet::new(),
+            expand_worktrees,
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
             display_rows: Vec::new(),
@@ -245,7 +255,7 @@ impl RepoList {
             self.display_rows.push(DisplayRow::Repo(i));
             let id = RepoId(entry.path.clone());
             if let Some(status) = &entry.status {
-                if self.expanded_repos.contains(&id) {
+                if self.worktrees_expanded(&id) {
                     for j in 0..status.worktree_info.len() {
                         self.display_rows.push(DisplayRow::Worktree(i, j));
                     }
@@ -510,7 +520,7 @@ impl RepoList {
         let removed: Vec<PathBuf> = by_path.into_keys().collect();
         for path in &removed {
             let id = RepoId(path.clone());
-            self.expanded_repos.remove(&id);
+            self.worktrees_toggled.remove(&id);
             self.expanded_stashes.remove(&id);
         }
 
@@ -638,16 +648,44 @@ impl RepoList {
         }
         let id = RepoId(entry.path.clone());
         let prev = self.snapshot_selection();
-        if self.expanded_repos.contains(&id) {
+        if self.worktrees_expanded(&id) {
             // Collapsing: move selection to the parent repo row
-            self.expanded_repos.remove(&id);
+            self.set_worktrees_expanded(&id, false);
             self.rebuild_display_rows();
             self.select_repo_row(repo_idx);
         } else {
-            self.expanded_repos.insert(id);
+            self.set_worktrees_expanded(&id, true);
             self.rebuild_display_rows();
             self.restore_selection(prev);
         }
+    }
+
+    /// Whether this repo's worktree subrows show: the configured default,
+    /// flipped for repos the user has toggled this session.
+    fn worktrees_expanded(&self, id: &RepoId) -> bool {
+        self.expand_worktrees != self.worktrees_toggled.contains(id)
+    }
+
+    fn set_worktrees_expanded(&mut self, id: &RepoId, expanded: bool) {
+        if expanded == self.expand_worktrees {
+            self.worktrees_toggled.remove(id);
+        } else {
+            self.worktrees_toggled.insert(id.clone());
+        }
+    }
+
+    /// Show a repo's worktrees, e.g. after creating one in it. Overrides both
+    /// a session collapse and `ui.expand_worktrees = false`, since the user
+    /// just asked for the worktree that is about to appear.
+    pub fn expand_repo(&mut self, path: &Path) {
+        let id = RepoId(path.to_path_buf());
+        if self.worktrees_expanded(&id) {
+            return;
+        }
+        let prev = self.snapshot_selection();
+        self.set_worktrees_expanded(&id, true);
+        self.rebuild_display_rows();
+        self.restore_selection(prev);
     }
 
     fn render_repo_item(&self, entry: &RepoEntry, layout: &RowLayout) -> ListItem<'static> {
@@ -697,7 +735,7 @@ impl RepoList {
             for (text, kind) in attention_cells(
                 status,
                 self.expanded_stashes.contains(&id),
-                self.expanded_repos.contains(&id),
+                self.worktrees_expanded(&id),
             ) {
                 let color = match kind {
                     AttentionCell::Stash => t.stash,

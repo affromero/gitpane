@@ -54,6 +54,10 @@ update_position = "top-right"
 # (tmux-only; default: true)
 show_liveness = true
 
+# Show each repo's worktrees on startup (default: true). Set false if many
+# repos with many worktrees make the list too tall; `w` still toggles either way.
+expand_worktrees = true
+
 [graph]
 # Branch filter for commit graph: "all", "local", "remote", or "none" (default: "all")
 branches = "all"

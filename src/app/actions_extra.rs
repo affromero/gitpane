@@ -783,6 +783,7 @@ impl App {
                 self.repo_list = RepoList::new(
                     repo_paths,
                     self.config.effective_root_dirs().into_owned(),
+                    self.config.ui.expand_worktrees,
                     self.theme.clone(),
                 );
                 self.repo_list

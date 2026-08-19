@@ -146,6 +146,10 @@ pub(super) fn default_show_liveness() -> bool {
     true
 }
 
+pub(super) fn default_expand_worktrees() -> bool {
+    true
+}
+
 pub(super) fn default_check_for_updates() -> bool {
     true
 }
@@ -182,6 +186,7 @@ impl Default for UiConfig {
             check_for_updates: default_check_for_updates(),
             update_position: UpdatePosition::default(),
             show_liveness: default_show_liveness(),
+            expand_worktrees: default_expand_worktrees(),
         }
     }
 }
