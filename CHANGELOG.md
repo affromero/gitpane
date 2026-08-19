@@ -2,6 +2,11 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Fixed
+- A configured root dir that doesn't exist on disk is no longer silently skipped: the Repositories panel shows a persistent `root does not exist: <path>` hint above the list for the whole session, so a stale or mistyped `root_dirs` entry can't quietly shrink (or empty) the workspace with no explanation. Discovery itself is unchanged; previously only `gitpane diagnostic` surfaced it.
+
 ## [0.12.0] - 2026-08-17
 
 ### Added

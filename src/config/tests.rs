@@ -433,6 +433,40 @@ fn test_cli_root_overrides_config() {
     assert_eq!(config.root_dirs, vec![PathBuf::from("/tmp/my-repos")]);
 }
 
+/// Missing roots are exactly the configured ones that don't exist on disk.
+/// Discovery silently skips them, so they must be discoverable for the
+/// startup warning and diagnostics.
+#[test]
+fn test_missing_roots_reports_only_non_existent_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let existing = tmp.path().join("code");
+    fs::create_dir_all(&existing).unwrap();
+    let missing = tmp.path().join("work");
+
+    let config = Config {
+        root_dirs: vec![existing.clone(), missing.clone()],
+        ..Config::default()
+    };
+
+    let mut got = config.missing_roots();
+    got.sort();
+    assert_eq!(got, vec![missing]);
+}
+
+/// A root that exists is never reported as missing even when it contains no
+/// repos — existence is the whole signal, not discoverability.
+#[test]
+fn test_missing_roots_ignores_existing_empty_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let existing = tmp.path().join("empty-code");
+    fs::create_dir_all(&existing).unwrap();
+    let config = Config {
+        root_dirs: vec![existing.clone()],
+        ..Config::default()
+    };
+    assert!(config.missing_roots().is_empty());
+}
+
 #[test]
 fn test_save_and_reload_roundtrip() {
     let tmp = tempfile::NamedTempFile::new().unwrap();

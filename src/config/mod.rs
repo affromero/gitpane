@@ -424,6 +424,17 @@ impl Config {
         self.root_dirs = vec![root];
     }
 
+    /// Configured root dirs that do not exist on disk. Discovery silently
+    /// skips them (`discover_repos` just `continue`s), so without this the
+    /// workspace can shrink — or disappear — with no explanation.
+    pub(crate) fn missing_roots(&self) -> Vec<PathBuf> {
+        self.root_dirs
+            .iter()
+            .filter(|root| !root.exists())
+            .cloned()
+            .collect()
+    }
+
     fn expand_tildes(&mut self) {
         if let Some(home) = dirs::home_dir() {
             for dir in &mut self.root_dirs {

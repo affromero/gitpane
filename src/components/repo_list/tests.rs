@@ -483,6 +483,81 @@ fn renders_breadcrumb_paths_and_ellipsizes_deep_ones() {
     assert!(text.contains("build"), "got: {text}");
 }
 
+/// A configured root that doesn't exist on disk surfaces a persistent hint
+/// above the list (discovery silently skips it), while repos that do exist
+/// still render normally below it.
+#[test]
+fn renders_persistent_hint_for_missing_root_beside_normal_repos() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let theme = Arc::new(Theme::default());
+    let tmp = tempfile::tempdir().unwrap();
+    let existing = tmp.path().to_path_buf();
+    let missing = tmp.path().join("gone"); // never created
+    let mut list = RepoList::new(
+        vec![existing.join("repo-a"), existing.join("repo-b")],
+        vec![existing.clone(), missing.clone()],
+        theme,
+    );
+    list.render_area = Rect::new(0, 0, 40, 8);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    // The tmp path overflows the 40-wide panel, so the hint's path is
+    // middle-ellipsized — match the parts, not the full path.
+    assert!(text.contains("root does not exist:"), "got: {text}");
+    assert!(text.contains("gone"), "got: {text}");
+    assert!(text.contains("repo-a"), "got: {text}");
+    assert!(text.contains("repo-b"), "got: {text}");
+}
+
+/// When every configured root exists, no hint is rendered — the hint is
+/// reserved for the silent-skip case, not a permanent fixture of the panel.
+#[test]
+fn renders_no_hint_when_all_roots_exist() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let theme = Arc::new(Theme::default());
+    let tmp = tempfile::tempdir().unwrap();
+    let mut list = RepoList::new(
+        vec![tmp.path().join("repo-a")],
+        vec![tmp.path().to_path_buf()],
+        theme,
+    );
+    list.render_area = Rect::new(0, 0, 40, 8);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    assert!(text.contains("repo-a"), "got: {text}");
+    assert!(!text.contains("root does not exist"), "got: {text}");
+}
+
 /// Every row shows its branch — a hidden branch reads as missing data — but
 /// the default branch renders in the dimmed color while deviations keep the
 /// branch color.
