@@ -23,6 +23,13 @@ struct Cli {
     #[arg(long)]
     root: Option<PathBuf>,
 
+    /// Scan the current directory (or the given path) for repos for this run,
+    /// without touching the configured root_dirs. Shorthand for --root when
+    /// you are already standing where you want to scan: with no value it uses
+    /// the current directory.
+    #[arg(long, num_args = 0..=1, default_missing_value = ".")]
+    cwd: Option<PathBuf>,
+
     /// Override the active theme for this run (does not modify config.toml)
     #[arg(long)]
     theme: Option<String>,
@@ -103,7 +110,9 @@ async fn run() -> Result<()> {
     match cli.command {
         Some(Command::Update) => return self_update(),
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
-        Some(Command::Diagnostic) => return run_diagnostic(cli.root, cli.theme.as_deref()),
+        Some(Command::Diagnostic) => {
+            return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
+        }
         None => {}
     }
     install_tracing()?;
@@ -112,6 +121,11 @@ async fn run() -> Result<()> {
 
     if let Some(root) = cli.root {
         config.override_root(root);
+    }
+    // `--cwd` wins over `--root`: it is the more specific "I am here" intent.
+    // Both are run-local overrides and are never written back to config.toml.
+    if let Some(cwd) = cli.cwd {
+        config.override_root(cwd);
     }
     if let Some(theme_name) = cli.theme {
         // Apply as a session-only override so `config.save()` (triggered by
@@ -182,11 +196,18 @@ fn list_themes(cli_override: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_diagnostic(root: Option<PathBuf>, theme_override: Option<&str>) -> Result<()> {
+fn run_diagnostic(
+    root: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    theme_override: Option<&str>,
+) -> Result<()> {
     let env = config::RealEnv;
     let mut config = config::Config::load()?;
     if let Some(root) = root {
         config.override_root(root);
+    }
+    if let Some(cwd) = cwd {
+        config.override_root(cwd);
     }
     if let Some(name) = theme_override {
         config.runtime_theme_override = Some(name.to_string());
@@ -248,4 +269,35 @@ fn self_update() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cwd_is_optional() {
+        let cli = Cli::try_parse_from(["gitpane"]).unwrap();
+        assert_eq!(cli.cwd, None);
+    }
+
+    #[test]
+    fn cwd_without_value_scans_the_current_directory() {
+        let cli = Cli::try_parse_from(["gitpane", "--cwd"]).unwrap();
+        assert_eq!(cli.cwd, Some(PathBuf::from(".")));
+    }
+
+    #[test]
+    fn cwd_accepts_an_explicit_path() {
+        let cli = Cli::try_parse_from(["gitpane", "--cwd", "/tmp/repo"]).unwrap();
+        assert_eq!(cli.cwd, Some(PathBuf::from("/tmp/repo")));
+    }
+
+    #[test]
+    fn cwd_coexists_with_root() {
+        let cli = Cli::try_parse_from(["gitpane", "--root", "~/Code", "--cwd", "/tmp"]).unwrap();
+        assert_eq!(cli.root, Some(PathBuf::from("~/Code")));
+        assert_eq!(cli.cwd, Some(PathBuf::from("/tmp")));
+    }
 }
