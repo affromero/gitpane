@@ -995,6 +995,23 @@ fn test_runtime_root_override_is_never_serialized() {
 }
 
 #[test]
+fn test_missing_roots_follows_the_runtime_override() {
+    // The missing-root hint and the scan-root override are tied together by
+    // one line in Config::missing_roots: it must report the override's
+    // missing root, not the configured-but-unused one.
+    let tmp = tempfile::tempdir().unwrap();
+    let existing = tmp.path().join("configured");
+    fs::create_dir_all(&existing).unwrap();
+    let mut config = Config {
+        root_dirs: vec![existing],
+        ..Default::default()
+    };
+    let absent = tmp.path().join("override-gone");
+    config.override_root(absent.clone());
+    assert_eq!(config.missing_roots(), vec![absent]);
+}
+
+#[test]
 fn test_override_root_expands_tilde() {
     let mut config = Config::default();
     config.override_root(PathBuf::from("~/Code"));
