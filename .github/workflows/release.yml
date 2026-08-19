@@ -35,6 +35,10 @@ jobs:
             os: windows-latest
             archive: zip
     runs-on: ${{ matrix.os }}
+    # A build takes ~5 min. Anything past 20 is a stalled runner (an apt
+    # mirror hang cost one release 75 minutes), and failing fast beats
+    # sitting on the 6h default nobody is watching.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -84,6 +88,7 @@ jobs:
     name: Upload Assets
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -126,6 +131,7 @@ jobs:
     name: Publish to crates.io
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
