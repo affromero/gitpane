@@ -1,14 +1,20 @@
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{layout::Rect, widgets::ListState};
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use ratatui::{layout::Rect, text::Span, widgets::ListState};
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::git::graph::{BranchSegment, GraphBuilder, GraphFilters, GraphOptions, GraphRow};
 use crate::theme::Theme;
+
+mod cache;
+use cache::{
+    CachedGraph, GRAPH_CACHE_CAPACITY, GraphCache, GraphCacheKey, RENDER_CACHE_CAPACITY,
+    RowRenderKey,
+};
 
 mod component;
 #[cfg(test)]
@@ -51,7 +57,6 @@ impl Drop for GraphLoadGuard {
         }
     }
 }
-
 struct CommitDetail {
     oid: String,
     message: String,
@@ -149,6 +154,16 @@ pub(crate) struct GitGraph {
     /// of a highlight the user has already moved past is dropped.
     diff_select_generation: u64,
     theme: Arc<Theme>,
+    /// Cached built graphs keyed by repo path + build signature, so switching
+    /// back to a recently viewed repo restores its rows instantly.
+    graph_cache: GraphCache,
+    /// Cached stable row bodies (prefix/labels/id/message/author) so frames
+    /// don't rebuild them for unchanged rows. The volatile tail (relative
+    /// time, diff stats) is appended fresh each frame.
+    render_cache: HashMap<RowRenderKey, Vec<Span<'static>>>,
+    /// Bumped on theme change so cached row bodies are rebuilt with the new
+    /// colors.
+    theme_generation: u64,
 }
 
 impl GitGraph {
@@ -184,14 +199,32 @@ impl GitGraph {
             detail_generation: 0,
             diff_select_generation: 0,
             theme,
+            graph_cache: GraphCache::new(GRAPH_CACHE_CAPACITY),
+            render_cache: HashMap::new(),
+            theme_generation: 0,
         }
     }
 
     pub fn set_theme(&mut self, theme: Arc<Theme>) {
         self.theme = theme;
+        // Cached row bodies carry the old theme's colors: bump the generation
+        // and drop them so the next frame rebuilds with the new palette.
+        self.theme_generation += 1;
+        self.render_cache.clear();
     }
 
     pub fn load_repo(&mut self, path: PathBuf, repo_name: &str) {
+        self.load_repo_inner(path, repo_name, false);
+    }
+
+    /// Like [`Self::load_repo`] but bypasses the graph cache: used by explicit
+    /// reload paths (`g`, live worktree refreshes) that must see fresh on-disk
+    /// state. The freshly built rows still populate the cache afterwards.
+    pub fn force_reload_repo(&mut self, path: PathBuf, repo_name: &str) {
+        self.load_repo_inner(path, repo_name, true);
+    }
+
+    fn load_repo_inner(&mut self, path: PathBuf, repo_name: &str, force: bool) {
         let is_same_repo = self.repo_path.as_deref() == Some(path.as_path());
 
         if is_same_repo && self.load_in_flight {
@@ -203,22 +236,28 @@ impl GitGraph {
         self.repo_path = Some(path.clone());
         self.error = None;
 
+        // Cache hit: restore the built rows synchronously — no repository
+        // open, no revwalk, no stats diffing, no "Loading…" flash. Bumping the
+        // load generation discards any older build still in flight for the
+        // previous repo, exactly as a fresh spawn would.
+        if !force && let Some(cached) = self.graph_cache.get(&self.cache_key(&path)) {
+            self.load_generation += 1;
+            if !is_same_repo {
+                self.reset_view_state();
+            }
+            self.filter_branches.extend(cached.filter_branches);
+            self.filter_authors.extend(cached.filter_authors);
+            self.set_rows(cached.rows);
+            return;
+        }
+
         // Keep old rows visible during reload (prevents blinking).
         // Only clear on repo switch.
         if !is_same_repo {
             self.loading = true;
             self.rows.clear();
             self.all_rows.clear();
-            self.state.select(None);
-            self.commit_detail = None;
-            self.needs_reload = false;
-            self.consecutive_aborts = 0;
-            self.search.clear();
-            self.filter_branches.clear();
-            self.filter_authors.clear();
-            self.collapsed_branches.clear();
-            self.segments.clear();
-            self.row_to_segment.clear();
+            self.reset_view_state();
         }
 
         let Some(tx) = &self.action_tx else { return };
@@ -273,6 +312,46 @@ impl GitGraph {
         });
     }
 
+    /// Reset per-repo view state (selection, search, collapse, filters)
+    /// without touching the row buffers. Shared by the repo-switch path and
+    /// the cache-hit restore path, so both behave identically.
+    fn reset_view_state(&mut self) {
+        self.state.select(None);
+        self.commit_detail = None;
+        self.needs_reload = false;
+        self.consecutive_aborts = 0;
+        self.search.clear();
+        self.filter_branches.clear();
+        self.filter_authors.clear();
+        self.collapsed_branches.clear();
+        self.segments.clear();
+        self.row_to_segment.clear();
+    }
+
+    /// The cache key for a graph build on `path`: the repo plus every option
+    /// that shapes the built rows.
+    fn cache_key(&self, path: &Path) -> GraphCacheKey {
+        GraphCacheKey {
+            path: path.to_path_buf(),
+            branch_filter: self.graph_options.branch_filter,
+            first_parent: self.graph_options.first_parent,
+            show_stats: self.graph_options.show_stats,
+            filters: self.graph_options.filters.clone(),
+        }
+    }
+
+    /// Drop cached graph snapshots for `path`. Called when the repo's
+    /// rendered refs/HEAD move, so the next load rebuilds from disk instead
+    /// of resurrecting a stale snapshot.
+    pub fn invalidate_repo(&mut self, path: &Path) {
+        self.graph_cache.invalidate(path);
+    }
+
+    /// Drop every cached graph snapshot (rescan / repo removal).
+    pub fn invalidate_graph_cache(&mut self) {
+        self.graph_cache.clear();
+    }
+
     pub fn set_error(&mut self, msg: String) {
         self.error = Some(msg);
         self.loading = false;
@@ -307,8 +386,23 @@ impl GitGraph {
         self.loading = false;
         self.load_in_flight = false;
         self.consecutive_aborts = 0;
+        // Rows changed wholesale: drop cached row bodies so stale spans
+        // (old oids, old labels) are never served again.
+        self.render_cache.clear();
         self.recompute_segments();
         self.recompute_collapsed_rows();
+        // Cache the freshly built graph so switching back to this repo (with
+        // the same options) restores it instantly instead of rebuilding.
+        if let Some(path) = &self.repo_path {
+            self.graph_cache.insert(
+                self.cache_key(path),
+                CachedGraph {
+                    rows: self.all_rows.clone(),
+                    filter_branches: self.filter_branches.clone(),
+                    filter_authors: self.filter_authors.clone(),
+                },
+            );
+        }
         if !self.display_rows().is_empty() {
             let idx = prev_selected
                 .map(|i| i.min(self.display_rows().len() - 1))
@@ -331,6 +425,12 @@ impl GitGraph {
             if let Some(stat) = stat_map.get(&row.oid) {
                 row.diff_stat = Some(stat.clone());
             }
+        }
+        // Keep the cached snapshot's +N/-M columns in sync so a later cache
+        // hit shows the same stats.
+        if let Some(path) = &self.repo_path {
+            let key = self.cache_key(path);
+            self.graph_cache.apply_stats(&key, &stat_map);
         }
         self.recompute_collapsed_rows();
     }

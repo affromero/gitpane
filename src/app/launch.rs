@@ -492,10 +492,13 @@ impl App {
             return;
         };
         // Refresh the graph from the worktree so new commits appear live.
+        // Bypass the cache: this runs on the local poll and after git ops on
+        // the parent, so it must read current on-disk state.
         if self.git_graph.has_detail() {
             self.git_graph.set_needs_reload();
         } else {
-            self.git_graph.load_repo(aw.path.clone(), &aw.display_name);
+            self.git_graph
+                .force_reload_repo(aw.path.clone(), &aw.display_name);
         }
 
         let tx = self.action_tx.clone();

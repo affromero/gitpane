@@ -726,6 +726,8 @@ impl App {
                     self.last_refresh.remove(id);
                     self.refresh_scheduled.remove(id);
                     let entry = &self.repo_list.repos[idx];
+                    // Drop cached graph snapshots for the removed repo.
+                    self.git_graph.invalidate_repo(&entry.path);
                     // Remove from pinned if it was pinned
                     self.config.pinned_repos.retain(|p| *p != entry.path);
                     // Add to excluded so it won't reappear on rescan
@@ -764,6 +766,9 @@ impl App {
                 self.dirty_repos.clear();
                 self.last_refresh.clear();
                 self.refresh_scheduled.clear();
+                // The repo set is rebuilt from scratch; cached graphs for
+                // vanished paths are dead weight.
+                self.git_graph.invalidate_graph_cache();
                 // Clear user-added exclusions, save, and re-discover repos
                 self.config.excluded_repos.clear();
                 if let Err(e) = self.config.save() {
@@ -819,6 +824,8 @@ impl App {
                         self.dirty_repos.remove(&id);
                         self.last_refresh.remove(&id);
                         self.refresh_scheduled.remove(&id);
+                        // Drop cached graph snapshots for vanished repos.
+                        self.git_graph.invalidate_repo(path);
                         if self
                             .active_worktree
                             .as_ref()

@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- The git graph is now cached per repo: switching back to a repo that was recently viewed restores its built rows instantly instead of reopening the repository, re-walking up to 200 commits, and diffing trees for stats. The cache is keyed by repo path plus the build-shaping options (branch filter, first-parent, ref/author filters, stats toggle), invalidated when a status refresh shows the repo's rendered refs/HEAD moved (even for repos that aren't selected, so a later switch never resurrects stale rows), evicted least-recently-used with a bounded capacity, and bypassed by the explicit `g` reload and live worktree refreshes. Rendered graph rows are cached too: the stable part of each line (lane prefix, labels, id, message, author) is rebuilt only when the row, theme, label width, or search highlight changes, with the relative-time tail (and one clock read per frame instead of one per row) recomputed fresh every frame.
+
 ### Fixed
 - A configured root dir that doesn't exist on disk is no longer silently skipped: the Repositories panel shows a persistent `root does not exist: <path>` hint above the list for the whole session, so a stale or mistyped `root_dirs` entry can't quietly shrink (or empty) the workspace with no explanation. Discovery itself is unchanged; previously only `gitpane diagnostic` surfaced it.
 
