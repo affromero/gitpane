@@ -143,7 +143,7 @@ pub(crate) fn discover_repos(config: &Config) -> Vec<PathBuf> {
     }
 
     // Discover from root dirs
-    for root in &config.root_dirs {
+    for root in config.effective_root_dirs().iter() {
         if !root.exists() {
             continue;
         }

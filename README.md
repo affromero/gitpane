@@ -71,12 +71,11 @@ Then run:
 ```bash
 gitpane                     # Scans ~/Code by default
 gitpane --root ~/projects   # Scan a specific directory
-gitpane --cwd               # Scan the current directory, without touching config
-gitpane --cwd ~/work        # Scan a specific directory, without touching config
+gitpane --cwd               # Scan the current directory for this run
 gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 ```
 
-`--root` and `--cwd` are run-local overrides of the configured `root_dirs`: nothing is written back to `config.toml`. `--cwd` is shorthand for `--root` when you are already standing where you want to scan — with no value it uses the current directory, and it wins over `--root` when both are given.
+`--root` and `--cwd` are run-local overrides of the configured `root_dirs`: they only affect the current run and are never written back to `config.toml`. `--cwd` scans the directory you are already standing in (an absolute `current_dir()`), so it plays nicely with subcommands — `gitpane --cwd diagnostic` just diagnoses that directory. Explicit paths stay with `--root`; when both are given, `--cwd` wins.
 
 ## Update
 

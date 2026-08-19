@@ -69,7 +69,10 @@ pub(crate) fn render(
     push_line(&mut out, &format!("  scan_depth: {}", config.scan_depth));
     push_line(
         &mut out,
-        &format!("  root_dirs: {}", format_paths(&config.root_dirs)),
+        &format!(
+            "  root_dirs: {}",
+            format_paths(config.effective_root_dirs().as_ref())
+        ),
     );
     push_line(
         &mut out,
@@ -231,6 +234,7 @@ fn warnings(
 
     warnings
 }
+
 
 fn format_paths(paths: &[PathBuf]) -> String {
     if paths.is_empty() {

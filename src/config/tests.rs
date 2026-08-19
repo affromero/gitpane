@@ -430,7 +430,12 @@ fn test_default_config_has_code_root() {
 fn test_cli_root_overrides_config() {
     let mut config = Config::default();
     config.override_root(PathBuf::from("/tmp/my-repos"));
-    assert_eq!(config.root_dirs, vec![PathBuf::from("/tmp/my-repos")]);
+    // The override wins for this run, but the configured roots stay intact.
+    assert_eq!(
+        config.effective_root_dirs().as_ref(),
+        &[PathBuf::from("/tmp/my-repos")],
+    );
+    assert_ne!(config.root_dirs, vec![PathBuf::from("/tmp/my-repos")]);
 }
 
 /// Missing roots are exactly the configured ones that don't exist on disk.
@@ -951,4 +956,51 @@ fn test_load_with_env_loads_custom_theme_file() {
     };
     let config = Config::load_with_env(&env).unwrap();
     assert_eq!(config.theme.repo_list.stash, ratatui::style::Color::Magenta);
+}
+
+#[test]
+fn test_effective_root_dirs_prefers_runtime_override() {
+    let mut config = Config {
+        root_dirs: vec![PathBuf::from("/config/roots")],
+        ..Default::default()
+    };
+    assert_eq!(
+        config.effective_root_dirs().as_ref(),
+        &[PathBuf::from("/config/roots")],
+        "without an override the configured roots win",
+    );
+
+    config.override_root(PathBuf::from("/tmp/run-root"));
+    assert_eq!(
+        config.effective_root_dirs().as_ref(),
+        &[PathBuf::from("/tmp/run-root")],
+        "an override must replace the configured roots",
+    );
+}
+
+#[test]
+fn test_runtime_root_override_is_never_serialized() {
+    let mut config = Config {
+        root_dirs: vec![PathBuf::from("/config/roots")],
+        ..Default::default()
+    };
+    config.override_root(PathBuf::from("/tmp/run-root"));
+
+    // Saving the whole config (triggered by pin/remove/rescan/theme actions)
+    // must not leak the run-local override, and must not rewrite root_dirs.
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let reloaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(reloaded.runtime_root_override, None);
+    assert_eq!(reloaded.root_dirs, vec![PathBuf::from("/config/roots")]);
+}
+
+#[test]
+fn test_override_root_expands_tilde() {
+    let mut config = Config::default();
+    config.override_root(PathBuf::from("~/Code"));
+    let roots = config.effective_root_dirs();
+    assert!(
+        !roots.iter().any(|r| r.starts_with("~")),
+        "tilde must expand"
+    );
 }

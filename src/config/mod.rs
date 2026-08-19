@@ -23,6 +23,12 @@ const CONFIG_FILE: &str = "config.toml";
 pub(crate) struct Config {
     #[serde(default = "default_root_dirs")]
     pub root_dirs: Vec<PathBuf>,
+    /// Run-local override of `root_dirs` from the CLI (`--root`/`--cwd`).
+    /// Never serialized, so a session's scan-root override can't leak into
+    /// config.toml when an unrelated action saves the config (pin a repo,
+    /// remove/exclude a repo, rescan, commit a theme).
+    #[serde(skip)]
+    pub runtime_root_override: Option<PathBuf>,
     #[serde(default)]
     pub excluded_repos: Vec<String>,
     #[serde(default)]
@@ -420,15 +426,26 @@ impl Config {
         }
     }
 
+    /// Apply a run-local scan-root override (`--root`/`--cwd`). Stored
+    /// separately from `root_dirs` so `save()` never persists it.
     pub fn override_root(&mut self, root: PathBuf) {
-        self.root_dirs = vec![root];
+        self.runtime_root_override = Some(expand_home(&root));
+    }
+
+    /// The scan roots in effect for this run: the runtime override when set,
+    /// otherwise the configured `root_dirs`.
+    pub fn effective_root_dirs(&self) -> std::borrow::Cow<'_, [PathBuf]> {
+        match &self.runtime_root_override {
+            Some(root) => std::borrow::Cow::Owned(vec![root.clone()]),
+            None => std::borrow::Cow::Borrowed(&self.root_dirs),
+        }
     }
 
     /// Configured root dirs that do not exist on disk. Discovery silently
     /// skips them (`discover_repos` just `continue`s), so without this the
     /// workspace can shrink — or disappear — with no explanation.
     pub(crate) fn missing_roots(&self) -> Vec<PathBuf> {
-        self.root_dirs
+        self.effective_root_dirs()
             .iter()
             .filter(|root| !root.exists())
             .cloned()
@@ -436,22 +453,24 @@ impl Config {
     }
 
     fn expand_tildes(&mut self) {
-        if let Some(home) = dirs::home_dir() {
-            for dir in &mut self.root_dirs {
-                if dir.starts_with("~") {
-                    *dir = home.join(dir.strip_prefix("~").unwrap());
-                }
-            }
-            for dir in &mut self.pinned_repos {
-                if dir.starts_with("~") {
-                    *dir = home.join(dir.strip_prefix("~").unwrap());
-                }
-            }
-            if let Some(dir) = &mut self.worktree.dir
-                && dir.starts_with("~")
-            {
-                *dir = home.join(dir.strip_prefix("~").unwrap());
-            }
+        for dir in &mut self.root_dirs {
+            *dir = expand_home(dir);
+        }
+        for dir in &mut self.pinned_repos {
+            *dir = expand_home(dir);
+        }
+        if let Some(dir) = &mut self.worktree.dir {
+            *dir = expand_home(dir);
         }
     }
+}
+
+/// Expand a leading `~` to the home directory; other paths pass through.
+fn expand_home(dir: &std::path::Path) -> PathBuf {
+    if let Some(home) = dirs::home_dir()
+        && dir.starts_with("~")
+    {
+        return home.join(dir.strip_prefix("~").unwrap());
+    }
+    dir.to_path_buf()
 }
