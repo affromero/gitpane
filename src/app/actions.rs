@@ -158,6 +158,15 @@ impl App {
                     let status_clone = status.clone();
                     self.repo_list.update_status(idx, status_clone);
 
+                    // A graph-relevant change invalidates the cached snapshot
+                    // even when this repo isn't selected, so switching to it
+                    // later rebuilds from disk instead of resurrecting stale
+                    // rows.
+                    if graph_changed {
+                        self.git_graph
+                            .invalidate_repo(&self.repo_list.repos[idx].path);
+                    }
+
                     // Refresh the file list so stale diffs are cleared
                     // when files are staged/unstaged. Skip when a worktree
                     // is being viewed — its files come from WorktreeFilesLoaded,
@@ -355,7 +364,9 @@ impl App {
                     } else if let Some(entry) = self.repo_list.selected_repo() {
                         let path = entry.path.clone();
                         let name = entry.name.clone();
-                        self.git_graph.load_repo(path, &name);
+                        // `g` is an explicit reload: bypass the cache so a
+                        // fresh on-disk graph is drawn even if nothing changed.
+                        self.git_graph.force_reload_repo(path, &name);
                     }
                 }
                 self.focus = FocusPanel::Graph;

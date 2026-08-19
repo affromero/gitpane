@@ -1,6 +1,7 @@
 use super::*;
 use crate::components::Component;
-use crate::git::graph::{BranchLabel, GraphRow, LaneSegment};
+use crate::config::BranchFilter;
+use crate::git::graph::{BranchLabel, DiffStat, GraphRow, LaneSegment};
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use git2::Oid;
 use ratatui::layout::Rect;
@@ -690,5 +691,243 @@ fn scrolling_the_file_list_asks_for_the_settled_files_diff() {
     assert_eq!(
         requested_file(graph.commit_diff_settled(generation)),
         "b.rs"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Graph cache: switching repos restores built rows instead of rebuilding.
+// ---------------------------------------------------------------------------
+
+fn graph_key(path: &str) -> GraphCacheKey {
+    GraphCacheKey {
+        path: PathBuf::from(path),
+        branch_filter: BranchFilter::All,
+        first_parent: false,
+        show_stats: true,
+        filters: GraphFilters::default(),
+    }
+}
+
+fn cached_graph(rows: Vec<GraphRow>) -> CachedGraph {
+    CachedGraph {
+        rows,
+        filter_branches: BTreeSet::new(),
+        filter_authors: BTreeSet::new(),
+    }
+}
+
+fn graph_with_path(path: &str) -> GitGraph {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(PathBuf::from(path));
+    graph
+}
+
+#[test]
+fn graph_cache_evicts_least_recently_used() {
+    let mut cache = GraphCache::new(2);
+    cache.insert(graph_key("/a"), cached_graph(vec![mock_row("1", "a", "A")]));
+    cache.insert(graph_key("/b"), cached_graph(vec![mock_row("2", "b", "B")]));
+    // Touching /a makes /b the least recently used.
+    let _ = cache.get(&graph_key("/a"));
+    cache.insert(graph_key("/c"), cached_graph(vec![mock_row("3", "c", "C")]));
+    assert!(cache.get(&graph_key("/a")).is_some());
+    assert!(cache.get(&graph_key("/b")).is_none());
+    assert!(cache.get(&graph_key("/c")).is_some());
+}
+
+#[test]
+fn graph_cache_invalidate_removes_all_signatures_for_path() {
+    let mut cache = GraphCache::new(8);
+    let mut key_b = graph_key("/a");
+    key_b.first_parent = true;
+    cache.insert(graph_key("/a"), cached_graph(vec![mock_row("1", "a", "A")]));
+    cache.insert(key_b, cached_graph(vec![mock_row("2", "a1", "A")]));
+    cache.invalidate(Path::new("/a"));
+    assert!(cache.get(&graph_key("/a")).is_none());
+    let mut key_b = graph_key("/a");
+    key_b.first_parent = true;
+    assert!(cache.get(&key_b).is_none());
+    // Other paths are untouched.
+    let mut cache2 = GraphCache::new(8);
+    cache2.insert(graph_key("/a"), cached_graph(vec![mock_row("1", "a", "A")]));
+    cache2.insert(graph_key("/b"), cached_graph(vec![mock_row("2", "b", "B")]));
+    cache2.invalidate(Path::new("/a"));
+    assert!(cache2.get(&graph_key("/b")).is_some());
+}
+
+#[test]
+fn graph_cache_apply_stats_updates_cached_rows() {
+    let mut cache = GraphCache::new(4);
+    let row = mock_row("abc1234", "a", "A");
+    let oid = row.oid;
+    cache.insert(graph_key("/a"), cached_graph(vec![row]));
+    let stat_map = std::collections::HashMap::from([(
+        oid,
+        DiffStat {
+            additions: 1,
+            deletions: 2,
+        },
+    )]);
+    cache.apply_stats(&graph_key("/a"), &stat_map);
+    let cached = cache.get(&graph_key("/a")).expect("still cached");
+    let stat = cached.rows[0].diff_stat.as_ref().expect("stats folded in");
+    assert_eq!(stat.additions, 1);
+    assert_eq!(stat.deletions, 2);
+}
+
+#[test]
+fn load_repo_restores_cached_rows_without_rebuilding() {
+    let mut graph = graph_with_path("/tmp/cache-repo");
+    graph.set_rows(vec![mock_row("abc1234", "cached message", "Alice")]);
+    assert!(
+        graph
+            .graph_cache
+            .get(&graph.cache_key(&PathBuf::from("/tmp/cache-repo")))
+            .is_some()
+    );
+
+    // Switching to an uncached repo clears the view (miss path, no action_tx).
+    graph.load_repo(PathBuf::from("/tmp/other-repo"), "other");
+    assert!(graph.loading);
+    assert!(graph.all_rows.is_empty());
+
+    // Switching back hits the cache and restores rows synchronously.
+    graph.load_repo(PathBuf::from("/tmp/cache-repo"), "cache-repo");
+    assert!(!graph.loading);
+    assert_eq!(graph.all_rows.len(), 1);
+    assert_eq!(graph.all_rows[0].message, "cached message");
+    assert_eq!(graph.state.selected(), Some(0));
+}
+
+#[test]
+fn cache_hit_for_different_repo_resets_view_state() {
+    let mut graph = graph_with_path("/tmp/a");
+    graph.set_rows(vec![mock_row("1", "a", "X"), mock_row("2", "b", "Y")]);
+    graph.state.select(Some(1));
+    graph.search.input = "query".to_string();
+
+    graph.load_repo(PathBuf::from("/tmp/b"), "b");
+    graph.load_repo(PathBuf::from("/tmp/a"), "a");
+
+    // The cache hit must behave like a normal repo switch: search and
+    // selection are reset, then set_rows re-selects row 0.
+    assert!(graph.search.input.is_empty());
+    assert_eq!(graph.state.selected(), Some(0));
+}
+
+#[test]
+fn invalidate_repo_forces_a_rebuild() {
+    let mut graph = graph_with_path("/tmp/cache-repo");
+    graph.set_rows(vec![mock_row("abc1234", "cached", "Alice")]);
+    graph.invalidate_repo(&PathBuf::from("/tmp/cache-repo"));
+
+    graph.load_repo(PathBuf::from("/tmp/other"), "other");
+    graph.load_repo(PathBuf::from("/tmp/cache-repo"), "cache-repo");
+    // The entry was dropped: the load is a miss, so rows stay cleared until
+    // the (absent) background build reports back.
+    assert!(graph.loading);
+    assert!(graph.all_rows.is_empty());
+}
+
+#[test]
+fn force_reload_repo_bypasses_the_cache() {
+    let mut graph = graph_with_path("/tmp/cache-repo");
+    graph.set_rows(vec![mock_row("abc1234", "cached", "Alice")]);
+
+    graph.load_repo(PathBuf::from("/tmp/other"), "other");
+    graph.force_reload_repo(PathBuf::from("/tmp/cache-repo"), "cache-repo");
+    assert!(graph.loading);
+    assert!(graph.all_rows.is_empty());
+}
+
+#[test]
+fn cache_is_keyed_by_graph_options() {
+    let mut graph = graph_with_path("/tmp/cache-repo");
+    graph.set_rows(vec![mock_row("abc1234", "cached", "Alice")]);
+    // A different build signature must not hit the cached snapshot.
+    graph.graph_options.first_parent = true;
+
+    graph.load_repo(PathBuf::from("/tmp/other"), "other");
+    graph.load_repo(PathBuf::from("/tmp/cache-repo"), "cache-repo");
+    assert!(graph.loading);
+    assert!(graph.all_rows.is_empty());
+}
+
+#[test]
+fn diff_stats_are_folded_into_the_cached_snapshot() {
+    let mut graph = graph_with_path("/tmp/stats-repo");
+    graph.set_rows(vec![mock_row("abc1234", "msg", "A")]);
+    let oid = graph.all_rows[0].oid;
+    graph.set_diff_stats(vec![(
+        oid,
+        DiffStat {
+            additions: 3,
+            deletions: 2,
+        },
+    )]);
+    let cached = graph
+        .graph_cache
+        .get(&graph.cache_key(&PathBuf::from("/tmp/stats-repo")))
+        .expect("cached");
+    let stat = cached.rows[0].diff_stat.as_ref().expect("stats cached");
+    assert_eq!(stat.additions, 3);
+    assert_eq!(stat.deletions, 2);
+}
+
+#[test]
+fn cache_hit_restores_filter_values_not_present_in_rows() {
+    let mut graph = graph_with_path("/tmp/cache-repo");
+    // A build's branch_names can list a branch whose commits are filtered out
+    // of the walk; the picker still needs that value after a cache hit.
+    graph.filter_branches.insert("hidden-branch".to_string());
+    graph.set_rows(vec![mock_row("abc1234", "cached", "Alice")]);
+
+    graph.load_repo(PathBuf::from("/tmp/other"), "other");
+    graph.load_repo(PathBuf::from("/tmp/cache-repo"), "cache-repo");
+    assert!(graph.filter_branches.contains("hidden-branch"));
+}
+
+#[test]
+fn theme_change_drops_cached_row_bodies() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.set_rows(vec![mock_row("abc1234", "msg", "A")]);
+    let key = RowRenderKey {
+        oid: graph.all_rows[0].oid,
+        theme_generation: graph.theme_generation,
+        label_max_len: 24,
+        dimmed: false,
+        collapsed: false,
+    };
+    graph.render_cache.insert(key, vec![Span::raw("x")]);
+    let generation_before = graph.theme_generation;
+    graph.set_theme(std::sync::Arc::new(crate::theme::Theme::default()));
+    assert!(graph.theme_generation > generation_before);
+    assert!(graph.render_cache.is_empty());
+}
+
+#[test]
+fn deferred_reload_after_invalidate_forces_a_rebuild() {
+    // Mirrors the live-worktree refresh path: the cached snapshot for the
+    // worktree path is invalidated before the reload is deferred (commit
+    // detail open), so when the detail closes the deferred `reload_graph`
+    // must miss the cache and start a fresh build instead of resurrecting
+    // the stale rows.
+    let mut graph = graph_with_path("/tmp/bench-wt");
+    graph.set_rows(vec![mock_row("abc1234", "stale", "Alice")]);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    graph.action_tx = Some(tx);
+    // `spawn_blocking` needs a runtime context for the miss path.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+
+    graph.invalidate_repo(&PathBuf::from("/tmp/bench-wt"));
+    graph.set_needs_reload();
+    graph.reload_graph();
+
+    // A cache hit would restore the stale row synchronously and leave the
+    // latch free; a miss (correct) starts a background rebuild.
+    assert!(
+        graph.load_in_flight,
+        "deferred reload must not hit the cache"
     );
 }

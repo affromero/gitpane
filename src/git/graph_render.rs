@@ -1,6 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use crate::git::graph::{BranchLabel, GraphRow, LaneSegment, lane_color};
@@ -116,6 +114,111 @@ pub(crate) fn render_branch_labels(
     spans
 }
 
+/// Build the stable part of a graph row line: the lane prefix, short id,
+/// branch labels, message and author. These spans change only when the row's
+/// commit, the theme, the label truncation width, or the search highlight
+/// (`dimmed`) changes — none of which moves between frames — so callers cache
+/// the result and re-append the volatile tail each frame.
+pub(crate) fn render_row_body(
+    row: &GraphRow,
+    theme: &GraphTheme,
+    label_max_len: usize,
+    dimmed: bool,
+    collapsed: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = render_graph_prefix(row, theme);
+
+    if dimmed || collapsed {
+        for span in &mut spans {
+            span.style = Style::default().fg(theme.dimmed);
+        }
+    }
+
+    if collapsed {
+        // Collapsed-branch placeholder: prefix + placeholder message only.
+        spans.push(Span::styled(
+            row.message.clone(),
+            Style::default()
+                .fg(theme.collapsed_message)
+                .add_modifier(Modifier::ITALIC),
+        ));
+        return spans;
+    }
+
+    let id_style = if dimmed {
+        Style::default().fg(theme.dimmed)
+    } else {
+        Style::default()
+            .fg(theme.commit_id)
+            .add_modifier(Modifier::BOLD)
+    };
+    spans.push(Span::styled(format!("{} ", row.short_id), id_style));
+
+    if !dimmed {
+        spans.extend(render_branch_labels(&row.labels, label_max_len, theme));
+    }
+
+    let msg_color = if dimmed {
+        theme.dimmed
+    } else if row.is_merge {
+        theme.merge_message
+    } else {
+        theme.commit_message
+    };
+    spans.push(Span::styled(
+        row.message.clone(),
+        Style::default().fg(msg_color),
+    ));
+
+    let author_color = if dimmed {
+        theme.dimmed
+    } else {
+        author_color(&row.author, theme)
+    };
+    spans.push(Span::styled(
+        format!("  — {}", row.author),
+        Style::default().fg(author_color),
+    ));
+
+    spans
+}
+
+/// Build the volatile tail of a graph row line: the relative commit time and
+/// the diff stats. Rebuilt every frame — the relative time advances on its
+/// own — using one `now` clock read shared across the whole frame.
+pub(crate) fn render_row_tail(
+    row: &GraphRow,
+    theme: &GraphTheme,
+    now_secs: i64,
+    dimmed: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if row.collapsed.is_some() {
+        return spans;
+    }
+    spans.push(Span::styled(
+        format!(" {}", format_relative_time_at(row.time, now_secs)),
+        Style::default().fg(theme.time),
+    ));
+    if let Some(ref stat) = row.diff_stat
+        && !dimmed
+    {
+        if stat.additions > 0 {
+            spans.push(Span::styled(
+                format!(" +{}", stat.additions),
+                Style::default().fg(theme.addition),
+            ));
+        }
+        if stat.deletions > 0 {
+            spans.push(Span::styled(
+                format!(" -{}", stat.deletions),
+                Style::default().fg(theme.deletion),
+            ));
+        }
+    }
+    spans
+}
+
 /// Truncate a span list so its total display width fits within `max_width`.
 /// Appends `..` at the cut point when truncation occurs.
 pub(crate) fn truncate_line(spans: &mut Vec<Span<'static>>, max_width: usize) {
@@ -207,12 +310,11 @@ pub(crate) fn h_scroll_line(spans: &mut Vec<Span<'static>>, offset: usize, max_w
     truncate_line(spans, max_width);
 }
 
-pub(crate) fn format_relative_time(epoch_secs: i64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let delta = (now - epoch_secs).max(0) as u64;
+/// Format `epoch_secs` relative to the explicit `now` (seconds since the Unix
+/// epoch). The caller passes one clock read for the whole frame instead of a
+/// `SystemTime::now()` call per visible row.
+pub(crate) fn format_relative_time_at(epoch_secs: i64, now_secs: i64) -> String {
+    let delta = (now_secs - epoch_secs).max(0) as u64;
 
     if delta < 60 {
         format!("{}s ago", delta)
@@ -247,7 +349,29 @@ pub(crate) fn author_color(name: &str, theme: &GraphTheme) -> Color {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    use crate::git::graph::DiffStat;
+
+    fn row(short_id: &str, message: &str, author: &str) -> GraphRow {
+        GraphRow {
+            commit_col: 0,
+            lanes: vec![LaneSegment::Commit],
+            horizontal_spans: Vec::new(),
+            oid: git2::Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            short_id: short_id.to_string(),
+            message: message.to_string(),
+            author: author.to_string(),
+            time: 1_000_000,
+            labels: Vec::new(),
+            is_merge: false,
+            parent_oids: Vec::new(),
+            diff_stat: None,
+            collapsed: None,
+        }
+    }
 
     fn label(name: &str, is_head: bool, is_remote: bool, is_worktree: bool) -> BranchLabel {
         BranchLabel {
@@ -347,7 +471,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        assert_eq!(format_relative_time(now - 30), "30s ago");
+        assert_eq!(format_relative_time_at(now - 30, now), "30s ago");
     }
 
     #[test]
@@ -356,7 +480,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        assert_eq!(format_relative_time(now - 7200), "2h ago");
+        assert_eq!(format_relative_time_at(now - 7200, now), "2h ago");
     }
 
     #[test]
@@ -365,7 +489,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        assert_eq!(format_relative_time(now - 259200), "3d ago");
+        assert_eq!(format_relative_time_at(now - 259200, now), "3d ago");
     }
 
     #[test]
@@ -375,7 +499,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
         // 2 weeks = 14 days = 14*86400 = 1209600
-        assert_eq!(format_relative_time(now - 1_209_600), "2w ago");
+        assert_eq!(format_relative_time_at(now - 1_209_600, now), "2w ago");
     }
 
     #[test]
@@ -385,7 +509,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
         // ~5 months = 5 * 30 days = 12960000
-        assert_eq!(format_relative_time(now - 12_960_000), "5mo ago");
+        assert_eq!(format_relative_time_at(now - 12_960_000, now), "5mo ago");
     }
 
     #[test]
@@ -395,7 +519,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
         // ~2 years = 2 * 365 days = 63072000
-        assert_eq!(format_relative_time(now - 63_072_000), "2y ago");
+        assert_eq!(format_relative_time_at(now - 63_072_000, now), "2y ago");
     }
 
     #[test]
@@ -405,7 +529,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
         // Future timestamp
-        assert_eq!(format_relative_time(now + 1000), "0s ago");
+        assert_eq!(format_relative_time_at(now + 1000, now), "0s ago");
     }
 
     #[test]
@@ -543,5 +667,79 @@ mod tests {
         let mut spans = vec![Span::raw("abc")];
         h_scroll_line(&mut spans, 10, 20);
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn test_render_row_body_contains_id_message_author() {
+        let theme = GraphTheme::default();
+        let spans = render_row_body(
+            &row("abc1234", "fix: thing", "Alice"),
+            &theme,
+            24,
+            false,
+            false,
+        );
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("abc1234"), "got: {text}");
+        assert!(text.contains("fix: thing"), "got: {text}");
+        assert!(text.contains("Alice"), "got: {text}");
+    }
+
+    #[test]
+    fn test_render_row_body_dimmed_forces_dim_style() {
+        let theme = GraphTheme::default();
+        let spans = render_row_body(&row("abc1234", "msg", "Alice"), &theme, 24, true, false);
+        for span in &spans {
+            assert_eq!(span.style.fg, Some(theme.dimmed), "got: {:#?}", span.style);
+        }
+    }
+
+    #[test]
+    fn test_render_row_body_collapsed_is_placeholder_only() {
+        let theme = GraphTheme::default();
+        let mut r = row("abc1234", "\u{25b6} feature (3 commits)", "Alice");
+        r.collapsed = Some(("feature".to_string(), 3));
+        let spans = render_row_body(&r, &theme, 24, false, true);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("\u{25b6} feature (3 commits)"), "got: {text}");
+        assert!(!text.contains("Alice"), "got: {text}");
+    }
+
+    #[test]
+    fn test_render_row_tail_skips_collapsed_rows() {
+        let theme = GraphTheme::default();
+        let mut r = row("abc1234", "x", "Alice");
+        r.collapsed = Some(("feature".to_string(), 3));
+        let tail = render_row_tail(&r, &theme, 1_000_000, false);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn test_render_row_tail_includes_time_and_stats() {
+        let theme = GraphTheme::default();
+        let mut r = row("abc1234", "x", "Alice");
+        r.diff_stat = Some(DiffStat {
+            additions: 3,
+            deletions: 2,
+        });
+        let tail = render_row_tail(&r, &theme, 1_000_000, false);
+        let text: String = tail.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("0s ago"), "got: {text}");
+        assert!(text.contains("+3"), "got: {text}");
+        assert!(text.contains("-2"), "got: {text}");
+    }
+
+    #[test]
+    fn test_render_row_tail_omits_stats_when_dimmed() {
+        let theme = GraphTheme::default();
+        let mut r = row("abc1234", "x", "Alice");
+        r.diff_stat = Some(DiffStat {
+            additions: 3,
+            deletions: 2,
+        });
+        let tail = render_row_tail(&r, &theme, 1_000_000, true);
+        let text: String = tail.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("0s ago"), "got: {text}");
+        assert!(!text.contains("+3"), "got: {text}");
     }
 }

@@ -392,3 +392,60 @@ async fn quit_waits_for_mutating_git_ops_and_force_quits_on_second_request() {
     guard.complete();
     assert!(app.ready_to_exit());
 }
+
+/// The live-worktree refresh must drop the worktree's cached graph even
+/// when the reload is deferred (commit detail open): a cache hit there would
+/// resurrect stale rows for up to a poll interval. Guards the
+/// `invalidate_repo(&aw.path)` line in `refresh_active_worktree`.
+#[test]
+fn worktree_refresh_invalidates_the_cached_graph_for_the_worktree_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    // `spawn_blocking` in the miss path needs a runtime context.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+
+    let wt = tmp.path().join("live-wt");
+    app.active_worktree = Some(ActiveWorktree {
+        path: wt.clone(),
+        repo_id: RepoId(wt.clone()),
+        display_name: "live-wt".to_string(),
+    });
+
+    // Seed the cache the way a completed build would.
+    app.git_graph.load_repo(wt.clone(), "live-wt");
+    app.git_graph.set_rows(vec![mock_graph_row()]);
+    assert!(
+        app.git_graph.has_cached_graph_for(&wt),
+        "precondition: the worktree graph is cached",
+    );
+
+    app.refresh_active_worktree();
+
+    assert!(
+        !app.git_graph.has_cached_graph_for(&wt),
+        "refresh_active_worktree must invalidate the worktree's cached graph",
+    );
+}
+
+fn mock_graph_row() -> crate::git::graph::GraphRow {
+    crate::git::graph::GraphRow {
+        commit_col: 0,
+        lanes: vec![crate::git::graph::LaneSegment::Commit],
+        horizontal_spans: Vec::new(),
+        oid: git2::Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        short_id: "abc1234".to_string(),
+        message: "m".to_string(),
+        author: "a".to_string(),
+        time: 0,
+        labels: Vec::new(),
+        is_merge: false,
+        parent_oids: Vec::new(),
+        diff_stat: None,
+        collapsed: None,
+    }
+}

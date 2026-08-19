@@ -51,14 +51,14 @@ impl Default for GraphOptions {
 
 /// Optional include lists for the graph. `None` means every value in the
 /// category is included; an empty set deliberately produces an empty graph.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct GraphFilters {
     pub branches: Option<BTreeSet<String>>,
     pub authors: Option<BTreeSet<String>>,
     pub refs: GraphRefFilters,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GraphRefFilters {
     pub local: bool,
     pub remote: bool,

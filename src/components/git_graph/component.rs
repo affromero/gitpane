@@ -88,6 +88,17 @@ impl GitGraph {
         let label_max_len = self.graph_options.label_max_len;
         let max_width = area.width.saturating_sub(2) as usize; // 2 for borders
         let has_search = !self.search.input.is_empty() && !self.search.matches.is_empty();
+        // One clock read for the whole frame's relative-time column.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Rendered row bodies are cached per (commit, theme, width, highlight,
+        // collapse) state; only the volatile tail (relative time, diff stats)
+        // is rebuilt each frame. Take the cache out of `self` so the closure
+        // can mutate it while `display_rows` is still borrowed.
+        let mut render_cache = std::mem::take(&mut self.render_cache);
         let items: Vec<ListItem> = self
             .display_rows()
             .iter()
@@ -95,87 +106,39 @@ impl GitGraph {
             .map(|(i, row)| {
                 let dimmed = has_search && !self.search.matches.contains(&i);
                 let is_collapsed = row.collapsed.is_some();
-                let mut spans = graph_render::render_graph_prefix(row, t);
 
-                if dimmed || is_collapsed {
-                    for span in &mut spans {
-                        span.style = Style::default().fg(t.dimmed);
-                    }
-                }
-
-                if is_collapsed {
-                    spans.push(Span::styled(
-                        row.message.clone(),
-                        Style::default()
-                            .fg(t.collapsed_message)
-                            .add_modifier(Modifier::ITALIC),
-                    ));
-                } else {
-                    let id_style = if dimmed {
-                        Style::default().fg(t.dimmed)
-                    } else {
-                        Style::default()
-                            .fg(t.commit_id)
-                            .add_modifier(Modifier::BOLD)
-                    };
-                    spans.push(Span::styled(format!("{} ", row.short_id), id_style));
-
-                    if !dimmed {
-                        spans.extend(graph_render::render_branch_labels(
-                            &row.labels,
-                            label_max_len,
+                let key = RowRenderKey {
+                    oid: row.oid,
+                    theme_generation: self.theme_generation,
+                    label_max_len,
+                    dimmed,
+                    collapsed: is_collapsed,
+                };
+                let mut spans = match render_cache.get(&key) {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let built = graph_render::render_row_body(
+                            row,
                             t,
-                        ));
-                    }
-
-                    let msg_color = if dimmed {
-                        t.dimmed
-                    } else if row.is_merge {
-                        t.merge_message
-                    } else {
-                        t.commit_message
-                    };
-                    spans.push(Span::styled(
-                        row.message.clone(),
-                        Style::default().fg(msg_color),
-                    ));
-
-                    let author_color = if dimmed {
-                        t.dimmed
-                    } else {
-                        graph_render::author_color(&row.author, t)
-                    };
-                    spans.push(Span::styled(
-                        format!("  — {}", row.author),
-                        Style::default().fg(author_color),
-                    ));
-                    spans.push(Span::styled(
-                        format!(" {}", graph_render::format_relative_time(row.time)),
-                        Style::default().fg(t.time),
-                    ));
-
-                    if let Some(ref stat) = row.diff_stat
-                        && !dimmed
-                    {
-                        if stat.additions > 0 {
-                            spans.push(Span::styled(
-                                format!(" +{}", stat.additions),
-                                Style::default().fg(t.addition),
-                            ));
+                            label_max_len,
+                            dimmed,
+                            is_collapsed,
+                        );
+                        if render_cache.len() >= RENDER_CACHE_CAPACITY {
+                            render_cache.clear();
                         }
-                        if stat.deletions > 0 {
-                            spans.push(Span::styled(
-                                format!(" -{}", stat.deletions),
-                                Style::default().fg(t.deletion),
-                            ));
-                        }
+                        render_cache.insert(key, built.clone());
+                        built
                     }
-                }
+                };
+
+                spans.extend(graph_render::render_row_tail(row, t, now_secs, dimmed));
 
                 graph_render::h_scroll_line(&mut spans, self.h_scroll, max_width);
                 ListItem::new(Line::from(spans))
             })
             .collect();
+        self.render_cache = render_cache;
 
         let list = List::new(items).block(block).highlight_style(
             Style::default()
