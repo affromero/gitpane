@@ -366,12 +366,13 @@ impl App {
         // Roots are cloned before `config` moves into `Self` below; the repo
         // list needs them to render each repo's relative display path.
         let roots = config.effective_root_dirs().into_owned();
+        let expand_worktrees = config.ui.expand_worktrees;
 
         let mut app = Self {
             config,
             should_quit: false,
             force_quit: false,
-            repo_list: RepoList::new(repo_paths, roots, theme.clone()),
+            repo_list: RepoList::new(repo_paths, roots, expand_worktrees, theme.clone()),
             file_list: FileList::new(theme.clone()),
             git_graph,
             graph_context_menu: GraphContextMenu::new(theme.clone()),

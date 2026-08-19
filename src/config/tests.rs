@@ -1021,3 +1021,14 @@ fn test_override_root_expands_tilde() {
         "tilde must expand"
     );
 }
+
+/// An existing config with a `[ui]` section written before this key existed
+/// still gets worktrees expanded, rather than deserializing to `false`.
+#[test]
+fn test_expand_worktrees_defaults_on_for_configs_without_the_key() {
+    let config: Config = toml::from_str("[ui]\nframe_rate = 30\n").unwrap();
+    assert!(config.ui.expand_worktrees);
+
+    let config: Config = toml::from_str("[ui]\nexpand_worktrees = false\n").unwrap();
+    assert!(!config.ui.expand_worktrees);
+}

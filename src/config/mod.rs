@@ -138,6 +138,10 @@ pub(crate) struct UiConfig {
     /// Mark repos/worktrees that have a live tmux pane cwd'd inside them.
     #[serde(default = "default_show_liveness")]
     pub show_liveness: bool,
+    /// Show each repo's worktrees on startup. Set false if many repos with
+    /// many worktrees make the list too tall; `w` still toggles either way.
+    #[serde(default = "default_expand_worktrees")]
+    pub expand_worktrees: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
