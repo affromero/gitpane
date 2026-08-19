@@ -264,6 +264,35 @@ mod tests {
     }
 
     #[test]
+    fn cli_root_override_replaces_scan_root_in_discovery() {
+        // The user-visible contract of --cwd/--root: discovery scans the
+        // override root and only the override root, not the configured ones.
+        let tmp = TempDir::new().unwrap();
+        let configured = tmp.path().join("configured");
+        let elsewhere = tmp.path().join("elsewhere");
+        make_repo(&configured, "in-configured");
+        make_repo(&elsewhere, "in-override");
+
+        let mut config = Config {
+            root_dirs: vec![configured.clone()],
+            scan_depth: 2,
+            ..Config::default()
+        };
+        config.override_root(elsewhere.clone());
+
+        let repos = discover_repos(&config);
+        let names: Vec<String> = repos
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        assert_eq!(
+            names,
+            ["in-override"],
+            "override must replace the scan root"
+        );
+    }
+
+    #[test]
     fn test_excluded_repos_are_filtered() {
         let tmp = TempDir::new().unwrap();
         make_repo(tmp.path(), "good-repo");

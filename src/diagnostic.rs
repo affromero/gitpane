@@ -235,7 +235,6 @@ fn warnings(
     warnings
 }
 
-
 fn format_paths(paths: &[PathBuf]) -> String {
     if paths.is_empty() {
         "none".to_string()
