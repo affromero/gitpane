@@ -904,3 +904,30 @@ fn theme_change_drops_cached_row_bodies() {
     assert!(graph.theme_generation > generation_before);
     assert!(graph.render_cache.is_empty());
 }
+
+#[test]
+fn deferred_reload_after_invalidate_forces_a_rebuild() {
+    // Mirrors the live-worktree refresh path: the cached snapshot for the
+    // worktree path is invalidated before the reload is deferred (commit
+    // detail open), so when the detail closes the deferred `reload_graph`
+    // must miss the cache and start a fresh build instead of resurrecting
+    // the stale rows.
+    let mut graph = graph_with_path("/tmp/bench-wt");
+    graph.set_rows(vec![mock_row("abc1234", "stale", "Alice")]);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    graph.action_tx = Some(tx);
+    // `spawn_blocking` needs a runtime context for the miss path.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+
+    graph.invalidate_repo(&PathBuf::from("/tmp/bench-wt"));
+    graph.set_needs_reload();
+    graph.reload_graph();
+
+    // A cache hit would restore the stale row synchronously and leave the
+    // latch free; a miss (correct) starts a background rebuild.
+    assert!(
+        graph.load_in_flight,
+        "deferred reload must not hit the cache"
+    );
+}

@@ -5,8 +5,9 @@ use crate::config::BranchFilter;
 use crate::git::graph::{DiffStat, GraphFilters, GraphRow};
 
 /// Upper bound on cached graph snapshots. Each holds up to `MAX_COMMITS`
-/// rows (~100 KB), so this keeps memory bounded to a few MB while covering
-/// the repos a user actually cycles through.
+/// rows of owned strings plus lane vectors, on the order of a few hundred
+/// KB, so the ceiling here lands in the low tens of MB — acceptable for
+/// covering the repos a user actually cycles through.
 pub(crate) const GRAPH_CACHE_CAPACITY: usize = 32;
 
 /// Upper bound on cached rendered row bodies. Rows are evicted wholesale once
