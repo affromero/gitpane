@@ -145,7 +145,10 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let parts: Vec<&str> = s.split('/').collect();
+    // Split on both separators: a native Windows path uses backslashes and
+    // would otherwise land here as a single part, hard-truncating and
+    // cutting off the tail (the repo basename) instead of middle-ellipsizing.
+    let parts: Vec<&str> = s.split(['/', '\\']).collect();
     let head = parts.first().copied().unwrap_or(s);
     let tail = parts.last().copied().unwrap_or(s);
     let head_tail = format!("{head}/…/{tail}");

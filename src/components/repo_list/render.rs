@@ -281,7 +281,10 @@ impl Component for RepoList {
                     .bg(s.error_label_bg)
                     .add_modifier(Modifier::BOLD),
             );
-            let text = middle_ellipsize(&text, area.width as usize);
+            // The rendered line is the 3-cell " ! " label plus the text;
+            // give the ellipsize budget the text's share so the ellipsis
+            // marker itself isn't clipped by the paragraph.
+            let text = middle_ellipsize(&text, area.width.saturating_sub(3) as usize);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     label,
