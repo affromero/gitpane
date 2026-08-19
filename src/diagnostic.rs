@@ -153,7 +153,7 @@ pub(crate) fn render(
     push_line(&mut out, &format!("  repos_discovered: {}", repos.len()));
     push_line(
         &mut out,
-        &format!("  missing_roots: {}", format_paths(&missing_roots(config))),
+        &format!("  missing_roots: {}", format_paths(&config.missing_roots())),
     );
     out.push('\n');
 
@@ -225,20 +225,11 @@ fn warnings(
         ));
     }
 
-    for root in missing_roots(config) {
+    for root in config.missing_roots() {
         warnings.push(format!("root_dir does not exist: {}", root.display()));
     }
 
     warnings
-}
-
-fn missing_roots(config: &Config) -> Vec<PathBuf> {
-    config
-        .root_dirs
-        .iter()
-        .filter(|root| !root.exists())
-        .cloned()
-        .collect()
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {

@@ -89,6 +89,11 @@ pub(crate) struct RepoList {
     /// (`display_path`), canonicalized in `new` to match the form discovery
     /// emits. Needed at rescan time too, for repos added later.
     roots: Vec<PathBuf>,
+    /// Configured workspace roots that do not exist on disk (canonicalized
+    /// like `roots`). Discovery silently skips them, so they are surfaced as
+    /// a persistent hint at the top of the panel — otherwise the workspace
+    /// can shrink (or vanish) with no explanation.
+    missing_roots: Vec<PathBuf>,
     pub state: ListState,
     pub render_area: Rect,
     pub focused: bool,
@@ -140,7 +145,10 @@ fn middle_ellipsize(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let parts: Vec<&str> = s.split('/').collect();
+    // Split on both separators: a native Windows path uses backslashes and
+    // would otherwise land here as a single part, hard-truncating and
+    // cutting off the tail (the repo basename) instead of middle-ellipsizing.
+    let parts: Vec<&str> = s.split(['/', '\\']).collect();
     let head = parts.first().copied().unwrap_or(s);
     let tail = parts.last().copied().unwrap_or(s);
     let head_tail = format!("{head}/…/{tail}");
@@ -168,6 +176,14 @@ impl RepoList {
             .into_iter()
             .map(|root| root.canonicalize().unwrap_or(root))
             .collect();
+        // A root that canonicalized exists on disk; a root that failed to
+        // canonicalize (kept as-is by `unwrap_or`) and still does not exist
+        // is one discovery will silently skip.
+        let missing_roots: Vec<PathBuf> = roots
+            .iter()
+            .filter(|root| !root.exists())
+            .cloned()
+            .collect();
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
             .map(|path| {
@@ -194,6 +210,7 @@ impl RepoList {
         let mut list = Self {
             repos,
             roots,
+            missing_roots,
             state,
             render_area: Rect::default(),
             focused: true,

@@ -2,9 +2,10 @@ use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Block, Borders, List, ListItem},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -252,6 +253,50 @@ impl Component for RepoList {
             t.border_unfocused
         };
 
+        // Persistent warning for configured roots that don't exist on disk.
+        // Discovery silently skips them, so without this the workspace can
+        // shrink (or vanish) with no explanation. Rendered above the list for
+        // the whole session — not a toast that expires after a few seconds.
+        let missing_hint = if self.missing_roots.is_empty() {
+            None
+        } else {
+            let names = self
+                .missing_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("root does not exist: {names}"))
+        };
+        let list_area = if let Some(text) = missing_hint {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(area);
+            let s = &self.theme.status_bar;
+            let label = Span::styled(
+                " ! ",
+                Style::default()
+                    .fg(s.error_label_fg)
+                    .bg(s.error_label_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            // The rendered line is the 3-cell " ! " label plus the text;
+            // give the ellipsize budget the text's share so the ellipsis
+            // marker itself isn't clipped by the paragraph.
+            let text = middle_ellipsize(&text, area.width.saturating_sub(3) as usize);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    label,
+                    Span::styled(text, Style::default().fg(s.error_text)),
+                ])),
+                rows[0],
+            );
+            rows[1]
+        } else {
+            area
+        };
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -265,7 +310,7 @@ impl Component for RepoList {
                     .add_modifier(Modifier::BOLD),
             );
 
-        frame.render_stateful_widget(list, area, &mut self.state);
+        frame.render_stateful_widget(list, list_area, &mut self.state);
         Ok(())
     }
 }
