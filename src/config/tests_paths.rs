@@ -1,6 +1,9 @@
 //! Config discovery: which file wins, where a save lands, keybinding parsing.
 
+use super::load::{LoadResolution, candidate_search_paths, default_write_path, resolve_load};
+use super::test_support::*;
 use super::*;
+use std::{collections::HashSet, fs, path::PathBuf};
 
 /// Regression: a sparse `~/.config/gitpane/config.toml` silently shadowed the
 /// full config in the platform dir (macOS Application Support), making pinned

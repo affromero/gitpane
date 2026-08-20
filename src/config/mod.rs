@@ -8,7 +8,13 @@ mod defaults;
 mod load;
 mod terminal;
 #[cfg(test)]
-mod tests;
+mod test_support;
+#[cfg(test)]
+mod tests_fields;
+#[cfg(test)]
+mod tests_paths;
+#[cfg(test)]
+mod tests_theme;
 
 use defaults::*;
 use load::{LoadResolution, candidate_search_paths, default_write_path, resolve_load};

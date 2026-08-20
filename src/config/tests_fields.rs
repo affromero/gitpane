@@ -1,6 +1,11 @@
 //! Per-section defaults, TOML roundtrips, and scan-root resolution.
 
+use super::terminal::{TERMINAL_GOTOS, goto_command_for_env};
 use super::*;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[test]
 fn test_default_config_has_code_root() {

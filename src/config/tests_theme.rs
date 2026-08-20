@@ -1,6 +1,8 @@
 //! Theme name resolution and loading through `load_with_env`.
 
+use super::test_support::*;
 use super::*;
+use std::{collections::HashSet, fs};
 
 #[test]
 fn test_theme_defaults_to_default_name() {
