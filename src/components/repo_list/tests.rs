@@ -95,6 +95,42 @@ fn selected_sync_target_id_resolves_repo_worktree_and_stash() {
 }
 
 #[test]
+fn selected_menu_targets_the_selected_row_at_its_right_edge() {
+    let mut list = make_list(&["/a", "/b"]);
+    list.render_area = Rect::new(2, 4, 40, 20);
+
+    // Repo row: not a worktree, anchored at the row's right edge.
+    list.state.select(Some(0));
+    assert_eq!(
+        list.selected_menu(),
+        Some((RepoId(PathBuf::from("/a")), false, 41, 5))
+    );
+
+    // Worktree row: targets the worktree's own path and flags is_worktree.
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("one")];
+    list.update_status(1, status);
+    list.state.select(Some(2)); // display rows: [/a, /b, /b's worktree]
+    assert_eq!(
+        list.selected_menu(),
+        Some((RepoId(PathBuf::from("/wt/one")), true, 41, 7))
+    );
+
+    // Stash row: no context menu, mirroring right-click.
+    let mut stash_status = empty_status("main");
+    stash_status.stashes = vec![stash_entry(0)];
+    list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
+    list.update_status(0, stash_status);
+    let stash_row = list
+        .display_rows
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Stash(_, _)))
+        .expect("stash row present");
+    list.state.select(Some(stash_row));
+    assert_eq!(list.selected_menu(), None);
+}
+
+#[test]
 fn sync_paths_noop_when_set_unchanged() {
     let mut list = make_list(&["/a", "/b"]);
     let diff = list.sync_paths(vec![PathBuf::from("/a"), PathBuf::from("/b")]);

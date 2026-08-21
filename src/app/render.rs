@@ -306,8 +306,12 @@ impl App {
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
-            Line::from(vec![key("v"), desc("Review changes (tmux window)")]),
-            Line::from(vec![key("G"), desc("Attach live tmux session")]),
+            Line::from(vec![key("v"), desc("Review changes (new window)")]),
+            Line::from(vec![key("G"), desc("Attach live session")]),
+            Line::from(vec![
+                key("x / Menu"),
+                desc("Context menu (right-click fallback)"),
+            ]),
             Line::from(vec![key("p / P"), desc("Pull / push repo/worktree")]),
             Line::from(vec![key("="), desc("Toggle GitHub panel")]),
             Line::from(vec![key("y"), desc("Copy to clipboard")]),
@@ -332,7 +336,7 @@ impl App {
                     desc("Focus mode (dim unselected)"),
                 ]));
                 lines.push(Line::from(vec![
-                    key("Right-click"),
+                    key("Right-click / x"),
                     desc("Menu: new worktree, push/pull, …"),
                 ]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
@@ -351,7 +355,10 @@ impl App {
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("h / l"), desc("Scroll left / right")]));
                 lines.push(Line::from(vec![key("Enter"), desc("Open commit files")]));
-                lines.push(Line::from(vec![key("Right-click"), desc("Filter graph")]));
+                lines.push(Line::from(vec![
+                    key("Right-click / x"),
+                    desc("Filter graph"),
+                ]));
                 lines.push(Line::from(""));
                 lines.push(section("Search"));
                 lines.push(Line::from(vec![key("/"), desc("Search commits")]));

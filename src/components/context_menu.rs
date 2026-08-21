@@ -68,11 +68,14 @@ pub(crate) struct MenuContext {
     pub behind: usize,
     pub has_submodules: bool,
     pub is_worktree: bool,
-    /// tmux sessions live in this row's path; surfaced as session menu items.
+    /// Sessions/tabs live in this row's path; surfaced as session menu items.
     pub live_sessions: Vec<String>,
     /// The resolved `[goto] command`, used to label the session item with where
     /// it opens (new tab / new window).
     pub goto_command: String,
+    /// Which multiplexer this runs under, so live-session items say "tmux" or
+    /// "herdr tab" and the attach suffix matches the backend.
+    pub mux: crate::session::env::Multiplexer,
 }
 
 /// File-row context that decides which file actions the menu offers.
@@ -129,6 +132,7 @@ impl ContextMenu {
             is_worktree,
             live_sessions,
             goto_command,
+            mux,
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
@@ -145,24 +149,31 @@ impl ContextMenu {
             item("Open".into(), MenuAction::Open),
             item("Review changes".into(), MenuAction::Review),
         ];
-        // The session item label says where it opens ("(new tab)"/"(new
-        // window)"), inferred from the [goto] command, so it's clear the current
-        // view stays put.
-        let where_suffix = match crate::session::launcher::goto_placement(&goto_command) {
-            Some(p) => format!(" ({p})"),
-            None => String::new(),
+        // The session item label says what is live and where it opens: tmux
+        // sessions infer "(new tab)"/"(new window)" from the [goto] command;
+        // herdr tabs focus in place.
+        let (live_kind, live_plural) = match mux {
+            crate::session::env::Multiplexer::Herdr => ("herdr tab", "herdr tabs"),
+            _ => ("tmux", "tmux sessions"),
+        };
+        let where_suffix = match mux {
+            crate::session::env::Multiplexer::Herdr => " (focus tab)".to_string(),
+            _ => match crate::session::launcher::goto_placement(&goto_command) {
+                Some(p) => format!(" ({p})"),
+                None => String::new(),
+            },
         };
         match live_sessions.len() {
             0 => {}
             1 => {
                 let s = live_sessions.into_iter().next().unwrap();
                 launch.push(item(
-                    format!("Open {s} active tmux{where_suffix}"),
+                    format!("Open {s} active {live_kind}{where_suffix}"),
                     MenuAction::GotoSession(s),
                 ));
             }
             _ => launch.push(item(
-                format!("Open active tmux session…{where_suffix}"),
+                format!("Open active {live_plural}…{where_suffix}"),
                 MenuAction::GotoSessionPicker,
             )),
         }

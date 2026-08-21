@@ -234,16 +234,23 @@ impl App {
                 }
             }
             Action::PollLocal => {
-                // Probe tmux pane cwds once per poll so live
-                // repos/worktrees get a marker (tmux-only; empty set
-                // otherwise). One `tmux list-panes` call, off-thread.
+                // Probe live panes once per poll so repos/worktrees get a
+                // marker. One `tmux list-panes` (or `herdr pane list`) call,
+                // off-thread; empty set otherwise.
                 if self.config.ui.show_liveness && !self.liveness_probe_in_flight {
                     self.liveness_probe_in_flight = true;
                     let tx = self.action_tx.clone();
                     tokio::task::spawn_blocking(move || {
-                        let _ = tx.send(Action::LiveSessionsLoaded(
-                            crate::session::liveness::tmux_pane_sessions(),
-                        ));
+                        let panes = match crate::session::env::Multiplexer::detect() {
+                            crate::session::env::Multiplexer::Tmux => {
+                                crate::session::liveness::tmux_pane_sessions()
+                            }
+                            crate::session::env::Multiplexer::Herdr => {
+                                crate::session::liveness::herdr_live_panes()
+                            }
+                            crate::session::env::Multiplexer::None => Vec::new(),
+                        };
+                        let _ = tx.send(Action::LiveSessionsLoaded(panes));
                     });
                 }
                 // Fast local status poll (no network, no spinner)
@@ -485,7 +492,7 @@ impl App {
                             value,
                             &p.dir.to_string_lossy(),
                             p.base.as_deref(),
-                            std::env::var_os("TMUX").is_some(),
+                            crate::session::env::Multiplexer::detect(),
                         );
                         self.run_launch_plan(plan, p.dir, p.label, tui)?;
                     }

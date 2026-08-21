@@ -138,6 +138,12 @@ async fn run() -> Result<()> {
     }
     config.ui.frame_rate = cli.frame_rate;
 
+    // Under herdr, forward right-click gestures to this pane so gitpane's
+    // context menu works (herdr's own right-click menu would swallow them).
+    // Fire-and-forget on the blocking pool so a wedged herdr never stalls
+    // startup; the helper itself no-ops outside herdr.
+    tokio::task::spawn_blocking(crate::session::launcher::forward_right_click_in_herdr);
+
     let mut app = app::App::new(config);
     app.run().await?;
 

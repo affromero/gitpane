@@ -3,6 +3,12 @@
 //! detached argv launcher, wrapped in a tmux pane/window, inlined into the
 //! current terminal, or via an interactive picker — without touching any I/O,
 //! so it is fully unit-testable. The caller executes the returned [`LaunchPlan`].
+//!
+//! The launch vocabulary is tmux-shaped (`split-window`/`new-window`); under
+//! herdr ([`Multiplexer::Herdr`]) the same placements are translated to herdr's
+//! `pane split` / `tab create` commands so config stays portable.
+
+use crate::session::env::Multiplexer;
 
 /// How a verb places the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +30,13 @@ enum Placement {
 pub(crate) enum LaunchPlan {
     /// Spawn this argv detached (current_dir set by the caller).
     Spawn(Vec<String>),
+    /// herdr: run `create` (`herdr pane split` / `herdr tab create`), parse the
+    /// new pane's id from its JSON response, then run `command` in that pane
+    /// with `herdr pane run`. `command` is `None` for a bare shell pane.
+    Herdr {
+        create: Vec<String>,
+        command: Option<String>,
+    },
     /// Run this `sh -c` string in the current terminal, suspending the TUI.
     Inline(String),
     /// Show the interactive placement picker.
@@ -106,14 +119,15 @@ fn build_tmux_argv(flags: &[String], dir: &str, cmd: Option<&str>) -> Vec<String
 }
 
 /// Decide how to launch `command` at `dir` under `placement`. `base` is the
-/// review base ref (None for open). `in_tmux` is whether `$TMUX` is set. A tmux
-/// placement (or `ask`) with no tmux falls back to running the command inline.
+/// review base ref (None for open). `mux` is the multiplexer this instance
+/// runs under (see [`Multiplexer::detect`]). A tmux placement (or `ask`) with
+/// no multiplexer falls back to running the command inline.
 pub(crate) fn plan(
     command: Option<&str>,
     placement: &str,
     dir: &str,
     base: Option<&str>,
-    in_tmux: bool,
+    mux: Multiplexer,
 ) -> LaunchPlan {
     let placement = match parse_placement(placement) {
         Ok(p) => p,
@@ -123,37 +137,60 @@ pub(crate) fn plan(
     match placement {
         Placement::Command => match cmd {
             Some(c) => LaunchPlan::Spawn(substitute_argv(c, dir)),
-            None if in_tmux => LaunchPlan::Spawn(vec![
-                "tmux".to_string(),
-                "split-window".to_string(),
-                "-c".to_string(),
-                dir.to_string(),
-            ]),
-            None => LaunchPlan::Error("set a command or run gitpane inside tmux".to_string()),
+            None => match mux {
+                Multiplexer::Tmux => LaunchPlan::Spawn(vec![
+                    "tmux".to_string(),
+                    "split-window".to_string(),
+                    "-c".to_string(),
+                    dir.to_string(),
+                ]),
+                Multiplexer::Herdr => LaunchPlan::Herdr {
+                    create: herdr_split_argv("right", dir, None),
+                    command: None,
+                },
+                Multiplexer::None => {
+                    LaunchPlan::Error("set a command or run gitpane inside tmux or herdr".into())
+                }
+            },
         },
         Placement::Tmux(flags) => {
             let shell = cmd.map(|c| substitute_shell(c, dir, base));
-            if in_tmux {
-                LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref()))
-            } else if let Some(s) = shell {
-                LaunchPlan::Inline(s)
-            } else {
-                LaunchPlan::Error("run gitpane inside tmux for this placement".to_string())
+            match mux {
+                Multiplexer::Tmux => {
+                    LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref()))
+                }
+                Multiplexer::Herdr => match herdr_create_argv(&flags, dir) {
+                    Ok(create) => LaunchPlan::Herdr {
+                        create,
+                        command: shell,
+                    },
+                    Err(e) => LaunchPlan::Error(e),
+                },
+                Multiplexer::None => {
+                    if let Some(s) = shell {
+                        LaunchPlan::Inline(s)
+                    } else {
+                        LaunchPlan::Error(
+                            "run gitpane inside tmux or herdr for this placement".into(),
+                        )
+                    }
+                }
             }
         }
         Placement::Inline => match cmd {
             Some(c) => LaunchPlan::Inline(substitute_shell(c, dir, base)),
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
-        Placement::Ask => {
-            if in_tmux {
-                LaunchPlan::Ask
-            } else if let Some(c) = cmd {
-                LaunchPlan::Inline(substitute_shell(c, dir, base))
-            } else {
-                LaunchPlan::Error("run gitpane inside tmux for this placement".to_string())
+        Placement::Ask => match mux {
+            Multiplexer::Tmux | Multiplexer::Herdr => LaunchPlan::Ask,
+            Multiplexer::None => {
+                if let Some(c) = cmd {
+                    LaunchPlan::Inline(substitute_shell(c, dir, base))
+                } else {
+                    LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
+                }
             }
-        }
+        },
     }
 }
 
@@ -250,6 +287,156 @@ pub(crate) fn goto_placement(command: &str) -> Option<&'static str> {
     }
 }
 
+/// `herdr pane split --current --direction <right|down> --cwd <dir> --no-focus`,
+/// with `--right-click pane` so a mouse TUI running in the new pane keeps its
+/// right-click (herdr would otherwise swallow it with its own menu). `target`
+/// replaces `--current` with `--pane <target>` when a `-t` placement flag named
+/// a herdr pane id (e.g. `w1:p3`).
+fn herdr_split_argv(direction: &str, dir: &str, target: Option<&str>) -> Vec<String> {
+    let mut argv = vec!["herdr".to_string(), "pane".to_string(), "split".to_string()];
+    match target {
+        Some(t) => {
+            argv.push("--pane".to_string());
+            argv.push(t.to_string());
+        }
+        None => argv.push("--current".to_string()),
+    }
+    argv.push("--direction".to_string());
+    argv.push(direction.to_string());
+    argv.push("--cwd".to_string());
+    argv.push(dir.to_string());
+    argv.push("--no-focus".to_string());
+    argv.push("--right-click".to_string());
+    argv.push("pane".to_string());
+    argv
+}
+
+/// `herdr tab create --cwd <dir> --no-focus` (a new tab, like tmux new-window).
+fn herdr_tab_argv(dir: &str) -> Vec<String> {
+    vec![
+        "herdr".to_string(),
+        "tab".to_string(),
+        "create".to_string(),
+        "--cwd".to_string(),
+        dir.to_string(),
+        "--no-focus".to_string(),
+    ]
+}
+
+/// Translate tmux-style `split-window`/`new-window` flags into a herdr create
+/// argv. `split-window` honors `-h`/`-v` (direction) and `-t <pane-id>`;
+/// `new-window` takes no flags. Any other flag is an error so a tmux-specific
+/// placement can't silently mis-launch under herdr.
+fn herdr_create_argv(flags: &[String], dir: &str) -> Result<Vec<String>, String> {
+    let mut rest = flags.iter();
+    let Some(head) = rest.next() else {
+        return Err("empty herdr placement".to_string());
+    };
+    match head.as_str() {
+        "split-window" => {
+            let mut direction = "right";
+            let mut target = None;
+            let mut extra = Vec::new();
+            while let Some(tok) = rest.next() {
+                match tok.as_str() {
+                    "-h" => direction = "right",
+                    "-v" => direction = "down",
+                    "-t" => {
+                        let t = rest.next().ok_or_else(|| {
+                            "placement '-t' needs a target under herdr".to_string()
+                        })?;
+                        target = Some(t.clone());
+                    }
+                    other => extra.push(other.to_string()),
+                }
+            }
+            if !extra.is_empty() {
+                return Err(format!(
+                    "placement flags {extra:?} are not supported under herdr (use -h, -v, -t <pane-id>)"
+                ));
+            }
+            Ok(herdr_split_argv(direction, dir, target.as_deref()))
+        }
+        "new-window" if flags.len() == 1 => Ok(herdr_tab_argv(dir)),
+        "new-window" => Err("placement 'new-window' takes no flags under herdr".to_string()),
+        other => Err(format!("invalid placement '{other}' under herdr")),
+    }
+}
+
+/// Placement-picker choices under herdr: a new tab, or split the current pane.
+/// Each value is a tmux-shaped placement string that [`plan`] translates for
+/// herdr, so the picker resume path stays multiplexer-agnostic.
+pub(crate) fn herdr_placement_choices() -> Vec<(String, String)> {
+    vec![
+        ("New tab".to_string(), "new-window".to_string()),
+        (
+            "Right of current pane".to_string(),
+            "split-window -h".to_string(),
+        ),
+        (
+            "Below current pane".to_string(),
+            "split-window -v".to_string(),
+        ),
+    ]
+}
+
+/// Extract the new pane id from a `herdr pane split` / `herdr tab create`
+/// response: `.result.pane.pane_id` (split) or `.result.root_pane.pane_id`
+/// (tab create). `None` when the output is not parseable herdr JSON.
+pub(crate) fn parse_herdr_pane_id(output: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct PaneId {
+        #[serde(default)]
+        pane_id: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Result {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        #[serde(default)]
+        root_pane: Option<PaneId>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        #[serde(default)]
+        result: Option<Result>,
+    }
+    let Ok(env) = serde_json::from_str::<Envelope>(output) else {
+        return None;
+    };
+    let result = env.result?;
+    if let Some(id) = result.pane.and_then(|p| p.pane_id) {
+        return Some(id);
+    }
+    result.root_pane?.pane_id
+}
+
+/// Under herdr, forward right-click gestures to this pane so gitpane's context
+/// menu works (herdr's own right-click menu would otherwise swallow them).
+/// Best-effort and fire-and-forget: a missing herdr or server only logs at
+/// debug. Right-clicking the pane frame still opens herdr's menu.
+pub(crate) fn forward_right_click_in_herdr() {
+    // Run whenever a herdr pane is reachable, not just when the pane we are in
+    // is herdr's: in a tmux pane nested inside herdr, forwarding the ancestor
+    // herdr pane lets the right-click reach tmux, which then passes it to us.
+    let reachable = std::env::var_os("HERDR_ENV").is_some()
+        || std::env::var_os("HERDR_PANE_ID").is_some()
+        || std::env::var_os("HERDR_TAB_ID").is_some()
+        || std::env::var_os("HERDR_WORKSPACE_ID").is_some();
+    if !reachable {
+        return;
+    }
+    let status = std::process::Command::new("herdr")
+        .args(["pane", "input", "--current", "--right-click", "pane"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(e) = status {
+        tracing::debug!("could not forward right-click to herdr: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,7 +501,13 @@ mod tests {
     fn command_mode_runs_detached_argv() {
         // open's default: the command is the launcher, run as argv (no shell).
         assert_eq!(
-            plan(Some("cursor {path}"), "command", "/w t/app", None, false),
+            plan(
+                Some("cursor {path}"),
+                "command",
+                "/w t/app",
+                None,
+                Multiplexer::None
+            ),
             argv(&["cursor", "/w t/app"])
         );
     }
@@ -322,7 +515,7 @@ mod tests {
     #[test]
     fn command_mode_empty_opens_tmux_pane_in_tmux() {
         assert_eq!(
-            plan(None, "command", "/app", None, true),
+            plan(None, "command", "/app", None, Multiplexer::Tmux),
             argv(&["tmux", "split-window", "-c", "/app"])
         );
     }
@@ -330,7 +523,7 @@ mod tests {
     #[test]
     fn command_mode_empty_without_tmux_errors() {
         assert!(matches!(
-            plan(None, "command", "/app", None, false),
+            plan(None, "command", "/app", None, Multiplexer::None),
             LaunchPlan::Error(_)
         ));
     }
@@ -343,7 +536,7 @@ mod tests {
                 "new-window",
                 "/app",
                 Some("origin/main"),
-                true
+                Multiplexer::Tmux
             ),
             argv(&[
                 "tmux",
@@ -365,7 +558,7 @@ mod tests {
                 "split-window -h -t agents",
                 "/app",
                 None,
-                true
+                Multiplexer::Tmux
             ),
             argv(&[
                 "tmux",
@@ -390,7 +583,7 @@ mod tests {
                 "new-window",
                 "/app",
                 Some("main"),
-                false
+                Multiplexer::None
             ),
             LaunchPlan::Inline("git diff 'main'...HEAD | delta".to_string())
         );
@@ -404,7 +597,7 @@ mod tests {
                 "inline",
                 "/app",
                 Some("a;rm -rf b"),
-                false
+                Multiplexer::None
             ),
             LaunchPlan::Inline("git diff 'a;rm -rf b'...HEAD".to_string())
         );
@@ -412,9 +605,12 @@ mod tests {
 
     #[test]
     fn ask_is_a_picker_in_tmux_and_inline_without() {
-        assert_eq!(plan(Some("x"), "ask", "/app", None, true), LaunchPlan::Ask);
         assert_eq!(
-            plan(Some("x"), "ask", "/app", None, false),
+            plan(Some("x"), "ask", "/app", None, Multiplexer::Tmux),
+            LaunchPlan::Ask
+        );
+        assert_eq!(
+            plan(Some("x"), "ask", "/app", None, Multiplexer::None),
             LaunchPlan::Inline("x".to_string())
         );
     }
@@ -428,7 +624,7 @@ mod tests {
                 "command",
                 "/w t/x",
                 None,
-                false
+                Multiplexer::None
             ),
             argv(&["wezterm", "cli", "spawn", "--cwd=/w t/x"])
         );
@@ -438,7 +634,7 @@ mod tests {
     fn command_mode_blank_command_opens_tmux_pane() {
         // A whitespace-only command counts as empty.
         assert_eq!(
-            plan(Some("   "), "command", "/repo", None, true),
+            plan(Some("   "), "command", "/repo", None, Multiplexer::Tmux),
             argv(&["tmux", "split-window", "-c", "/repo"])
         );
     }
@@ -452,7 +648,7 @@ mod tests {
                 "inline",
                 "/w t/x",
                 None,
-                false
+                Multiplexer::None
             ),
             LaunchPlan::Inline("cd '/w t/x' && git diff".to_string())
         );
@@ -461,7 +657,7 @@ mod tests {
     #[test]
     fn invalid_placement_is_an_error_plan() {
         assert!(matches!(
-            plan(Some("x"), "frobnicate", "/app", None, true),
+            plan(Some("x"), "frobnicate", "/app", None, Multiplexer::Tmux),
             LaunchPlan::Error(_)
         ));
     }
@@ -498,5 +694,186 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    fn herdr_argv(parts: &[&str]) -> LaunchPlan {
+        LaunchPlan::Herdr {
+            create: parts.iter().map(|s| s.to_string()).collect(),
+            command: None,
+        }
+    }
+
+    #[test]
+    fn command_mode_empty_opens_herdr_pane_in_herdr() {
+        assert_eq!(
+            plan(None, "command", "/app", None, Multiplexer::Herdr),
+            herdr_argv(&[
+                "herdr",
+                "pane",
+                "split",
+                "--current",
+                "--direction",
+                "right",
+                "--cwd",
+                "/app",
+                "--no-focus",
+                "--right-click",
+                "pane",
+            ])
+        );
+    }
+
+    #[test]
+    fn herdr_split_placement_honors_h_v_and_pane_target() {
+        // `-h` -> right, `-v` -> down, `-t <pane-id>` -> `--pane`.
+        assert_eq!(
+            plan(
+                Some("lazygit"),
+                "split-window -h",
+                "/app",
+                None,
+                Multiplexer::Herdr
+            ),
+            LaunchPlan::Herdr {
+                create: vec![
+                    "herdr",
+                    "pane",
+                    "split",
+                    "--current",
+                    "--direction",
+                    "right",
+                    "--cwd",
+                    "/app",
+                    "--no-focus",
+                    "--right-click",
+                    "pane",
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+                command: Some("lazygit".to_string()),
+            }
+        );
+        let down = plan(
+            Some("x"),
+            "split-window -v",
+            "/app",
+            None,
+            Multiplexer::Herdr,
+        );
+        assert!(matches!(
+            down,
+            LaunchPlan::Herdr {
+                create: ref c,
+                ..
+            } if c.contains(&"down".to_string())
+        ));
+        let targeted = plan(
+            Some("x"),
+            "split-window -h -t w1:p3",
+            "/app",
+            None,
+            Multiplexer::Herdr,
+        );
+        assert!(matches!(
+            targeted,
+            LaunchPlan::Herdr {
+                create: ref c,
+                ..
+            } if c.contains(&"--pane".to_string()) && c.contains(&"w1:p3".to_string())
+        ));
+    }
+
+    #[test]
+    fn herdr_new_window_creates_a_tab() {
+        // review's default `new-window` placement -> `herdr tab create`; the
+        // command runs in the tab's root pane via `herdr pane run`.
+        assert_eq!(
+            plan(
+                Some("git diff {base}...HEAD"),
+                "new-window",
+                "/app",
+                Some("origin/main"),
+                Multiplexer::Herdr,
+            ),
+            LaunchPlan::Herdr {
+                create: vec!["herdr", "tab", "create", "--cwd", "/app", "--no-focus",]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                command: Some("git diff 'origin/main'...HEAD".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn herdr_rejects_unknown_and_tmux_only_flags() {
+        // Unknown flags and `new-window` flags must not silently mis-launch.
+        assert!(matches!(
+            plan(
+                Some("x"),
+                "split-window -l 20",
+                "/app",
+                None,
+                Multiplexer::Herdr
+            ),
+            LaunchPlan::Error(_)
+        ));
+        assert!(matches!(
+            plan(
+                Some("x"),
+                "new-window -t work",
+                "/app",
+                None,
+                Multiplexer::Herdr
+            ),
+            LaunchPlan::Error(_)
+        ));
+        assert!(matches!(
+            plan(
+                Some("x"),
+                "split-window -t",
+                "/app",
+                None,
+                Multiplexer::Herdr
+            ),
+            LaunchPlan::Error(_)
+        ));
+    }
+
+    #[test]
+    fn ask_is_a_picker_under_herdr() {
+        assert_eq!(
+            plan(Some("x"), "ask", "/app", None, Multiplexer::Herdr),
+            LaunchPlan::Ask
+        );
+    }
+
+    #[test]
+    fn herdr_placement_choices_offer_tab_and_splits() {
+        assert_eq!(
+            herdr_placement_choices(),
+            vec![
+                ("New tab".to_string(), "new-window".to_string()),
+                (
+                    "Right of current pane".to_string(),
+                    "split-window -h".to_string(),
+                ),
+                (
+                    "Below current pane".to_string(),
+                    "split-window -v".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_herdr_pane_id_reads_split_and_tab_responses() {
+        let split = "{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:p3\"}}}";
+        assert_eq!(parse_herdr_pane_id(split), Some("w1:p3".to_string()));
+        let tab =
+            "{\"result\":{\"tab\":{\"tab_id\":\"w1:t2\"},\"root_pane\":{\"pane_id\":\"w1:p7\"}}}";
+        assert_eq!(parse_herdr_pane_id(tab), Some("w1:p7".to_string()));
+        assert_eq!(parse_herdr_pane_id("not json"), None);
     }
 }

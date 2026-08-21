@@ -123,6 +123,37 @@ impl FileList {
         Some(file.path.to_string_lossy().to_string())
     }
 
+    /// The context-menu action for the selected file row, anchored at the
+    /// selected row's right edge. Used by the keyboard context menu (`x` /
+    /// Menu); mirrors the flags the right-click handler computes.
+    pub fn selected_menu(&self) -> Option<Action> {
+        let idx = self.state.selected()?;
+        let entry = self.files.get(idx)?;
+        let repo_id = self.repo_id.clone()?;
+        let area = if self.viewing_diff() {
+            self.file_list_area
+        } else {
+            self.render_area
+        };
+        let row = area
+            .y
+            .saturating_add(1)
+            .saturating_add(idx.saturating_sub(self.state.offset()) as u16);
+        let col = area.x.saturating_add(area.width.saturating_sub(1));
+        let conflicted = entry.status == FileStatus::Conflicted;
+        Some(Action::ShowFileContextMenu {
+            id: repo_id,
+            path: entry.path.clone(),
+            row,
+            col,
+            staged: entry.staged,
+            // A conflicted row counts as stageable: `git add` marks it resolved
+            // and Discard restores it.
+            unstaged: entry.unstaged || conflicted,
+            is_untracked: entry.status == FileStatus::Untracked,
+            is_submodule: entry.is_submodule,
+        })
+    }
     pub fn diff_generation(&self) -> u64 {
         self.diff_generation
     }
@@ -711,5 +742,60 @@ mod tag_tests {
             ),
             "[sub: -uninit] "
         );
+    }
+}
+
+#[cfg(test)]
+mod selected_menu_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn entry(path: &str, status: FileStatus, staged: bool, unstaged: bool) -> FileEntry {
+        FileEntry {
+            path: PathBuf::from(path),
+            status,
+            staged,
+            unstaged,
+            is_submodule: false,
+            submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
+        }
+    }
+
+    #[test]
+    fn selected_menu_builds_a_file_context_menu_action() {
+        let mut list = FileList::new(Arc::new(Theme::default()));
+        list.render_area = Rect::new(0, 0, 60, 24);
+        list.set_files(
+            vec![
+                entry("a.rs", FileStatus::Modified, false, true),
+                entry("b.rs", FileStatus::Untracked, false, true),
+            ],
+            "repo",
+            RepoId(PathBuf::from("/repo")),
+        );
+        list.state.select(Some(1));
+        let action = list.selected_menu().expect("menu for selected row");
+        assert!(matches!(
+            action,
+            Action::ShowFileContextMenu {
+                id,
+                path,
+                row: 2,
+                col: 59,
+                staged: false,
+                unstaged: true,
+                is_untracked: true,
+                is_submodule: false,
+            } if id.0.as_path() == std::path::Path::new("/repo")
+                && path.as_path() == std::path::Path::new("b.rs")
+        ));
+    }
+
+    #[test]
+    fn selected_menu_none_without_files() {
+        let list = FileList::new(Arc::new(Theme::default()));
+        assert!(list.selected_menu().is_none());
     }
 }

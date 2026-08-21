@@ -49,6 +49,65 @@ fn parse_pane_sessions(output: &str) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
+/// Probe herdr panes: `(tab_id, pane_cwd)` for every pane that reports a cwd.
+/// The tab id is the handle herdr's attach (`herdr tab focus`) takes, the herdr
+/// analog of a tmux session name. Prefers `foreground_cwd` (what a running
+/// agent is actually working in) over the pane's label cwd. Empty when herdr
+/// is absent or errors.
+pub(crate) fn herdr_live_panes() -> Vec<(String, PathBuf)> {
+    let output = std::process::Command::new("herdr")
+        .args(["pane", "list"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => parse_herdr_panes(&String::from_utf8_lossy(&o.stdout))
+            .into_iter()
+            .map(|(s, p)| {
+                let canon = p.canonicalize().unwrap_or(p);
+                (s, canon)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Parse `herdr pane list` JSON (`.result.panes[]` of `{tab_id, cwd,
+/// foreground_cwd}`) into `(tab_id, cwd)` pairs, dropping panes with no
+/// resolvable cwd or tab id.
+fn parse_herdr_panes(output: &str) -> Vec<(String, PathBuf)> {
+    #[derive(serde::Deserialize)]
+    struct Pane {
+        #[serde(default)]
+        tab_id: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        foreground_cwd: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Panes {
+        #[serde(default)]
+        panes: Vec<Pane>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        #[serde(default)]
+        result: Option<Panes>,
+    }
+    let Ok(parsed) = serde_json::from_str::<Envelope>(output) else {
+        return Vec::new();
+    };
+    parsed
+        .result
+        .into_iter()
+        .flat_map(|r| r.panes)
+        .filter_map(|p| {
+            let cwd = p.foreground_cwd.or(p.cwd)?;
+            let tab = p.tab_id.filter(|t| !t.is_empty())?;
+            Some((tab, PathBuf::from(cwd)))
+        })
+        .collect()
+}
+
 /// Sorted, unique session names that have a pane cwd'd at or below `path` (the
 /// repo/worktree is "live" in those sessions). Empty when none.
 pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<String> {
@@ -62,12 +121,11 @@ pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<Str
     names
 }
 
-/// Whether `path` has any live session (a tmux pane cwd'd at or below it). Used
+/// Whether `path` has any live session (a pane cwd'd at or below it). Used
 /// for the bare `◉` row marker; the session names go in the context menu.
 pub(crate) fn is_live(path: &Path, panes: &[(String, PathBuf)]) -> bool {
     panes.iter().any(|(_, p)| p.starts_with(path))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +183,33 @@ mod tests {
         assert!(is_live(Path::new("/code/app"), &p));
         assert!(!is_live(Path::new("/code/app-sibling"), &p));
         assert!(!is_live(Path::new("/code/app"), &[]));
+    }
+
+    #[test]
+    fn parse_herdr_panes_prefers_foreground_cwd_and_groups_by_tab() {
+        let out = "{\"result\":{\"panes\":[
+            {\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"cwd\":\"/code/app\"},
+            {\"pane_id\":\"w1:p2\",\"tab_id\":\"w1:t1\",\"cwd\":\"/code/app\",
+             \"foreground_cwd\":\"/code/app/src\"},
+            {\"pane_id\":\"w1:p3\",\"tab_id\":\"w1:t2\",\"cwd\":\"/elsewhere\"},
+            {\"pane_id\":\"w1:p4\",\"tab_id\":null,\"cwd\":\"/code/app\"}
+        ]}}";
+        assert_eq!(
+            parse_herdr_panes(out),
+            vec![
+                ("w1:t1".to_string(), PathBuf::from("/code/app")),
+                ("w1:t1".to_string(), PathBuf::from("/code/app/src")),
+                ("w1:t2".to_string(), PathBuf::from("/elsewhere")),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_herdr_panes_skips_non_json_and_empty() {
+        assert!(parse_herdr_panes("not json").is_empty());
+        assert!(parse_herdr_panes("{\"result\":{}}").is_empty());
+        // A pane with a cwd but no tab id is dropped (nothing to focus).
+        let out = "{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\",\"cwd\":\"/code\"}]}}";
+        assert!(parse_herdr_panes(out).is_empty());
     }
 }
