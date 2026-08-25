@@ -206,6 +206,7 @@ impl Default for Config {
             open: OpenConfig::default(),
             review: ReviewConfig::default(),
             worktree: WorktreeConfig::default(),
+            herdr: HerdrConfig::default(),
             goto: GotoConfig::default(),
             keybindings: Vec::new(),
             theme_name: default_theme_name(),
@@ -214,6 +215,18 @@ impl Default for Config {
             runtime_root_override: None,
             loaded_path: None,
             write_target_override: None,
+        }
+    }
+}
+
+pub(super) fn default_forward_right_click() -> bool {
+    false
+}
+
+impl Default for HerdrConfig {
+    fn default() -> Self {
+        Self {
+            forward_right_click: default_forward_right_click(),
         }
     }
 }

@@ -941,6 +941,7 @@ dependencies = [
  "futures",
  "git2",
  "ignore",
+ "libc",
  "notify",
  "notify-debouncer-full",
  "ratatui",

@@ -24,8 +24,8 @@
 //! `bash -c '...'`) puts the wrapper between us and the pane shell, and the
 //! nested decision falls back to herdr; the `probe_detect` ignored test prints
 //! the resolved values for manual checks. When tmux cannot
-//! be asked (non-Linux parent lookup, or a dead tmux server) the nested case
-//! also falls back to herdr.
+//! be asked (e.g. a dead tmux server) the nested case also falls back to
+//! herdr.
 
 use std::sync::OnceLock;
 
@@ -102,24 +102,20 @@ fn tmux_pane_pids() -> Vec<u32> {
     }
 }
 
-/// Our parent PID (field 4 of /proc/self/stat). `0` when unreadable or not on
-/// Linux — the nested decision then falls back to herdr.
-#[cfg(target_os = "linux")]
+/// Our parent PID. `libc::getppid()` is cross-platform on unix (Linux and
+/// macOS); the previous `/proc/self/stat` parser only worked on Linux, so on
+/// macOS the nested decision could never match and tmux-inside-herdr always
+/// resolved to herdr. Non-unix platforms keep the old fallback of `0` (the
+/// nested decision then falls back to herdr).
+#[cfg(unix)]
 fn parent_pid() -> u32 {
-    std::fs::read_to_string("/proc/self/stat")
-        .ok()
-        .and_then(|s| {
-            // The comm field (field 2) can contain spaces and parentheses, so
-            // parse from the last ')' — ppid is the first field after it.
-            let tail = s.rsplit_once(')')?.1;
-            let mut fields = tail.split_whitespace();
-            let _state = fields.next()?;
-            fields.next()?.parse().ok()
-        })
-        .unwrap_or(0)
+    // SAFETY: getppid() takes no arguments and never fails; it returns 0
+    // only when the parent has already exited (the nested decision then
+    // falls back to herdr, matching the old unreadable-proc behavior).
+    unsafe { libc::getppid() as u32 }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 fn parent_pid() -> u32 {
     0
 }
@@ -194,6 +190,14 @@ mod tests {
         );
         // Unreachable tmux (no pane pids) also falls back to herdr.
         assert_eq!(disambiguate_nested(&[], 500, 600), Multiplexer::Herdr);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_pid_is_nonzero() {
+        // A running process always has a live parent (cargo during tests);
+        // 0 would mean getppid failed or the parent exited.
+        assert_ne!(parent_pid(), 0);
     }
 
     /// Manual environment probe (skipped by default): prints what

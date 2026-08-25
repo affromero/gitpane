@@ -243,13 +243,18 @@ impl App {
                 return;
             }
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let Some(pane_id) = crate::session::launcher::parse_herdr_pane_id(&stdout) else {
-                let _ = tx.send(Action::Error(format!(
-                    "{label} failed: no pane id in herdr response"
-                )));
-                return;
-            };
             if let Some(cmd) = command {
+                // Parse only when the pane id is actually needed: the default
+                // `o` path passes `command: None`, so an output-shape
+                // mismatch there must not fail the launch (the pane or tab is
+                // already open).
+                let Some(pane_id) = crate::session::launcher::parse_herdr_pane_id(&stdout) else {
+                    let _ = tx.send(Action::Error(format!(
+                        "{label} failed: no pane id in herdr response (stdout: {})",
+                        sanitize_stdout(&stdout)
+                    )));
+                    return;
+                };
                 let run = std::process::Command::new("herdr")
                     .args(["pane", "run", &pane_id, &cmd])
                     .current_dir(&dir)
@@ -292,7 +297,7 @@ impl App {
             &self.config.open.placement,
             &path.to_string_lossy(),
             None,
-            crate::session::env::Multiplexer::detect(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, command, None, "open");
@@ -320,7 +325,7 @@ impl App {
             &placement,
             &path.to_string_lossy(),
             None,
-            crate::session::env::Multiplexer::detect(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, Some(command), None, "keybinding");
@@ -355,7 +360,7 @@ impl App {
             &self.config.review.placement,
             &path.to_string_lossy(),
             Some(&base),
-            crate::session::env::Multiplexer::detect(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, Some(command), Some(base), "review");
@@ -390,7 +395,7 @@ impl App {
         base: Option<String>,
         label: &'static str,
     ) {
-        let choices = match crate::session::env::Multiplexer::detect() {
+        let choices = match self.mux {
             crate::session::env::Multiplexer::Herdr => {
                 crate::session::launcher::herdr_placement_choices()
             }
@@ -423,7 +428,7 @@ impl App {
     /// directly (a herdr tab focus, or the tmux `[goto] command`), several -> the
     /// picker.
     pub(super) fn attach_sessions_for(&mut self, path: &std::path::Path) -> Result<()> {
-        let mux = crate::session::env::Multiplexer::detect();
+        let mux = self.mux;
         let sessions = crate::session::liveness::live_sessions(path, self.repo_list.live_panes());
         match sessions.as_slice() {
             [] => {
@@ -456,7 +461,7 @@ impl App {
     /// is checked and a failure (e.g. a stale session) is surfaced.
     pub(super) fn goto_session(&mut self, session: &str) {
         // herdr: focus the tab hosting the live pane — no `[goto] command` needed.
-        if crate::session::env::Multiplexer::detect() == crate::session::env::Multiplexer::Herdr {
+        if self.mux == crate::session::env::Multiplexer::Herdr {
             let tx = self.action_tx.clone();
             let session = session.to_string();
             tokio::task::spawn_blocking(move || {
@@ -699,4 +704,38 @@ fn spawn_detached(
             }
         }
     });
+}
+
+/// Truncate and escape a command's stdout for inclusion in an error message.
+/// Keeps the message single-line, bounded, and free of control characters.
+fn sanitize_stdout(stdout: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let mut out = String::new();
+    for ch in stdout.chars().take(MAX_CHARS) {
+        match ch {
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    if stdout.chars().count() > MAX_CHARS {
+        out.push('…');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_stdout;
+
+    #[test]
+    fn sanitize_stdout_truncates_and_escapes_controls() {
+        let long = "x".repeat(300);
+        let s = sanitize_stdout(&long);
+        assert_eq!(s.chars().count(), 201);
+        assert!(s.ends_with('…'));
+
+        let s = sanitize_stdout("a\nb\r\tc\u{1b}[31m");
+        assert_eq!(s, "a b  c?[31m");
+    }
 }

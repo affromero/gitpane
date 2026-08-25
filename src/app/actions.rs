@@ -240,8 +240,9 @@ impl App {
                 if self.config.ui.show_liveness && !self.liveness_probe_in_flight {
                     self.liveness_probe_in_flight = true;
                     let tx = self.action_tx.clone();
+                    let mux = self.mux;
                     tokio::task::spawn_blocking(move || {
-                        let panes = match crate::session::env::Multiplexer::detect() {
+                        let panes = match mux {
                             crate::session::env::Multiplexer::Tmux => {
                                 crate::session::liveness::tmux_pane_sessions()
                             }
@@ -492,7 +493,7 @@ impl App {
                             value,
                             &p.dir.to_string_lossy(),
                             p.base.as_deref(),
-                            crate::session::env::Multiplexer::detect(),
+                            self.mux,
                         );
                         self.run_launch_plan(plan, p.dir, p.label, tui)?;
                     }

@@ -309,7 +309,7 @@ impl App {
             Line::from(vec![key("v"), desc("Review changes (new window)")]),
             Line::from(vec![key("G"), desc("Attach live session")]),
             Line::from(vec![
-                key("x / Menu"),
+                key("Menu"),
                 desc("Context menu (right-click fallback)"),
             ]),
             Line::from(vec![key("p / P"), desc("Pull / push repo/worktree")]),
@@ -336,7 +336,7 @@ impl App {
                     desc("Focus mode (dim unselected)"),
                 ]));
                 lines.push(Line::from(vec![
-                    key("Right-click / x"),
+                    key("Right-click / Menu"),
                     desc("Menu: new worktree, push/pull, …"),
                 ]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));

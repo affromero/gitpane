@@ -188,7 +188,7 @@ impl App {
             KeyCode::Char('v') => {
                 self.action_tx.send(Action::ReviewSelected)?;
             }
-            KeyCode::Char('x') | KeyCode::Menu => {
+            KeyCode::Menu => {
                 // Keyboard context menu: the right-click fallback for
                 // terminals/multiplexers (herdr, …) that swallow the gesture.
                 self.open_context_menu_at_selection()?;
@@ -271,7 +271,7 @@ impl App {
         Ok(())
     }
 
-    /// Open the context menu for the focused panel's selected row (the `x` /
+    /// Open the context menu for the focused panel's selected row (the
     /// Menu key path). Modal overlays take precedence; a panel without a
     /// selectable row (e.g. the GitHub panel) is a no-op.
     pub(super) fn open_context_menu_at_selection(&mut self) -> Result<()> {

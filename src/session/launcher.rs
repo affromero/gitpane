@@ -390,7 +390,7 @@ pub(crate) fn parse_herdr_pane_id(output: &str) -> Option<String> {
         pane_id: Option<String>,
     }
     #[derive(serde::Deserialize)]
-    struct Result {
+    struct Payload {
         #[serde(default)]
         pane: Option<PaneId>,
         #[serde(default)]
@@ -399,7 +399,7 @@ pub(crate) fn parse_herdr_pane_id(output: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Envelope {
         #[serde(default)]
-        result: Option<Result>,
+        result: Option<Payload>,
     }
     let Ok(env) = serde_json::from_str::<Envelope>(output) else {
         return None;
@@ -415,6 +415,10 @@ pub(crate) fn parse_herdr_pane_id(output: &str) -> Option<String> {
 /// menu works (herdr's own right-click menu would otherwise swallow them).
 /// Best-effort and fire-and-forget: a missing herdr or server only logs at
 /// debug. Right-clicking the pane frame still opens herdr's menu.
+///
+/// Opt-in only (`[herdr] forward_right_click`): herdr's CLI cannot read the
+/// current routing back, so gitpane never restores it on exit — enabling this
+/// intentionally leaves the pane forwarding right-click after gitpane quits.
 pub(crate) fn forward_right_click_in_herdr() {
     // Run whenever a herdr pane is reachable, not just when the pane we are in
     // is herdr's: in a tmux pane nested inside herdr, forwarding the ancestor

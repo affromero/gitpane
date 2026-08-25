@@ -26,7 +26,41 @@ pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
                 (s, canon)
             })
             .collect(),
-        _ => Vec::new(),
+        Ok(o) => {
+            rate_limited_debug(|| {
+                format!(
+                    "tmux list-panes failed (status {:?}): {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )
+            });
+            Vec::new()
+        }
+        Err(e) => {
+            rate_limited_debug(|| format!("tmux list-panes spawn failed: {e}"));
+            Vec::new()
+        }
+    }
+}
+
+/// Log a debug line at most once per minute. The liveness probes run every
+/// poll (5s by default), so a persistently failing probe would otherwise
+/// spam the log; the rate limit keeps the failure diagnosable without noise.
+fn rate_limited_debug(msg: impl FnOnce() -> String) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= 60
+        && LAST
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        tracing::debug!("{}", msg());
     }
 }
 
@@ -59,21 +93,43 @@ pub(crate) fn herdr_live_panes() -> Vec<(String, PathBuf)> {
         .args(["pane", "list"])
         .output();
     match output {
-        Ok(o) if o.status.success() => parse_herdr_panes(&String::from_utf8_lossy(&o.stdout))
-            .into_iter()
-            .map(|(s, p)| {
-                let canon = p.canonicalize().unwrap_or(p);
-                (s, canon)
-            })
-            .collect(),
-        _ => Vec::new(),
+        Ok(o) if o.status.success() => {
+            match parse_herdr_panes(&String::from_utf8_lossy(&o.stdout)) {
+                Ok(panes) => panes
+                    .into_iter()
+                    .map(|(s, p)| {
+                        let canon = p.canonicalize().unwrap_or(p);
+                        (s, canon)
+                    })
+                    .collect(),
+                Err(e) => {
+                    rate_limited_debug(|| format!("herdr pane list parse failed: {e}"));
+                    Vec::new()
+                }
+            }
+        }
+        Ok(o) => {
+            rate_limited_debug(|| {
+                format!(
+                    "herdr pane list failed (status {:?}): {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )
+            });
+            Vec::new()
+        }
+        Err(e) => {
+            rate_limited_debug(|| format!("herdr pane list spawn failed: {e}"));
+            Vec::new()
+        }
     }
 }
 
 /// Parse `herdr pane list` JSON (`.result.panes[]` of `{tab_id, cwd,
 /// foreground_cwd}`) into `(tab_id, cwd)` pairs, dropping panes with no
-/// resolvable cwd or tab id.
-fn parse_herdr_panes(output: &str) -> Vec<(String, PathBuf)> {
+/// resolvable cwd or tab id. `Err` carries the serde error so a shape
+/// mismatch is diagnosable instead of collapsing to an empty set.
+fn parse_herdr_panes(output: &str) -> Result<Vec<(String, PathBuf)>, String> {
     #[derive(serde::Deserialize)]
     struct Pane {
         #[serde(default)]
@@ -93,19 +149,24 @@ fn parse_herdr_panes(output: &str) -> Vec<(String, PathBuf)> {
         #[serde(default)]
         result: Option<Panes>,
     }
-    let Ok(parsed) = serde_json::from_str::<Envelope>(output) else {
-        return Vec::new();
-    };
-    parsed
+    let parsed: Envelope = serde_json::from_str(output).map_err(|e| e.to_string())?;
+    Ok(parsed
         .result
         .into_iter()
         .flat_map(|r| r.panes)
         .filter_map(|p| {
-            let cwd = p.foreground_cwd.or(p.cwd)?;
+            // Prefer the foreground cwd (what a running agent is actually
+            // working in); fall back to the pane's label cwd. Treat an empty
+            // string as absent so `Some("")` falls through to `cwd` instead
+            // of producing a bogus root-relative path.
+            let cwd = p
+                .foreground_cwd
+                .filter(|c| !c.is_empty())
+                .or_else(|| p.cwd.filter(|c| !c.is_empty()))?;
             let tab = p.tab_id.filter(|t| !t.is_empty())?;
             Some((tab, PathBuf::from(cwd)))
         })
-        .collect()
+        .collect())
 }
 
 /// Sorted, unique session names that have a pane cwd'd at or below `path` (the
@@ -126,6 +187,7 @@ pub(crate) fn live_sessions(path: &Path, panes: &[(String, PathBuf)]) -> Vec<Str
 pub(crate) fn is_live(path: &Path, panes: &[(String, PathBuf)]) -> bool {
     panes.iter().any(|(_, p)| p.starts_with(path))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_herdr_panes_prefers_foreground_cwd_and_groups_by_tab() {
+    fn parse_herdr_panes_prefers_foreground_cwd_and_drops_null_tab() {
         let out = "{\"result\":{\"panes\":[
             {\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"cwd\":\"/code/app\"},
             {\"pane_id\":\"w1:p2\",\"tab_id\":\"w1:t1\",\"cwd\":\"/code/app\",
@@ -195,7 +257,7 @@ mod tests {
             {\"pane_id\":\"w1:p4\",\"tab_id\":null,\"cwd\":\"/code/app\"}
         ]}}";
         assert_eq!(
-            parse_herdr_panes(out),
+            parse_herdr_panes(out).unwrap(),
             vec![
                 ("w1:t1".to_string(), PathBuf::from("/code/app")),
                 ("w1:t1".to_string(), PathBuf::from("/code/app/src")),
@@ -206,10 +268,21 @@ mod tests {
 
     #[test]
     fn parse_herdr_panes_skips_non_json_and_empty() {
-        assert!(parse_herdr_panes("not json").is_empty());
-        assert!(parse_herdr_panes("{\"result\":{}}").is_empty());
+        assert!(parse_herdr_panes("not json").is_err());
+        assert!(parse_herdr_panes("{\"result\":{}}").unwrap().is_empty());
         // A pane with a cwd but no tab id is dropped (nothing to focus).
         let out = "{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\",\"cwd\":\"/code\"}]}}";
-        assert!(parse_herdr_panes(out).is_empty());
+        assert!(parse_herdr_panes(out).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_herdr_panes_falls_back_from_empty_foreground_cwd() {
+        // An empty foreground_cwd is treated as absent: the label cwd wins.
+        let out = "{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",
+            \"cwd\":\"/code/app\",\"foreground_cwd\":\"\"}]}}";
+        assert_eq!(
+            parse_herdr_panes(out).unwrap(),
+            vec![("w1:t1".to_string(), PathBuf::from("/code/app"))]
+        );
     }
 }
