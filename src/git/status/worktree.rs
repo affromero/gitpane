@@ -63,25 +63,24 @@ pub(super) fn collect_worktree_info(
 /// Run `git fetch` with a 30-second timeout to update remote-tracking refs.
 /// Uses the CLI because git2 fetch doesn't support SSH agent / credential helpers
 /// out of the box. Returns `true` on success, `false` on failure/timeout.
+///
+/// The fetch runs in its own process group so a timeout kill takes the whole
+/// tree down with it: `git fetch` over SSH leaves a detached `ssh`
+/// (git-upload-pack) child behind if only the git process is killed, and that
+/// orphan keeps the server-side connection alive until the network gives up.
 pub(super) fn fetch_remote_silent(path: &Path) -> bool {
     use wait_timeout::ChildExt;
 
-    let child = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("fetch")
-        .arg("--quiet")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let child = fetch_child(path);
 
     match child {
         Ok(mut c) => {
             match c.wait_timeout(std::time::Duration::from_secs(30)) {
                 Ok(Some(status)) => status.success(),
                 Ok(None) => {
-                    // Timed out — kill the hung process
-                    let _ = c.kill();
+                    // Timed out — kill the whole process group (git + its ssh
+                    // children), not just git.
+                    kill_process_group(&mut c);
                     let _ = c.wait();
                     false
                 }
@@ -90,6 +89,51 @@ pub(super) fn fetch_remote_silent(path: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Spawn `git fetch --quiet` with stdout/stderr discarded.
+///
+/// On unix the child gets its own process group so that a timeout kill can
+/// target the whole tree (git and every child it spawned, notably `ssh` for
+/// ssh remotes) instead of leaving orphans behind.
+fn fetch_child(path: &Path) -> std::io::Result<std::process::Child> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C")
+        .arg(path)
+        .arg("fetch")
+        .arg("--quiet")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group (pgid == pid) so kill_process_group can take
+        // git's children — the ssh client — down with it.
+        cmd.process_group(0);
+    }
+    cmd.spawn()
+}
+
+/// Kill the child and everything in its process group.
+///
+/// On unix the fetch child was spawned with `process_group(0)`, so its pgid
+/// equals its pid and this takes `git fetch` and its `ssh` child together.
+/// Non-unix platforms fall back to killing only the child itself (previous
+/// behavior).
+#[cfg(unix)]
+pub(super) fn kill_process_group(child: &mut std::process::Child) {
+    // SAFETY: child.id() is the pgid because fetch_child spawned it with
+    // process_group(0); SIGKILL cannot fail for a valid existing pgid, and a
+    // race where the group already exited is harmless (ESRCH is ignored).
+    let pgid = child.id() as i32;
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn kill_process_group(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 /// Returns (ahead, behind) for HEAD relative to its publishing target.

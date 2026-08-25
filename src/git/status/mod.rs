@@ -9,6 +9,8 @@ mod test_support;
 #[cfg(test)]
 mod tests_basic;
 #[cfg(test)]
+mod tests_fetch_kill;
+#[cfg(test)]
 mod tests_refs;
 #[cfg(test)]
 mod tests_submodule;
