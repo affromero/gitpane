@@ -123,11 +123,14 @@ fn fetch_child(path: &Path) -> std::io::Result<std::process::Child> {
 #[cfg(unix)]
 pub(super) fn kill_process_group(child: &mut std::process::Child) {
     // SAFETY: child.id() is the pgid because fetch_child spawned it with
-    // process_group(0); SIGKILL cannot fail for a valid existing pgid, and a
-    // race where the group already exited is harmless (ESRCH is ignored).
+    // process_group(0). A race where the group already exited is harmless
+    // (ESRCH); any other failure falls back to killing the child directly so
+    // the caller's `wait()` cannot block on a still-running git.
     let pgid = child.id() as i32;
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
+    if unsafe { libc::killpg(pgid, libc::SIGKILL) } != 0
+        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    {
+        let _ = child.kill();
     }
 }
 

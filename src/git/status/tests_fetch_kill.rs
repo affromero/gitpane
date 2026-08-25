@@ -18,8 +18,8 @@ fn process_group_kill_takes_grandchildren() {
 
     let mut child = Command::new("sh")
         .arg("-c")
-        // sleep inherits sh's stdin but not the stdout pipe: only sh may
-        // write to it, so the pid line below is readable without waiting
+        // sleep inherits the stdout pipe but never writes to it; read_line
+        // below returns at echo's newline, so reading the pid does not wait
         // for sleep to exit.
         .arg("sleep 60 2>/dev/null & echo $!; wait")
         .process_group(0)
