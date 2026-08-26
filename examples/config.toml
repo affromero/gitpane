@@ -110,6 +110,14 @@ enabled = true
 # Unset (default): a worktree is created as a sibling of its repo.
 # dir = "~/worktrees"
 
+[herdr]
+# Ask herdr to forward right-click gestures to gitpane's pane at startup ("herdr pane
+# input --current --right-click pane") so the context menu works despite herdr's own
+# right-click menu. herdr's CLI cannot read the current routing back, so gitpane never
+# restores it on exit — the pane keeps forwarding right-click after gitpane quits.
+# Opt-in; the `Menu` key always works as the context-menu fallback (default: false).
+forward_right_click = false
+
 [goto]
 # Command run by `G` to open a repo's live tmux session, `{session}` = the
 # session name (run as argv, no shell). By DEFAULT this is auto-detected from

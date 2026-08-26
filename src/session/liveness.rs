@@ -141,7 +141,6 @@ fn parse_herdr_panes(output: &str) -> Result<Vec<(String, PathBuf)>, String> {
     }
     #[derive(serde::Deserialize)]
     struct Panes {
-        #[serde(default)]
         panes: Vec<Pane>,
     }
     #[derive(serde::Deserialize)]
@@ -269,7 +268,15 @@ mod tests {
     #[test]
     fn parse_herdr_panes_skips_non_json_and_empty() {
         assert!(parse_herdr_panes("not json").is_err());
-        assert!(parse_herdr_panes("{\"result\":{}}").unwrap().is_empty());
+        // A missing `panes` (e.g. a future herdr renaming the field) is an Err,
+        // so shape drift fails loudly instead of silently showing "nothing live".
+        assert!(parse_herdr_panes("{\"result\":{}}").is_err());
+        // A genuinely empty `panes: []` still parses to an empty set.
+        assert!(
+            parse_herdr_panes("{\"result\":{\"panes\":[]}}")
+                .unwrap()
+                .is_empty()
+        );
         // A pane with a cwd but no tab id is dropped (nothing to focus).
         let out = "{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\",\"cwd\":\"/code\"}]}}";
         assert!(parse_herdr_panes(out).unwrap().is_empty());
