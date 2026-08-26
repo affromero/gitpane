@@ -191,6 +191,9 @@ impl App {
                 }
                 self.action_tx.send(Action::Render)?;
             }
+            LaunchPlan::Herdr { create, command } => {
+                self.spawn_herdr_launch(create, command, dir, label);
+            }
             LaunchPlan::Ask => {
                 self.action_tx
                     .send(Action::Error("ask placement isn't available yet".into()))?;
@@ -200,6 +203,82 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// herdr launch: run `create` (`herdr pane split` / `herdr tab create`),
+    /// parse the new pane's id from its JSON response, then run `command` in
+    /// that pane with `herdr pane run`. Runs off-thread; failures surface via
+    /// `Action::Error`.
+    pub(super) fn spawn_herdr_launch(
+        &mut self,
+        create: Vec<String>,
+        command: Option<String>,
+        dir: std::path::PathBuf,
+        label: &'static str,
+    ) {
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let Some(program) = create.first().cloned() else {
+                let _ = tx.send(Action::Error(format!(
+                    "{label} failed: empty herdr command"
+                )));
+                return;
+            };
+            let output = std::process::Command::new(&program)
+                .args(&create[1..])
+                .current_dir(&dir)
+                .output();
+            let Ok(out) = output else {
+                let _ = tx.send(Action::Error(format!("{label} failed running herdr")));
+                return;
+            };
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let first = stderr
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("herdr failed")
+                    .trim();
+                let _ = tx.send(Action::Error(format!("{label} failed: {first}")));
+                return;
+            }
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Some(cmd) = command {
+                // Parse only when the pane id is actually needed: the default
+                // `o` path passes `command: None`, so an output-shape
+                // mismatch there must not fail the launch (the pane or tab is
+                // already open).
+                let Some(pane_id) = crate::session::launcher::parse_herdr_pane_id(&stdout) else {
+                    let _ = tx.send(Action::Error(format!(
+                        "{label} failed: no pane id in herdr response (stdout: {})",
+                        sanitize_stdout(&stdout)
+                    )));
+                    return;
+                };
+                let run = std::process::Command::new("herdr")
+                    .args(["pane", "run", &pane_id, &cmd])
+                    .current_dir(&dir)
+                    .output();
+                match run {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        let first = stderr
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("herdr failed")
+                            .trim();
+                        let _ = tx.send(Action::Error(format!("{label} failed: {first}")));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Action::Error(format!(
+                            "{label} failed: {}",
+                            crate::git::describe_spawn_error(&e)
+                        )));
+                    }
+                }
+            }
+        });
     }
     /// The directory of the highlighted row: a worktree row resolves to its own
     /// path, otherwise the selected repo's path (mirrors ShowGitGraph). Used by
@@ -218,7 +297,7 @@ impl App {
             &self.config.open.placement,
             &path.to_string_lossy(),
             None,
-            std::env::var_os("TMUX").is_some(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, command, None, "open");
@@ -246,7 +325,7 @@ impl App {
             &placement,
             &path.to_string_lossy(),
             None,
-            std::env::var_os("TMUX").is_some(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, Some(command), None, "keybinding");
@@ -281,7 +360,7 @@ impl App {
             &self.config.review.placement,
             &path.to_string_lossy(),
             Some(&base),
-            std::env::var_os("TMUX").is_some(),
+            self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
             self.start_placement_picker(path, Some(command), Some(base), "review");
@@ -308,7 +387,7 @@ impl App {
         Ok(())
     }
     /// Park a launch and open the placement picker (`placement = "ask"`), listing
-    /// the current tmux windows as right-of/below targets.
+    /// tmux windows as right-of/below targets, or herdr tabs/splits under herdr.
     pub(super) fn start_placement_picker(
         &mut self,
         dir: std::path::PathBuf,
@@ -316,8 +395,14 @@ impl App {
         base: Option<String>,
         label: &'static str,
     ) {
-        let choices =
-            crate::session::launcher::placement_choices(&crate::session::launcher::tmux_windows());
+        let choices = match self.mux {
+            crate::session::env::Multiplexer::Herdr => {
+                crate::session::launcher::herdr_placement_choices()
+            }
+            _ => crate::session::launcher::placement_choices(
+                &crate::session::launcher::tmux_windows(),
+            ),
+        };
         self.pending_pick = Some(PendingPick::Launch(PendingLaunch {
             dir,
             command,
@@ -339,23 +424,32 @@ impl App {
         }
         Ok(())
     }
-    /// Attach the live tmux session(s) at `path`: none -> a hint, one -> attach
-    /// directly via the `[goto] command`, several -> the picker.
+    /// Attach the live session(s) at `path`: none -> a hint, one -> attach
+    /// directly (a herdr tab focus, or the tmux `[goto] command`), several -> the
+    /// picker.
     pub(super) fn attach_sessions_for(&mut self, path: &std::path::Path) -> Result<()> {
+        let mux = self.mux;
         let sessions = crate::session::liveness::live_sessions(path, self.repo_list.live_panes());
         match sessions.as_slice() {
             [] => {
-                self.action_tx
-                    .send(Action::Error("no live tmux session here".into()))?;
+                let msg = if mux == crate::session::env::Multiplexer::Herdr {
+                    "no live herdr tab here"
+                } else {
+                    "no live tmux session here"
+                };
+                self.action_tx.send(Action::Error(msg.into()))?;
             }
             [one] => self.goto_session(one),
             many => {
                 let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
-                let title =
+                let title = if mux == crate::session::env::Multiplexer::Herdr {
+                    "Open herdr tab".to_string()
+                } else {
                     match crate::session::launcher::goto_placement(&self.config.goto.command) {
                         Some(p) => format!("Open session ({p})"),
                         None => "Open session".to_string(),
-                    };
+                    }
+                };
                 self.pending_pick = Some(PendingPick::GotoSession);
                 self.picker.show(&title, choices);
             }
@@ -366,6 +460,36 @@ impl App {
     /// (switches the tmux client or spawns a terminal tab), so its exit status
     /// is checked and a failure (e.g. a stale session) is surfaced.
     pub(super) fn goto_session(&mut self, session: &str) {
+        // herdr: focus the tab hosting the live pane — no `[goto] command` needed.
+        if self.mux == crate::session::env::Multiplexer::Herdr {
+            let tx = self.action_tx.clone();
+            let session = session.to_string();
+            tokio::task::spawn_blocking(move || {
+                let output = std::process::Command::new("herdr")
+                    .args(["tab", "focus", &session])
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        let first = stderr
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("herdr failed")
+                            .trim();
+                        let _ = tx.send(Action::Error(format!("goto failed: {first}")));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Action::Error(format!(
+                            "goto failed: {}",
+                            crate::git::describe_spawn_error(&e)
+                        )));
+                    }
+                }
+            });
+            return;
+        }
+        // tmux / plain terminal: the `[goto] command` opens a terminal tab/window.
         let argv = crate::session::launcher::build_goto_argv(&self.config.goto.command, session);
         if argv.is_empty() {
             // Unknown terminal (no detected new-tab/window command) and no
@@ -580,4 +704,38 @@ fn spawn_detached(
             }
         }
     });
+}
+
+/// Truncate and escape a command's stdout for inclusion in an error message.
+/// Keeps the message single-line, bounded, and free of control characters.
+fn sanitize_stdout(stdout: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let mut out = String::new();
+    for ch in stdout.chars().take(MAX_CHARS) {
+        match ch {
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    if stdout.chars().count() > MAX_CHARS {
+        out.push('…');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_stdout;
+
+    #[test]
+    fn sanitize_stdout_truncates_and_escapes_controls() {
+        let long = "x".repeat(300);
+        let s = sanitize_stdout(&long);
+        assert_eq!(s.chars().count(), 201);
+        assert!(s.ends_with('…'));
+
+        let s = sanitize_stdout("a\nb\r\tc\u{1b}[31m");
+        assert_eq!(s, "a b  c?[31m");
+    }
 }

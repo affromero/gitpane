@@ -131,6 +131,21 @@ fn test_show_stats_roundtrip() {
 }
 
 #[test]
+fn test_herdr_forward_right_click_defaults_false() {
+    let config: Config = toml::from_str("").unwrap();
+    assert!(!config.herdr.forward_right_click);
+}
+
+#[test]
+fn test_herdr_forward_right_click_roundtrip() {
+    let mut config = Config::default();
+    config.herdr.forward_right_click = true;
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert!(loaded.herdr.forward_right_click);
+}
+
+#[test]
 fn test_check_for_updates_defaults_true() {
     let config: Config = toml::from_str("").unwrap();
     assert!(config.ui.check_for_updates);

@@ -58,6 +58,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub worktree: WorktreeConfig,
     #[serde(default)]
+    pub herdr: HerdrConfig,
+    #[serde(default)]
     pub goto: GotoConfig,
     /// User-defined keybindings. Each binds a single key to a templated shell
     /// command run against the selected repo/worktree. See [`Keybinding`].
@@ -236,6 +238,18 @@ pub(crate) struct GotoConfig {
     pub command: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct HerdrConfig {
+    /// Ask herdr to forward right-click gestures to gitpane's pane at
+    /// startup (`herdr pane input --current --right-click pane`), so the
+    /// context menu works despite herdr's own right-click menu. herdr's CLI
+    /// cannot read the current routing back, so gitpane never restores it on
+    /// exit — the forwarding stays in place after gitpane quits. Defaults to
+    /// false; the `Menu` key always works as the context-menu fallback.
+    #[serde(default = "default_forward_right_click")]
+    pub forward_right_click: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct WorktreeConfig {
     /// Directory new worktrees are created under, each as `<repo>-<branch>`.
@@ -257,8 +271,9 @@ pub(crate) struct WorktreeConfig {
 /// ```
 ///
 /// `key` is a single character. Keys already bound to built-in actions
-/// (`o v G r R t g p P q y a d s =`, `Tab`, `Esc`, `?`) are reserved and cannot be
-/// rebound; a panel-local key (`j`/`k`/`Enter`/…) can be shadowed but then no
+/// (`o v G r R t g p P q y a d s =`, `Tab`, `Esc`, `?`, `Menu`) are consumed
+/// by the built-in handler first, so a binding on one of them never fires; a
+/// panel-local key (`j`/`k`/`Enter`/…) can be shadowed but then no
 /// longer navigates that panel. `command` uses the same `{path}` substitution
 /// and `placement` vocabulary as `[open]` (`command`/`inline`/`ask`/
 /// `split-window`/`new-window`).

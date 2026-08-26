@@ -113,6 +113,7 @@ impl App {
                             is_worktree,
                             live_sessions,
                             goto_command: self.config.goto.command.clone(),
+                            mux: self.mux,
                         },
                     );
                 }

@@ -140,7 +140,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`) and lists them under it. In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work. Worktrees show on startup; press `w` to collapse a repo you want quiet, or set `[ui] expand_worktrees = false` to start every repo collapsed.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
 - **Custom keybindings**: Bind your own keys to shell commands with `[[keybindings]]`, each run against the selected repo/worktree with `{path}` substitution and the same placement options as `[open]`. Extend gitpane with your own verbs without waiting on a feature.
-- **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane open inside it, so at a glance you can see which parallel agents are actively working where. tmux only; toggle with `[ui] show_liveness`.
+- **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane (or herdr pane) open inside it, so at a glance you can see which parallel agents are actively working where. tmux and herdr; toggle with `[ui] show_liveness`.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them.
@@ -164,9 +164,9 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 | `r` | Refresh all repo statuses |
 | `R` | Rescan directories for repos (clears exclusions) |
 | `g` | Reload git graph for selected repo |
-| `o` | Open selected repo/worktree (new tmux pane, or `[open]` command) |
-| `v` | Review selected repo/worktree's diff vs its base branch (new tmux window) |
-| `G` | Attach the live tmux session(s) for the selected repo/worktree |
+| `o` | Open selected repo/worktree (new tmux pane, herdr pane, or `[open]` command) |
+| `v` | Review selected repo/worktree's diff vs its base branch (new tmux window / herdr tab) |
+| `G` | Attach the live tmux session(s) / herdr tab(s) for the selected repo/worktree |
 | `p` | Pull the selected repo/worktree |
 | `P` | Push the selected repo/worktree |
 | `=` | Toggle the GitHub panel (issues/PRs) for the selected repo |
@@ -176,6 +176,7 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 | `w` | Toggle worktree subtree for the selected repo (shown by default) |
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
+| `Menu` | Open the context menu for the selected row (right-click fallback; needed under herdr, which has its own right-click) |
 | `y` | Copy selected item to clipboard |
 | `q` | Quit (closes an open diff first; waits for an in-flight pull/push, press again to force) |
 | `Esc` | Navigate back through panels, then quit |
@@ -236,6 +237,7 @@ Each pull request row shows its rolled-up CI status: a green `✓` when checks p
 | Click selected row | Open diff / commit detail |
 | Right click (repo list) | Context menu (push, pull, copy path) |
 | Scroll wheel | Navigate lists or scroll diffs |
+| `Menu` | Keyboard context menu — same menu as right-click, for terminals and multiplexers (e.g. herdr) that intercept the gesture |
 
 ### Path input (`a`)
 
@@ -320,7 +322,7 @@ See [`examples/config.toml`](examples/config.toml) for a fully annotated example
 
 Press `o` (or pick `Open` from the right click menu) to launch the highlighted repo, or worktree if a worktree row is selected, in its own directory.
 
-- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Outside tmux it shows a hint to configure `[open] command` (a `command` launches directly, with no tmux needed).
+- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Inside [herdr](https://herdr.dev) it opens a new herdr pane to the right (`herdr pane split --current --direction right --cwd <dir>`). Outside both it shows a hint to configure `[open] command` (a `command` launches directly, with no tmux needed).
 - **Custom:** set `[open] command` to any launcher, with `{path}` standing in for the directory:
 
 ```toml
@@ -356,6 +358,29 @@ So "right of \<named\>" is `split-window -h -t <named>` and "below" is `split-wi
 Prefer to choose per launch? Set `placement = "ask"` and gitpane pops a small picker listing your tmux windows ("Right of …", "Below …", or "New window") each time you press `o`/`v`. The fast path stays a fixed config string; `ask` is there when you want it. (`inline` runs the command in the current terminal by suspending gitpane — handy outside tmux.)
 
 The selection drives the target: highlight a repo row and `o` opens the repo root; highlight one of the worktree rows listed under it, and `o` opens that worktree instead. This is the parallel agents workflow, glance at the dashboard, press `o` on the worktree an agent is using, and you are in it.
+
+### herdr
+
+[herdr](https://herdr.dev) is a terminal workspace manager for AI coding agents, and gitpane adapts to it natively when it runs inside a herdr pane (detected via `$HERDR_ENV` / `$HERDR_PANE_ID`, no config needed):
+
+- **Open / review**: with no `[open] command`, `o` splits a new herdr pane to the right of gitpane at the target directory; `v` (and the `new-window` placement) creates a new herdr tab and runs the command there. tmux-shaped placements still work — `split-window -h` / `split-window -v` map to pane directions, `new-window` maps to a new tab, and `-t <pane-id>` pins a specific pane. tmux-only placement flags are rejected with an error instead of silently mis-launching.
+- **Right-click**: herdr has its own right-click menu, so the context menu needs herdr to forward right-click gestures to gitpane's pane (`herdr pane input --current --right-click pane`). This is opt-in via `[herdr] forward_right_click = true`, because herdr's CLI cannot read the current routing back — gitpane never restores it on exit, so enabling it intentionally leaves the pane forwarding right-click after gitpane quits. (Right-clicking the pane frame still opens herdr's menu.) On any terminal where right-click still doesn't get through, press the `Menu` key instead.
+- **`ask` placement**: the picker offers a new tab, or right/below the current pane.
+- **Liveness and `G`**: the `◉` marker comes from `herdr pane list` (a pane whose cwd is inside the repo), and `G` (or the context menu item) focuses the tab hosting the live pane (`herdr tab focus`).
+- **Output contract**: herdr has no `--json`/`--format` flag — `pane list` / `pane split` / `tab create` already emit exactly one JSON document on stdout, which gitpane parses. Tested against herdr **0.8.2**; if a future herdr adds a warning line or a non-JSON default to stdout, liveness and launch parsing fail loudly (rate-limited debug log with the parse error) instead of silently showing nothing.
+
+**Nested tmux and herdr** work too. Neither multiplexer strips the other's
+environment variables, so a nested pane carries both `$TMUX` and `$HERDR_*`;
+gitpane resolves the ambiguity by asking tmux whether the process directly
+below it is one of its panes (Linux):
+
+- gitpane inside **herdr inside tmux** → herdr backend (pane split / tab focus,
+  right-click forwarding).
+- gitpane inside **tmux inside herdr** → tmux backend (`tmux split-window`, tmux
+  liveness, `[goto]`), and right-click is still forwarded through the ancestor
+  herdr pane so it reaches the tmux pane.
+- If tmux can't be asked (non-Linux, or a dead tmux server), the nested case
+  falls back to the herdr backend, which keeps right-click working.
 
 ### Reviewing changes
 
@@ -397,7 +422,7 @@ dir = "~/worktrees"   # each new worktree becomes <dir>/<repo>-<branch>
 
 ### Going to a live session
 
-A `◉` marker on a repo/worktree means a tmux pane is cwd'd inside it (a session has work parked there). Press `G` to open it — one session opens directly, several open a picker. Right click to see the session names: `Open <session> active tmux (new tab)` / `(new window)`, depending on your terminal.
+A `◉` marker on a repo/worktree means a tmux pane (or a herdr pane, see [herdr](#herdr)) is cwd'd inside it — a session has work parked there. Press `G` to open it — one session opens directly, several open a picker. Right click to see the session names: `Open <session> active tmux (new tab)` / `(new window)`, depending on your terminal.
 
 gitpane **auto-detects your terminal** and opens the session in a **new tab** (or window) — your current view never gets replaced. It never does an in-place `tmux switch-client`, which would strand you away from gitpane. Detected terminals:
 
@@ -433,7 +458,7 @@ placement = "inline"             # suspend gitpane and run in the current termin
 
 `command` and `placement` work exactly like [`[open]`](#opening-a-repo-or-worktree): `{path}` is the target directory, the default `command` placement runs the command directly (so embed your own `tmux …` for a pane/window), and `split-window`/`new-window`/`inline`/`ask` place a plain command for you. Only `{path}` is substituted (there is no review base).
 
-Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s =`, plus `Tab`/`Esc`/`?`) are reserved and cannot be rebound. A key that a focused panel handles (`j`/`k`/`Enter`/…, and the repo panel's `w`/`S` subtree toggles) can be bound, but the custom binding then shadows that panel action. Run `gitpane diagnostic` to see the bindings gitpane loaded.
+Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s =`, plus `Tab`/`Esc`/`?`/`Menu`) are consumed by the built-in handler first, so a binding on one of them never fires. A key that a focused panel handles (`j`/`k`/`Enter`/…, and the repo panel's `w`/`S` subtree toggles) can be bound, but the custom binding then shadows that panel action. Run `gitpane diagnostic` to see the bindings gitpane loaded.
 
 ### Theming
 

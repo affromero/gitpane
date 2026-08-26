@@ -179,6 +179,10 @@ pub(crate) struct App {
     pending_pick: Option<PendingPick>,
     focus: FocusPanel,
     sort_order: SortOrder,
+    /// The terminal multiplexer this instance runs under, resolved once at
+    /// startup (the first detect shells out to tmux, so it must not happen
+    /// mid-interaction in the main loop).
+    mux: crate::session::env::Multiplexer,
     action_tx: UnboundedSender<Action>,
     action_rx: UnboundedReceiver<Action>,
     repo_area: Rect,
@@ -387,6 +391,7 @@ impl App {
             pending_pick: None,
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
+            mux: crate::session::env::Multiplexer::detect(),
             action_tx,
             action_rx,
             repo_area: Rect::default(),

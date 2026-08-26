@@ -188,6 +188,11 @@ impl App {
             KeyCode::Char('v') => {
                 self.action_tx.send(Action::ReviewSelected)?;
             }
+            KeyCode::Menu => {
+                // Keyboard context menu: the right-click fallback for
+                // terminals/multiplexers (herdr, …) that swallow the gesture.
+                self.open_context_menu_at_selection()?;
+            }
             KeyCode::Char('a') => {
                 self.action_tx.send(Action::OpenAddRepo)?;
             }
@@ -262,6 +267,41 @@ impl App {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Open the context menu for the focused panel's selected row (the
+    /// Menu key path). Modal overlays take precedence; a panel without a
+    /// selectable row (e.g. the GitHub panel) is a no-op.
+    pub(super) fn open_context_menu_at_selection(&mut self) -> Result<()> {
+        if self.context_menu.visible
+            || self.graph_context_menu.visible
+            || self.picker.visible
+            || self.path_input.visible
+            || self.confirm_dialog.visible
+            || self.theme_picker.visible
+            || self.graph_filter_picker.visible
+        {
+            return Ok(());
+        }
+        let action = match self.focus {
+            FocusPanel::Repos => {
+                self.repo_list
+                    .selected_menu()
+                    .map(|(id, is_worktree, col, row)| Action::ShowContextMenu {
+                        id,
+                        row,
+                        col,
+                        is_worktree,
+                    })
+            }
+            FocusPanel::Changes => self.file_list.selected_menu(),
+            FocusPanel::Graph => Some(Action::OpenGraphContextMenu),
+            FocusPanel::GitHub => None,
+        };
+        if let Some(action) = action {
+            self.action_tx.send(action)?;
         }
         Ok(())
     }

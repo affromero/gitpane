@@ -363,6 +363,37 @@ impl RepoList {
         }
     }
 
+    /// The context-menu target for the selected row: `(id, is_worktree, col,
+    /// row)`, anchored at the selected row's right edge. Used by the keyboard
+    /// context menu (`x` / Menu), which has no mouse position to anchor on.
+    /// Stash rows have no menu, mirroring right-click.
+    pub fn selected_menu(&self) -> Option<(RepoId, bool, u16, u16)> {
+        let idx = self.state.selected()?;
+        let (id, is_worktree) = match self.display_rows.get(idx)? {
+            DisplayRow::Repo(i) => (RepoId(self.repos.get(*i)?.path.clone()), false),
+            DisplayRow::Worktree(ri, wi) => {
+                let wt = self
+                    .repos
+                    .get(*ri)?
+                    .status
+                    .as_ref()?
+                    .worktree_info
+                    .get(*wi)?;
+                (RepoId(wt.path.clone()), true)
+            }
+            DisplayRow::Stash(_, _) => return None,
+        };
+        let row = self
+            .render_area
+            .y
+            .saturating_add(1)
+            .saturating_add(idx.saturating_sub(self.state.offset()) as u16);
+        let col = self
+            .render_area
+            .x
+            .saturating_add(self.render_area.width.saturating_sub(1));
+        Some((id, is_worktree, col, row))
+    }
     /// Rebuild `display_rows` after `repos` was reordered or a status update
     /// changed subrow counts, then restore the selection captured as `target`
     /// beforehand. Falls back to the parent repo row when the exact subrow is
