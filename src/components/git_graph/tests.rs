@@ -167,6 +167,7 @@ fn test_search_no_results() {
 fn make_label(name: &str) -> BranchLabel {
     BranchLabel {
         name: name.to_string(),
+        catalog_name: name.to_string(),
         is_head: false,
         is_remote: false,
         is_worktree: false,

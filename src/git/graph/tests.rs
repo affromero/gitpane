@@ -19,6 +19,17 @@ fn create_commit_as(
         .unwrap()
 }
 
+/// Create a commit object without updating any ref, so two divergent children
+/// of the same parent can be built without first-parent/HEAD fast-forward
+/// conflicts. The caller points refs at the returned oid explicitly.
+fn create_commit_no_ref(repo: &Repository, message: &str, parents: &[&git2::Commit]) -> Oid {
+    let sig = Signature::now("Test", "test@test.com").unwrap();
+    let tree_id = repo.index().unwrap().write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    repo.commit(None, &sig, &sig, message, &tree, parents)
+        .unwrap()
+}
+
 #[test]
 fn branch_filter_walks_from_the_selected_branch() {
     let tmp = TempDir::new().unwrap();
@@ -748,4 +759,220 @@ fn test_segments_multi_commit_branch() {
     assert_eq!(segments.len(), 1);
     assert_eq!(segments[0].row_indices, vec![2, 3]);
     assert_eq!(segments[0].id, oid_d.to_string());
+}
+
+#[test]
+fn merged_catalog_collapses_tracked_upstream_into_local_name() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+
+    // A commit only on the remote-tracking ref (ahead of local `main`).
+    let remote_oid = create_commit(&repo, "remote-new", &[&root]);
+    repo.reference("refs/remotes/origin/main", remote_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+
+    let names = GraphBuilder::branch_names(tmp.path(), &crate::config::BranchFilter::All).unwrap();
+    assert!(names.iter().any(|n| n == "main"), "got: {names:?}");
+    assert!(
+        !names.iter().any(|n| n == "origin/main"),
+        "tracked upstream must collapse into its local name; got: {names:?}"
+    );
+}
+
+#[test]
+fn selecting_merged_branch_walks_from_both_local_and_upstream_tips() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+
+    // `main` and `origin/main` diverge off `root`: each gets its own commit.
+    // Neither commit is reachable from the other tip, so each appears only if
+    // its own tip is used as a walk root.
+    let local_oid = create_commit_no_ref(&repo, "local-new", &[&root]);
+    repo.reference("refs/heads/main", local_oid, true, "test setup")
+        .unwrap();
+    let remote_oid = create_commit_no_ref(&repo, "remote-new", &[&root]);
+    repo.reference("refs/remotes/origin/main", remote_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some(["main".to_string()].into_iter().collect()),
+            authors: None,
+            refs: GraphRefFilters::default(),
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+
+    let messages: Vec<&str> = rows.iter().map(|r| r.message.as_str()).collect();
+    assert!(
+        messages.contains(&"local-new"),
+        "local tip must be a walk root (commit only on the local branch); got: {messages:?}"
+    );
+    assert!(
+        messages.contains(&"remote-new"),
+        "upstream tip must be a walk root (commit only on the remote); got: {messages:?}"
+    );
+}
+
+#[test]
+fn remote_filter_keeps_an_upstream_branch_distinct() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+
+    let remote_oid = create_commit(&repo, "remote-new", &[&root]);
+    repo.reference("refs/remotes/origin/main", remote_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+
+    // In Remote-only mode the catalog must show the remote branch under its own
+    // name; the merge applies only when both sides are visible (All).
+    let names =
+        GraphBuilder::branch_names(tmp.path(), &crate::config::BranchFilter::Remote).unwrap();
+    assert!(
+        names.iter().any(|n| n == "origin/main"),
+        "remote branch must stay distinct in Remote-only mode; got: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "main"),
+        "local branches are not collected in Remote-only mode; got: {names:?}"
+    );
+}
+
+#[test]
+fn untracked_remote_branch_stays_distinct_from_any_local() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+
+    // `main` tracks `origin/main`; `origin/other` is tracked by nobody. The
+    // tracked pair must collapse to one entry, the untracked remote must stay
+    // distinct — and no invented collapsed entry may appear.
+    let tracked_oid = create_commit_no_ref(&repo, "tracked-tip", &[&root]);
+    repo.reference("refs/remotes/origin/main", tracked_oid, true, "test setup")
+        .unwrap();
+    let other_oid = create_commit_no_ref(&repo, "other-remote-tip", &[&root]);
+    repo.reference("refs/remotes/origin/other", other_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+
+    let names = GraphBuilder::branch_names(tmp.path(), &crate::config::BranchFilter::All).unwrap();
+    assert!(
+        names.iter().any(|n| n == "origin/other"),
+        "untracked remote must stay distinct; got: {names:?}"
+    );
+    assert!(names.iter().any(|n| n == "main"), "got: {names:?}");
+    assert!(
+        !names.iter().any(|n| n == "origin/main"),
+        "tracked upstream must collapse into main; got: {names:?}"
+    );
+}
+
+#[test]
+fn merged_selection_respects_disabled_remote_refs() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+
+    let local_oid = create_commit_no_ref(&repo, "local-new", &[&root]);
+    repo.reference("refs/heads/main", local_oid, true, "test setup")
+        .unwrap();
+    let remote_oid = create_commit_no_ref(&repo, "remote-new", &[&root]);
+    repo.reference("refs/remotes/origin/main", remote_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+
+    // Turn off remote refs: the merged selection must drop the upstream tip.
+    let refs = GraphRefFilters {
+        remote: false,
+        ..GraphRefFilters::default()
+    };
+    let options = GraphOptions {
+        filters: GraphFilters {
+            branches: Some(["main".to_string()].into_iter().collect()),
+            authors: None,
+            refs,
+        },
+        ..GraphOptions::default()
+    };
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+    let messages: Vec<&str> = rows.iter().map(|r| r.message.as_str()).collect();
+    assert!(
+        messages.contains(&"local-new"),
+        "local tip must be walked; got: {messages:?}"
+    );
+    assert!(
+        !messages.contains(&"remote-new"),
+        "remote tip must be dropped when refs.remote is off; got: {messages:?}"
+    );
+}
+
+#[test]
+fn ambiguous_shared_upstream_keeps_remote_distinct() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    repo.branch("main", &root, false).unwrap();
+    repo.branch("dev", &root, false).unwrap();
+
+    let remote_oid = create_commit(&repo, "remote-tip", &[&root]);
+    repo.reference("refs/remotes/origin/main", remote_oid, true, "test setup")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+
+    // Both `main` and `dev` track the SAME upstream `origin/main`. The collapse
+    // is ambiguous, so the remote must stay its own distinct catalog entry.
+    let mut main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+    main_branch.set_upstream(Some("origin/main")).unwrap();
+    let mut dev_branch = repo.find_branch("dev", git2::BranchType::Local).unwrap();
+    dev_branch.set_upstream(Some("origin/main")).unwrap();
+
+    let names = GraphBuilder::branch_names(tmp.path(), &crate::config::BranchFilter::All).unwrap();
+    assert!(
+        names.iter().any(|n| n == "origin/main"),
+        "ambiguous shared upstream must stay distinct; got: {names:?}"
+    );
+    assert!(names.iter().any(|n| n == "main"), "got: {names:?}");
+    assert!(names.iter().any(|n| n == "dev"), "got: {names:?}");
 }

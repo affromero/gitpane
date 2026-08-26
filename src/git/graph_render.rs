@@ -376,6 +376,7 @@ mod tests {
     fn label(name: &str, is_head: bool, is_remote: bool, is_worktree: bool) -> BranchLabel {
         BranchLabel {
             name: name.to_string(),
+            catalog_name: name.to_string(),
             is_head,
             is_remote,
             is_worktree,
@@ -589,6 +590,7 @@ mod tests {
         let theme = GraphTheme::default();
         let labels = vec![BranchLabel {
             name: "v1.0.0".to_string(),
+            catalog_name: "v1.0.0".to_string(),
             is_head: false,
             is_remote: false,
             is_worktree: false,
@@ -610,6 +612,7 @@ mod tests {
         let theme = GraphTheme::default();
         let labels = vec![BranchLabel {
             name: "stash@{0}".to_string(),
+            catalog_name: "stash@{0}".to_string(),
             is_head: false,
             is_remote: false,
             is_worktree: false,

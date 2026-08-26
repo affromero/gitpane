@@ -19,6 +19,11 @@ const PALETTE_SIZE: usize = 6;
 #[derive(Clone, Debug)]
 pub(crate) struct BranchLabel {
     pub name: String,
+    /// Name shown in the branch filter picker. A local branch and the
+    /// remote-tracking branch it tracks (its upstream) share one catalog name,
+    /// so they collapse to a single filter entry and selecting it walks from
+    /// both tips. Most labels use their own `name` as the catalog name.
+    pub catalog_name: String,
     pub is_head: bool,
     pub is_remote: bool,
     pub is_worktree: bool,
@@ -163,7 +168,7 @@ impl GraphBuilder {
                         !label.is_tag
                             && !label.is_stash
                             && options.filters.refs.includes(label)
-                            && branches.contains(&label.name)
+                            && branches.contains(&label.catalog_name)
                     })
                 })
                 .map(|(oid, _)| *oid)
@@ -181,7 +186,7 @@ impl GraphBuilder {
         if let Some(branches) = &options.filters.branches {
             for labels in ref_map.values_mut() {
                 labels.retain(|label| {
-                    label.is_tag || label.is_stash || branches.contains(&label.name)
+                    label.is_tag || label.is_stash || branches.contains(&label.catalog_name)
                 });
             }
             ref_map.retain(|_, labels| !labels.is_empty());
@@ -268,7 +273,7 @@ impl GraphBuilder {
             .values()
             .flat_map(|labels| labels.iter())
             .filter(|label| !label.is_tag && !label.is_stash)
-            .map(|label| label.name.clone())
+            .map(|label| label.catalog_name.clone())
             .collect::<BTreeSet<_>>();
         Ok(names.into_iter().collect())
     }
