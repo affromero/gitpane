@@ -145,14 +145,13 @@ fn parse_herdr_panes(output: &str) -> Result<Vec<(String, PathBuf)>, String> {
     }
     #[derive(serde::Deserialize)]
     struct Envelope {
-        #[serde(default)]
-        result: Option<Panes>,
+        result: Panes,
     }
     let parsed: Envelope = serde_json::from_str(output).map_err(|e| e.to_string())?;
     Ok(parsed
         .result
+        .panes
         .into_iter()
-        .flat_map(|r| r.panes)
         .filter_map(|p| {
             // Prefer the foreground cwd (what a running agent is actually
             // working in); fall back to the pane's label cwd. Treat an empty
@@ -268,8 +267,10 @@ mod tests {
     #[test]
     fn parse_herdr_panes_skips_non_json_and_empty() {
         assert!(parse_herdr_panes("not json").is_err());
-        // A missing `panes` (e.g. a future herdr renaming the field) is an Err,
-        // so shape drift fails loudly instead of silently showing "nothing live".
+        // A missing `result` or `panes` (e.g. a future herdr renaming either
+        // field) is an Err, so shape drift fails loudly instead of silently
+        // showing "nothing live".
+        assert!(parse_herdr_panes("{}").is_err());
         assert!(parse_herdr_panes("{\"result\":{}}").is_err());
         // A genuinely empty `panes: []` still parses to an empty set.
         assert!(
