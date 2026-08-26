@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.14.0] - 2026-08-26
+
+### Added
+- Native support for [herdr](https://herdr.dev), a terminal workspace manager for AI coding agents, as a first-class multiplexer alongside tmux. Inside a herdr pane, `o` opens a new herdr pane at the target directory and `v` reviews in a new herdr tab, with tmux-shaped placements (`split-window -h/-v`, `new-window`, `-t <pane-id>`) translated to herdr commands so existing configs keep working; tmux-only flags error instead of silently mis-launching. The `◉` liveness marker probes `herdr pane list` (preferring the foreground process's cwd), and `G` focuses the tab hosting the live pane. Nested setups resolve to the innermost multiplexer: tmux-inside-herdr picks tmux, herdr-inside-tmux picks herdr. herdr's output contract is strict — a response whose JSON shape drifts fails loudly in the logs instead of silently showing nothing live (tested against herdr 0.8.2). Thanks @expoli.
+- The `Menu` key opens the context menu for the selected row in every panel, as a keyboard fallback for terminals and multiplexers (like herdr) that intercept right-click. Opt-in `[herdr] forward_right_click = true` additionally asks herdr to forward right-click gestures to gitpane's pane at startup; it defaults to off because herdr cannot report the current routing, so the forwarding persists after gitpane quits. Thanks @expoli.
+
+### Fixed
+- A repo fetch that times out is now killed as a process group, so the ssh child it spawned dies with it instead of lingering as an orphan that keeps the connection (and the repo's `.git` locks) alive. When process-group kill fails, gitpane falls back to killing the direct child. Thanks @expoli.
+
 ## [0.13.0] - 2026-08-19
 
 ### Added
