@@ -39,25 +39,13 @@ cargo install gitpane
 
 That's it. No cloning, no building from source. Runs on **Linux, macOS, and Windows**.
 
-> **Don't have Rust?** Download a prebuilt binary from [GitHub Releases](https://github.com/affromero/gitpane/releases/latest). It is a single static binary with zero dependencies.
+> **Don't have Rust?** Install the latest prebuilt binary (a single static binary with zero dependencies) in one line:
 >
 > ```bash
-> # macOS (Apple Silicon)
-> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-aarch64-apple-darwin.tar.gz
-> tar xzf gitpane-aarch64-apple-darwin.tar.gz && sudo mv gitpane /usr/local/bin/
->
-> # macOS (Intel)
-> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-x86_64-apple-darwin.tar.gz
-> tar xzf gitpane-x86_64-apple-darwin.tar.gz && sudo mv gitpane /usr/local/bin/
->
-> # Linux (x86_64, statically linked)
-> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-x86_64-unknown-linux-musl.tar.gz
-> tar xzf gitpane-x86_64-unknown-linux-musl.tar.gz && sudo mv gitpane /usr/local/bin/
->
-> # Linux (ARM64)
-> curl -LO https://github.com/affromero/gitpane/releases/latest/download/gitpane-aarch64-unknown-linux-gnu.tar.gz
-> tar xzf gitpane-aarch64-unknown-linux-gnu.tar.gz && sudo mv gitpane /usr/local/bin/
+> curl -fsSL https://raw.githubusercontent.com/affromero/gitpane/main/install.sh | sh
 > ```
+>
+> It detects your platform (macOS arm64/x86_64, Linux x86_64/aarch64) and installs to `/usr/local/bin` (override with `GITPANE_INSTALL_DIR`). Per-platform tarballs and Windows zips are on [GitHub Releases](https://github.com/affromero/gitpane/releases/latest) if you prefer a manual download.
 
 > **On NetBSD?** gitpane is available as a community-maintained [pkgsrc](https://www.pkgsrc.org/) package in [`devel/gitpane`](https://pkgsrc.se/devel/gitpane), thanks to [@0323pin](https://github.com/0323pin):
 >
@@ -86,7 +74,7 @@ gitpane update              # checks for a newer release, then runs cargo instal
 cargo install gitpane       # the equivalent manual command, overwrites the old binary
 ```
 
-If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), download the latest binary for your platform using the same commands from the install section above.
+If you installed from a [GitHub Release](https://github.com/affromero/gitpane/releases/latest), re-run the install one-liner from the install section above to get the latest binary.
 
 On NetBSD, update through pkgsrc instead of `gitpane update`, which shells out to `cargo install` and would replace the package-managed binary with a cargo-built one.
 
