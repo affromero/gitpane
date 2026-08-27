@@ -41,6 +41,7 @@ mod github;
 mod input;
 mod launch;
 mod render;
+mod repo_admin;
 #[cfg(test)]
 mod tests;
 
@@ -447,21 +448,50 @@ impl App {
     /// live, never which row the user is on.
     fn sort_repos(&mut self) {
         let keep = self.repo_list.selected_row_id();
+        // Pinned submodules anchor to their (topmost) parent so they stay
+        // adjacent under it in every order: groups sort by the anchor's key,
+        // the anchor itself leads its group (`nested` ascending), and nested
+        // siblings order among themselves. DirtyFirst deliberately groups by
+        // the anchor's dirtiness — a submodule follows its parent instead of
+        // floating away on its own dirty bit.
+        let repos = &self.repo_list.repos;
+        let mut keys: std::collections::HashMap<std::path::PathBuf, (bool, String, bool, String)> =
+            std::collections::HashMap::with_capacity(repos.len());
+        for entry in repos {
+            let mut anchor = entry;
+            while let Some(p) = crate::components::repo_list::submodule_parent(repos, anchor) {
+                anchor = p;
+            }
+            let anchor_clean = !anchor.status.as_ref().is_some_and(|s| s.is_dirty);
+            keys.insert(
+                entry.path.clone(),
+                (
+                    anchor_clean,
+                    anchor.display.to_lowercase(),
+                    entry.path != anchor.path,
+                    entry.display.to_lowercase(),
+                ),
+            );
+        }
         match self.sort_order {
             SortOrder::Alphabetical => {
-                self.repo_list
-                    .repos
-                    .sort_by_cached_key(|r| r.display.to_lowercase());
+                self.repo_list.repos.sort_by_cached_key(|r| {
+                    let (_, anchor, nested, own) = keys[&r.path].clone();
+                    (anchor, nested, own)
+                });
             }
             SortOrder::ReverseAlphabetical => {
-                self.repo_list
-                    .repos
-                    .sort_by_cached_key(|r| std::cmp::Reverse(r.display.to_lowercase()));
+                // Reverse applies to both display keys; `nested` stays
+                // ascending so a parent still leads its group.
+                self.repo_list.repos.sort_by_cached_key(|r| {
+                    let (_, anchor, nested, own) = keys[&r.path].clone();
+                    (std::cmp::Reverse(anchor), nested, std::cmp::Reverse(own))
+                });
             }
             SortOrder::DirtyFirst => {
                 self.repo_list.repos.sort_by_cached_key(|r| {
-                    let dirty = r.status.as_ref().is_some_and(|s| s.is_dirty);
-                    (!dirty, r.display.to_lowercase())
+                    let (anchor_clean, anchor, nested, own) = keys[&r.path].clone();
+                    (anchor_clean, anchor, nested, own)
                 });
             }
         }

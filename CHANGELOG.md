@@ -2,6 +2,15 @@
 
 All notable changes to gitpane are documented here.
 
+## [Unreleased]
+
+### Added
+- Submodule rows in the Changes panel can now be pinned to the repo list from the context menu: "Add to repositories" appears for unpinned submodules and swaps to "Remove from repositories" (with the same confirmation as the `d` key) once pinned. The menu is grouped with separators — mutations, inspect, graph, pin management — and adding a repo now jumps focus to the Repositories panel with the new row selected.
+- Pinned submodules nest under their parent repo in the list: they render as a dim `└ name` connector row directly below the parent in every sort order, instead of a long breadcrumb path sorted on its own.
+
+### Fixed
+- Removing a pinned repo that the root scan can never rediscover (a submodule inside another listed repo, or a repo outside every root) no longer appends its bare directory name to `excluded_repos`, where it substring-matched unrelated paths forever after.
+
 ## [0.14.1] - 2026-08-27
 
 ### Added

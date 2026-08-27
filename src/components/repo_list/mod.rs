@@ -126,6 +126,39 @@ pub(crate) struct RepoList {
 /// `scanner::test_discover_skips_phantom_dot_git_at_root` describes. Stripping
 /// the root off itself leaves nothing, so an empty relative path falls through
 /// to the basename rather than rendering a nameless row.
+/// Connector drawn before a nested submodule's name in the repo list.
+pub(crate) const NESTED_CONNECTOR: &str = "\u{2514} ";
+
+/// The entry that lists `entry` as one of its submodules — i.e. some other
+/// row whose `status.submodules` contains a path resolving to `entry.path`.
+/// `None` until the parent's status arrives, so a nested row falls back to
+/// its breadcrumb label instead of flickering.
+pub(crate) fn submodule_parent<'a>(
+    repos: &'a [RepoEntry],
+    entry: &RepoEntry,
+) -> Option<&'a RepoEntry> {
+    repos.iter().find(|p| {
+        p.path != entry.path
+            && p.status.as_ref().is_some_and(|s| {
+                s.submodules
+                    .iter()
+                    .any(|sm| p.path.join(&sm.path) == entry.path)
+            })
+    })
+}
+
+/// Label an entry renders in the name column and its width contribution:
+/// nested submodules show connector + basename, everything else shows the
+/// breadcrumb. Shared by `row_layout` and `render_repo_item` so column math
+/// and hit-testing agree.
+pub(crate) fn row_label<'a>(repos: &[RepoEntry], entry: &'a RepoEntry) -> (bool, &'a str) {
+    if submodule_parent(repos, entry).is_some() {
+        (true, &entry.name)
+    } else {
+        (false, &entry.display)
+    }
+}
+
 fn display_path(path: &Path, roots: &[PathBuf]) -> String {
     for root in roots {
         if let Ok(rel) = path.strip_prefix(root)
@@ -735,9 +768,27 @@ impl RepoList {
 
         // Name column: packed left, ellipsized to the shared width. `x`
         // tracks the current column so the aligned columns can fill up to
-        // their rails.
-        let name = middle_ellipsize(&entry.display, layout.name_col as usize);
-        let mut x = 2 + name.chars().count() as u16;
+        // their rails. Nested submodules draw a dim connector before the
+        // name; only the name ellipsizes, so the connector survives narrow
+        // panels. The connector width is part of the measured label
+        // (`row_label` + `row_layout`), keeping the rails aligned.
+        let (nested, label) = row_label(&self.repos, entry);
+        let mut x = 2u16;
+        if nested {
+            let connector_w = NESTED_CONNECTOR.chars().count() as u16;
+            spans.push(Span::styled(
+                NESTED_CONNECTOR,
+                Style::default().fg(t.worktree_subtree_icon),
+            ));
+            x += connector_w;
+        }
+        let budget = (layout.name_col as usize).saturating_sub(if nested {
+            NESTED_CONNECTOR.chars().count()
+        } else {
+            0
+        });
+        let name = middle_ellipsize(label, budget);
+        x += name.chars().count() as u16;
         spans.push(Span::styled(name, Style::default().fg(t.repo_name)));
 
         // Status tail: this row's own indicators, packed tight — attention

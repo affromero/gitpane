@@ -449,3 +449,246 @@ fn mock_graph_row() -> crate::git::graph::GraphRow {
         collapsed: None,
     }
 }
+
+/// Removing a pinned submodule must not pollute `excluded_repos`: the walk
+/// never rediscovers a repo nested inside another listed repo, and the bare
+/// name would substring-match unrelated paths forever after.
+#[test]
+fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "parent");
+    let sub = make_repo(
+        tmp.path(),
+        &Path::new("parent").join("sub").display().to_string(),
+    );
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![sub],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    let id = RepoId(
+        app.repo_list
+            .repos
+            .iter()
+            .find(|r| r.name == "sub")
+            .expect("pinned submodule listed")
+            .path
+            .clone(),
+    );
+
+    let excluded_before = app.config.excluded_repos.clone();
+    app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
+
+    assert!(app.repo_list.repos.iter().all(|r| r.name != "sub"));
+    assert_eq!(
+        app.config.excluded_repos, excluded_before,
+        "pinned submodule removal must not exclude by name"
+    );
+}
+
+/// A repo the root walk discovered must still be excluded on removal, or it
+/// reappears on the next rescan.
+#[test]
+fn removing_a_discovered_repo_still_excludes_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "walker");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    let id = RepoId(app.repo_list.repos[0].path.clone());
+
+    app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
+
+    assert!(app.repo_list.repos.is_empty());
+    assert!(app.config.excluded_repos.contains(&"walker".to_string()));
+}
+
+/// `ConfirmRemoveRepo` only asks: the repo stays listed until the dialog's
+/// accept action fires.
+#[test]
+fn confirm_remove_repo_asks_before_removing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "keeper");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    let id = RepoId(app.repo_list.repos[0].path.clone());
+
+    app.handle_repo_admin(Action::ConfirmRemoveRepo(id))
+        .unwrap();
+
+    assert_eq!(app.repo_list.repos.len(), 1);
+    assert!(app.confirm_dialog.visible);
+}
+
+/// Removing the repo whose path is the panels' active context (set by "Open
+/// in graph" on a submodule) must drop that context, or the panels keep
+/// rendering a repo that is no longer listed.
+#[test]
+fn removing_the_active_context_repo_clears_active_worktree() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "parent");
+    let sub = make_repo(
+        tmp.path(),
+        &Path::new("parent").join("sub").display().to_string(),
+    );
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![sub],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    let entry_path = app
+        .repo_list
+        .repos
+        .iter()
+        .find(|r| r.name == "sub")
+        .expect("pinned submodule listed")
+        .path
+        .clone();
+    app.active_worktree = Some(ActiveWorktree {
+        path: entry_path.clone(),
+        repo_id: RepoId(entry_path.clone()),
+        display_name: "parent/sub".to_string(),
+    });
+
+    app.handle_repo_admin(Action::RemoveRepo(RepoId(entry_path)))
+        .unwrap();
+
+    assert!(app.active_worktree.is_none());
+}
+
+/// Adding a repo must land the user on it: Repos panel focused and the new
+/// row selectable immediately (the row model is rebuilt before SelectRepo,
+/// not lazily at the next draw).
+#[test]
+fn add_repo_focuses_the_repo_list_on_the_new_row() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "existing");
+    let newcomer = make_repo(tmp.path(), "newcomer");
+
+    let config = Config {
+        root_dirs: vec![tmp.path().join("existing-only-root")],
+        ..Config::default()
+    };
+    std::fs::create_dir_all(tmp.path().join("existing-only-root")).unwrap();
+    let mut app = App::new(config);
+    app.focus = FocusPanel::Changes;
+
+    app.handle_repo_admin(Action::AddRepo(newcomer.clone()))
+        .unwrap();
+
+    assert_eq!(app.focus, FocusPanel::Repos);
+    let canonical = newcomer.canonicalize().unwrap();
+    let idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.path == canonical)
+        .expect("newcomer listed");
+    app.repo_list.select_repo_row(idx);
+    assert_eq!(
+        app.repo_list.selected_index(),
+        Some(idx),
+        "display_rows stale: the new row is not selectable before a draw"
+    );
+}
+
+fn attach_submodule_status(app: &mut App, parent_name: &str, sub_rel: &str) {
+    let idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == parent_name)
+        .expect("parent listed");
+    let mut status = test_status("main", None);
+    status.submodules.push(crate::git::status::SubmoduleInfo {
+        name: sub_rel.to_string(),
+        path: std::path::PathBuf::from(sub_rel),
+        state: None,
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: crate::git::status::SubmoduleWarn::default(),
+    });
+    app.repo_list.repos[idx].status = Some(status);
+}
+
+/// A pinned submodule stays adjacent under its parent in every sort order:
+/// alphabetical, reverse (parent still leads its group), and dirty-first
+/// (the group follows the parent's dirtiness, not the submodule's own).
+#[test]
+fn sort_repos_keeps_pinned_submodules_under_their_parent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "aaa");
+    make_repo(tmp.path(), "mmm");
+    let sub = make_repo(
+        tmp.path(),
+        &Path::new("mmm").join("sub").display().to_string(),
+    );
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![sub],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    attach_submodule_status(&mut app, "mmm", "sub");
+
+    let names = |app: &App| {
+        app.repo_list
+            .repos
+            .iter()
+            .map(|r| r.name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    app.sort_order = SortOrder::Alphabetical;
+    app.sort_repos();
+    assert_eq!(names(&app), ["aaa", "mmm", "sub"]);
+
+    app.sort_order = SortOrder::ReverseAlphabetical;
+    app.sort_repos();
+    assert_eq!(names(&app), ["mmm", "sub", "aaa"]);
+
+    // Dirty the submodule only: the group must not float above `aaa`
+    // (grouping follows the parent), but with the parent dirty it must.
+    app.sort_order = SortOrder::DirtyFirst;
+    let sub_idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == "sub")
+        .unwrap();
+    let mut sub_status = test_status("main", None);
+    sub_status.is_dirty = true;
+    app.repo_list.repos[sub_idx].status = Some(sub_status);
+    app.sort_repos();
+    assert_eq!(names(&app), ["aaa", "mmm", "sub"]);
+
+    let mmm_idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == "mmm")
+        .unwrap();
+    if let Some(s) = app.repo_list.repos[mmm_idx].status.as_mut() {
+        s.is_dirty = true;
+    }
+    app.sort_repos();
+    assert_eq!(names(&app), ["mmm", "sub", "aaa"]);
+}

@@ -46,6 +46,8 @@ enum MenuAction {
     OpenSubmoduleGraph,
     /// Submodule row only: pin the submodule as its own entry in the repo list.
     AddSubmoduleAsRepo,
+    /// Submodule row only, when already pinned: unpin it (with confirmation).
+    RemoveSubmoduleRepo,
     StageFile,
     UnstageFile,
     /// Discard a changed file; `bool` is `is_untracked` (delete vs restore).
@@ -91,6 +93,9 @@ pub(crate) struct FileMenuContext {
     pub is_untracked: bool,
     /// Submodule row: no stage/unstage/discard (only Open / Open folder).
     pub is_submodule: bool,
+    /// Submodule row that is already pinned in the repo list: its entry's id,
+    /// resolved by the caller so Remove targets the exact listed path.
+    pub submodule_repo: Option<RepoId>,
 }
 
 pub(crate) struct ContextMenu {
@@ -99,6 +104,9 @@ pub(crate) struct ContextMenu {
     /// Set in file mode (`show_file`); the right-clicked file's repo-relative
     /// path. `None` in repo mode (`show`).
     pub file_path: Option<PathBuf>,
+    /// Set in file mode when the row is a pinned submodule; see
+    /// [`FileMenuContext::submodule_repo`].
+    submodule_repo: Option<RepoId>,
     pub position: (u16, u16), // (col, row)
     rows: Vec<MenuRow>,
     state: ListState,
@@ -113,6 +121,7 @@ impl ContextMenu {
             visible: false,
             repo_id: None,
             file_path: None,
+            submodule_repo: None,
             position: (0, 0),
             rows: Vec::new(),
             state: ListState::default(),
@@ -139,6 +148,7 @@ impl ContextMenu {
         self.visible = true;
         self.repo_id = Some(repo_id);
         self.file_path = None;
+        self.submodule_repo = None;
         self.position = (col, row);
 
         let item = |label: String, action: MenuAction| MenuItem { label, action };
@@ -250,10 +260,12 @@ impl ContextMenu {
             unstaged,
             is_untracked,
             is_submodule,
+            submodule_repo,
         } = ctx;
         self.visible = true;
         self.repo_id = Some(repo_id);
         self.file_path = Some(path);
+        self.submodule_repo = submodule_repo;
         self.position = (col, row);
 
         let item = |label: String, action: MenuAction| MenuItem { label, action };
@@ -279,22 +291,32 @@ impl ContextMenu {
         }
 
         // Always available: inspect the file or its enclosing folder.
-        let mut inspect = vec![
+        let inspect = vec![
             item("Open".into(), MenuAction::OpenFile),
             item("Open folder".into(), MenuAction::RevealFile),
             item("Copy path".into(), MenuAction::CopyFilePath),
         ];
-        // A submodule is its own repo: offer to browse its graph in the panels.
+        // A submodule is its own repo: offer to browse its graph in the
+        // panels, and to pin it to (or unpin it from) the repo list.
+        let mut graph = Vec::new();
+        let mut manage = Vec::new();
         if is_submodule {
-            inspect.push(item("Open in graph".into(), MenuAction::OpenSubmoduleGraph));
-            inspect.push(item(
-                "Add to repositories".into(),
-                MenuAction::AddSubmoduleAsRepo,
-            ));
+            graph.push(item("Open in graph".into(), MenuAction::OpenSubmoduleGraph));
+            if self.submodule_repo.is_some() {
+                manage.push(item(
+                    "Remove from repositories".into(),
+                    MenuAction::RemoveSubmoduleRepo,
+                ));
+            } else {
+                manage.push(item(
+                    "Add to repositories".into(),
+                    MenuAction::AddSubmoduleAsRepo,
+                ));
+            }
         }
 
         self.rows.clear();
-        for group in [mutate, inspect] {
+        for group in [mutate, inspect, graph, manage] {
             if group.is_empty() {
                 continue;
             }
@@ -401,6 +423,9 @@ impl ContextMenu {
                 sub_path: self.file_path.clone()?,
             },
             MenuAction::AddSubmoduleAsRepo => Action::AddRepo(id.0.join(self.file_path.clone()?)),
+            MenuAction::RemoveSubmoduleRepo => {
+                Action::ConfirmRemoveRepo(self.submodule_repo.clone()?)
+            }
             MenuAction::StageFile => Action::StageFile(id, self.file_path.clone()?),
             MenuAction::UnstageFile => Action::UnstageFile(id, self.file_path.clone()?),
             MenuAction::DiscardFile(is_untracked) => {
@@ -556,9 +581,20 @@ mod file_menu_tests {
     }
 
     fn show(staged: bool, unstaged: bool, is_untracked: bool, is_submodule: bool) -> ContextMenu {
+        show_pinned(staged, unstaged, is_untracked, is_submodule, false)
+    }
+
+    fn show_pinned(
+        staged: bool,
+        unstaged: bool,
+        is_untracked: bool,
+        is_submodule: bool,
+        pinned: bool,
+    ) -> ContextMenu {
+        let repo = PathBuf::from("/repo");
         let mut menu = ContextMenu::new(Arc::new(Theme::default()));
         menu.show_file(
-            RepoId(PathBuf::from("/repo")),
+            RepoId(repo.clone()),
             0,
             0,
             FileMenuContext {
@@ -567,6 +603,7 @@ mod file_menu_tests {
                 unstaged,
                 is_untracked,
                 is_submodule,
+                submodule_repo: pinned.then(|| RepoId(repo.join("a.txt"))),
             },
         );
         menu
@@ -614,5 +651,12 @@ mod file_menu_tests {
                 "Add to repositories".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn pinned_submodule_row_offers_remove_instead_of_add() {
+        let labels = item_labels(&show_pinned(false, true, false, true, true));
+        assert!(labels.contains(&"Remove from repositories".to_string()));
+        assert!(!labels.iter().any(|l| l == "Add to repositories"));
     }
 }

@@ -219,6 +219,9 @@ pub(crate) enum Action {
     OpenAddRepo,
     AddRepo(std::path::PathBuf),
     RemoveRepo(RepoId),
+    /// Ask before removing: shows the confirm dialog that dispatches
+    /// [`Action::RemoveRepo`] on accept.
+    ConfirmRemoveRepo(RepoId),
     CycleSortOrder,
     RescanRepos,
     /// Idempotent rescan triggered by FS events. Compares the discovered set
