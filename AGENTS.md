@@ -92,7 +92,8 @@ map in [README.md#architecture](README.md#architecture). Key areas:
   doc tweaks).
 - The web UI pre-fills `.github/PULL_REQUEST_TEMPLATE.md`, but `gh pr create`
   does not — structure the PR body yourself with the template's sections:
-  `Closes #<n>`, `## Problem`, `## Fix`, `## Test`.
+  `Closes #<n>`, `## In simple terms` (one or two sentences a user
+  would understand), `## Problem`, `## Fix`, `## Test`.
 
 ## Releasing
 

@@ -6,6 +6,11 @@ doc tweaks) skip the issue.
 
 Closes #<issue number>
 
+## In simple terms
+
+One or two sentences a user (not a git-internals expert) would understand:
+what changes on screen or in behavior?
+
 ## Problem
 
 What is wrong and why it matters. Include repro steps or observed output for bugs.
