@@ -19,6 +19,48 @@ pub(super) fn resolve_refs(
         .and_then(|r| r.shorthand().ok().map(String::from));
     let wt_branches = collect_worktree_branches(repo);
 
+    // Map a remote-tracking branch's short name (e.g. `origin/main`) to the
+    // local branch that tracks it, so a merged catalog entry can collapse a
+    // local↔upstream pair into one. Only `All` collects both sides, so only
+    // that mode merges; a remote-only view keeps each remote branch distinct.
+    let mut upstream_to_local: HashMap<String, String> = HashMap::new();
+    if *filter == BranchFilter::All
+        && let Ok(branches) = repo.branches(Some(BranchType::Local))
+    {
+        // Collect every local branch that tracks each remote-tracking ref, so a
+        // collapse is only applied when it is unambiguous.
+        let mut tracking: HashMap<String, Vec<String>> = HashMap::new();
+        for branch_result in branches {
+            let Ok((branch, _)) = branch_result else {
+                continue;
+            };
+            let Ok(Some(name)) = branch.name() else {
+                continue;
+            };
+            let Ok(upstream) = branch.upstream() else {
+                continue;
+            };
+            // Only remote-tracking upstreams merge; a branch tracking
+            // another local branch must stay two distinct entries.
+            if !upstream.get().is_remote() {
+                continue;
+            }
+            let Some(up_name) = upstream.name().ok().flatten() else {
+                continue;
+            };
+            tracking
+                .entry(up_name.to_string())
+                .or_default()
+                .push(name.to_string());
+        }
+        // Collapse only when exactly one local branch tracks the upstream; if two
+        // locals share the same remote, keep the remote distinct instead of guessing.
+        for (up_name, locals) in tracking {
+            if let [single] = locals.as_slice() {
+                upstream_to_local.insert(up_name, single.clone());
+            }
+        }
+    }
     let mut map: HashMap<Oid, Vec<BranchLabel>> = HashMap::new();
 
     let branch_types: Vec<BranchType> = match filter {
@@ -50,9 +92,18 @@ pub(super) fn resolve_refs(
             let is_head =
                 !is_remote && head_oid == Some(target) && head_name.as_deref() == Some(&name);
             let is_worktree = !is_remote && wt_branches.contains(&name);
+            let catalog_name = if is_remote {
+                upstream_to_local
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone())
+            } else {
+                name.clone()
+            };
 
             map.entry(target).or_default().push(BranchLabel {
                 name,
+                catalog_name,
                 is_head,
                 is_remote,
                 is_worktree,
@@ -81,6 +132,7 @@ pub(super) fn resolve_refs(
             if let Some(oid) = oid {
                 map.entry(oid).or_default().push(BranchLabel {
                     name: name.to_string(),
+                    catalog_name: name.to_string(),
                     is_head: false,
                     is_remote: false,
                     is_worktree: false,
@@ -125,6 +177,7 @@ pub(super) fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, V
         };
         map.entry(parent_oid).or_default().push(BranchLabel {
             name: format!("stash@{{{index}}}"),
+            catalog_name: format!("stash@{{{index}}}"),
             is_head: false,
             is_remote: false,
             is_worktree: false,

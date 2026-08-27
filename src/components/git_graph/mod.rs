@@ -387,7 +387,7 @@ impl GitGraph {
             rows.iter()
                 .flat_map(|row| row.labels.iter())
                 .filter(|label| !label.is_tag && !label.is_stash)
-                .map(|label| label.name.clone()),
+                .map(|label| label.catalog_name.clone()),
         );
         self.filter_authors
             .extend(rows.iter().map(|row| row.author.clone()));
