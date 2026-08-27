@@ -143,7 +143,15 @@ pub(super) fn row_layout(
     let mut l = RowLayout::default();
     let widest_name = repos
         .iter()
-        .map(|r| r.display.chars().count() as u16)
+        .map(|r| {
+            let (nested, label) = super::row_label(repos, r);
+            let connector = if nested {
+                super::NESTED_CONNECTOR.chars().count() as u16
+            } else {
+                0
+            };
+            connector + label.chars().count() as u16
+        })
         .max()
         .unwrap_or(0);
     // Widest packed tail (attention cells + liveness dot + file count) —

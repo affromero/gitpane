@@ -557,3 +557,71 @@ fn focus_mode_keeps_selected_repos_subrows_bright() {
         assert!(row_dimmed(&mut list, 4), "the other repo still dims");
     }
 }
+
+/// A pinned submodule row drops its breadcrumb for connector + basename once
+/// the parent's status lists it, and the shared name column budgets for the
+/// connector so the branch rail stays aligned.
+#[test]
+fn pinned_submodule_labels_as_nested_basename() {
+    let parent = PathBuf::from("/parent");
+    let sub_rel = Path::new("modules").join("dep");
+    let sub = parent.join(&sub_rel);
+    let mut list = make_list(&[&parent.display().to_string(), &sub.display().to_string()]);
+
+    // Before the parent's status arrives: no nesting, breadcrumb kept.
+    let (nested, _) = row_label(&list.repos, &list.repos[1]);
+    assert!(!nested, "nesting must wait for the parent's submodule list");
+
+    let mut status = empty_status("main");
+    status.submodules.push(submodule_info(sub_rel));
+    list.repos[0].status = Some(status);
+
+    let (nested, label) = row_label(&list.repos, &list.repos[1]);
+    assert!(nested);
+    assert_eq!(label, "dep");
+    let (parent_nested, parent_label) = row_label(&list.repos, &list.repos[0]);
+    assert!(!parent_nested);
+    assert_eq!(parent_label, "parent");
+
+    // The name column budgets connector + basename for the nested row:
+    // "parent" (6) outweighs "└ " + "dep" (5).
+    let layout = row_layout(&list.repos, &[], 60);
+    assert_eq!(layout.name_col, 6);
+}
+
+/// The rendered row shows the dim connector glyph before the submodule name.
+#[test]
+fn nested_submodule_row_draws_the_connector() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let parent = PathBuf::from("/parent");
+    let sub = parent.join("dep");
+    let mut list = make_list(&[&parent.display().to_string(), &sub.display().to_string()]);
+    let mut status = empty_status("main");
+    status.submodules.push(submodule_info(PathBuf::from("dep")));
+    list.repos[0].status = Some(status);
+    list.render_area = Rect::new(0, 0, 40, 6);
+
+    let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+    terminal
+        .draw(|f| {
+            list.draw(f, f.area()).unwrap();
+        })
+        .unwrap();
+
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol().to_string())
+        .collect();
+    assert!(
+        text.contains("\u{2514} dep"),
+        "no nested connector in: {text}"
+    );
+    assert!(
+        !text.contains("parent/dep") && !text.contains("parent\\dep"),
+        "nested row still shows its breadcrumb: {text}"
+    );
+}

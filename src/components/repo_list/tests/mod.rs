@@ -45,6 +45,18 @@ pub(super) fn worktree_entry(name: &str) -> WorktreeEntry {
     }
 }
 
+pub(super) fn submodule_info(path: PathBuf) -> crate::git::status::SubmoduleInfo {
+    crate::git::status::SubmoduleInfo {
+        name: path.display().to_string(),
+        path,
+        state: None,
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: crate::git::status::SubmoduleWarn::default(),
+    }
+}
+
 pub(super) fn make_list(paths: &[&str]) -> RepoList {
     make_list_with_expand(paths, true)
 }

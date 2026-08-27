@@ -606,3 +606,89 @@ fn add_repo_focuses_the_repo_list_on_the_new_row() {
         "display_rows stale: the new row is not selectable before a draw"
     );
 }
+
+fn attach_submodule_status(app: &mut App, parent_name: &str, sub_rel: &str) {
+    let idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == parent_name)
+        .expect("parent listed");
+    let mut status = test_status("main", None);
+    status.submodules.push(crate::git::status::SubmoduleInfo {
+        name: sub_rel.to_string(),
+        path: std::path::PathBuf::from(sub_rel),
+        state: None,
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: crate::git::status::SubmoduleWarn::default(),
+    });
+    app.repo_list.repos[idx].status = Some(status);
+}
+
+/// A pinned submodule stays adjacent under its parent in every sort order:
+/// alphabetical, reverse (parent still leads its group), and dirty-first
+/// (the group follows the parent's dirtiness, not the submodule's own).
+#[test]
+fn sort_repos_keeps_pinned_submodules_under_their_parent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "aaa");
+    make_repo(tmp.path(), "mmm");
+    let sub = make_repo(
+        tmp.path(),
+        &Path::new("mmm").join("sub").display().to_string(),
+    );
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![sub],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    attach_submodule_status(&mut app, "mmm", "sub");
+
+    let names = |app: &App| {
+        app.repo_list
+            .repos
+            .iter()
+            .map(|r| r.name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    app.sort_order = SortOrder::Alphabetical;
+    app.sort_repos();
+    assert_eq!(names(&app), ["aaa", "mmm", "sub"]);
+
+    app.sort_order = SortOrder::ReverseAlphabetical;
+    app.sort_repos();
+    assert_eq!(names(&app), ["mmm", "sub", "aaa"]);
+
+    // Dirty the submodule only: the group must not float above `aaa`
+    // (grouping follows the parent), but with the parent dirty it must.
+    app.sort_order = SortOrder::DirtyFirst;
+    let sub_idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == "sub")
+        .unwrap();
+    let mut sub_status = test_status("main", None);
+    sub_status.is_dirty = true;
+    app.repo_list.repos[sub_idx].status = Some(sub_status);
+    app.sort_repos();
+    assert_eq!(names(&app), ["aaa", "mmm", "sub"]);
+
+    let mmm_idx = app
+        .repo_list
+        .repos
+        .iter()
+        .position(|r| r.name == "mmm")
+        .unwrap();
+    if let Some(s) = app.repo_list.repos[mmm_idx].status.as_mut() {
+        s.is_dirty = true;
+    }
+    app.sort_repos();
+    assert_eq!(names(&app), ["mmm", "sub", "aaa"]);
+}
