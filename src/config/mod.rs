@@ -310,6 +310,16 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
+        // A test that saves without an explicit target would silently
+        // overwrite the developer's real config (this happened: app tests
+        // exercising AddRepo/RemoveRepo clobbered ~/.config/gitpane). Fail
+        // loudly instead; fixtures set `write_target_override` to a tempdir.
+        // Mock-env tests go through `save_with_env` directly and are exempt.
+        #[cfg(test)]
+        assert!(
+            self.write_target_override.is_some() || self.loaded_path.is_some(),
+            "test Config would save to the real config path; set write_target_override"
+        );
         self.save_with_env(&RealEnv)
     }
 
