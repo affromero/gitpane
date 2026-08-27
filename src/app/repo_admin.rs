@@ -42,12 +42,14 @@ impl App {
                         }
                         let repo_id = RepoId(path.clone());
                         let display = self.repo_list.display_for(&path);
+                        let gitlink = path.join(".git").is_file();
                         self.repo_list.repos.push(RepoEntry {
                             path,
                             name,
                             display,
                             status: None,
                             git_op: false,
+                            gitlink,
                         });
                         // Sort now: it rebuilds `display_rows`, so the
                         // SelectRepo below can land on the new row instead of
@@ -77,16 +79,13 @@ impl App {
                     self.git_graph.invalidate_repo(&entry.path);
                     // Remove from pinned if it was pinned
                     self.config.pinned_repos.retain(|p| *p != entry.path);
-                    // Exclude only repos the root walk can rediscover. A
-                    // pinned submodule (inside another listed repo) or a repo
-                    // outside every root never comes back on rescan, and its
-                    // bare name in `excluded_repos` substring-matches
-                    // unrelated paths.
-                    let inside_listed_repo = self
-                        .repo_list
-                        .repos
-                        .iter()
-                        .any(|r| r.path != entry.path && entry.path.starts_with(&r.path));
+                    // Exclude only repos the walk can rediscover: it
+                    // promotes real `.git` directories (including a plain
+                    // repo nested inside another one) but never gitlink
+                    // checkouts — a pinned submodule's `.git` pointer file —
+                    // and never anything outside every root. Excluding those
+                    // is pure downside: the bare name substring-matches
+                    // unrelated paths forever after.
                     // Compare against canonicalized roots: entry paths are
                     // canonical (macOS tempdirs resolve through /private).
                     let under_root = self.config.effective_root_dirs().iter().any(|root| {
@@ -95,7 +94,7 @@ impl App {
                     });
                     let name = entry.name.clone();
                     if under_root
-                        && !inside_listed_repo
+                        && entry.path.join(".git").is_dir()
                         && !self.config.excluded_repos.contains(&name)
                     {
                         self.config.excluded_repos.push(name);

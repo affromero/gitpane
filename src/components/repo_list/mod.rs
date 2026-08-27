@@ -49,6 +49,30 @@ pub(crate) struct RepoEntry {
     pub status: Option<RepoStatus>,
     /// True only during push/pull/rebase — shows animated spinner
     pub git_op: bool,
+    /// `.git` is a `gitdir:` pointer file, not a directory: a submodule or
+    /// linked-worktree checkout. Probed once at construction (never per
+    /// frame) and used for nesting — unlike `status.submodules`, which only
+    /// lists dirty/warned submodules, this stays true for a clean one.
+    pub gitlink: bool,
+}
+
+impl RepoEntry {
+    fn new(path: PathBuf, roots: &[PathBuf]) -> Self {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let display = display_path(&path, roots);
+        let gitlink = path.join(".git").is_file();
+        Self {
+            path,
+            name,
+            display,
+            status: None,
+            git_op: false,
+            gitlink,
+        }
+    }
 }
 
 /// A resolved target for a context-menu git operation, produced by
@@ -129,22 +153,24 @@ pub(crate) struct RepoList {
 /// Connector drawn before a nested submodule's name in the repo list.
 pub(crate) const NESTED_CONNECTOR: &str = "\u{2514} ";
 
-/// The entry that lists `entry` as one of its submodules — i.e. some other
-/// row whose `status.submodules` contains a path resolving to `entry.path`.
-/// `None` until the parent's status arrives, so a nested row falls back to
-/// its breadcrumb label instead of flickering.
+/// The listed entry `entry` belongs under: `entry` is a gitlink checkout (a
+/// submodule or linked worktree, per its cached `.git`-pointer probe) whose
+/// path sits strictly inside the other entry's tree. Structural, not
+/// status-driven — `status.submodules` only lists dirty/warned submodules,
+/// so nesting keyed on it dissolved the moment a submodule went clean.
+/// Prefers the deepest ancestor so a submodule-of-a-submodule attaches to
+/// its immediate parent.
 pub(crate) fn submodule_parent<'a>(
     repos: &'a [RepoEntry],
     entry: &RepoEntry,
 ) -> Option<&'a RepoEntry> {
-    repos.iter().find(|p| {
-        p.path != entry.path
-            && p.status.as_ref().is_some_and(|s| {
-                s.submodules
-                    .iter()
-                    .any(|sm| p.path.join(&sm.path) == entry.path)
-            })
-    })
+    if !entry.gitlink {
+        return None;
+    }
+    repos
+        .iter()
+        .filter(|p| p.path != entry.path && entry.path.starts_with(&p.path))
+        .max_by_key(|p| p.path.components().count())
 }
 
 /// Label an entry renders in the name column and its width contribution:
@@ -228,20 +254,7 @@ impl RepoList {
             .collect();
         let repos: Vec<RepoEntry> = repo_paths
             .into_iter()
-            .map(|path| {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string());
-                let display = display_path(&path, &roots);
-                RepoEntry {
-                    path,
-                    name,
-                    display,
-                    status: None,
-                    git_op: false,
-                }
-            })
+            .map(|path| RepoEntry::new(path, &roots))
             .collect();
 
         let mut state = ListState::default();
@@ -565,18 +578,7 @@ impl RepoList {
             if let Some(existing) = by_path.remove(path) {
                 next.push(existing);
             } else {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string());
-                let display = display_path(path, &self.roots);
-                next.push(RepoEntry {
-                    path: path.clone(),
-                    name,
-                    display,
-                    status: None,
-                    git_op: false,
-                });
+                next.push(RepoEntry::new(path.clone(), &self.roots));
                 added.push(path.clone());
             }
         }
