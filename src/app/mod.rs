@@ -41,6 +41,7 @@ mod github;
 mod input;
 mod launch;
 mod render;
+mod repo_admin;
 #[cfg(test)]
 mod tests;
 
