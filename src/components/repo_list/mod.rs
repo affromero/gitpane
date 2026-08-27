@@ -152,6 +152,9 @@ pub(crate) struct RepoList {
 /// to the basename rather than rendering a nameless row.
 /// Connector drawn before a nested submodule's name in the repo list.
 pub(crate) const NESTED_CONNECTOR: &str = "\u{2514} ";
+/// Badge drawn after a nested submodule's name, echoing the Changes pane's
+/// `[sub: ...]` tag so the row reads as a submodule, not a worktree.
+pub(crate) const NESTED_BADGE: &str = " [sub]";
 
 /// The listed entry `entry` belongs under: `entry` is a gitlink checkout (a
 /// submodule or linked worktree, per its cached `.git`-pointer probe) whose
@@ -785,13 +788,20 @@ impl RepoList {
             x += connector_w;
         }
         let budget = (layout.name_col as usize).saturating_sub(if nested {
-            NESTED_CONNECTOR.chars().count()
+            NESTED_CONNECTOR.chars().count() + NESTED_BADGE.chars().count()
         } else {
             0
         });
         let name = middle_ellipsize(label, budget);
         x += name.chars().count() as u16;
         spans.push(Span::styled(name, Style::default().fg(t.repo_name)));
+        if nested {
+            spans.push(Span::styled(
+                NESTED_BADGE,
+                Style::default().fg(t.worktree_subtree_icon),
+            ));
+            x += NESTED_BADGE.chars().count() as u16;
+        }
 
         // Status tail: this row's own indicators, packed tight — attention
         // cells (the same segments `indicator_columns` hit-tests), then the

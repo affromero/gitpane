@@ -145,12 +145,13 @@ pub(super) fn row_layout(
         .iter()
         .map(|r| {
             let (nested, label) = super::row_label(repos, r);
-            let connector = if nested {
-                super::NESTED_CONNECTOR.chars().count() as u16
+            let dressing = if nested {
+                (super::NESTED_CONNECTOR.chars().count() + super::NESTED_BADGE.chars().count())
+                    as u16
             } else {
                 0
             };
-            connector + label.chars().count() as u16
+            dressing + label.chars().count() as u16
         })
         .max()
         .unwrap_or(0);
