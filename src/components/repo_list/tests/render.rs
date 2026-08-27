@@ -581,10 +581,10 @@ fn pinned_submodule_labels_as_nested_basename() {
     assert!(!parent_nested);
     assert_eq!(parent_label, "parent");
 
-    // The name column budgets connector + basename for the nested row:
-    // "parent" (6) outweighs "└ " + "dep" (5).
+    // The name column budgets connector + basename + badge for the nested
+    // row: "\u{2514} " + "dep" + " [sub]" (11) outweighs "parent" (6).
     let layout = row_layout(&list.repos, &[], 60);
-    assert_eq!(layout.name_col, 6);
+    assert_eq!(layout.name_col, 11);
 }
 
 /// A plain repo that merely lives inside another listed repo (real `.git`
