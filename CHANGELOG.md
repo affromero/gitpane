@@ -2,6 +2,14 @@
 
 All notable changes to gitpane are documented here.
 
+## [0.14.1] - 2026-08-27
+
+### Added
+- One-line install without Rust tooling: `curl -fsSL https://raw.githubusercontent.com/affromero/gitpane/main/install.sh | sh` detects the platform, downloads the latest release binary, and installs it to `/usr/local/bin` (override with `GITPANE_INSTALL_DIR`; sudo only when the target dir is not writable). Replaces the four per-platform curl+tar blocks in the README.
+
+### Fixed
+- A local branch and the remote-tracking branch it tracks (e.g. `main` tracking `origin/main`) now appear as a single entry in the git graph's branch filter instead of two, and selecting it walks the graph from both the local and upstream tips, so commits fetched from the remote stay visible even when the view is narrowed to that branch. The collapse applies only when it is unambiguous: All-branches mode, remote-tracking upstreams only, and exactly one local tracking the upstream; remote-only views and untracked or shared upstreams keep their own entries. Thanks @expoli.
+
 ## [0.14.0] - 2026-08-26
 
 ### Added
