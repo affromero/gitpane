@@ -131,6 +131,19 @@ impl App {
                 is_untracked,
                 is_submodule,
             } => {
+                // Resolve only for submodule rows: every other right-click
+                // skips the canonicalize syscall and the repo-list scan.
+                let submodule_repo = is_submodule
+                    .then(|| {
+                        let abs = id.0.join(path);
+                        let abs = abs.canonicalize().unwrap_or(abs);
+                        self.repo_list
+                            .repos
+                            .iter()
+                            .find(|r| r.path == abs)
+                            .map(|r| RepoId(r.path.clone()))
+                    })
+                    .flatten();
                 self.context_menu.show_file(
                     id.clone(),
                     col,
@@ -141,6 +154,7 @@ impl App {
                         unstaged,
                         is_untracked,
                         is_submodule,
+                        submodule_repo,
                     },
                 );
             }
@@ -677,6 +691,7 @@ impl App {
             Action::OpenAddRepo
             | Action::AddRepo(_)
             | Action::RemoveRepo(_)
+            | Action::ConfirmRemoveRepo(_)
             | Action::CycleSortOrder
             | Action::RescanRepos
             | Action::DiscoverNewRepos => self.handle_repo_admin(action)?,

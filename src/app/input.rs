@@ -202,11 +202,8 @@ impl App {
                 if self.repo_list.selected_worktree().is_some() {
                     self.action_tx.send(Action::RemoveWorktreeSelected)?;
                 } else if let Some(idx) = self.repo_list.selected_index() {
-                    let entry = &self.repo_list.repos[idx];
-                    let name = entry.name.clone();
-                    let repo_id = RepoId(entry.path.clone());
-                    self.confirm_dialog
-                        .show(format!("Remove {}?", name), Action::RemoveRepo(repo_id));
+                    let repo_id = RepoId(self.repo_list.repos[idx].path.clone());
+                    self.action_tx.send(Action::ConfirmRemoveRepo(repo_id))?;
                 }
             }
             KeyCode::Char('s') => {

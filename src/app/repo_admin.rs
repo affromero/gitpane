@@ -21,6 +21,9 @@ impl App {
                     // emits — a symlinked or trailing-slash spelling would
                     // otherwise duplicate the repo on the next rescan.
                     let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    // Land the user on the result either way: Repos panel
+                    // focused, new (or existing) row selected.
+                    self.focus = FocusPanel::Repos;
                     if let Some(existing) = self.repo_list.repos.iter().find(|r| r.path == path) {
                         self.success_message =
                             Some(("already in list".to_string(), Instant::now()));
@@ -46,9 +49,20 @@ impl App {
                             status: None,
                             git_op: false,
                         });
+                        // Sort now: it rebuilds `display_rows`, so the
+                        // SelectRepo below can land on the new row instead of
+                        // silently no-op'ing against the stale row model.
+                        self.sort_repos();
                         self.action_tx.send(Action::RefreshRepo(repo_id.clone()))?;
                         self.action_tx.send(Action::SelectRepo(repo_id))?;
                     }
+                }
+            }
+            Action::ConfirmRemoveRepo(ref id) => {
+                if let Some(idx) = self.repo_list.resolve_index(id) {
+                    let name = self.repo_list.repos[idx].name.clone();
+                    self.confirm_dialog
+                        .show(format!("Remove {name}?"), Action::RemoveRepo(id.clone()));
                 }
             }
             Action::RemoveRepo(ref id) => {
@@ -63,10 +77,38 @@ impl App {
                     self.git_graph.invalidate_repo(&entry.path);
                     // Remove from pinned if it was pinned
                     self.config.pinned_repos.retain(|p| *p != entry.path);
-                    // Add to excluded so it won't reappear on rescan
+                    // Exclude only repos the root walk can rediscover. A
+                    // pinned submodule (inside another listed repo) or a repo
+                    // outside every root never comes back on rescan, and its
+                    // bare name in `excluded_repos` substring-matches
+                    // unrelated paths.
+                    let inside_listed_repo = self
+                        .repo_list
+                        .repos
+                        .iter()
+                        .any(|r| r.path != entry.path && entry.path.starts_with(&r.path));
+                    // Compare against canonicalized roots: entry paths are
+                    // canonical (macOS tempdirs resolve through /private).
+                    let under_root = self.config.effective_root_dirs().iter().any(|root| {
+                        let root = root.canonicalize().unwrap_or_else(|_| root.clone());
+                        entry.path.starts_with(&root)
+                    });
                     let name = entry.name.clone();
-                    if !self.config.excluded_repos.contains(&name) {
+                    if under_root
+                        && !inside_listed_repo
+                        && !self.config.excluded_repos.contains(&name)
+                    {
                         self.config.excluded_repos.push(name);
+                    }
+                    // A removed repo can be the graph/changes panels' current
+                    // path context (via "Open in graph"): drop it so the
+                    // panels fall back to the selected repo.
+                    if self
+                        .active_worktree
+                        .as_ref()
+                        .is_some_and(|aw| aw.path.starts_with(&entry.path))
+                    {
+                        self.active_worktree = None;
                     }
                     if let Err(e) = self.config.save() {
                         tracing::error!("Failed to save config: {}", e);
