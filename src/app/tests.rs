@@ -145,6 +145,27 @@ fn make_repo(root: &std::path::Path, rel: &str) -> std::path::PathBuf {
     repo
 }
 
+/// A submodule-shaped checkout: `.git` is a `gitdir:` pointer file into the
+/// parent's module store, the layout `is_repo_root` accepts and the walk
+/// never rediscovers.
+fn make_submodule_repo(
+    root: &std::path::Path,
+    parent_rel: &str,
+    sub_rel: &str,
+) -> std::path::PathBuf {
+    let module = root
+        .join(parent_rel)
+        .join(".git")
+        .join("modules")
+        .join(sub_rel);
+    std::fs::create_dir_all(&module).unwrap();
+    std::fs::write(module.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let sub = root.join(parent_rel).join(sub_rel);
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join(".git"), format!("gitdir: {}\n", module.display())).unwrap();
+    sub
+}
+
 fn displays(app: &App) -> Vec<String> {
     app.repo_list
         .repos
@@ -457,10 +478,7 @@ fn mock_graph_row() -> crate::git::graph::GraphRow {
 fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "parent");
-    let sub = make_repo(
-        tmp.path(),
-        &Path::new("parent").join("sub").display().to_string(),
-    );
+    let sub = make_submodule_repo(tmp.path(), "parent", "sub");
 
     let config = Config {
         root_dirs: vec![tmp.path().to_path_buf()],
@@ -607,26 +625,6 @@ fn add_repo_focuses_the_repo_list_on_the_new_row() {
     );
 }
 
-fn attach_submodule_status(app: &mut App, parent_name: &str, sub_rel: &str) {
-    let idx = app
-        .repo_list
-        .repos
-        .iter()
-        .position(|r| r.name == parent_name)
-        .expect("parent listed");
-    let mut status = test_status("main", None);
-    status.submodules.push(crate::git::status::SubmoduleInfo {
-        name: sub_rel.to_string(),
-        path: std::path::PathBuf::from(sub_rel),
-        state: None,
-        head: None,
-        head_oid: None,
-        workdir_oid: None,
-        warn: crate::git::status::SubmoduleWarn::default(),
-    });
-    app.repo_list.repos[idx].status = Some(status);
-}
-
 /// A pinned submodule stays adjacent under its parent in every sort order:
 /// alphabetical, reverse (parent still leads its group), and dirty-first
 /// (the group follows the parent's dirtiness, not the submodule's own).
@@ -635,10 +633,7 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "aaa");
     make_repo(tmp.path(), "mmm");
-    let sub = make_repo(
-        tmp.path(),
-        &Path::new("mmm").join("sub").display().to_string(),
-    );
+    let sub = make_submodule_repo(tmp.path(), "mmm", "sub");
 
     let config = Config {
         root_dirs: vec![tmp.path().to_path_buf()],
@@ -647,7 +642,6 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
         ..Config::default()
     };
     let mut app = App::new(config);
-    attach_submodule_status(&mut app, "mmm", "sub");
 
     let names = |app: &App| {
         app.repo_list
@@ -686,9 +680,47 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
         .iter()
         .position(|r| r.name == "mmm")
         .unwrap();
-    if let Some(s) = app.repo_list.repos[mmm_idx].status.as_mut() {
-        s.is_dirty = true;
-    }
+    let mut mmm_status = test_status("main", None);
+    mmm_status.is_dirty = true;
+    app.repo_list.repos[mmm_idx].status = Some(mmm_status);
     app.sort_repos();
     assert_eq!(names(&app), ["mmm", "sub", "aaa"]);
+}
+
+/// A plain repo nested inside another listed repo (real `.git` directory) IS
+/// rediscovered by the walk, so removing it must still exclude it — only
+/// gitlink checkouts skip the exclusion.
+#[test]
+fn removing_a_nested_plain_repo_still_excludes_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    make_repo(tmp.path(), "parent");
+    let plain = make_repo(
+        tmp.path(),
+        &Path::new("parent")
+            .join("tools")
+            .join("side")
+            .display()
+            .to_string(),
+    );
+
+    let config = Config {
+        root_dirs: vec![tmp.path().to_path_buf()],
+        pinned_repos: vec![plain],
+        scan_depth: 2,
+        ..Config::default()
+    };
+    let mut app = App::new(config);
+    let id = RepoId(
+        app.repo_list
+            .repos
+            .iter()
+            .find(|r| r.name == "side")
+            .expect("nested plain repo listed")
+            .path
+            .clone(),
+    );
+
+    app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
+
+    assert!(app.config.excluded_repos.contains(&"side".to_string()));
 }
