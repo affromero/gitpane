@@ -2,7 +2,7 @@ use super::*;
 use git2::{Repository, Signature};
 use tempfile::TempDir;
 
-fn create_commit(repo: &Repository, message: &str, parents: &[&git2::Commit]) -> Oid {
+pub(super) fn create_commit(repo: &Repository, message: &str, parents: &[&git2::Commit]) -> Oid {
     create_commit_as(repo, message, "Test", parents)
 }
 
@@ -22,7 +22,11 @@ fn create_commit_as(
 /// Create a commit object without updating any ref, so two divergent children
 /// of the same parent can be built without first-parent/HEAD fast-forward
 /// conflicts. The caller points refs at the returned oid explicitly.
-fn create_commit_no_ref(repo: &Repository, message: &str, parents: &[&git2::Commit]) -> Oid {
+pub(super) fn create_commit_no_ref(
+    repo: &Repository,
+    message: &str,
+    parents: &[&git2::Commit],
+) -> Oid {
     let sig = Signature::now("Test", "test@test.com").unwrap();
     let tree_id = repo.index().unwrap().write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();

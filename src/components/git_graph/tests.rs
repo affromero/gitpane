@@ -176,6 +176,26 @@ fn make_label(name: &str) -> BranchLabel {
     }
 }
 
+#[test]
+fn picker_catalog_uses_catalog_names_not_display_names() {
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    let mut row = mock_row("abc1234", "tip", "Alice");
+    // Local `main` plus its tracked upstream displayed as `origin/main` but
+    // collapsed to the `main` catalog entry.
+    let mut remote = make_label("origin/main");
+    remote.catalog_name = "main".to_string();
+    remote.is_remote = true;
+    row.labels = vec![make_label("main"), remote];
+    graph.set_rows(vec![row]);
+
+    let branches = graph.filter_branches();
+    assert_eq!(
+        branches,
+        vec!["main".to_string()],
+        "picker must expose collapsed catalog names only"
+    );
+}
+
 const OID_M: &str = "1111111111111111111111111111111111111111";
 const OID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

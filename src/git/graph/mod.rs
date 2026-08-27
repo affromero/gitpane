@@ -8,6 +8,8 @@ mod refs;
 mod segments;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_filters;
 
 use refs::{merge_stash_labels, resolve_refs};
 
@@ -23,6 +25,13 @@ pub(crate) struct BranchLabel {
     /// remote-tracking branch it tracks (its upstream) share one catalog name,
     /// so they collapse to a single filter entry and selecting it walks from
     /// both tips. Most labels use their own `name` as the catalog name.
+    ///
+    /// Catalog identity is a plain string, so a local branch literally named
+    /// like a remote shorthand (a local `origin/topic` next to an untracked
+    /// remote `origin/topic`) shares one entry and selecting it walks both
+    /// tips. This predates the upstream collapse (filter matching was always
+    /// string-based); the upgrade path is ref-qualified identities
+    /// (`refs/heads/...` vs `refs/remotes/...`) with separate display names.
     pub catalog_name: String,
     pub is_head: bool,
     pub is_remote: bool,

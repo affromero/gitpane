@@ -272,6 +272,10 @@ impl GitGraph {
             // before either terminal action below is sent.
             let guard = GraphLoadGuard::new(load_gen, tx.clone());
             let builder = GraphBuilder::new();
+            // `branch_names` and `build` resolve refs independently, so a
+            // fetch or upstream change landing between the two calls can
+            // briefly leave the picker catalog inconsistent with the built
+            // graph. Accepted: the next reload re-derives both together.
             if let Ok(branches) = GraphBuilder::branch_names(&path, &options.branch_filter) {
                 let _ = tx.send(Action::GraphFilterBranchesLoaded {
                     generation: load_gen,
