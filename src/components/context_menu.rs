@@ -44,6 +44,8 @@ enum MenuAction {
     CopyFilePath,
     /// Submodule row only: retarget the graph/changes panels onto the submodule.
     OpenSubmoduleGraph,
+    /// Submodule row only: pin the submodule as its own entry in the repo list.
+    AddSubmoduleAsRepo,
     StageFile,
     UnstageFile,
     /// Discard a changed file; `bool` is `is_untracked` (delete vs restore).
@@ -285,6 +287,10 @@ impl ContextMenu {
         // A submodule is its own repo: offer to browse its graph in the panels.
         if is_submodule {
             inspect.push(item("Open in graph".into(), MenuAction::OpenSubmoduleGraph));
+            inspect.push(item(
+                "Add to repositories".into(),
+                MenuAction::AddSubmoduleAsRepo,
+            ));
         }
 
         self.rows.clear();
@@ -394,6 +400,7 @@ impl ContextMenu {
                 repo_id: id,
                 sub_path: self.file_path.clone()?,
             },
+            MenuAction::AddSubmoduleAsRepo => Action::AddRepo(id.0.join(self.file_path.clone()?)),
             MenuAction::StageFile => Action::StageFile(id, self.file_path.clone()?),
             MenuAction::UnstageFile => Action::UnstageFile(id, self.file_path.clone()?),
             MenuAction::DiscardFile(is_untracked) => {
@@ -604,6 +611,7 @@ mod file_menu_tests {
                 "Open folder".to_string(),
                 "Copy path".to_string(),
                 "Open in graph".to_string(),
+                "Add to repositories".to_string(),
             ]
         );
     }
