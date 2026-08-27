@@ -186,6 +186,7 @@ fn app_opens_with_the_repo_list_already_sorted() {
     make_repo(tmp.path(), "zeta/bravo");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 3,
         ..Config::default()
@@ -217,6 +218,7 @@ fn sort_repos_intermixes_pinned_repos() {
     let pinned = make_repo(tmp.path(), "zzz");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         pinned_repos: vec![pinned],
         scan_depth: 2,
@@ -245,6 +247,7 @@ fn sort_repos_is_case_insensitive_in_both_directions() {
     make_repo(tmp.path(), "aaa");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 2,
         ..Config::default()
@@ -279,6 +282,7 @@ fn sort_keeps_the_selected_repo() {
     make_repo(tmp.path(), "zzz");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 2,
         ..Config::default()
@@ -311,6 +315,7 @@ fn drain_actions(app: &mut App) -> Vec<Action> {
 fn power_test_app() -> App {
     let tmp = tempfile::TempDir::new().unwrap();
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 2,
         ..Config::default()
@@ -422,6 +427,7 @@ async fn quit_waits_for_mutating_git_ops_and_force_quits_on_second_request() {
 fn worktree_refresh_invalidates_the_cached_graph_for_the_worktree_path() {
     let tmp = tempfile::tempdir().unwrap();
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         ..Config::default()
     };
@@ -481,6 +487,7 @@ fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
     let sub = make_submodule_repo(tmp.path(), "parent", "sub");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         pinned_repos: vec![sub],
         scan_depth: 2,
@@ -515,6 +522,7 @@ fn removing_a_discovered_repo_still_excludes_it() {
     make_repo(tmp.path(), "walker");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 2,
         ..Config::default()
@@ -536,6 +544,7 @@ fn confirm_remove_repo_asks_before_removing() {
     make_repo(tmp.path(), "keeper");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         scan_depth: 2,
         ..Config::default()
@@ -563,6 +572,7 @@ fn removing_the_active_context_repo_clears_active_worktree() {
     );
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         pinned_repos: vec![sub],
         scan_depth: 2,
@@ -599,6 +609,7 @@ fn add_repo_focuses_the_repo_list_on_the_new_row() {
     let newcomer = make_repo(tmp.path(), "newcomer");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().join("existing-only-root")],
         ..Config::default()
     };
@@ -636,6 +647,7 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
     let sub = make_submodule_repo(tmp.path(), "mmm", "sub");
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         pinned_repos: vec![sub],
         scan_depth: 2,
@@ -704,6 +716,7 @@ fn removing_a_nested_plain_repo_still_excludes_it() {
     );
 
     let config = Config {
+        write_target_override: Some(tmp.path().join("config.toml")),
         root_dirs: vec![tmp.path().to_path_buf()],
         pinned_repos: vec![plain],
         scan_depth: 2,
