@@ -85,6 +85,15 @@ map in [README.md#architecture](README.md#architecture). Key areas:
 - Validate or quote any user input that reaches a shell. argv launches avoid the
   shell entirely; `sh -c` paths quote every substituted value.
 
+## Pull requests
+
+- Open an issue first (bug report or feature request) and reference it with
+  `Closes #<n>` in the PR body. Skip the issue only for trivial fixes (typos,
+  doc tweaks).
+- The web UI pre-fills `.github/PULL_REQUEST_TEMPLATE.md`, but `gh pr create`
+  does not — structure the PR body yourself with the template's sections:
+  `Closes #<n>`, `## Problem`, `## Fix`, `## Test`.
+
 ## Releasing
 
 Releases are tag driven. Pushing a `vX.Y.Z` tag triggers
