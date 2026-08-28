@@ -62,12 +62,14 @@ enum Command {
 /// of seconds while the last poll drained. `shutdown_background` unblocks
 /// shutdown immediately. That is safe for everything that can still be in
 /// flight here: in-process status queries only read `.git`, and the status
-/// poll's `git fetch` child (spawned with null stdio) survives as an
-/// independent, crash-safe git process. Mutating operations (pull, push,
-/// submodule updates) hold piped stdio that would SIGPIPE the child
-/// mid-write, so the app instead gates quitting on their completion (see
-/// `GitOpGuard` in `app`); they only reach this line still running when the
-/// user force-quits with a second `q`.
+/// poll's `git fetch` child is spawned with null stdio, so we kill it as a
+/// process group on shutdown (see `kill_in_flight_git_ops`) rather than
+/// letting its ssh connection persist. Mutating operations (pull, push,
+/// submodule updates) hold piped stdio that would SIGPIPE the child mid-write,
+/// so the app instead gates quitting on their completion (see `GitOpGuard` in
+/// `app`); they only reach this line still running when the user force-quits
+/// with a second `q`, and `kill_in_flight_git_ops` then takes them down as a
+/// group too.
 ///
 /// `block_on` runs under `catch_unwind` so a panic inside the app also
 /// takes the `shutdown_background` path — unwinding through the runtime's
@@ -93,6 +95,14 @@ fn main() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
+
+    // Kill any in-flight killable git process (status `git fetch` plus any
+    // mutating op, e.g. a pull/push/submodule, still running after a force-quit)
+    // as a process group (git + its ssh child) so quitting does not leave the
+    // ssh connection open until the remote gives up. Runs before shutdown so
+    // the blocking-pool threads reap the dead children and return promptly
+    // instead of waiting out their timeouts.
+    crate::git::status::kill_in_flight_git_ops();
 
     // Do not wait for in-flight blocking-pool tasks (see doc above).
     runtime.shutdown_background();

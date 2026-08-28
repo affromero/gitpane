@@ -26,12 +26,9 @@ impl App {
         // Created before scheduling so a quit between scheduling and closure
         // start still counts this op as in flight.
         let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
+        let op_timeout = Duration::from_secs(self.config.git.op_timeout_secs);
         tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&exec_path)
-                .args(&args)
-                .output();
+            let output = crate::git::status::run_git_op_capturing(&exec_path, &args, op_timeout);
             match output {
                 Ok(o) if o.status.success() => {
                     guard.complete();

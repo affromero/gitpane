@@ -18,6 +18,7 @@ mod worktree;
 
 use change_summary::{ChangeSummary, collect_change_summary};
 use worktree::{collect_worktree_info, compute_ahead_behind, fetch_remote_silent};
+pub(crate) use worktree::{kill_in_flight_git_ops, run_git_op_capturing};
 
 #[derive(Clone, Debug)]
 pub(crate) struct RepoStatus {

@@ -125,7 +125,8 @@ struct GitOpGuard {
 /// across the whole process — one count per live [`GitOpGuard`]. Quit waits
 /// for this to reach zero: exiting would close the children's piped
 /// stdout/stderr and SIGPIPE a `git pull` mid-merge (see `main.rs`).
-/// Read-only status queries are not counted and stay abandonable.
+/// Read-only status queries are not counted here; their in-flight `git fetch`
+/// groups are instead killed on shutdown (see `kill_in_flight_git_ops`).
 static MUTATING_GIT_OPS: AtomicUsize = AtomicUsize::new(0);
 
 /// Number of in-flight mutating git operations. `main` consults this on the

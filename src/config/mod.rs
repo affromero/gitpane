@@ -50,6 +50,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub submodules: SubmoduleConfig,
     #[serde(default)]
+    pub git: GitConfig,
+    #[serde(default)]
     pub github: GithubConfig,
     #[serde(default)]
     pub open: OpenConfig,
@@ -178,6 +180,16 @@ pub(crate) struct SubmoduleConfig {
     pub ignore_dirty: bool,
     #[serde(default = "default_warn_unpushed")]
     pub warn_unpushed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct GitConfig {
+    /// Seconds a user-initiated mutating git op (pull/push/submodule) may run
+    /// before it is killed as a process group (with its `ssh` child). A stalled
+    /// connection cannot hang the app forever (a normal quit waits for mutating
+    /// ops to complete); generous enough to let a large transfer finish.
+    #[serde(default = "default_git_op_timeout_secs")]
+    pub op_timeout_secs: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

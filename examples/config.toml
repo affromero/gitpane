@@ -40,6 +40,14 @@ poll_fetch_secs = 30
 # cloned repo appears in the list (default: 5).
 discovery_cooldown_secs = 5
 
+
+[git]
+# Seconds a user-initiated pull/push/submodule may run before it is killed as
+# a process group (with its ssh child), so a stalled connection can't hang the
+# app. A normal quit waits for these to complete; a hung one is killed after
+# this many seconds (default: 300).
+op_timeout_secs = 300
+
 [ui]
 # Terminal refresh rate in frames per second (default: 10)
 frame_rate = 10
