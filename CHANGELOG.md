@@ -10,6 +10,7 @@ All notable changes to gitpane are documented here.
 
 ### Fixed
 - Removing a pinned repo that the root scan can never rediscover (a submodule inside another listed repo, or a repo outside every root) no longer appends its bare directory name to `excluded_repos`, where it substring-matched unrelated paths forever after.
+- Quitting no longer leaves an in-flight git operation (and the `ssh` it spawns for an SSH remote) running after the app exits; in-flight fetch and pull/push/submodule and file/worktree ops are now killed as a process group on exit, force-quit, or timeout. Follow-up to the v0.14.0 fetch process-group kill, which only covered the fetch timeout path.
 
 ## [0.14.1] - 2026-08-27
 

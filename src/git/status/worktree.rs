@@ -1,4 +1,5 @@
 use crate::config::SubmoduleConfig;
+use crate::git::process::{kill_process_group, spawn_killable, unregister_killable_pid};
 use git2::Repository;
 use std::path::Path;
 
@@ -68,35 +69,18 @@ pub(super) fn collect_worktree_info(
 /// tree down with it: `git fetch` over SSH leaves a detached `ssh`
 /// (git-upload-pack) child behind if only the git process is killed, and that
 /// orphan keeps the server-side connection alive until the network gives up.
+///
+/// The child pid is also registered (see `kill_in_flight_git_ops`) so that
+/// quitting the app takes the whole group down too, instead of leaving the ssh
+/// connection running until the fetch times out.
+///
+/// The 30s timeout here is a fixed background-poll bound, deliberately separate
+/// from the mutating-op timeout (which governs user-initiated
+/// pull/push/worktree operations): a background poll should not hold a
+/// blocking-pool thread for long.
 pub(super) fn fetch_remote_silent(path: &Path) -> bool {
     use wait_timeout::ChildExt;
 
-    let child = fetch_child(path);
-
-    match child {
-        Ok(mut c) => {
-            match c.wait_timeout(std::time::Duration::from_secs(30)) {
-                Ok(Some(status)) => status.success(),
-                Ok(None) => {
-                    // Timed out — kill the whole process group (git + its ssh
-                    // children), not just git.
-                    kill_process_group(&mut c);
-                    let _ = c.wait();
-                    false
-                }
-                Err(_) => false,
-            }
-        }
-        Err(_) => false,
-    }
-}
-
-/// Spawn `git fetch --quiet` with stdout/stderr discarded.
-///
-/// On unix the child gets its own process group so that a timeout kill can
-/// target the whole tree (git and every child it spawned, notably `ssh` for
-/// ssh remotes) instead of leaving orphans behind.
-fn fetch_child(path: &Path) -> std::io::Result<std::process::Child> {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(path)
@@ -104,39 +88,34 @@ fn fetch_child(path: &Path) -> std::io::Result<std::process::Child> {
         .arg("--quiet")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // Own process group (pgid == pid) so kill_process_group can take
-        // git's children — the ssh client — down with it.
-        cmd.process_group(0);
-    }
-    cmd.spawn()
-}
+    // `spawn_killable` puts the child in its own process group and registers
+    // the pid, so a quit can take git + its ssh child down together.
+    let mut c = match spawn_killable(&mut cmd) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let pid = c.id() as i32;
 
-/// Kill the child and everything in its process group.
-///
-/// On unix the fetch child was spawned with `process_group(0)`, so its pgid
-/// equals its pid and this takes `git fetch` and its `ssh` child together.
-/// Non-unix platforms fall back to killing only the child itself (previous
-/// behavior).
-#[cfg(unix)]
-pub(super) fn kill_process_group(child: &mut std::process::Child) {
-    // SAFETY: child.id() is the pgid because fetch_child spawned it with
-    // process_group(0). A race where the group already exited is harmless
-    // (ESRCH); any other failure falls back to killing the child directly so
-    // the caller's `wait()` cannot block on a still-running git.
-    let pgid = child.id() as i32;
-    if unsafe { libc::killpg(pgid, libc::SIGKILL) } != 0
-        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        let _ = child.kill();
-    }
-}
+    let result = match c.wait_timeout(std::time::Duration::from_secs(30)) {
+        Ok(Some(status)) => status.success(),
+        Ok(None) => {
+            // Timed out — kill the whole process group (git + its ssh
+            // children), not just git.
+            kill_process_group(&mut c);
+            let _ = c.wait();
+            false
+        }
+        Err(_) => {
+            // Spawn/wait error — kill the whole group too, so a still-running
+            // child is not left untracked (and unregistered) as an orphan.
+            kill_process_group(&mut c);
+            let _ = c.wait();
+            false
+        }
+    };
 
-#[cfg(not(unix))]
-pub(super) fn kill_process_group(child: &mut std::process::Child) {
-    let _ = child.kill();
+    unregister_killable_pid(pid);
+    result
 }
 
 /// Returns (ahead, behind) for HEAD relative to its publishing target.

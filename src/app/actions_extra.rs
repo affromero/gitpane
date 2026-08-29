@@ -266,11 +266,7 @@ impl App {
                             git_args.push(remote);
                             git_args.push(branch);
                         }
-                        let output = std::process::Command::new("git")
-                            .arg("-C")
-                            .arg(&path)
-                            .args(&git_args)
-                            .output();
+                        let output = crate::git::process::run_git_op_capturing(&path, &git_args);
                         match output {
                             Ok(o) if o.status.success() => {
                                 guard.complete();
@@ -349,11 +345,7 @@ impl App {
                     // Pre-scheduling for the same quit-race reason as above.
                     let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
                     tokio::task::spawn_blocking(move || {
-                        let output = std::process::Command::new("git")
-                            .arg("-C")
-                            .arg(&path)
-                            .args(&git_args)
-                            .output();
+                        let output = crate::git::process::run_git_op_capturing(&path, &git_args);
                         match output {
                             Ok(o) if o.status.success() => {
                                 guard.complete();

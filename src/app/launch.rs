@@ -27,11 +27,7 @@ impl App {
         // start still counts this op as in flight.
         let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
         tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&exec_path)
-                .args(&args)
-                .output();
+            let output = crate::git::process::run_git_op_capturing(&exec_path, &args);
             match output {
                 Ok(o) if o.status.success() => {
                     guard.complete();
