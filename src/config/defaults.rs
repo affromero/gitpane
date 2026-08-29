@@ -10,18 +10,6 @@ impl Default for SubmoduleConfig {
     }
 }
 
-impl Default for GitConfig {
-    fn default() -> Self {
-        Self {
-            op_timeout_secs: default_git_op_timeout_secs(),
-        }
-    }
-}
-
-pub(super) fn default_git_op_timeout_secs() -> u64 {
-    300
-}
-
 impl Default for GithubConfig {
     fn default() -> Self {
         Self {
@@ -214,7 +202,6 @@ impl Default for Config {
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
             submodules: SubmoduleConfig::default(),
-            git: GitConfig::default(),
             github: GithubConfig::default(),
             open: OpenConfig::default(),
             review: ReviewConfig::default(),

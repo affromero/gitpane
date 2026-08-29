@@ -232,32 +232,6 @@ fn test_github_config_parse() {
 }
 
 #[test]
-fn test_git_config_defaults() {
-    let config: Config = toml::from_str("").unwrap();
-    assert_eq!(config.git.op_timeout_secs, 300);
-    assert_eq!(Config::default().git.op_timeout_secs, 300);
-}
-
-#[test]
-fn test_git_config_roundtrip() {
-    let mut config = Config::default();
-    config.git.op_timeout_secs = 90;
-    let serialized = toml::to_string_pretty(&config).unwrap();
-    let loaded: Config = toml::from_str(&serialized).unwrap();
-    assert_eq!(loaded.git.op_timeout_secs, 90);
-}
-
-#[test]
-fn test_git_config_parse() {
-    let toml_str = r#"
-        [git]
-        op_timeout_secs = 120
-    "#;
-    let config: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.git.op_timeout_secs, 120);
-}
-
-#[test]
 fn test_open_config_defaults() {
     let config: Config = toml::from_str("").unwrap();
     assert!(config.open.command.is_none());

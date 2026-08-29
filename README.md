@@ -284,12 +284,6 @@ sleep_when_hidden = true      # Stop polling when idle/hidden: under tmux when t
 doze_after_secs = 120         # Input-idle seconds before a visible pane stops polling (watcher still refreshes
                               # under tmux Doze; outside tmux this gates everything until input wakes it)
 
-
-[git]
-op_timeout_secs = 300      # Seconds a user-initiated pull/push/submodule may run before it is
-                            # killed as a process group (with its ssh child); a normal quit waits
-                            # for these, and a stalled one is killed after this many seconds
-
 [ui]
 frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup

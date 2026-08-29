@@ -10,7 +10,7 @@
 //! app does not leave ssh running.
 #![cfg(unix)]
 
-use super::worktree::{
+use super::{
     ResetsShuttingDown, capture_with_timeout, kill_in_flight_git_ops, kill_process_group,
     register_killable_pid,
 };
@@ -76,6 +76,9 @@ fn kill_in_flight_git_ops_takes_registered_groups_down() {
     use std::process::{Command, Stdio};
 
     // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic).
+    let _lock = super::TEST_KILL_LOCK.lock().unwrap();
+    // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic);
+    // declared after the lock so it is reset before the lock is released.
     let _reset = ResetsShuttingDown::new();
     let mut child = Command::new("sh")
         .arg("-c")
@@ -235,4 +238,45 @@ fn capture_with_timeout_success_does_not_kill_descendant() {
 
     // Clean up the lingering sleep.
     unsafe { libc::kill(sleep_pid, libc::SIGKILL) };
+}
+
+/// The public `run_git_op_capturing` must register the child pid at spawn and
+/// unregister it once the command completes, so the killable registry does not
+/// accumulate entries.
+#[test]
+fn run_git_op_capturing_registers_and_unregisters() {
+    use std::time::Duration;
+    let _lock = super::TEST_KILL_LOCK.lock().unwrap();
+    let _reset = ResetsShuttingDown::new();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().to_path_buf();
+    let init = std::process::Command::new("git")
+        .arg("init")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(init.success());
+
+    let args = vec!["status".to_string(), "--short".to_string()];
+    let res = super::run_git_op_capturing(&path, &args);
+    assert!(
+        res.is_ok(),
+        "expected Ok from an in-repo git status, got {:?}",
+        res.as_ref().err().map(|e| e.kind())
+    );
+
+    // Poll briefly: the child's pid may be removed by a concurrent test, but our
+    // own pid must not linger.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if super::killable_pids().lock().unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "killable registry not empty after run_git_op_capturing"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

@@ -102,7 +102,7 @@ fn main() -> Result<()> {
     // ssh connection open until the remote gives up. Runs before shutdown so
     // the blocking-pool threads reap the dead children and return promptly
     // instead of waiting out their timeouts.
-    crate::git::status::kill_in_flight_git_ops();
+    crate::git::process::kill_in_flight_git_ops();
 
     // Do not wait for in-flight blocking-pool tasks (see doc above).
     runtime.shutdown_background();

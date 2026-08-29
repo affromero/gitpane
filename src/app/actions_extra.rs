@@ -248,7 +248,6 @@ impl App {
                     // scheduling and closure start must still see the op in
                     // flight — the counter gates the run loop's exit.
                     let guard = GitOpGuard::new(parent_id.clone(), tx.clone());
-                    let op_timeout = Duration::from_secs(self.config.git.op_timeout_secs);
                     tokio::task::spawn_blocking(move || {
                         // Resolve the remote here (blocking I/O) and append
                         // `<remote> <branch>` so pull/push work without an
@@ -267,8 +266,7 @@ impl App {
                             git_args.push(remote);
                             git_args.push(branch);
                         }
-                        let output =
-                            crate::git::status::run_git_op_capturing(&path, &git_args, op_timeout);
+                        let output = crate::git::process::run_git_op_capturing(&path, &git_args);
                         match output {
                             Ok(o) if o.status.success() => {
                                 guard.complete();
@@ -346,10 +344,8 @@ impl App {
                     let tx = self.action_tx.clone();
                     // Pre-scheduling for the same quit-race reason as above.
                     let guard = GitOpGuard::new(repo_id.clone(), tx.clone());
-                    let op_timeout = Duration::from_secs(self.config.git.op_timeout_secs);
                     tokio::task::spawn_blocking(move || {
-                        let output =
-                            crate::git::status::run_git_op_capturing(&path, &git_args, op_timeout);
+                        let output = crate::git::process::run_git_op_capturing(&path, &git_args);
                         match output {
                             Ok(o) if o.status.success() => {
                                 guard.complete();
