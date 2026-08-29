@@ -75,8 +75,9 @@ fn kill_in_flight_git_ops_takes_registered_groups_down() {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic).
-    let _lock = super::TEST_KILL_LOCK.lock().unwrap();
+    let _lock = super::TEST_KILL_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic);
     // declared after the lock so it is reset before the lock is released.
     let _reset = ResetsShuttingDown::new();
@@ -240,13 +241,16 @@ fn capture_with_timeout_success_does_not_kill_descendant() {
     unsafe { libc::kill(sleep_pid, libc::SIGKILL) };
 }
 
-/// The public `run_git_op_capturing` must register the child pid at spawn and
-/// unregister it once the command completes, so the killable registry does not
-/// accumulate entries.
+/// The public `run_git_op_capturing` must register the child at spawn so a
+/// shutdown kill can take it (and its descendants) down, then unregister it. A
+/// `!`-alias makes git fork `sh`, which backgrounds a `sleep` (the ssh stand-in)
+/// and records its pid, so the test can prove the whole group died.
 #[test]
 fn run_git_op_capturing_registers_and_unregisters() {
     use std::time::Duration;
-    let _lock = super::TEST_KILL_LOCK.lock().unwrap();
+    let _lock = super::TEST_KILL_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _reset = ResetsShuttingDown::new();
 
     let tmp = tempfile::TempDir::new().unwrap();
@@ -261,25 +265,70 @@ fn run_git_op_capturing_registers_and_unregisters() {
         return;
     }
 
-    let args = vec!["status".to_string(), "--short".to_string()];
-    let res = super::run_git_op_capturing(&path, &args);
+    // The alias records the sleep pid in a file once the whole git -> sh ->
+    // sleep tree is up; waiting on that (rather than on registration alone)
+    // avoids killing the group before the stand-in has even been forked.
+    let pidfile = tempfile::NamedTempFile::new().expect("temp pid file");
+    let pidfile_path = pidfile.path().to_str().unwrap().to_string();
+    let args = vec![
+        "-c".to_string(),
+        format!("alias.slow=!sleep 30 2>/dev/null & echo $! > '{pidfile_path}'; wait"),
+        "slow".to_string(),
+    ];
+    let worker = std::thread::spawn(move || super::run_git_op_capturing(&path, &args));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let sleep_pid: i32 = loop {
+        if let Some(pid) = std::fs::read_to_string(&pidfile_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "git alias never reported its sleep grandchild"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // spawn() registers before it returns, so by now the child is in the set.
     assert!(
-        res.is_ok(),
-        "expected Ok from an in-repo git status, got {:?}",
-        res.as_ref().err().map(|e| e.kind())
+        !super::killable_pids().lock().unwrap().is_empty(),
+        "run_git_op_capturing did not register its child"
     );
 
-    // Poll briefly: the child's pid may be removed by a concurrent test, but our
-    // own pid must not linger.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let killed_at = std::time::Instant::now();
+    kill_in_flight_git_ops();
+    let out = worker
+        .join()
+        .expect("worker thread")
+        .expect("a killed op still yields its captured Output");
+    assert!(
+        killed_at.elapsed() < Duration::from_secs(10),
+        "wrapper did not return promptly after the shutdown kill"
+    );
+    assert!(
+        !out.status.success(),
+        "a SIGKILLed git op must not report success"
+    );
+
+    // The sleep grandchild must be gone too, otherwise the group kill missed
+    // the ssh stand-in.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if super::killable_pids().lock().unwrap().is_empty() {
+        let rc = unsafe { libc::kill(sleep_pid, 0) };
+        if rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "killable registry not empty after run_git_op_capturing"
+            "sleep grandchild {sleep_pid} still alive after the shutdown kill"
         );
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
     }
+
+    assert!(
+        super::killable_pids().lock().unwrap().is_empty(),
+        "killable registry not empty after run_git_op_capturing"
+    );
 }
