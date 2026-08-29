@@ -7,12 +7,12 @@ All notable changes to gitpane are documented here.
 ## [0.15.0] - 2026-08-29
 
 ### Added
-- Submodule rows in the Changes panel can now be pinned to the repo list from the context menu: "Add to repositories" appears for unpinned submodules and swaps to "Remove from repositories" (with the same confirmation as the `d` key) once pinned. The menu is grouped with separators — mutations, inspect, graph, pin management — and adding a repo now jumps focus to the Repositories panel with the new row selected.
-- Pinned submodules nest under their parent repo in the list: they render as a dim `└ name` connector row directly below the parent in every sort order, instead of a long breadcrumb path sorted on its own.
+- Submodule rows in the Changes panel can now be pinned to the repo list from the context menu: "Add to repositories" appears for unpinned submodules and swaps to "Remove from repositories" (with the same confirmation as the `d` key) once pinned. The menu is grouped with separators — mutations, inspect, graph, pin management — and adding a repo now jumps focus to the Repositories panel with the new row selected. ([`e0b93a5`](https://github.com/affromero/gitpane/commit/e0b93a5), [`2a4b1ce`](https://github.com/affromero/gitpane/commit/2a4b1ce))
+- Pinned submodules nest under their parent repo in the list: they render as a dim `└ name` connector row directly below the parent in every sort order, instead of a long breadcrumb path sorted on its own. ([`2a4b1ce`](https://github.com/affromero/gitpane/commit/2a4b1ce), [`28a0614`](https://github.com/affromero/gitpane/commit/28a0614), [`c44f1d9`](https://github.com/affromero/gitpane/commit/c44f1d9))
 
 ### Fixed
-- Removing a pinned repo that the root scan can never rediscover (a submodule inside another listed repo, or a repo outside every root) no longer appends its bare directory name to `excluded_repos`, where it substring-matched unrelated paths forever after.
-- Quitting no longer leaves an in-flight git operation (and the `ssh` it spawns for an SSH remote) running after the app exits; in-flight fetch and pull/push/submodule and file/worktree ops are now killed as a process group on exit, force-quit, or timeout. Follow-up to the v0.14.0 fetch process-group kill, which only covered the fetch timeout path. Thanks @expoli.
+- Removing a pinned repo that the root scan can never rediscover (a submodule inside another listed repo, or a repo outside every root) no longer appends its bare directory name to `excluded_repos`, where it substring-matched unrelated paths forever after. ([`2a4b1ce`](https://github.com/affromero/gitpane/commit/2a4b1ce))
+- Quitting no longer leaves an in-flight git operation (and its `ssh`) running after exit; fetch, pull/push/submodule and file/worktree ops are killed as a process group on exit, force-quit, or timeout. Follow-up to the v0.14.0 fetch process-group kill, which only covered the fetch timeout path. ([#60](https://github.com/affromero/gitpane/pull/60), [#61](https://github.com/affromero/gitpane/pull/61), closes [#59](https://github.com/affromero/gitpane/issues/59)) Thanks @expoli.
 
 ## [0.14.1] - 2026-08-27
 
