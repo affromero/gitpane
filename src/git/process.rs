@@ -17,6 +17,7 @@ use std::sync::{Mutex, OnceLock};
 /// enough to let a large transfer finish, but bounded so a stalled connection
 /// cannot hang the app forever (a normal quit waits for mutating ops to
 /// complete).
+#[cfg(unix)]
 const MUTATING_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// How long a success-path [`capture_with_timeout`] may keep draining a child's
@@ -24,6 +25,7 @@ const MUTATING_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// that exits cleanly can leave a descendant (e.g. a backgrounded hook) holding
 /// a pipe write-end open; we poll with this short grace rather than killing that
 /// descendant, and rather than blocking for minutes.
+#[cfg(unix)]
 const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Pids of in-flight git processes that should be taken down as a group when the
@@ -364,7 +366,7 @@ pub(crate) fn kill_process_group(child: &mut std::process::Child) {
 
 /// Test hook: register a pid so [`kill_in_flight_git_ops`] can be exercised
 /// without running a real git command.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn register_killable_pid(pid: i32) {
     killable_pids().lock().unwrap().insert(pid);
 }
@@ -373,17 +375,17 @@ pub(super) fn register_killable_pid(pid: i32) {
 /// test that drives the exit-kill cannot leave the process-global flag set (even
 /// if the test panics) and poison a later test that spawns a killable git
 /// process.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) struct ResetsShuttingDown;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl ResetsShuttingDown {
     pub(super) fn new() -> Self {
         Self
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Drop for ResetsShuttingDown {
     fn drop(&mut self) {
         SHUTTING_DOWN.store(false, Ordering::SeqCst);
@@ -393,7 +395,7 @@ impl Drop for ResetsShuttingDown {
 /// Serializes the tests that touch the process-global `KILLABLE_GIT_PIDS` /
 /// `SHUTTING_DOWN` state, so a test that sets `SHUTTING_DOWN` cannot race a
 /// test that spawns a killable git process.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 static TEST_KILL_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]

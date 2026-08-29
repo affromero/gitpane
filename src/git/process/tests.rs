@@ -254,9 +254,12 @@ fn run_git_op_capturing_registers_and_unregisters() {
     let init = std::process::Command::new("git")
         .arg("init")
         .arg(&path)
-        .status()
-        .unwrap();
-    assert!(init.success());
+        .status();
+    // Skip (don't panic) when git is unavailable, matching the repo's pattern.
+    if !matches!(init, Ok(s) if s.success()) {
+        eprintln!("skipping run_git_op_capturing test: 'git init' failed");
+        return;
+    }
 
     let args = vec!["status".to_string(), "--short".to_string()];
     let res = super::run_git_op_capturing(&path, &args);
