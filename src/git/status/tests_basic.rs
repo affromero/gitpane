@@ -61,34 +61,20 @@ fn test_untracked_file_detected() {
 }
 
 #[test]
-fn test_background_status_does_not_recurse_untracked_dirs() {
+fn test_status_queries_keep_untracked_dirs_compact() {
     let (tmp, _repo) = init_temp_repo();
     fs::create_dir_all(tmp.path().join("nested")).unwrap();
     fs::write(tmp.path().join("nested/file.txt"), "new").unwrap();
+    fs::write(tmp.path().join("nested/another.txt"), "new").unwrap();
 
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert!(status.is_dirty);
-    assert!(
-        status
-            .files
-            .iter()
-            .any(|f| f.status == FileStatus::Untracked)
-    );
-    assert!(
-        !status
-            .files
-            .iter()
-            .any(|f| f.path == Path::new("nested/file.txt"))
-    );
+    assert_eq!(status.files.len(), 1);
+    assert_eq!(status.files[0].path, Path::new("nested"));
+    assert_eq!(status.files[0].status, FileStatus::Untracked);
 
-    let recursive =
-        query_status_inner(tmp.path(), false, true, &SubmoduleConfig::default()).unwrap();
-    assert!(
-        recursive
-            .files
-            .iter()
-            .any(|f| f.path == Path::new("nested/file.txt"))
-    );
+    let fetched = query_status_with_fetch(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    assert_eq!(fetched.files, status.files);
 }
 
 #[test]
