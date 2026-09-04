@@ -216,7 +216,7 @@ pub(crate) fn query_status(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, false, false, sub_cfg)
+    query_status_inner(path, false, sub_cfg)
 }
 
 /// Status query with `git fetch` first. Used by explicit user refresh (`r` key).
@@ -224,13 +224,15 @@ pub(crate) fn query_status_with_fetch(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, true, true, sub_cfg)
+    // Keep untracked directories compact, matching local-poll and
+    // watcher-triggered queries. Otherwise a fetch refresh expands every file
+    // only for the next local refresh to collapse it again.
+    query_status_inner(path, true, sub_cfg)
 }
 
 fn query_status_inner(
     path: &Path,
     fetch: bool,
-    recurse_untracked_dirs: bool,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
     let mut repo = Repository::open(path)?;
@@ -275,7 +277,7 @@ fn query_status_inner(
         submodules,
         has_dirty_submodules,
         has_unpushed_submodules,
-    } = collect_change_summary(&repo, path, recurse_untracked_dirs, sub_cfg)?;
+    } = collect_change_summary(&repo, path, false, sub_cfg)?;
 
     // Collect linked worktree details (excludes the main working tree)
     let worktree_info = collect_worktree_info(&repo, sub_cfg);
