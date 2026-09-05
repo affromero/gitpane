@@ -4,6 +4,11 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-05
+
+### Fixed
+- The Changes pane no longer flickers between an untracked directory and every file it contains. All status refreshes now keep untracked directories compact. ([#64](https://github.com/affromero/gitpane/pull/64), closes [#63](https://github.com/affromero/gitpane/issues/63))
+
 ## [0.15.0] - 2026-08-29
 
 ### Added
