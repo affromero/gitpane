@@ -130,6 +130,7 @@ pub(crate) struct GitGraph {
     action_tx: Option<UnboundedSender<Action>>,
     render_area: Rect,
     graph_list_area: Rect,
+    msg_area: Rect,
     files_area: Rect,
     diff_area: Rect,
     commit_detail: Option<CommitDetail>,
@@ -164,6 +165,17 @@ pub(crate) struct GitGraph {
     /// Bumped on theme change so cached row bodies are rebuilt with the new
     /// colors.
     theme_generation: u64,
+    /// Fractional split of the commit-detail area along the layout axis:
+    /// `[graph|message, message|files, files|diff]` (0.0..1.0). The middle
+    /// border is recomputed from the message line count until the user drags
+    /// it; the outer two default to a 40% graph / 65% files split.
+    detail_split: [f64; 3],
+    /// True once the user drags the message|files border, after which
+    /// `detail_split[1]` overrides the auto-sized message height.
+    msg_dragged: bool,
+    /// Which commit-detail border is being dragged: 0 = graph|message,
+    /// 1 = message|files, 2 = files|diff.
+    dragging_detail_border: Option<u8>,
 }
 
 impl GitGraph {
@@ -185,6 +197,7 @@ impl GitGraph {
             action_tx: None,
             render_area: Rect::default(),
             graph_list_area: Rect::default(),
+            msg_area: Rect::default(),
             files_area: Rect::default(),
             diff_area: Rect::default(),
             commit_detail: None,
@@ -202,6 +215,9 @@ impl GitGraph {
             graph_cache: GraphCache::new(GRAPH_CACHE_CAPACITY),
             render_cache: HashMap::new(),
             theme_generation: 0,
+            detail_split: [0.40, 0.50, 0.65],
+            msg_dragged: false,
+            dragging_detail_border: None,
         }
     }
 
