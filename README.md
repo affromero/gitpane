@@ -295,6 +295,16 @@ branches = "all"         # Branch filter: "all", "local", "remote", or "none"
 label_max_len = 24       # Max length for branch/tag labels
 show_stats = true        # Show +N/-M diff stats per commit
 
+
+[git2]
+# libgit2 memory bounds (MiB). The library defaults (1 GiB pack window, 8 GiB
+# total mapped, 256 MiB object cache) suit 64-bit servers; on a workspace
+# containing multi-GiB packs they can push resident memory past 2 GiB.
+# 0 restores the libgit2 default for that knob.
+window_size_mib = 16
+window_mapped_limit_mib = 128
+cache_max_size_mib = 32
+
 [github]
 enabled = true           # Show the GitHub issues/PRs panel (via `gh`); opt-out, on by default
 

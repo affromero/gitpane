@@ -79,6 +79,28 @@ impl Default for GraphConfig {
     }
 }
 
+pub(super) fn default_git2_window_size_mib() -> usize {
+    16
+}
+
+pub(super) fn default_git2_window_mapped_limit_mib() -> usize {
+    128
+}
+
+pub(super) fn default_git2_cache_max_size_mib() -> usize {
+    32
+}
+
+impl Default for Git2Config {
+    fn default() -> Self {
+        Self {
+            window_size_mib: default_git2_window_size_mib(),
+            window_mapped_limit_mib: default_git2_window_mapped_limit_mib(),
+            cache_max_size_mib: default_git2_cache_max_size_mib(),
+        }
+    }
+}
+
 pub(super) fn default_root_dirs() -> Vec<PathBuf> {
     dirs::home_dir()
         .map(|h| vec![h.join("Code")])
@@ -201,6 +223,7 @@ impl Default for Config {
             watch: WatchConfig::default(),
             ui: UiConfig::default(),
             graph: GraphConfig::default(),
+            git2: Git2Config::default(),
             submodules: SubmoduleConfig::default(),
             github: GithubConfig::default(),
             open: OpenConfig::default(),
