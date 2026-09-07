@@ -131,6 +131,27 @@ fn test_show_stats_roundtrip() {
 }
 
 #[test]
+fn test_git2_limits_defaults() {
+    let config: Config = toml::from_str("").unwrap();
+    assert_eq!(config.git2.window_size_mib, 16);
+    assert_eq!(config.git2.window_mapped_limit_mib, 128);
+    assert_eq!(config.git2.cache_max_size_mib, 32);
+}
+
+#[test]
+fn test_git2_limits_roundtrip_and_zero_means_default() {
+    let mut config = Config::default();
+    config.git2.window_size_mib = 0;
+    config.git2.window_mapped_limit_mib = 256;
+    config.git2.cache_max_size_mib = 64;
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(loaded.git2.window_size_mib, 0);
+    assert_eq!(loaded.git2.window_mapped_limit_mib, 256);
+    assert_eq!(loaded.git2.cache_max_size_mib, 64);
+}
+
+#[test]
 fn test_herdr_forward_right_click_defaults_false() {
     let config: Config = toml::from_str("").unwrap();
     assert!(!config.herdr.forward_right_click);

@@ -48,6 +48,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub graph: GraphConfig,
     #[serde(default)]
+    pub git2: Git2Config,
+    #[serde(default)]
     pub submodules: SubmoduleConfig,
     #[serde(default)]
     pub github: GithubConfig,
@@ -170,6 +172,28 @@ pub(crate) struct GraphConfig {
     pub label_max_len: usize,
     #[serde(default = "default_show_stats")]
     pub show_stats: bool,
+}
+
+/// Bounds for libgit2's internal memory (pack mmap windows and the global
+/// object cache). The library defaults are sized for 64-bit servers (1 GiB
+/// window size, 8 GiB total mapped, 256 MiB object cache) and can spike
+/// resident memory past 2 GiB on a multi-repo workspace containing a
+/// multi-GiB pack; gitpane's defaults keep a large workspace in the
+/// hundreds of MiB. `0` restores the libgit2 default for that knob.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Git2Config {
+    /// Size of a single libgit2 pack mmap window, in MiB. 0 = libgit2 default
+    /// (1 GiB on 64-bit).
+    #[serde(default = "default_git2_window_size_mib")]
+    pub window_size_mib: usize,
+    /// Total bytes libgit2 may keep mapped across all packs, in MiB. 0 =
+    /// libgit2 default (8 GiB on 64-bit). Must be >= `window_size_mib` (a
+    /// smaller limit would leave no room for even one window).
+    #[serde(default = "default_git2_window_mapped_limit_mib")]
+    pub window_mapped_limit_mib: usize,
+    /// Global parsed-object cache, in MiB. 0 = libgit2 default (256 MiB).
+    #[serde(default = "default_git2_cache_max_size_mib")]
+    pub cache_max_size_mib: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
