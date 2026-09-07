@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::components::ListFilter;
 use crate::git::graph::GraphFilters;
 use crate::theme::Theme;
 
@@ -37,6 +38,13 @@ pub(crate) struct GraphFilterPicker {
     state: ListState,
     rendered_area: Rect,
     theme: Arc<Theme>,
+    /// Substring filter over the current category's choices (`/` to type).
+    filter: ListFilter,
+    /// True while the picker collects filter characters (`/` pressed).
+    searching: bool,
+    /// Choices of the currently open category, cached (once per category
+    /// entry) so keypresses and draws don't re-clone the branch/author list.
+    choices_cache: Vec<String>,
 }
 
 impl GraphFilterPicker {
@@ -51,6 +59,9 @@ impl GraphFilterPicker {
             state: ListState::default(),
             rendered_area: Rect::default(),
             theme,
+            filter: ListFilter::default(),
+            searching: false,
+            choices_cache: Vec::new(),
         }
     }
 
@@ -58,10 +69,45 @@ impl GraphFilterPicker {
         self.theme = theme;
     }
 
+    /// Whether the picker is inside a filter category (branches/authors/refs
+    /// views); only then does the status-bar hint apply.
+    pub fn is_filtering(&self) -> bool {
+        self.category.is_some()
+    }
+
+    /// Key hint for the bottom status bar while a filter category is open.
+    /// `None` on the root screen / when nothing is filterable: the repo
+    /// status legend stays.
+    pub fn hint_text(&self) -> Option<String> {
+        match self.category? {
+            Category::Branches | Category::Authors => Some(self.hint_for_list().to_string()),
+            Category::Refs => Some(self.hint_for_list().to_string()),
+            Category::Views => Some(
+                if self.searching {
+                    " type to filter · ↑↓ move · Space toggle · Esc clear · ← back "
+                } else {
+                    " ↑↓ move · Space toggle · ← back "
+                }
+                .to_string(),
+            ),
+        }
+    }
+
+    fn hint_for_list(&self) -> &'static str {
+        if self.searching {
+            " type to filter · ↑↓ move · Space toggle · Esc clear · ← back "
+        } else {
+            " ↑↓ move · Space toggle · / filter · a all · x none · i invert · ← back "
+        }
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
         self.category = None;
         self.state.select(None);
+        self.filter.clear();
+        self.choices_cache.clear();
+        self.searching = false;
     }
 
     pub fn show(
@@ -77,6 +123,9 @@ impl GraphFilterPicker {
         self.first_parent = first_parent;
         self.category = None;
         self.state.select(Some(0));
+        self.filter.clear();
+        self.choices_cache.clear();
+        self.searching = false;
         self.visible = true;
     }
 
@@ -106,6 +155,17 @@ impl GraphFilterPicker {
         }
     }
 
+    /// Number of rows in the value list: 3 action rows plus the (filtered)
+    /// choices. While the filter is active, only matching choices are shown.
+    fn visible_count(&self) -> usize {
+        let n = if self.filter.is_active() {
+            self.filter.count() + 3
+        } else {
+            self.choices_cache.len() + 3
+        };
+        n.max(3)
+    }
+
     fn selection_summary(values: Option<&BTreeSet<String>>, total: usize) -> String {
         match values {
             None => "all".to_string(),
@@ -131,7 +191,7 @@ impl GraphFilterPicker {
     }
 
     fn toggle_choice(&mut self, index: usize) -> Option<Action> {
-        let choices = self.choices();
+        let choices = &self.choices_cache;
         let choice = choices.get(index)?.clone();
         if matches!(self.category, Some(Category::Refs)) {
             match index {
@@ -147,7 +207,7 @@ impl GraphFilterPicker {
             self.first_parent = !self.first_parent;
             return Some(Action::SetGraphFirstParent(self.first_parent));
         }
-        let all: BTreeSet<String> = choices.into_iter().collect();
+        let all: BTreeSet<String> = choices.iter().cloned().collect();
         let mut selected = self.selected_set().cloned().unwrap_or(all);
         if !selected.insert(choice.clone()) {
             selected.remove(&choice);
@@ -161,7 +221,7 @@ impl GraphFilterPicker {
             0 => Some(self.set_all()),
             1 => Some(self.set_none()),
             2 => Some(self.invert()),
-            index => self.toggle_choice(index - 3),
+            index => self.toggle_choice(self.filter.visible_at(index - 3)?),
         }
     }
 
@@ -206,7 +266,7 @@ impl GraphFilterPicker {
             self.first_parent = !self.first_parent;
             return Action::SetGraphFirstParent(self.first_parent);
         }
-        let all: BTreeSet<String> = self.choices().into_iter().collect();
+        let all: BTreeSet<String> = self.choices_cache.iter().cloned().collect();
         let selected = self.selected_set().cloned().unwrap_or_else(|| all.clone());
         self.set_selected_set(Some(all.difference(&selected).cloned().collect()));
         self.apply()
@@ -233,6 +293,9 @@ impl GraphFilterPicker {
                         3 => Category::Views,
                         _ => Category::Branches,
                     });
+                    self.choices_cache = self.choices();
+                    self.filter.clear();
+                    self.filter.rebuild(&self.choices_cache);
                     self.state.select(Some(0));
                 }
                 KeyCode::Char('r') => {
@@ -247,14 +310,51 @@ impl GraphFilterPicker {
             return Ok(None);
         }
 
+        if self.searching {
+            match key.code {
+                // Space/Enter first: the generic `Char(c)` arm below would
+                // swallow `' '` as a query character.
+                KeyCode::Char(' ') | KeyCode::Enter => return Ok(self.activate_category_row()),
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.filter.rebuild(&self.choices_cache);
+                }
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.filter.rebuild(&self.choices_cache);
+                }
+                KeyCode::Esc => {
+                    self.searching = false;
+                    self.filter.clear();
+                    self.filter.rebuild(&self.choices_cache);
+                }
+                KeyCode::Up => self.select_prev(),
+                KeyCode::Down => self.select_next(self.visible_count()),
+                KeyCode::Left => {
+                    self.searching = false;
+                    self.filter.clear();
+                    self.filter.rebuild(&self.choices_cache);
+                    self.category = None;
+                    self.state.select(Some(0));
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.select_next(self.choices().len() + 3),
+            KeyCode::Char('/') => {
+                self.searching = true;
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.select_next(self.visible_count()),
             KeyCode::Char('k') | KeyCode::Up => self.select_prev(),
             KeyCode::Char(' ') | KeyCode::Enter => return Ok(self.activate_category_row()),
             KeyCode::Char('a') => return Ok(Some(self.set_all())),
             KeyCode::Char('x') => return Ok(Some(self.set_none())),
             KeyCode::Char('i') => return Ok(Some(self.invert())),
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('q') => {
+                self.searching = false;
+                self.filter.clear();
                 self.category = None;
                 self.state.select(Some(0));
             }
@@ -289,10 +389,12 @@ impl GraphFilterPicker {
                 3 => Category::Views,
                 _ => Category::Branches,
             });
+            self.choices_cache = self.choices();
+            self.filter.rebuild(&self.choices_cache);
             self.state.select(Some(0));
             return Ok(None);
         }
-        if index < self.choices().len() + 3 {
+        if index < self.visible_count() {
             self.state.select(Some(index));
             return Ok(self.activate_category_row());
         }
@@ -304,23 +406,37 @@ impl GraphFilterPicker {
             return;
         }
         let t = &self.theme.overlay;
-        let (title, items, height) = if let Some(category) = self.category {
-            let choices = self.choices();
+        let choices = &self.choices_cache;
+        let (title, items, height, longest) = if let Some(category) = self.category {
             let category_name = match category {
                 Category::Branches => "Branches",
                 Category::Authors => "Authors",
                 Category::Refs => "Refs",
                 Category::Views => "Views",
             };
-            let mut items = vec![
+            let visible_n = if self.filter.is_active() {
+                self.filter.count()
+            } else {
+                choices.len()
+            };
+            let longest = (0..visible_n)
+                .filter_map(|i| self.filter.visible_at(i))
+                .map(|i| choices[i].chars().count())
+                .max()
+                .unwrap_or(0);
+            let mut items: Vec<ListItem<'_>> = vec![
                 ListItem::new(" ├─ All "),
                 ListItem::new(" ├─ None "),
                 ListItem::new(" ├─ Invert "),
             ];
-            if choices.is_empty() {
-                items.push(ListItem::new(" └─ No values in this graph "));
+            if visible_n == 0 {
+                items.push(ListItem::new(" └─ No matches "));
             } else {
-                items.extend(choices.iter().enumerate().map(|(index, choice)| {
+                for fpos in 0..visible_n {
+                    let Some(real) = self.filter.visible_at(fpos) else {
+                        continue;
+                    };
+                    let choice = &choices[real];
                     let enabled = match category {
                         Category::Branches => self
                             .filters
@@ -332,7 +448,7 @@ impl GraphFilterPicker {
                             .authors
                             .as_ref()
                             .is_none_or(|values| values.contains(choice)),
-                        Category::Refs => match index {
+                        Category::Refs => match real {
                             0 => self.filters.refs.local,
                             1 => self.filters.refs.remote,
                             2 => self.filters.refs.tags,
@@ -341,23 +457,38 @@ impl GraphFilterPicker {
                         Category::Views => self.first_parent,
                     };
                     let marker = if enabled { "x" } else { " " };
-                    let connector = if index + 1 == choices.len() {
+                    let connector = if fpos + 1 == visible_n {
                         "└─"
                     } else {
                         "├─"
                     };
-                    ListItem::new(Line::from(Span::raw(format!(
-                        " {connector} [{marker}] {choice}"
-                    ))))
-                }));
+                    let mut spans = vec![Span::raw(format!(" {connector} [{marker}] "))];
+                    spans.extend(crate::components::highlight_matches(
+                        choice,
+                        self.filter.query(),
+                        Style::default(),
+                        Style::default()
+                            .fg(t.path_input_prompt)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    items.push(ListItem::new(Line::from(spans)));
+                }
             }
+            let query_tail = if self.searching || self.filter.is_active() {
+                // The caret makes an empty query visible as "typing mode".
+                format!(" — /{}▏ ", self.filter.query())
+            } else {
+                String::new()
+            };
             (
-                format!(" Graph filters / {category_name} "),
+                format!(" Graph filters / {category_name}{query_tail}"),
                 items,
-                choices.len().max(1) as u16 + 5,
+                visible_n.max(1) as u16 + 5,
+                longest,
             )
         } else {
-            let items = vec![
+            let longest = 0;
+            let items: Vec<ListItem<'_>> = vec![
                 ListItem::new(format!(
                     " ├─ Branches ({}) ",
                     Self::selection_summary(self.filters.branches.as_ref(), self.branches.len())
@@ -388,10 +519,12 @@ impl GraphFilterPicker {
                 )),
                 ListItem::new(" └─ Reset filters "),
             ];
-            (" Graph filters ".to_string(), items, 7)
+            (" Graph filters ".to_string(), items, 7, longest)
         };
         let height = height.min(area.height.saturating_sub(4)).max(5);
-        let width = 52u16.min(area.width.saturating_sub(4));
+        // Width follows the longest visible choice so long branch/author names
+        // aren't truncated by a fixed width, clamped to the terminal.
+        let width = (52u16.max(longest as u16 + 12)).min(area.width.saturating_sub(4));
         let [vertical] = Layout::vertical([Constraint::Length(height)])
             .flex(Flex::Center)
             .areas(area);
@@ -400,16 +533,16 @@ impl GraphFilterPicker {
             .areas(vertical);
         self.rendered_area = rect;
 
-        let hint = if self.category.is_some() {
-            " ↑↓ move · Space toggle · a all · x none · i invert · ← back "
-        } else {
-            " ↑↓ move · → enter · r reset · ← close "
-        };
         frame.render_widget(Clear, rect);
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title(format!("{title}—{hint}"))
+                    .title(title)
+                    .title_style(if self.searching || self.filter.is_active() {
+                        Style::default().fg(t.path_input_prompt)
+                    } else {
+                        Style::default()
+                    })
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(t.context_menu_border)),
             )
@@ -418,7 +551,9 @@ impl GraphFilterPicker {
                     .bg(t.context_menu_selection_bg)
                     .add_modifier(Modifier::BOLD),
             );
+
         frame.render_stateful_widget(list, rect, &mut self.state);
+        self.rendered_area = rect;
     }
 }
 
@@ -542,5 +677,91 @@ mod tests {
         assert!(
             matches!(action, Some(Action::SetGraphFilters(filters)) if filters.branches == Some(BTreeSet::new()))
         );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn new_picker() -> GraphFilterPicker {
+        GraphFilterPicker::new(Arc::new(Theme::default()))
+    }
+
+    #[test]
+    fn search_narrows_then_toggles_a_matching_branch() {
+        let mut picker = new_picker();
+        picker.show(
+            GraphFilters::default(),
+            vec![
+                "main".to_string(),
+                "feature/x".to_string(),
+                "feature/y".to_string(),
+            ],
+            Vec::new(),
+            false,
+        );
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Enter))
+            .unwrap();
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Char('/')))
+            .unwrap();
+        for c in "feat".chars() {
+            picker
+                .handle_key_event(KeyEvent::from(KeyCode::Char(c)))
+                .unwrap();
+        }
+        // 3 action rows + 2 matches; down to the first match and toggle it.
+        for _ in 0..3 {
+            picker
+                .handle_key_event(KeyEvent::from(KeyCode::Down))
+                .unwrap();
+        }
+        let action = picker
+            .handle_key_event(KeyEvent::from(KeyCode::Char(' ')))
+            .unwrap();
+        let Some(Action::SetGraphFilters(filters)) = action else {
+            panic!("expected graph filters action");
+        };
+        // filters.branches was None (= all); toggling feature/x unselects it.
+        let expected: BTreeSet<String> = ["main", "feature/y"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(filters.branches, Some(expected));
+    }
+
+    #[test]
+    fn esc_clears_search_before_leaving_category() {
+        let mut picker = new_picker();
+        picker.show(
+            GraphFilters::default(),
+            vec!["alpha".to_string(), "beta".to_string()],
+            Vec::new(),
+            false,
+        );
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Enter))
+            .unwrap();
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Char('/')))
+            .unwrap();
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Char('b')))
+            .unwrap();
+        assert_eq!(picker.filter.count(), 1);
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Esc))
+            .unwrap();
+        assert!(!picker.filter.is_active());
+        assert!(
+            picker.category.is_some(),
+            "first Esc only clears the filter"
+        );
+        picker
+            .handle_key_event(KeyEvent::from(KeyCode::Esc))
+            .unwrap();
+        assert!(picker.category.is_none());
     }
 }

@@ -19,6 +19,10 @@ pub(crate) struct StatusBar {
     pub sort_order: SortOrder,
     pub error: Option<(String, Instant)>,
     pub success: Option<(String, Instant)>,
+    /// When set (e.g. the graph filter picker is open), the repo-status
+    /// legend on the left is replaced by this hint so key help stays visible
+    /// in the most overlooked corner of the screen.
+    pub overlay_hint: Option<String>,
     theme: Arc<Theme>,
 }
 
@@ -30,6 +34,7 @@ impl StatusBar {
             sort_order: SortOrder::Alphabetical,
             error: None,
             success: None,
+            overlay_hint: None,
             theme,
         }
     }
@@ -122,8 +127,18 @@ impl Component for StatusBar {
 
         let elapsed = self.started_at.elapsed().as_secs();
 
-        let spans = if elapsed < 60 {
-            vec![
+        let spans: Vec<Span<'_>> = if let Some(hint) = self.overlay_hint.as_deref() {
+            // Modal (e.g. graph filter picker) is open: replace the repo
+            // legend with the picker hint, independent of the 60s legend
+            // window so it never vanishes mid-filtering.
+            let mut v = vec![
+                Span::styled(hint.to_string(), Style::default().fg(s.legend_text)),
+                dim_sep(s),
+            ];
+            v.extend(key_hint_spans(s, self.sort_order.label()));
+            v
+        } else if elapsed < 60 {
+            let mut v: Vec<Span<'_>> = vec![
                 Span::styled(" * ", Style::default().fg(r.dirty_marker)),
                 Span::styled("dirty ", Style::default().fg(s.legend_text)),
                 Span::styled("\u{2191}", Style::default().fg(r.ahead)),
@@ -136,38 +151,10 @@ impl Component for StatusBar {
                 Span::styled(" stash ", Style::default().fg(s.legend_text)),
                 Span::styled("[n]", Style::default().fg(r.file_count)),
                 Span::styled(" files  ", Style::default().fg(s.legend_text)),
-                dim_sep(s),
-                key_span("Tab", s),
-                Span::raw(" switch  "),
-                key_span("Enter", s),
-                Span::raw(" diff  "),
-                key_span("g", s),
-                Span::raw(" reload graph  "),
-                key_span("p", s),
-                Span::raw("/"),
-                key_span("P", s),
-                Span::raw(" pull/push  "),
-                key_span("r", s),
-                Span::raw(" refresh  "),
-                key_span("R", s),
-                Span::raw(" rescan  "),
-                key_span("a", s),
-                Span::raw(" add  "),
-                key_span("d", s),
-                Span::raw(" remove  "),
-                key_span("y", s),
-                Span::raw(" copy  "),
-                key_span("s", s),
-                Span::raw(format!(" sort ({})  ", self.sort_order.label())),
-                key_span("w", s),
-                Span::raw(" worktrees  "),
-                key_span("S", s),
-                Span::raw(" stash list  "),
-                key_span("t", s),
-                Span::raw(" theme  "),
-                key_span("q", s),
-                Span::raw(" quit"),
-            ]
+            ];
+            v.push(dim_sep(s));
+            v.extend(key_hint_spans(s, self.sort_order.label()));
+            v
         } else {
             let focus_label = match self.focus {
                 FocusPanel::Repos => "Repos",
@@ -223,6 +210,42 @@ impl Component for StatusBar {
         frame.render_widget(bar, content_area);
         Ok(())
     }
+}
+
+/// The always-on key help tail shared by the status bar variants.
+fn key_hint_spans<'a>(s: &'a StatusBarTheme, sort_label: &'a str) -> Vec<Span<'a>> {
+    vec![
+        key_span("Tab", s),
+        Span::raw(" switch  "),
+        key_span("Enter", s),
+        Span::raw(" diff  "),
+        key_span("g", s),
+        Span::raw(" reload graph  "),
+        key_span("p", s),
+        Span::raw("/"),
+        key_span("P", s),
+        Span::raw(" pull/push  "),
+        key_span("r", s),
+        Span::raw(" refresh  "),
+        key_span("R", s),
+        Span::raw(" rescan  "),
+        key_span("a", s),
+        Span::raw(" add  "),
+        key_span("d", s),
+        Span::raw(" remove  "),
+        key_span("y", s),
+        Span::raw(" copy  "),
+        key_span("s", s),
+        Span::raw(format!(" sort ({})  ", sort_label)),
+        key_span("w", s),
+        Span::raw(" worktrees  "),
+        key_span("S", s),
+        Span::raw(" stash list  "),
+        key_span("t", s),
+        Span::raw(" theme  "),
+        key_span("q", s),
+        Span::raw(" quit"),
+    ]
 }
 
 fn dim_sep(theme: &StatusBarTheme) -> Span<'static> {

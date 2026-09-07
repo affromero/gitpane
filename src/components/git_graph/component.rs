@@ -529,11 +529,14 @@ impl Component for GitGraph {
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
                     if mouse.row >= content_y {
+                        // Open the context menu even when the graph is empty
+                        // (e.g. a "none" branch filter): the filter controls
+                        // must stay reachable, not just per-commit actions.
                         let idx = (mouse.row - content_y) as usize + self.state.offset();
                         if idx < self.display_rows().len() {
                             self.state.select(Some(idx));
-                            return Ok(Some(Action::OpenGraphContextMenu));
                         }
+                        return Ok(Some(Action::OpenGraphContextMenu));
                     }
                 }
                 Ok(None)

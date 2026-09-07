@@ -70,6 +70,17 @@ impl App {
                         self.git_graph.first_parent(),
                         self.git_graph.can_toggle_selected_branch(),
                     );
+                } else {
+                    // Empty graph (e.g. a `none` branch filter): per-commit
+                    // actions are meaningless, so jump straight to the filter
+                    // picker — the graph must never become unreachable.
+                    self.graph_context_menu.hide();
+                    self.graph_filter_picker.show(
+                        self.git_graph.filters(),
+                        self.git_graph.filter_branches(),
+                        self.git_graph.filter_authors(),
+                        self.git_graph.first_parent(),
+                    );
                 }
             }
             Action::OpenGraphCommitFiles => {

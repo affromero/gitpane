@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::Component;
+use crate::components::{Component, ListFilter};
 use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
 use crate::theme::{FileListTheme, Theme};
@@ -33,6 +33,14 @@ pub(crate) struct FileList {
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
     theme: Arc<Theme>,
+    /// Substring filter over file paths (`/` to type; matches are highlighted
+    /// and `j`/`k` jump between them).
+    filter: ListFilter,
+    /// True while filter characters are being typed.
+    searching: bool,
+    /// Path strings mirroring `files`, kept in sync so the filter can rebuild
+    /// without re-allocating every keypress.
+    path_strings: Vec<String>,
 }
 
 impl FileList {
@@ -52,6 +60,9 @@ impl FileList {
             horizontal_layout: false,
             diff_generation: 0,
             theme,
+            filter: ListFilter::default(),
+            searching: false,
+            path_strings: Vec::new(),
         }
     }
 
@@ -65,6 +76,12 @@ impl FileList {
         let files_changed = !is_same_repo || self.files != files;
 
         self.files = files;
+        self.path_strings = self
+            .files
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned())
+            .collect();
+        self.filter.rebuild(&self.path_strings);
         self.repo_name = repo_name.to_string();
         self.repo_id = Some(repo_id);
 
@@ -92,6 +109,10 @@ impl FileList {
     }
 
     fn select_next(&mut self) {
+        if self.filter.is_active() || self.searching {
+            self.filtered_step(1);
+            return;
+        }
         if self.files.is_empty() {
             return;
         }
@@ -103,6 +124,10 @@ impl FileList {
     }
 
     fn select_prev(&mut self) {
+        if self.filter.is_active() || self.searching {
+            self.filtered_step(-1);
+            return;
+        }
         if self.files.is_empty() {
             return;
         }
@@ -111,6 +136,25 @@ impl FileList {
             None => 0,
         };
         self.state.select(Some(i));
+    }
+
+    /// Move selection to the next/previous matching file (wrapping), matching
+    /// the graph search behavior. No-op when nothing matches.
+    fn filtered_step(&mut self, delta: isize) {
+        let matches = self.filter.matches();
+        if matches.is_empty() {
+            return;
+        }
+        let pos = self
+            .state
+            .selected()
+            .and_then(|s| self.filter.position_of(s));
+        let next = match pos {
+            Some(p) => ((p as isize + delta).rem_euclid(matches.len() as isize)) as usize,
+            None if delta > 0 => 0,
+            None => matches.len() - 1,
+        };
+        self.state.select(Some(matches[next]));
     }
 
     pub fn viewing_diff(&self) -> bool {
@@ -177,7 +221,11 @@ impl FileList {
         let title = if self.repo_name.is_empty() {
             " Changes ".to_string()
         } else {
-            format!(" Changes — {} ", self.repo_name)
+            let mut t = format!(" Changes — {} ", self.repo_name);
+            if self.searching || self.filter.is_active() {
+                t = format!("{t} /{}▏ ", self.filter.query());
+            }
+            t
         };
 
         let block = Block::default()
@@ -201,7 +249,12 @@ impl FileList {
         let items: Vec<ListItem> = self
             .files
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(file_index, entry)| {
+                let mut item_style = Style::default();
+                if self.filter.is_active() && self.filter.position_of(file_index).is_some() {
+                    item_style = item_style.add_modifier(Modifier::BOLD);
+                }
                 let color = match entry.status {
                     FileStatus::Modified => t.status_modified,
                     FileStatus::Added => t.status_added,
@@ -230,22 +283,55 @@ impl FileList {
                 } else {
                     t.regular_path
                 };
-                spans.push(Span::styled(
-                    entry.path.to_string_lossy().to_string(),
+                let path_str = &self.path_strings[file_index];
+                spans.extend(crate::components::highlight_matches(
+                    path_str,
+                    self.filter.query(),
                     Style::default().fg(path_color),
+                    Style::default()
+                        .fg(t.border_focused)
+                        .add_modifier(Modifier::BOLD),
                 ));
 
-                ListItem::new(Line::from(spans))
+                ListItem::new(Line::from(spans)).style(item_style)
             })
             .collect();
 
-        let list = List::new(items).block(block).highlight_style(
+        // No-matches note when the filter hides everything (very large lists).
+        let list = if self.filter.is_active() && self.filter.count() == 0 {
+            let mut items = items;
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  no matching files ",
+                Style::default().fg(t.empty_text),
+            ))));
+            List::new(items).block(block)
+        } else {
+            List::new(items).block(block)
+        };
+        let list = list.highlight_style(
             Style::default()
                 .bg(t.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
 
         frame.render_stateful_widget(list, area, &mut self.state);
+
+        // Bottom input line: makes the typing mode unmistakable even while the
+        // query is still empty (it would otherwise look like nothing happened).
+        if self.searching || self.filter.is_active() {
+            let input = format!(" /{}▏ ", self.filter.query());
+            let over = Rect::new(
+                area.x + 1,
+                area.y + area.height.saturating_sub(1),
+                (area.width.saturating_sub(2)).min(input.chars().count() as u16),
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new(input)
+                    .style(Style::default().fg(t.border_focused).bg(t.selection_bg)),
+                over,
+            );
+        }
     }
 
     fn draw_diff(&self, frame: &mut Frame, area: Rect) {
@@ -394,7 +480,41 @@ impl Component for FileList {
             return Ok(None);
         }
 
+        if self.searching {
+            match key.code {
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.filter.rebuild(&self.path_strings);
+                }
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.filter.rebuild(&self.path_strings);
+                }
+                KeyCode::Esc => {
+                    self.searching = false;
+                    self.filter.clear();
+                    self.filter.rebuild(&self.path_strings);
+                }
+                KeyCode::Down => self.select_next(),
+                KeyCode::Up => self.select_prev(),
+                KeyCode::Enter => {
+                    // No matches: Enter must not open the previously
+                    // selected (non-matching) file's diff.
+                    if self.filter.count() == 0 {
+                        return Ok(None);
+                    }
+                    return Ok(self.try_show_diff());
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+
         match key.code {
+            KeyCode::Char('/') => {
+                self.searching = true;
+                Ok(None)
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
                 Ok(None)
@@ -797,5 +917,70 @@ mod selected_menu_tests {
     fn selected_menu_none_without_files() {
         let list = FileList::new(Arc::new(Theme::default()));
         assert!(list.selected_menu().is_none());
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use crate::git::status::{FileEntry, FileStatus, SubmoduleWarn};
+    use std::path::PathBuf;
+
+    fn entry(path: &str) -> FileEntry {
+        FileEntry {
+            path: PathBuf::from(path),
+            status: FileStatus::Modified,
+            staged: false,
+            unstaged: true,
+            is_submodule: false,
+            submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
+        }
+    }
+
+    #[test]
+    fn filter_jumps_to_matching_file_and_opens_it() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.set_files(
+            vec![
+                entry("src/main.rs"),
+                entry("src/lib.rs"),
+                entry("tests/foo.rs"),
+            ],
+            "r",
+            RepoId(PathBuf::from("/r")),
+        );
+        fl.handle_key_event(KeyEvent::from(KeyCode::Char('/')))
+            .unwrap();
+        for c in "lib".chars() {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char(c)))
+                .unwrap();
+        }
+        assert_eq!(fl.filter.count(), 1);
+        fl.select_next();
+        assert_eq!(fl.state.selected(), Some(1));
+        let action = fl.try_show_diff();
+        assert!(
+            matches!(action, Some(Action::ShowDiff(_, p)) if p == std::path::Path::new("src/lib.rs"))
+        );
+    }
+
+    #[test]
+    fn filter_with_no_matches_keeps_selection() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.set_files(vec![entry("a.txt")], "r", RepoId(PathBuf::from("/r")));
+        fl.handle_key_event(KeyEvent::from(KeyCode::Char('/')))
+            .unwrap();
+        for c in "zzz".chars() {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char(c)))
+                .unwrap();
+        }
+        assert_eq!(fl.filter.count(), 0);
+        fl.select_next();
+        assert_eq!(fl.state.selected(), Some(0));
+        // Esc clears the search and restores full navigation
+        fl.handle_key_event(KeyEvent::from(KeyCode::Esc)).unwrap();
+        assert!(!fl.filter.is_active());
     }
 }
