@@ -134,7 +134,10 @@ impl App {
                 } else {
                     match self.focus {
                         FocusPanel::GitHub => self.focus = FocusPanel::Graph,
-                        FocusPanel::Graph => self.focus = FocusPanel::Changes,
+                        FocusPanel::Graph => {
+                            self.git_graph.close_detail();
+                            self.focus = FocusPanel::Changes;
+                        }
                         FocusPanel::Changes => self.focus = FocusPanel::Repos,
                         FocusPanel::Repos => self.action_tx.send(Action::Quit)?,
                     }
@@ -410,27 +413,11 @@ impl App {
                     // will only engage on MouseEventKind::Drag.
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.dragging_border.is_some() => {
-                    let rel = mouse_pos.saturating_sub(origin) as f64 / total as f64;
-                    let min_f = 3.0 / total as f64;
-                    match self.dragging_border {
-                        Some(0) => {
-                            self.border_frac[0] = rel.clamp(min_f, self.border_frac[1] - min_f);
-                        }
-                        Some(1) => {
-                            // Cap at the graph/github split when the panel is shown.
-                            let upper = if self.github_visible {
-                                self.border_frac[2]
-                            } else {
-                                1.0
-                            } - min_f;
-                            self.border_frac[1] = rel.clamp(self.border_frac[0] + min_f, upper);
-                        }
-                        Some(2) => {
-                            self.border_frac[2] =
-                                rel.clamp(self.border_frac[1] + min_f, 1.0 - min_f);
-                        }
-                        _ => {}
-                    }
+                    self.resize_panel_border(
+                        total,
+                        mouse_pos.saturating_sub(origin),
+                        self.dragging_border.unwrap(),
+                    );
                     return Ok(());
                 }
                 MouseEventKind::Up(MouseButton::Left) if self.dragging_border.is_some() => {

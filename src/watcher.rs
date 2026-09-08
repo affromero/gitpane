@@ -16,6 +16,62 @@ pub(crate) struct RepoWatcher {
     _debouncer: Debouncer<RecommendedWatcher, NoCache>,
 }
 
+/// The worktree owns its HEAD/index; refs and packed-refs belong to every
+/// tracked worktree sharing the common directory. Resolve through git2 so
+/// gitdir pointer files, symlinks, and bare repositories use the same routing.
+#[derive(Debug)]
+struct RepoMetadata {
+    owner: PathBuf,
+    git_dir: PathBuf,
+    common_dir: PathBuf,
+}
+
+impl RepoMetadata {
+    fn resolve(owner: &Path) -> Option<Self> {
+        let repo = git2::Repository::open(owner).ok()?;
+        Some(Self {
+            owner: owner.to_path_buf(),
+            git_dir: repo.path().canonicalize().ok()?,
+            common_dir: repo.commondir().canonicalize().ok()?,
+        })
+    }
+}
+
+fn is_shared_metadata(relative: &Path) -> bool {
+    relative == Path::new("packed-refs") || relative.starts_with("refs")
+}
+
+fn is_private_metadata(relative: &Path) -> bool {
+    matches!(
+        relative.to_str(),
+        Some("HEAD" | "index" | "MERGE_HEAD" | "REBASE_HEAD" | "COMMIT_EDITMSG")
+    ) || is_shared_metadata(relative)
+}
+
+/// `Some` claims the event even when the owner set is empty: object/log noise
+/// inside a real git directory must not fall through as a working-tree edit.
+fn metadata_owners(changed: &Path, metadata: &[RepoMetadata]) -> Option<HashSet<PathBuf>> {
+    let changed = crate::repo_id::boundary_path(changed);
+    let mut inside_metadata = false;
+    let mut owners = HashSet::new();
+    for repo in metadata {
+        if let Ok(relative) = changed.strip_prefix(crate::repo_id::boundary_path(&repo.git_dir)) {
+            inside_metadata = true;
+            if is_private_metadata(relative) {
+                owners.insert(repo.owner.clone());
+            }
+        }
+        if let Ok(relative) = changed.strip_prefix(crate::repo_id::boundary_path(&repo.common_dir))
+        {
+            inside_metadata = true;
+            if is_shared_metadata(relative) {
+                owners.insert(repo.owner.clone());
+            }
+        }
+    }
+    inside_metadata.then_some(owners)
+}
+
 /// How a single filesystem event is attributed.
 #[derive(Debug, PartialEq, Eq)]
 enum Classification {
@@ -36,6 +92,7 @@ fn classify(
     root_dirs: &[PathBuf],
     exclude_set: &HashSet<String>,
 ) -> Classification {
+    let changed_path = crate::repo_id::boundary_path(changed_path);
     // Skip events from excluded directories (node_modules, target, etc.).
     if changed_path
         .components()
@@ -51,14 +108,16 @@ fn classify(
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let path_str = changed_path.to_string_lossy();
         let is_meaningful = name == "HEAD"
             || name == "index"
             || name == "MERGE_HEAD"
             || name == "REBASE_HEAD"
             || name == "COMMIT_EDITMSG"
             || name == "packed-refs"
-            || path_str.contains(".git/refs/");
+            || changed_path
+                .components()
+                .zip(changed_path.components().skip(1))
+                .any(|(a, b)| a.as_os_str() == ".git" && b.as_os_str() == "refs");
         if !is_meaningful {
             return Classification::Ignore;
         }
@@ -66,7 +125,7 @@ fn classify(
 
     // Inside a known repo? Route the change to it.
     for repo_path in repo_paths {
-        if changed_path.starts_with(repo_path) {
+        if changed_path.starts_with(crate::repo_id::boundary_path(repo_path)) {
             return Classification::Repo(repo_path.clone());
         }
     }
@@ -78,7 +137,7 @@ fn classify(
     // actually find the new repo.
     for root in root_dirs {
         if let Some(parent) = changed_path.parent()
-            && parent == root.as_path()
+            && parent == crate::repo_id::boundary_path(root).as_ref()
         {
             return Classification::RootDir;
         }
@@ -150,8 +209,8 @@ fn watch_dirs(root: &Path, exclude_set: &HashSet<String>) -> Vec<PathBuf> {
 }
 
 /// Install a non-recursive notify watch on each gitignore-aware working-tree
-/// directory, then re-add the `.git` metadata watches the change classifier
-/// depends on. We do the walk ourselves (rather than asking notify for
+/// directory. Git metadata is watched separately at its resolved location.
+/// We do the walk ourselves (rather than asking notify for
 /// `RecursiveMode::Recursive`) so we never descend into symlinks that point at
 /// restricted system paths, and so ignored / build dirs never hit inotify.
 fn install_filtered_watches(
@@ -190,9 +249,6 @@ fn install_filtered_watches(
             }
         }
     }
-
-    // The working-tree walk prunes `.git`; re-add the watches we depend on.
-    watch_git_metadata(debouncer, &root.join(".git"));
 }
 
 /// Re-install the small set of `.git` watches the change classifier depends on.
@@ -201,8 +257,8 @@ fn install_filtered_watches(
 /// meaningful — that is how commits, checkouts, merges, and branch updates
 /// trigger a refresh. We watch `.git` itself (its top-level files) plus every
 /// directory under `.git/refs`, and deliberately skip `.git/objects` (huge and
-/// never classified as meaningful). The scanner only admits repos whose `.git`
-/// is a real directory, so a missing/file `.git` here is a no-op.
+/// never classified as meaningful). `git_dir` is a resolved private or shared
+/// metadata directory, including the target of a worktree's gitdir file.
 fn watch_git_metadata(debouncer: &mut Debouncer<RecommendedWatcher, NoCache>, git_dir: &Path) {
     if !git_dir.is_dir() {
         return;
@@ -238,6 +294,14 @@ impl RepoWatcher {
     ) -> color_eyre::Result<Self> {
         let owned_repo_paths: Vec<PathBuf> = repo_paths.to_vec();
         let owned_root_dirs: Vec<PathBuf> = root_dirs.to_vec();
+        let metadata: Vec<RepoMetadata> = repo_paths
+            .iter()
+            .filter_map(|path| RepoMetadata::resolve(path))
+            .collect();
+        let metadata_dirs: HashSet<PathBuf> = metadata
+            .iter()
+            .flat_map(|repo| [repo.git_dir.clone(), repo.common_dir.clone()])
+            .collect();
 
         // Bridge channel: notify callback (OS thread) -> tokio task
         let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<PathBuf>>();
@@ -253,6 +317,12 @@ impl RepoWatcher {
                 let mut roots_changed = false;
 
                 for changed_path in &changed_paths {
+                    // A linked worktree's metadata can live beneath another
+                    // tracked repo. Resolve ownership before lexical routing.
+                    if let Some(owners) = metadata_owners(changed_path, &metadata) {
+                        affected_repos.extend(owners);
+                        continue;
+                    }
                     match classify(
                         changed_path,
                         &repos_for_routing,
@@ -308,6 +378,9 @@ impl RepoWatcher {
             }
             install_filtered_watches(&mut debouncer, path, &exclude_set, watch_worktree_dirs);
         }
+        for git_dir in metadata_dirs {
+            watch_git_metadata(&mut debouncer, &git_dir);
+        }
 
         // Watch each configured root non-recursively so we notice top-level
         // children appearing or disappearing (new clones, deleted repos).
@@ -330,6 +403,180 @@ impl RepoWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_windows_events_keep_canonical_repository_identity() {
+        let owner = PathBuf::from(r"\\?\C:\repos\project");
+        let metadata = vec![RepoMetadata {
+            owner: owner.clone(),
+            git_dir: owner.join(".git"),
+            common_dir: owner.join(".git"),
+        }];
+        assert_eq!(
+            metadata_owners(
+                Path::new("C:/repos/project/.git/refs/heads/main"),
+                &metadata
+            ),
+            Some(HashSet::from([owner.clone()]))
+        );
+        assert_eq!(
+            classify(
+                Path::new("C:/repos/project/source.rs"),
+                std::slice::from_ref(&owner),
+                &[],
+                &HashSet::new()
+            ),
+            Classification::Repo(owner)
+        );
+        assert_eq!(
+            classify(
+                Path::new(r"\\?\C:\repos\new-repo"),
+                &[],
+                &[PathBuf::from("C:/repos")],
+                &HashSet::new()
+            ),
+            Classification::RootDir
+        );
+    }
+
+    fn commit_empty(repo: &git2::Repository, message: &str) -> git2::Oid {
+        let sig = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            message,
+            &tree,
+            &parent.iter().collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    fn linked_repos() -> (tempfile::TempDir, git2::Repository, git2::Repository) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let main = git2::Repository::init(root.join("main")).unwrap();
+        commit_empty(&main, "Initial");
+        let linked_path = root.join("linked");
+        main.worktree("linked", &linked_path, None).unwrap();
+        let linked = git2::Repository::open(linked_path).unwrap();
+        (tmp, main, linked)
+    }
+
+    #[test]
+    fn worktree_private_metadata_refreshes_its_owner() {
+        let (_tmp, main, linked) = linked_repos();
+        let main_path = main.workdir().unwrap().to_path_buf();
+        let linked_path = linked.workdir().unwrap().to_path_buf();
+        let metadata = vec![
+            RepoMetadata::resolve(&main_path).unwrap(),
+            RepoMetadata::resolve(&linked_path).unwrap(),
+        ];
+        for name in ["HEAD", "index", "MERGE_HEAD", "refs/worktree/private"] {
+            assert_eq!(
+                metadata_owners(&linked.path().join(name), &metadata),
+                Some(HashSet::from([linked_path.clone()])),
+                "private {name} must refresh the linked worktree"
+            );
+        }
+        assert_eq!(
+            metadata_owners(&main.path().join("HEAD"), &metadata),
+            Some(HashSet::from([main_path]))
+        );
+    }
+
+    #[test]
+    fn shared_refs_refresh_every_tracked_worktree() {
+        let (_tmp, main, linked) = linked_repos();
+        let paths = [main.workdir().unwrap(), linked.workdir().unwrap()];
+        let metadata: Vec<_> = paths
+            .iter()
+            .map(|path| RepoMetadata::resolve(path).unwrap())
+            .collect();
+        let expected: HashSet<_> = paths.iter().map(|path| path.to_path_buf()).collect();
+        for name in ["refs/heads/main", "refs/tags/v1", "packed-refs"] {
+            assert_eq!(
+                metadata_owners(&main.commondir().join(name), &metadata),
+                Some(expected.clone()),
+                "shared {name} must refresh all owners"
+            );
+        }
+        for name in ["objects/ab/object", "logs/HEAD", "index.lock"] {
+            assert_eq!(
+                metadata_owners(&main.commondir().join(name), &metadata),
+                Some(HashSet::new()),
+                "metadata noise {name} must not become a worktree edit"
+            );
+        }
+        assert_eq!(
+            metadata_owners(&paths[0].join("source.rs"), &metadata),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn pinned_worktree_refreshes_after_private_head_and_shared_ref_changes() {
+        let (_tmp, main, linked) = linked_repos();
+        let first = main.head().unwrap().target().unwrap();
+        let second = commit_empty(&main, "Second");
+        let main_path = main.workdir().unwrap().to_path_buf();
+        let linked_path = linked.workdir().unwrap().to_path_buf();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let watcher =
+            RepoWatcher::new(std::slice::from_ref(&linked_path), &[], 20, tx, &[], false).unwrap();
+
+        // Repeat only metadata writes while awaiting an OS event. This gives
+        // the watcher time to become ready without assuming a fixed delay or
+        // producing worktree-file events that could mask missing gitdir watches.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut writes = tokio::time::interval(Duration::from_millis(100));
+            let mut target = first;
+            loop {
+                tokio::select! {
+                    _ = writes.tick() => {
+                        target = if target == first { second } else { first };
+                        linked.set_head_detached(target).unwrap();
+                    }
+                    event = rx.recv() => {
+                        if matches!(event, Some(Event::RepoChanged(path)) if path == linked_path) {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("a pinned worktree must refresh after its private HEAD moves");
+        drop(watcher);
+
+        let paths = [main_path, linked_path];
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let _watcher = RepoWatcher::new(&paths, &[], 20, tx, &[], false).unwrap();
+        let mut remaining: HashSet<_> = paths.into_iter().collect();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut writes = tokio::time::interval(Duration::from_millis(100));
+            let mut target = first;
+            while !remaining.is_empty() {
+                tokio::select! {
+                    _ = writes.tick() => {
+                        target = if target == first { second } else { first };
+                        main.reference("refs/heads/shared", target, true, "update").unwrap();
+                    }
+                    event = rx.recv() => {
+                        if let Some(Event::RepoChanged(path)) = event {
+                            remaining.remove(&path);
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("a shared branch update must refresh every tracked worktree");
+    }
 
     fn s(p: &str) -> PathBuf {
         PathBuf::from(p)

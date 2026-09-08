@@ -1,4 +1,5 @@
 use super::*;
+mod robustness;
 use crate::git::status::StashEntry;
 use std::path::Path;
 
@@ -720,7 +721,7 @@ fn removing_a_discovered_repo_still_excludes_it() {
     app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
 
     assert!(app.repo_list.repos.is_empty());
-    assert!(app.config.excluded_repos.contains(&"walker".to_string()));
+    assert!(crate::git::scanner::discover_repos(&app.config).is_empty());
 }
 
 /// `ConfirmRemoveRepo` only asks: the repo stays listed until the dialog's
@@ -920,7 +921,8 @@ async fn removing_a_nested_plain_repo_still_excludes_it() {
             .clone(),
     );
 
-    app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
+    app.handle_repo_admin(Action::RemoveRepo(id.clone()))
+        .unwrap();
 
-    assert!(app.config.excluded_repos.contains(&"side".to_string()));
+    assert!(!crate::git::scanner::discover_repos(&app.config).contains(&id.0));
 }

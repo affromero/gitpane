@@ -488,10 +488,11 @@ impl App {
                 self.picker.hide();
                 match self.pending_pick.take() {
                     Some(PendingPick::Launch(p)) => {
-                        let plan = crate::session::launcher::plan(
+                        let plan = crate::session::launcher::plan_with_target(
                             p.command.as_deref(),
                             value,
                             &p.dir.to_string_lossy(),
+                            &p.target.to_string_lossy(),
                             p.base.as_deref(),
                             self.mux,
                         );

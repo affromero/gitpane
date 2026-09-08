@@ -51,13 +51,35 @@ pub(crate) fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Build argv from a command template by replacing every `{path}` token with
-/// `dir` (one argv element per whitespace-split token, so the path is space-safe
-/// without quoting). Used for `Placement::Command` (no shell).
-fn substitute_argv(template: &str, dir: &str) -> Vec<String> {
+/// Expand placeholders in the original template only. Inserted paths and refs
+/// may themselves contain placeholder text, which must remain literal data.
+fn substitute_placeholders(template: &str, dir: &str, base: Option<&str>) -> String {
+    let mut output = String::new();
+    let mut cursor = 0;
+    for (offset, _) in template.match_indices('{') {
+        let replacement = if template[offset..].starts_with("{path}") {
+            Some(("{path}", dir))
+        } else if template[offset..].starts_with("{base}") {
+            base.map(|b| ("{base}", b))
+        } else {
+            None
+        };
+        if let Some((token, value)) = replacement {
+            output.push_str(&template[cursor..offset]);
+            output.push_str(value);
+            cursor = offset + token.len();
+        }
+    }
+    output.push_str(&template[cursor..]);
+    output
+}
+
+/// Build argv with path/base substitution after whitespace splitting, keeping
+/// each expanded value within its argument. No shell quoting is needed.
+fn substitute_argv(template: &str, dir: &str, base: Option<&str>) -> Vec<String> {
     template
         .split_whitespace()
-        .map(|tok| tok.replace("{path}", dir))
+        .map(|tok| substitute_placeholders(tok, dir, base))
         .collect()
 }
 
@@ -65,11 +87,8 @@ fn substitute_argv(template: &str, dir: &str) -> Vec<String> {
 /// shell-quoting each value so a path with spaces or a ref with shell
 /// metacharacters cannot break out of the command.
 fn substitute_shell(template: &str, dir: &str, base: Option<&str>) -> String {
-    let mut s = template.replace("{path}", &shell_single_quote(dir));
-    if let Some(b) = base {
-        s = s.replace("{base}", &shell_single_quote(b));
-    }
-    s
+    let base = base.map(shell_single_quote);
+    substitute_placeholders(template, &shell_single_quote(dir), base.as_deref())
 }
 
 /// Parse a placement string. `command`/`inline`/`ask` are keywords; anything
@@ -129,6 +148,24 @@ pub(crate) fn plan(
     base: Option<&str>,
     mux: Multiplexer,
 ) -> LaunchPlan {
+    plan_with_target(command, placement, dir, dir, base, mux)
+}
+
+/// Launch at `dir` while expanding `{path}` to `target`. Opening a file uses
+/// its parent as the placement's working directory and the file as the target.
+pub(crate) fn plan_with_target(
+    command: Option<&str>,
+    placement: &str,
+    dir: &str,
+    target: &str,
+    base: Option<&str>,
+    mux: Multiplexer,
+) -> LaunchPlan {
+    let dir = crate::repo_id::boundary_path(std::path::Path::new(dir));
+    let target = crate::repo_id::boundary_path(std::path::Path::new(target));
+    let dir = dir.to_string_lossy();
+    let target = target.to_string_lossy();
+    let (dir, target) = (dir.as_ref(), target.as_ref());
     let placement = match parse_placement(placement) {
         Ok(p) => p,
         Err(e) => return LaunchPlan::Error(e),
@@ -136,7 +173,7 @@ pub(crate) fn plan(
     let cmd = command.filter(|c| !c.trim().is_empty());
     match placement {
         Placement::Command => match cmd {
-            Some(c) => LaunchPlan::Spawn(substitute_argv(c, dir)),
+            Some(c) => LaunchPlan::Spawn(substitute_argv(c, target, base)),
             None => match mux {
                 Multiplexer::Tmux => LaunchPlan::Spawn(vec![
                     "tmux".to_string(),
@@ -154,7 +191,7 @@ pub(crate) fn plan(
             },
         },
         Placement::Tmux(flags) => {
-            let shell = cmd.map(|c| substitute_shell(c, dir, base));
+            let shell = cmd.map(|c| substitute_shell(c, target, base));
             match mux {
                 Multiplexer::Tmux => {
                     LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref()))
@@ -178,14 +215,14 @@ pub(crate) fn plan(
             }
         }
         Placement::Inline => match cmd {
-            Some(c) => LaunchPlan::Inline(substitute_shell(c, dir, base)),
+            Some(c) => LaunchPlan::Inline(substitute_shell(c, target, base)),
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
         Placement::Ask => match mux {
             Multiplexer::Tmux | Multiplexer::Herdr => LaunchPlan::Ask,
             Multiplexer::None => {
                 if let Some(c) = cmd {
-                    LaunchPlan::Inline(substitute_shell(c, dir, base))
+                    LaunchPlan::Inline(substitute_shell(c, target, base))
                 } else {
                     LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
                 }
@@ -442,442 +479,4 @@ pub(crate) fn forward_right_click_in_herdr() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(parts: &[&str]) -> LaunchPlan {
-        LaunchPlan::Spawn(parts.iter().map(|s| s.to_string()).collect())
-    }
-
-    #[test]
-    fn goto_placement_infers_tab_or_window() {
-        assert_eq!(
-            goto_placement("wezterm cli spawn -- tmux attach -t {session}"),
-            Some("new tab")
-        );
-        assert_eq!(
-            goto_placement("kitten @ launch --type=tab tmux attach -t {session}"),
-            Some("new tab")
-        );
-        assert_eq!(
-            goto_placement("open -na Ghostty --args -e tmux attach -t {session}"),
-            Some("new window")
-        );
-        assert_eq!(goto_placement("tmux switch-client -t {session}"), None);
-    }
-
-    #[test]
-    fn goto_argv_substitutes_session() {
-        assert_eq!(
-            build_goto_argv("tmux switch-client -t {session}", "fairtrail"),
-            vec!["tmux", "switch-client", "-t", "fairtrail"]
-        );
-        assert_eq!(
-            build_goto_argv("wezterm cli spawn -- tmux attach -t {session}", "ft-rec"),
-            vec![
-                "wezterm", "cli", "spawn", "--", "tmux", "attach", "-t", "ft-rec"
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_keywords_and_tmux_and_invalid() {
-        assert_eq!(parse_placement("command"), Ok(Placement::Command));
-        assert_eq!(parse_placement("inline"), Ok(Placement::Inline));
-        assert_eq!(parse_placement("ask"), Ok(Placement::Ask));
-        assert_eq!(
-            parse_placement("split-window -h -t agents"),
-            Ok(Placement::Tmux(
-                ["split-window", "-h", "-t", "agents"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            ))
-        );
-        assert!(parse_placement("kill-server").is_err());
-        assert!(parse_placement("-t other").is_err());
-        // A `;` would chain extra tmux commands — rejected even after a valid head.
-        assert!(parse_placement("split-window -h ; kill-server").is_err());
-        assert!(parse_placement("new-window;kill-server").is_err());
-    }
-
-    #[test]
-    fn command_mode_runs_detached_argv() {
-        // open's default: the command is the launcher, run as argv (no shell).
-        assert_eq!(
-            plan(
-                Some("cursor {path}"),
-                "command",
-                "/w t/app",
-                None,
-                Multiplexer::None
-            ),
-            argv(&["cursor", "/w t/app"])
-        );
-    }
-
-    #[test]
-    fn command_mode_empty_opens_tmux_pane_in_tmux() {
-        assert_eq!(
-            plan(None, "command", "/app", None, Multiplexer::Tmux),
-            argv(&["tmux", "split-window", "-c", "/app"])
-        );
-    }
-
-    #[test]
-    fn command_mode_empty_without_tmux_errors() {
-        assert!(matches!(
-            plan(None, "command", "/app", None, Multiplexer::None),
-            LaunchPlan::Error(_)
-        ));
-    }
-
-    #[test]
-    fn tmux_placement_wraps_in_sh_c() {
-        assert_eq!(
-            plan(
-                Some("git diff {base}...HEAD"),
-                "new-window",
-                "/app",
-                Some("origin/main"),
-                Multiplexer::Tmux
-            ),
-            argv(&[
-                "tmux",
-                "new-window",
-                "-c",
-                "/app",
-                "sh",
-                "-c",
-                "git diff 'origin/main'...HEAD"
-            ])
-        );
-    }
-
-    #[test]
-    fn tmux_placement_passes_flags_through() {
-        assert_eq!(
-            plan(
-                Some("lazygit"),
-                "split-window -h -t agents",
-                "/app",
-                None,
-                Multiplexer::Tmux
-            ),
-            argv(&[
-                "tmux",
-                "split-window",
-                "-h",
-                "-t",
-                "agents",
-                "-c",
-                "/app",
-                "sh",
-                "-c",
-                "lazygit"
-            ])
-        );
-    }
-
-    #[test]
-    fn tmux_placement_without_tmux_falls_back_to_inline() {
-        assert_eq!(
-            plan(
-                Some("git diff {base}...HEAD | delta"),
-                "new-window",
-                "/app",
-                Some("main"),
-                Multiplexer::None
-            ),
-            LaunchPlan::Inline("git diff 'main'...HEAD | delta".to_string())
-        );
-    }
-
-    #[test]
-    fn base_with_metacharacters_is_quoted() {
-        assert_eq!(
-            plan(
-                Some("git diff {base}...HEAD"),
-                "inline",
-                "/app",
-                Some("a;rm -rf b"),
-                Multiplexer::None
-            ),
-            LaunchPlan::Inline("git diff 'a;rm -rf b'...HEAD".to_string())
-        );
-    }
-
-    #[test]
-    fn ask_is_a_picker_in_tmux_and_inline_without() {
-        assert_eq!(
-            plan(Some("x"), "ask", "/app", None, Multiplexer::Tmux),
-            LaunchPlan::Ask
-        );
-        assert_eq!(
-            plan(Some("x"), "ask", "/app", None, Multiplexer::None),
-            LaunchPlan::Inline("x".to_string())
-        );
-    }
-
-    #[test]
-    fn command_mode_expands_embedded_path_token() {
-        // `{path}` inside a token expands too (one argv element, space-safe).
-        assert_eq!(
-            plan(
-                Some("wezterm cli spawn --cwd={path}"),
-                "command",
-                "/w t/x",
-                None,
-                Multiplexer::None
-            ),
-            argv(&["wezterm", "cli", "spawn", "--cwd=/w t/x"])
-        );
-    }
-
-    #[test]
-    fn command_mode_blank_command_opens_tmux_pane() {
-        // A whitespace-only command counts as empty.
-        assert_eq!(
-            plan(Some("   "), "command", "/repo", None, Multiplexer::Tmux),
-            argv(&["tmux", "split-window", "-c", "/repo"])
-        );
-    }
-
-    #[test]
-    fn shell_mode_quotes_path_token() {
-        // In shell modes, {path} is shell-quoted (it reaches `sh -c`).
-        assert_eq!(
-            plan(
-                Some("cd {path} && git diff"),
-                "inline",
-                "/w t/x",
-                None,
-                Multiplexer::None
-            ),
-            LaunchPlan::Inline("cd '/w t/x' && git diff".to_string())
-        );
-    }
-
-    #[test]
-    fn invalid_placement_is_an_error_plan() {
-        assert!(matches!(
-            plan(Some("x"), "frobnicate", "/app", None, Multiplexer::Tmux),
-            LaunchPlan::Error(_)
-        ));
-    }
-
-    #[test]
-    fn parse_tmux_windows_skips_malformed_lines() {
-        let out = "@0\tmain:0 editor\n@1\t\nno-tab-here\n@2\twork:2 logs\n";
-        assert_eq!(
-            parse_tmux_windows(out),
-            vec![
-                ("main:0 editor".to_string(), "@0".to_string()),
-                ("@1".to_string(), "@1".to_string()), // empty label -> target as label
-                ("work:2 logs".to_string(), "@2".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn placement_choices_use_space_free_window_id_target() {
-        // Even with a spaced label, the placement `-t` target is the window id,
-        // so the whitespace-split placement string stays valid.
-        let windows = vec![("my session:0 editor".to_string(), "@7".to_string())];
-        assert_eq!(
-            placement_choices(&windows),
-            vec![
-                ("New window".to_string(), "new-window".to_string()),
-                (
-                    "Right of my session:0 editor".to_string(),
-                    "split-window -h -t @7".to_string()
-                ),
-                (
-                    "Below my session:0 editor".to_string(),
-                    "split-window -v -t @7".to_string()
-                ),
-            ]
-        );
-    }
-
-    fn herdr_argv(parts: &[&str]) -> LaunchPlan {
-        LaunchPlan::Herdr {
-            create: parts.iter().map(|s| s.to_string()).collect(),
-            command: None,
-        }
-    }
-
-    #[test]
-    fn command_mode_empty_opens_herdr_pane_in_herdr() {
-        assert_eq!(
-            plan(None, "command", "/app", None, Multiplexer::Herdr),
-            herdr_argv(&[
-                "herdr",
-                "pane",
-                "split",
-                "--current",
-                "--direction",
-                "right",
-                "--cwd",
-                "/app",
-                "--no-focus",
-                "--right-click",
-                "pane",
-            ])
-        );
-    }
-
-    #[test]
-    fn herdr_split_placement_honors_h_v_and_pane_target() {
-        // `-h` -> right, `-v` -> down, `-t <pane-id>` -> `--pane`.
-        assert_eq!(
-            plan(
-                Some("lazygit"),
-                "split-window -h",
-                "/app",
-                None,
-                Multiplexer::Herdr
-            ),
-            LaunchPlan::Herdr {
-                create: vec![
-                    "herdr",
-                    "pane",
-                    "split",
-                    "--current",
-                    "--direction",
-                    "right",
-                    "--cwd",
-                    "/app",
-                    "--no-focus",
-                    "--right-click",
-                    "pane",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-                command: Some("lazygit".to_string()),
-            }
-        );
-        let down = plan(
-            Some("x"),
-            "split-window -v",
-            "/app",
-            None,
-            Multiplexer::Herdr,
-        );
-        assert!(matches!(
-            down,
-            LaunchPlan::Herdr {
-                create: ref c,
-                ..
-            } if c.contains(&"down".to_string())
-        ));
-        let targeted = plan(
-            Some("x"),
-            "split-window -h -t w1:p3",
-            "/app",
-            None,
-            Multiplexer::Herdr,
-        );
-        assert!(matches!(
-            targeted,
-            LaunchPlan::Herdr {
-                create: ref c,
-                ..
-            } if c.contains(&"--pane".to_string()) && c.contains(&"w1:p3".to_string())
-        ));
-    }
-
-    #[test]
-    fn herdr_new_window_creates_a_tab() {
-        // review's default `new-window` placement -> `herdr tab create`; the
-        // command runs in the tab's root pane via `herdr pane run`.
-        assert_eq!(
-            plan(
-                Some("git diff {base}...HEAD"),
-                "new-window",
-                "/app",
-                Some("origin/main"),
-                Multiplexer::Herdr,
-            ),
-            LaunchPlan::Herdr {
-                create: vec!["herdr", "tab", "create", "--cwd", "/app", "--no-focus",]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                command: Some("git diff 'origin/main'...HEAD".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn herdr_rejects_unknown_and_tmux_only_flags() {
-        // Unknown flags and `new-window` flags must not silently mis-launch.
-        assert!(matches!(
-            plan(
-                Some("x"),
-                "split-window -l 20",
-                "/app",
-                None,
-                Multiplexer::Herdr
-            ),
-            LaunchPlan::Error(_)
-        ));
-        assert!(matches!(
-            plan(
-                Some("x"),
-                "new-window -t work",
-                "/app",
-                None,
-                Multiplexer::Herdr
-            ),
-            LaunchPlan::Error(_)
-        ));
-        assert!(matches!(
-            plan(
-                Some("x"),
-                "split-window -t",
-                "/app",
-                None,
-                Multiplexer::Herdr
-            ),
-            LaunchPlan::Error(_)
-        ));
-    }
-
-    #[test]
-    fn ask_is_a_picker_under_herdr() {
-        assert_eq!(
-            plan(Some("x"), "ask", "/app", None, Multiplexer::Herdr),
-            LaunchPlan::Ask
-        );
-    }
-
-    #[test]
-    fn herdr_placement_choices_offer_tab_and_splits() {
-        assert_eq!(
-            herdr_placement_choices(),
-            vec![
-                ("New tab".to_string(), "new-window".to_string()),
-                (
-                    "Right of current pane".to_string(),
-                    "split-window -h".to_string(),
-                ),
-                (
-                    "Below current pane".to_string(),
-                    "split-window -v".to_string(),
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_herdr_pane_id_reads_split_and_tab_responses() {
-        let split = "{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:p3\"}}}";
-        assert_eq!(parse_herdr_pane_id(split), Some("w1:p3".to_string()));
-        let tab =
-            "{\"result\":{\"tab\":{\"tab_id\":\"w1:t2\"},\"root_pane\":{\"pane_id\":\"w1:p7\"}}}";
-        assert_eq!(parse_herdr_pane_id(tab), Some("w1:p7".to_string()));
-        assert_eq!(parse_herdr_pane_id("not json"), None);
-    }
-}
+mod tests;

@@ -34,6 +34,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Test release metadata validation
+        # Ubuntu provides Python 3.11+ for the stdlib tomllib parser.
+        run: python3 -B -m unittest discover -s scripts -p 'test_release_metadata.py'
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

@@ -19,6 +19,27 @@ impl App {
         refresh_id: RepoId,
         args: Vec<String>,
     ) {
+        self.spawn_prepared_git_op(exec_path, refresh_id, move |_| Ok(args));
+    }
+
+    pub(super) fn spawn_file_op(
+        &mut self,
+        exec_path: std::path::PathBuf,
+        refresh_id: RepoId,
+        selected: std::path::PathBuf,
+        operation: crate::git::file_ops::FileOperation,
+    ) {
+        self.spawn_prepared_git_op(exec_path, refresh_id, move |path| {
+            crate::git::file_ops::arguments(path, &selected, operation)
+        });
+    }
+
+    fn spawn_prepared_git_op(
+        &mut self,
+        exec_path: std::path::PathBuf,
+        refresh_id: RepoId,
+        prepare: impl FnOnce(&std::path::Path) -> Result<Vec<String>> + Send + 'static,
+    ) {
         if let Some(idx) = self.repo_list.resolve_index(&refresh_id) {
             self.repo_list.repos[idx].git_op = true;
         }
@@ -27,6 +48,15 @@ impl App {
         // start still counts this op as in flight.
         let guard = GitOpGuard::new(refresh_id.clone(), tx.clone());
         tokio::task::spawn_blocking(move || {
+            let args = match prepare(&exec_path) {
+                Ok(args) => args,
+                Err(error) => {
+                    guard.complete();
+                    let _ = tx.send(Action::Error(error.to_string()));
+                    let _ = tx.send(Action::RefreshRepo(refresh_id));
+                    return;
+                }
+            };
             let output = crate::git::process::run_git_op_capturing(&exec_path, &args);
             match output {
                 Ok(o) if o.status.success() => {
@@ -91,28 +121,43 @@ impl App {
         rel: &std::path::Path,
         tui: &mut Tui,
     ) -> Result<()> {
-        let Some(abs) = self.file_op_dir(id).map(|d| d.join(rel)) else {
+        let Some(request) = self.file_open_request(id, rel) else {
             return Ok(());
         };
-        if self.config.open.command.is_some() {
-            self.launch_open(abs, tui)?;
+        if request.command.is_some() {
+            self.launch_open_request(request, tui)?;
         } else {
             let opener = if cfg!(target_os = "macos") {
                 "open"
             } else {
                 "xdg-open"
             };
-            let cwd = abs
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| abs.clone());
             self.os_open(
-                vec![opener.to_string(), abs.to_string_lossy().into_owned()],
-                cwd,
+                vec![
+                    opener.to_string(),
+                    request.target.to_string_lossy().into_owned(),
+                ],
+                request.dir,
                 "open",
             );
         }
         Ok(())
+    }
+
+    fn file_open_request(&self, id: &RepoId, rel: &std::path::Path) -> Option<PendingLaunch> {
+        let repo_dir = self.file_op_dir(id)?;
+        let target = repo_dir.join(rel);
+        let dir = target
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(repo_dir);
+        Some(PendingLaunch {
+            dir,
+            target,
+            command: self.config.open.command.clone(),
+            base: None,
+            label: "open",
+        })
     }
 
     /// Reveal a changed file in the OS file manager: Finder selects it on macOS
@@ -287,18 +332,31 @@ impl App {
     }
     /// Open `path` via the `[open]` launcher (or the placement picker for "ask").
     pub(super) fn launch_open(&mut self, path: std::path::PathBuf, tui: &mut Tui) -> Result<()> {
-        let command = self.config.open.command.clone();
-        let plan = crate::session::launcher::plan(
-            command.as_deref(),
+        self.launch_open_request(
+            PendingLaunch {
+                dir: path.clone(),
+                target: path,
+                command: self.config.open.command.clone(),
+                base: None,
+                label: "open",
+            },
+            tui,
+        )
+    }
+
+    fn launch_open_request(&mut self, request: PendingLaunch, tui: &mut Tui) -> Result<()> {
+        let plan = crate::session::launcher::plan_with_target(
+            request.command.as_deref(),
             &self.config.open.placement,
-            &path.to_string_lossy(),
+            &request.dir.to_string_lossy(),
+            &request.target.to_string_lossy(),
             None,
             self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
-            self.start_placement_picker(path, command, None, "open");
+            self.start_placement_picker(request);
         } else {
-            self.run_launch_plan(plan, path, "open", tui)?;
+            self.run_launch_plan(plan, request.dir, "open", tui)?;
         }
         Ok(())
     }
@@ -324,7 +382,13 @@ impl App {
             self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
-            self.start_placement_picker(path, Some(command), None, "keybinding");
+            self.start_placement_picker(PendingLaunch {
+                dir: path.clone(),
+                target: path,
+                command: Some(command),
+                base: None,
+                label: "keybinding",
+            });
         } else {
             self.run_launch_plan(plan, path, "keybinding", tui)?;
         }
@@ -359,7 +423,13 @@ impl App {
             self.mux,
         );
         if matches!(plan, crate::session::launcher::LaunchPlan::Ask) {
-            self.start_placement_picker(path, Some(command), Some(base), "review");
+            self.start_placement_picker(PendingLaunch {
+                dir: path.clone(),
+                target: path,
+                command: Some(command),
+                base: Some(base),
+                label: "review",
+            });
         } else {
             self.run_launch_plan(plan, path, "review", tui)?;
         }
@@ -384,13 +454,7 @@ impl App {
     }
     /// Park a launch and open the placement picker (`placement = "ask"`), listing
     /// tmux windows as right-of/below targets, or herdr tabs/splits under herdr.
-    pub(super) fn start_placement_picker(
-        &mut self,
-        dir: std::path::PathBuf,
-        command: Option<String>,
-        base: Option<String>,
-        label: &'static str,
-    ) {
+    fn start_placement_picker(&mut self, request: PendingLaunch) {
         let choices = match self.mux {
             crate::session::env::Multiplexer::Herdr => {
                 crate::session::launcher::herdr_placement_choices()
@@ -399,12 +463,7 @@ impl App {
                 &crate::session::launcher::tmux_windows(),
             ),
         };
-        self.pending_pick = Some(PendingPick::Launch(PendingLaunch {
-            dir,
-            command,
-            base,
-            label,
-        }));
+        self.pending_pick = Some(PendingPick::Launch(request));
         self.picker.show("Open where?", choices);
     }
     /// Attach the live tmux session(s) for the currently selected row (the `G`
@@ -722,7 +781,79 @@ fn sanitize_stdout(stdout: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_stdout;
+    use super::*;
+
+    fn file_open_app() -> (tempfile::TempDir, App, RepoId, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        git2::Repository::init(&repo).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let file = repo.join("source file.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut config = Config {
+            root_dirs: vec![temp.path().to_path_buf()],
+            ..Config::default()
+        };
+        config.open.command = Some("git hash-object {path}".into());
+        config.open.placement = "command".into();
+        (temp, App::new(config), RepoId(repo), file)
+    }
+
+    fn run_file_open(request: PendingLaunch, expected: &std::path::Path) {
+        let plan = crate::session::launcher::plan_with_target(
+            request.command.as_deref(),
+            "command",
+            &request.dir.to_string_lossy(),
+            &request.target.to_string_lossy(),
+            request.base.as_deref(),
+            crate::session::env::Multiplexer::None,
+        );
+        let crate::session::launcher::LaunchPlan::Spawn(argv) = plan else {
+            panic!("expected an argv launch")
+        };
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(&request.dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected_oid =
+            git2::Oid::hash_object(git2::ObjectType::Blob, &std::fs::read(expected).unwrap())
+                .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            expected_oid.to_string()
+        );
+        assert_eq!(request.dir, expected.parent().unwrap());
+    }
+
+    #[test]
+    fn configured_file_open_passes_file_to_editor_with_directory_cwd() {
+        let (_temp, app, id, file) = file_open_app();
+        let request = app
+            .file_open_request(&id, std::path::Path::new("source file.rs"))
+            .unwrap();
+        run_file_open(request, &file);
+    }
+
+    #[test]
+    fn placement_picker_preserves_file_target_and_directory_cwd() {
+        let (_temp, mut app, id, file) = file_open_app();
+        // Herdr choices are local data, so no real multiplexer is needed.
+        app.mux = crate::session::env::Multiplexer::Herdr;
+        let request = app
+            .file_open_request(&id, std::path::Path::new("source file.rs"))
+            .unwrap();
+        app.start_placement_picker(request);
+        let Some(PendingPick::Launch(request)) = app.pending_pick.take() else {
+            panic!("expected a parked file launch")
+        };
+        run_file_open(request, &file);
+    }
 
     #[test]
     fn sanitize_stdout_truncates_and_escapes_controls() {

@@ -47,17 +47,20 @@ fn is_real_git_dir(dot_git: &Path) -> bool {
 }
 
 /// Whether a candidate repo path matches an `excluded_repos` pattern.
-/// Patterns match the repo's directory name or any path component.
+/// Legacy patterns match substrings; `path:` entries match one absolute path.
 fn is_excluded(repo_path: &Path, config: &Config) -> bool {
     let repo_name = repo_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let path_str = repo_path.to_string_lossy();
-    config
-        .excluded_repos
-        .iter()
-        .any(|pattern| repo_name == *pattern || path_str.contains(pattern))
+    config.excluded_repos.iter().any(|pattern| {
+        if let Some(exact) = pattern.strip_prefix("path:") {
+            repo_path == Path::new(exact)
+        } else {
+            repo_name == *pattern || path_str.contains(pattern)
+        }
+    })
 }
 
 /// Google `repo` (git-repo) managed workspace discovery.
