@@ -37,6 +37,7 @@ use crate::watcher::RepoWatcher;
 
 mod actions;
 mod actions_extra;
+mod config_sync;
 mod github;
 mod input;
 mod launch;
@@ -162,6 +163,7 @@ impl Drop for GitOpGuard {
 
 pub(crate) struct App {
     config: Config,
+    last_config_check: Option<Instant>,
     should_quit: bool,
     /// Second quit request: exit without waiting for in-flight git ops.
     force_quit: bool,
@@ -376,6 +378,7 @@ impl App {
 
         let mut app = Self {
             config,
+            last_config_check: None,
             should_quit: false,
             force_quit: false,
             repo_list: RepoList::new(repo_paths, roots, expand_worktrees, theme.clone()),
@@ -584,6 +587,15 @@ impl App {
 
             let path = entry.path.clone();
             self.git_graph.load_repo(path, &name);
+        } else {
+            self.file_list
+                .set_files(Vec::new(), "", RepoId(std::path::PathBuf::new()));
+            let options = self.git_graph.graph_options.clone();
+            self.git_graph = GitGraph::new(self.theme.clone());
+            self.git_graph.graph_options = options;
+            let _ = self
+                .git_graph
+                .register_action_handler(self.action_tx.clone());
         }
     }
     /// Replace the live theme on App and every component.
@@ -746,6 +758,12 @@ impl App {
                 self.action_tx.send(Action::Quit)?;
             }
             Event::Tick => {
+                if self
+                    .last_config_check
+                    .is_none_or(|last| last.elapsed() >= Duration::from_secs(1))
+                {
+                    self.sync_shared_config();
+                }
                 // Housekeeping only; the run loop renders after the drain
                 // whenever this tick flushed substantive background work.
                 self.action_tx.send(Action::Tick)?;
@@ -815,6 +833,7 @@ impl App {
                 self.action_tx.send(Action::PollFetch)?;
             }
             Event::FocusGained => {
+                self.sync_shared_config();
                 if let Some(entry) = self.repo_list.selected_repo() {
                     self.action_tx
                         .send(Action::RefreshRepo(RepoId(entry.path.clone())))?;
@@ -824,6 +843,7 @@ impl App {
                 let was_deep = self.power == PowerState::DeepSleep;
                 self.power = state;
                 if was_deep && state != PowerState::DeepSleep {
+                    self.sync_shared_config();
                     // Waking from deep sleep: the Tui's re-enabled local
                     // timer already fires an immediate PollLocal; here we
                     // replay a deferred root change and repaint the stale

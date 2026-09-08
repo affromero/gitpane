@@ -209,6 +209,7 @@ impl Default for UiConfig {
             update_position: UpdatePosition::default(),
             show_liveness: default_show_liveness(),
             expand_worktrees: default_expand_worktrees(),
+            sync_repos: default_sync_repos(),
         }
     }
 }
@@ -236,14 +237,20 @@ impl Default for Config {
             theme: Theme::default(),
             runtime_theme_override: None,
             runtime_root_override: None,
+            runtime_no_sync_repos: false,
             loaded_path: None,
             write_target_override: None,
+            saved_snapshot: None,
         }
     }
 }
 
 pub(super) fn default_forward_right_click() -> bool {
     false
+}
+
+pub(super) fn default_sync_repos() -> bool {
+    true
 }
 
 impl Default for HerdrConfig {
