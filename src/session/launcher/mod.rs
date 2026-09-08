@@ -161,6 +161,11 @@ pub(crate) fn plan_with_target(
     base: Option<&str>,
     mux: Multiplexer,
 ) -> LaunchPlan {
+    let dir = crate::repo_id::boundary_path(std::path::Path::new(dir));
+    let target = crate::repo_id::boundary_path(std::path::Path::new(target));
+    let dir = dir.to_string_lossy();
+    let target = target.to_string_lossy();
+    let (dir, target) = (dir.as_ref(), target.as_ref());
     let placement = match parse_placement(placement) {
         Ok(p) => p,
         Err(e) => return LaunchPlan::Error(e),

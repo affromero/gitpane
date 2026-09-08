@@ -18,6 +18,10 @@ fn git(path: &Path, args: &[&str]) {
 fn fixture(names: &[&str]) -> (tempfile::TempDir, Repository) {
     let tmp = tempfile::TempDir::new().unwrap();
     let repo = Repository::init(tmp.path()).unwrap();
+    repo.config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
     let mut index = repo.index().unwrap();
     for name in names {
         std::fs::write(tmp.path().join(name), format!("original {name}\n")).unwrap();

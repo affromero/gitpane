@@ -51,16 +51,18 @@ fn is_private_metadata(relative: &Path) -> bool {
 /// `Some` claims the event even when the owner set is empty: object/log noise
 /// inside a real git directory must not fall through as a working-tree edit.
 fn metadata_owners(changed: &Path, metadata: &[RepoMetadata]) -> Option<HashSet<PathBuf>> {
+    let changed = crate::repo_id::boundary_path(changed);
     let mut inside_metadata = false;
     let mut owners = HashSet::new();
     for repo in metadata {
-        if let Ok(relative) = changed.strip_prefix(&repo.git_dir) {
+        if let Ok(relative) = changed.strip_prefix(crate::repo_id::boundary_path(&repo.git_dir)) {
             inside_metadata = true;
             if is_private_metadata(relative) {
                 owners.insert(repo.owner.clone());
             }
         }
-        if let Ok(relative) = changed.strip_prefix(&repo.common_dir) {
+        if let Ok(relative) = changed.strip_prefix(crate::repo_id::boundary_path(&repo.common_dir))
+        {
             inside_metadata = true;
             if is_shared_metadata(relative) {
                 owners.insert(repo.owner.clone());
@@ -90,6 +92,7 @@ fn classify(
     root_dirs: &[PathBuf],
     exclude_set: &HashSet<String>,
 ) -> Classification {
+    let changed_path = crate::repo_id::boundary_path(changed_path);
     // Skip events from excluded directories (node_modules, target, etc.).
     if changed_path
         .components()
@@ -105,14 +108,16 @@ fn classify(
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let path_str = changed_path.to_string_lossy();
         let is_meaningful = name == "HEAD"
             || name == "index"
             || name == "MERGE_HEAD"
             || name == "REBASE_HEAD"
             || name == "COMMIT_EDITMSG"
             || name == "packed-refs"
-            || path_str.contains(".git/refs/");
+            || changed_path
+                .components()
+                .zip(changed_path.components().skip(1))
+                .any(|(a, b)| a.as_os_str() == ".git" && b.as_os_str() == "refs");
         if !is_meaningful {
             return Classification::Ignore;
         }
@@ -120,7 +125,7 @@ fn classify(
 
     // Inside a known repo? Route the change to it.
     for repo_path in repo_paths {
-        if changed_path.starts_with(repo_path) {
+        if changed_path.starts_with(crate::repo_id::boundary_path(repo_path)) {
             return Classification::Repo(repo_path.clone());
         }
     }
@@ -132,7 +137,7 @@ fn classify(
     // actually find the new repo.
     for root in root_dirs {
         if let Some(parent) = changed_path.parent()
-            && parent == root.as_path()
+            && parent == crate::repo_id::boundary_path(root).as_ref()
         {
             return Classification::RootDir;
         }
@@ -398,6 +403,42 @@ impl RepoWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_windows_events_keep_canonical_repository_identity() {
+        let owner = PathBuf::from(r"\\?\C:\repos\project");
+        let metadata = vec![RepoMetadata {
+            owner: owner.clone(),
+            git_dir: owner.join(".git"),
+            common_dir: owner.join(".git"),
+        }];
+        assert_eq!(
+            metadata_owners(
+                Path::new("C:/repos/project/.git/refs/heads/main"),
+                &metadata
+            ),
+            Some(HashSet::from([owner.clone()]))
+        );
+        assert_eq!(
+            classify(
+                Path::new("C:/repos/project/source.rs"),
+                std::slice::from_ref(&owner),
+                &[],
+                &HashSet::new()
+            ),
+            Classification::Repo(owner)
+        );
+        assert_eq!(
+            classify(
+                Path::new(r"\\?\C:\repos\new-repo"),
+                &[],
+                &[PathBuf::from("C:/repos")],
+                &HashSet::new()
+            ),
+            Classification::RootDir
+        );
+    }
 
     fn commit_empty(repo: &git2::Repository, message: &str) -> git2::Oid {
         let sig = git2::Signature::now("Test", "test@example.test").unwrap();
