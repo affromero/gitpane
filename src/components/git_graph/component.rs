@@ -25,19 +25,29 @@ impl GitGraph {
         } else {
             area.width
         };
-        // Clamp the stored split to the current axis first: on a short axis the
-        // stored 0.40/0.65 borders may not leave a three-cell message block
-        // between them, and clamping `split[1]` against those raw values would
-        // produce an inverted (min > max) range and panic.
-        let mut split = clamp_detail_split(axis, self.detail_split);
+        // Feasible integer boundary positions for this axis (short axes leave
+        // no room between the stored 0.40/0.65 borders, so clamp in cells).
+        let [b0, b1, b2] = detail_cell_bounds(axis, self.detail_split);
         if !self.msg_dragged {
             let line_count = detail.message.lines().count().max(1) as u16;
             let want = msg_auto_cells(line_count, axis);
-            let min_f = detail_min_fraction(axis);
-            split[1] = (split[0] + want as f64 / axis.max(1) as f64)
-                .clamp(split[0] + min_f, split[2] - min_f);
+            let min_cells = detail_min_cells(axis);
+            // Message|files border sits `want` cells below the graph border,
+            // clamped so the message and files panes each keep a minimum.
+            let b1 = b0
+                .saturating_add(want)
+                .clamp(b0 + min_cells, b2 - min_cells);
+            return [
+                b0 as f64 / axis as f64,
+                b1 as f64 / axis as f64,
+                b2 as f64 / axis as f64,
+            ];
         }
-        split
+        [
+            b0 as f64 / axis as f64,
+            b1 as f64 / axis as f64,
+            b2 as f64 / axis as f64,
+        ]
     }
 
     fn filter_summary(&self) -> Option<String> {
@@ -302,24 +312,14 @@ const DETAIL_GRAB_ZONE: u16 = 2;
 /// along the detail layout axis. `horizontal_layout` = the outer panels are
 /// side by side, so the detail splits vertically (historical convention).
 /// `split` holds the graph|message, message|files and files|diff fractions.
-/// Each block keeps at least `detail_min_fraction(axis)` cells on the axis.
+/// Each pane keeps at least `detail_min_cells(axis)` cells on the axis.
 fn detail_chunks(area: Rect, split: [f64; 3], horizontal_layout: bool) -> [Rect; 4] {
     let axis = if horizontal_layout {
         area.height
     } else {
         area.width
     };
-    let axis_f = axis as f64;
-    let [f0, f1, f2] = clamp_detail_split(axis, split);
-    // Round, don't floor: a fraction can land just under a whole cell
-    // (e.g. 0.0749... * 40 = 2.99... -> 2) and starve a block below its min.
-    let c0 = (f0 * axis_f + 0.5) as u16;
-    let c1 = ((f1 - f0) * axis_f + 0.5) as u16;
-    let c2 = ((f2 - f1) * axis_f + 0.5) as u16;
-    let c3 = axis
-        .saturating_sub(c0)
-        .saturating_sub(c1)
-        .saturating_sub(c2);
+    let [b0, b1, b2] = detail_cell_bounds(axis, split);
     let make = |start: u16, len: u16, area: Rect, vertical: bool| {
         if vertical {
             Rect {
@@ -336,36 +336,41 @@ fn detail_chunks(area: Rect, split: [f64; 3], horizontal_layout: bool) -> [Rect;
         }
     };
     [
-        make(0, c0, area, horizontal_layout),
-        make(c0, c1, area, horizontal_layout),
-        make(c0 + c1, c2, area, horizontal_layout),
-        make(c0 + c1 + c2, c3, area, horizontal_layout),
+        make(0, b0, area, horizontal_layout),
+        make(b0, b1 - b0, area, horizontal_layout),
+        make(b1, b2 - b1, area, horizontal_layout),
+        make(b2, axis - b2, area, horizontal_layout),
     ]
 }
 
-/// The minimum fraction (0.0..1.0) of the detail axis that each pane keeps.
-/// Honours the three-cell floor only where the axis can actually afford it:
-/// four panes each need a quarter of the axis, so on a short axis (e.g. 10
-/// cells) the floor drops to `axis / 4` cells per pane, otherwise the clamp
-/// bounds below would invert (min > max) and panic.
-fn detail_min_fraction(axis: u16) -> f64 {
-    if axis == 0 {
-        return 0.0;
-    }
-    let min_cells = 3u16.min(axis / 4);
-    min_cells as f64 / axis as f64
+/// The minimum number of cells each detail pane keeps on the axis. Capped at
+/// three, but never more than a quarter of the axis: four panes each need a
+/// quarter, so a short axis (e.g. 10 cells) drops the floor to `axis / 4`
+/// cells per pane, otherwise the clamp bounds below would invert.
+fn detail_min_cells(axis: u16) -> u16 {
+    3u16.min(axis / 4)
 }
 
-/// Clamp a stored three-way detail split so the borders stay ordered and every
-/// pane keeps at least `detail_min_fraction(axis)` cells on the axis. The
-/// clamping is monotonic (`f0` then `f1` then `f2`), so it never produces an
-/// inverted (min > max) range even on a short axis.
-fn clamp_detail_split(axis: u16, split: [f64; 3]) -> [f64; 3] {
-    let min_f = detail_min_fraction(axis);
-    let f0 = split[0].clamp(min_f, 1.0 - 3.0 * min_f);
-    let f1 = split[1].clamp(f0 + min_f, 1.0 - 2.0 * min_f);
-    let f2 = split[2].clamp(f1 + min_f, 1.0 - min_f);
-    [f0, f1, f2]
+/// Feasible integer boundary positions (cells on the detail axis) for a
+/// three-way split, derived from the desired fractional `split`. Each pane
+/// keeps at least `detail_min_cells(axis)` cells. The clamping happens in
+/// integer cell space, so float rounding can never produce an inverted
+/// (min > max) range that panics the layout.
+fn detail_cell_bounds(axis: u16, split: [f64; 3]) -> [u16; 3] {
+    if axis == 0 {
+        return [0, 0, 0];
+    }
+    let min_cells = detail_min_cells(axis);
+    let axis_f = axis as f64;
+    // Desired boundary positions (graph|message, message|files, files|diff).
+    let d0 = (split[0] * axis_f).round() as u16;
+    let d1 = (split[1] * axis_f).round() as u16;
+    let d2 = (split[2] * axis_f).round() as u16;
+    // Clamp in order; each pane keeps at least `min_cells` cells.
+    let b0 = d0.clamp(min_cells, axis - 3 * min_cells);
+    let b1 = d1.clamp(b0 + min_cells, axis - 2 * min_cells);
+    let b2 = d2.clamp(b1 + min_cells, axis - min_cells);
+    [b0, b1, b2]
 }
 
 /// Auto height (in cells) for the commit message block: follows the message's
@@ -655,23 +660,30 @@ impl Component for GitGraph {
                     // Start from the split already clamped to this axis: the
                     // stored borders may be infeasible for a small area, and
                     // clamping `rel` against them could invert (min > max) and
-                    // panic.
-                    let mut split = clamp_detail_split(axis, self.detail_split);
-                    let min_f = detail_min_fraction(axis);
+                    // panic. Clamp in integer cell space below.
+                    let [mut b0, mut b1, mut b2] = detail_cell_bounds(axis, self.detail_split);
+                    let min_cells = detail_min_cells(axis);
+                    // `rel` is the pointer position as a fraction of the axis;
+                    // convert to a cell, then clamp onto the pane boundary.
+                    let at = (rel * axis as f64).round() as u16;
                     match border {
                         0 => {
-                            split[0] = rel.clamp(min_f, split[1] - min_f);
+                            b0 = at.clamp(min_cells, b1 - min_cells);
                         }
                         1 => {
-                            split[1] = rel.clamp(split[0] + min_f, split[2] - min_f);
+                            b1 = at.clamp(b0 + min_cells, b2 - min_cells);
                             self.msg_dragged = true;
                         }
                         2 => {
-                            split[2] = rel.clamp(split[1] + min_f, 1.0 - min_f);
+                            b2 = at.clamp(b1 + min_cells, axis - min_cells);
                         }
                         _ => {}
                     }
-                    self.detail_split = split;
+                    self.detail_split = [
+                        b0 as f64 / axis as f64,
+                        b1 as f64 / axis as f64,
+                        b2 as f64 / axis as f64,
+                    ];
                     Ok(None)
                 } else {
                     Ok(None)

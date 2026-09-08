@@ -113,3 +113,28 @@ fn review_dragging_a_border_at_small_area_does_not_panic() {
     assert!(a >= 0.0 && c <= 1.0, "split must stay in range: {a}..{c}");
     terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
 }
+
+#[test]
+fn review_commit_detail_renders_at_80_by_13() {
+    let mut graph = graph_with_unicode_detail();
+    let mut terminal = Terminal::new(TestBackend::new(80, 13)).unwrap();
+    terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
+}
+
+#[test]
+fn review_detail_renders_small_sizes_in_both_orientations() {
+    // The P1 crash was a f64 clamp inversion that only surfaced at specific
+    // axes (e.g. 13), so sweep a range of small sizes through the real widget
+    // draw path for both the horizontal and vertical detail layout.
+    for axis in 0..=40 {
+        for horizontal in [true, false] {
+            let mut graph = graph_with_unicode_detail();
+            graph.horizontal_layout = horizontal;
+            let (w, h) = if horizontal { (60, axis) } else { (axis, 60) };
+            let w = w.max(1);
+            let h = h.max(1);
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
+        }
+    }
+}
