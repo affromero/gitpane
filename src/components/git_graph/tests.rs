@@ -6,7 +6,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use git2::Oid;
 use ratatui::layout::Rect;
 
-fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
+pub(crate) fn mock_row(short_id: &str, message: &str, author: &str) -> GraphRow {
     GraphRow {
         commit_col: 0,
         lanes: vec![LaneSegment::Commit],
@@ -453,7 +453,7 @@ fn test_set_rows_resets_abort_counter() {
 
 /// The commit id every `mock_row` carries, so a detail pane can be opened for
 /// the row the tests click on.
-const MOCK_OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(crate) const MOCK_OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// A graph showing one commit, with its detail pane already open on `files`,
 /// laid out like the three-pane draw: graph | files | diff.

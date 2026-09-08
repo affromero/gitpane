@@ -18,6 +18,8 @@ use cache::{
 
 mod component;
 #[cfg(test)]
+mod detail_review_tests;
+#[cfg(test)]
 mod tests;
 
 /// RAII guard that guarantees the graph's `load_in_flight` latch is released

@@ -20,21 +20,26 @@ impl GitGraph {
     /// message|files border overridden by the message's line count while the
     /// user has not dragged that border (see `msg_dragged`).
     fn detail_split_with_auto_msg(&self, area: Rect, detail: &CommitDetail) -> [f64; 3] {
-        let mut split = self.detail_split;
+        let axis = if self.horizontal_layout {
+            area.height
+        } else {
+            area.width
+        };
+        // Clamp the stored split to the current axis first: on a short axis the
+        // stored 0.40/0.65 borders may not leave a three-cell message block
+        // between them, and clamping `split[1]` against those raw values would
+        // produce an inverted (min > max) range and panic.
+        let mut split = clamp_detail_split(axis, self.detail_split);
         if !self.msg_dragged {
-            let axis = if self.horizontal_layout {
-                area.height
-            } else {
-                area.width
-            };
             let line_count = detail.message.lines().count().max(1) as u16;
             let want = msg_auto_cells(line_count, axis);
-            let min_f = 3.0 / axis.max(1) as f64;
-            split[1] = (self.detail_split[0] + want as f64 / axis.max(1) as f64)
+            let min_f = detail_min_fraction(axis);
+            split[1] = (split[0] + want as f64 / axis.max(1) as f64)
                 .clamp(split[0] + min_f, split[2] - min_f);
         }
         split
     }
+
     fn filter_summary(&self) -> Option<String> {
         let mut parts = Vec::new();
         if let Some(branches) = &self.graph_options.filters.branches {
@@ -297,23 +302,15 @@ const DETAIL_GRAB_ZONE: u16 = 2;
 /// along the detail layout axis. `horizontal_layout` = the outer panels are
 /// side by side, so the detail splits vertically (historical convention).
 /// `split` holds the graph|message, message|files and files|diff fractions.
-/// Each block keeps at least 3 cells on the axis.
+/// Each block keeps at least `detail_min_fraction(axis)` cells on the axis.
 fn detail_chunks(area: Rect, split: [f64; 3], horizontal_layout: bool) -> [Rect; 4] {
     let axis = if horizontal_layout {
         area.height
     } else {
         area.width
     };
-    let min_cells = 3u16.min(axis / 3);
     let axis_f = axis as f64;
-    let min_f = if axis_f > 0.0 {
-        min_cells as f64 / axis_f
-    } else {
-        0.0
-    };
-    let f0 = split[0].clamp(min_f, 1.0 - 3.0 * min_f);
-    let f1 = split[1].clamp(f0 + min_f, 1.0 - 2.0 * min_f);
-    let f2 = split[2].clamp(f1 + min_f, 1.0 - min_f);
+    let [f0, f1, f2] = clamp_detail_split(axis, split);
     // Round, don't floor: a fraction can land just under a whole cell
     // (e.g. 0.0749... * 40 = 2.99... -> 2) and starve a block below its min.
     let c0 = (f0 * axis_f + 0.5) as u16;
@@ -346,6 +343,31 @@ fn detail_chunks(area: Rect, split: [f64; 3], horizontal_layout: bool) -> [Rect;
     ]
 }
 
+/// The minimum fraction (0.0..1.0) of the detail axis that each pane keeps.
+/// Honours the three-cell floor only where the axis can actually afford it:
+/// four panes each need a quarter of the axis, so on a short axis (e.g. 10
+/// cells) the floor drops to `axis / 4` cells per pane, otherwise the clamp
+/// bounds below would invert (min > max) and panic.
+fn detail_min_fraction(axis: u16) -> f64 {
+    if axis == 0 {
+        return 0.0;
+    }
+    let min_cells = 3u16.min(axis / 4);
+    min_cells as f64 / axis as f64
+}
+
+/// Clamp a stored three-way detail split so the borders stay ordered and every
+/// pane keeps at least `detail_min_fraction(axis)` cells on the axis. The
+/// clamping is monotonic (`f0` then `f1` then `f2`), so it never produces an
+/// inverted (min > max) range even on a short axis.
+fn clamp_detail_split(axis: u16, split: [f64; 3]) -> [f64; 3] {
+    let min_f = detail_min_fraction(axis);
+    let f0 = split[0].clamp(min_f, 1.0 - 3.0 * min_f);
+    let f1 = split[1].clamp(f0 + min_f, 1.0 - 2.0 * min_f);
+    let f2 = split[2].clamp(f1 + min_f, 1.0 - min_f);
+    [f0, f1, f2]
+}
+
 /// Auto height (in cells) for the commit message block: follows the message's
 /// line count, capped at 40% of the available axis, at least 3 cells.
 fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
@@ -354,19 +376,20 @@ fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
 
 /// Maximum scroll offset (rows) for a wrapping paragraph inside a bordered
 /// block: the content's wrapped row count (each source line wrapped at the
-/// inner width) minus the rows visible between the borders. `0` when the
-/// content fits or the viewport is too small to matter. Wrapping approximates
-/// character counts, so wide (CJK) glyphs may allow one extra row of scroll;
-/// a harmless overshoot that keeps scroll stops at the content end.
+/// inner width using display-width word wrapping, exactly as ratatui renders
+/// it) minus the rows visible between the borders. `0` when the content fits
+/// or the viewport is too small to matter.
 fn max_scroll_lines(text: &str, viewport_height: u16, viewport_width: u16) -> u16 {
     if viewport_height <= 2 || viewport_width <= 2 {
         return 0;
     }
     let inner = viewport_width - 2;
-    let content_rows: u16 = text
-        .lines()
-        .map(|l| ((l.chars().count() as u16).div_ceil(inner)).max(1))
-        .sum();
+    // Use the same wrapping ratatui applies when rendering the paragraph
+    // (display width + word boundaries), so wide (CJK) glyphs and long words
+    // don't leave the content end unreachable.
+    let content_rows = Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .line_count(inner) as u16;
     content_rows.saturating_sub(viewport_height - 2)
 }
 
@@ -629,23 +652,26 @@ impl Component for GitGraph {
                         (area.width, area.x)
                     };
                     let rel = axis_pos.saturating_sub(origin) as f64 / axis.max(1) as f64;
-                    let min_f = 3.0 / axis.max(1) as f64;
+                    // Start from the split already clamped to this axis: the
+                    // stored borders may be infeasible for a small area, and
+                    // clamping `rel` against them could invert (min > max) and
+                    // panic.
+                    let mut split = clamp_detail_split(axis, self.detail_split);
+                    let min_f = detail_min_fraction(axis);
                     match border {
                         0 => {
-                            self.detail_split[0] =
-                                rel.clamp(min_f, self.detail_split[2] - 2.0 * min_f);
+                            split[0] = rel.clamp(min_f, split[1] - min_f);
                         }
                         1 => {
-                            self.detail_split[1] = rel
-                                .clamp(self.detail_split[0] + min_f, self.detail_split[2] - min_f);
+                            split[1] = rel.clamp(split[0] + min_f, split[2] - min_f);
                             self.msg_dragged = true;
                         }
                         2 => {
-                            self.detail_split[2] =
-                                rel.clamp(self.detail_split[0] + 2.0 * min_f, 1.0 - min_f);
+                            split[2] = rel.clamp(split[1] + min_f, 1.0 - min_f);
                         }
                         _ => {}
                     }
+                    self.detail_split = split;
                     Ok(None)
                 } else {
                     Ok(None)
