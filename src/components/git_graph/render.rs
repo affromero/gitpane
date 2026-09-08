@@ -205,7 +205,13 @@ impl GitGraph {
         area: Rect,
         theme: &crate::theme::GraphTheme,
     ) {
-        let title = format!(" Files — {} ", &detail.oid[..7.min(detail.oid.len())]);
+        let mut title = format!(" Files: {} ", &detail.oid[..7.min(detail.oid.len())]);
+        if detail.file_searching || detail.file_filter.is_active() {
+            title.push_str(&format!(" /{}▏ ", detail.file_filter.query()));
+            if detail.file_filter.count() == 0 {
+                title.push_str(" No matches ");
+            }
+        }
         detail.file_list_area = area;
 
         let files_block = Block::default()
@@ -232,13 +238,18 @@ impl GitGraph {
                     "R" => theme.commit_files_status_renamed,
                     _ => theme.commit_files_status_other,
                 };
-                let spans = vec![
-                    Span::styled(
-                        format!(" {} ", status),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(path, Style::default().fg(theme.commit_files_path)),
-                ];
+                let mut spans = vec![Span::styled(
+                    format!(" {} ", status),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )];
+                spans.extend(crate::components::highlight_matches(
+                    path,
+                    detail.file_filter.query(),
+                    Style::default().fg(theme.commit_files_path),
+                    Style::default()
+                        .fg(theme.commit_files_border)
+                        .add_modifier(Modifier::BOLD),
+                ));
                 ListItem::new(Line::from(spans))
             })
             .collect();

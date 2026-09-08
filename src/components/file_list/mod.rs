@@ -75,6 +75,11 @@ impl FileList {
         let prev_selected = self.state.selected();
         let files_changed = !is_same_repo || self.files != files;
 
+        if !is_same_repo {
+            self.searching = false;
+            self.filter.clear();
+        }
+
         self.files = files;
         self.path_strings = self
             .files
@@ -86,6 +91,7 @@ impl FileList {
         self.repo_id = Some(repo_id);
 
         if files_changed {
+            self.diff_generation += 1;
             self.diff_content = None;
             self.diff_scroll = 0;
         }
@@ -101,6 +107,22 @@ impl FileList {
         } else {
             self.state.select(Some(0));
         }
+        self.normalize_search_selection();
+    }
+
+    pub fn search_active(&self) -> bool {
+        self.searching && !self.viewing_diff()
+    }
+
+    fn normalize_search_selection(&mut self) {
+        self.state
+            .select(self.filter.selected_match(self.state.selected()));
+    }
+
+    fn rebuild_search(&mut self) {
+        self.filter.rebuild(&self.path_strings);
+        self.normalize_search_selection();
+        self.diff_generation += 1;
     }
 
     pub fn set_diff(&mut self, content: String) {
@@ -141,20 +163,8 @@ impl FileList {
     /// Move selection to the next/previous matching file (wrapping), matching
     /// the graph search behavior. No-op when nothing matches.
     fn filtered_step(&mut self, delta: isize) {
-        let matches = self.filter.matches();
-        if matches.is_empty() {
-            return;
-        }
-        let pos = self
-            .state
-            .selected()
-            .and_then(|s| self.filter.position_of(s));
-        let next = match pos {
-            Some(p) => ((p as isize + delta).rem_euclid(matches.len() as isize)) as usize,
-            None if delta > 0 => 0,
-            None => matches.len() - 1,
-        };
-        self.state.select(Some(matches[next]));
+        self.state
+            .select(self.filter.step(self.state.selected(), delta));
     }
 
     pub fn viewing_diff(&self) -> bool {
@@ -204,6 +214,9 @@ impl FileList {
 
     fn try_show_diff(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
+        if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+            return None;
+        }
         let repo_id = self.repo_id.clone()?;
         let file = self.files.get(idx)?;
         self.diff_generation += 1;
@@ -484,16 +497,16 @@ impl Component for FileList {
             match key.code {
                 KeyCode::Char(c) => {
                     self.filter.push(c);
-                    self.filter.rebuild(&self.path_strings);
+                    self.rebuild_search();
                 }
                 KeyCode::Backspace => {
                     self.filter.pop();
-                    self.filter.rebuild(&self.path_strings);
+                    self.rebuild_search();
                 }
                 KeyCode::Esc => {
                     self.searching = false;
                     self.filter.clear();
-                    self.filter.rebuild(&self.path_strings);
+                    self.rebuild_search();
                 }
                 KeyCode::Down => self.select_next(),
                 KeyCode::Up => self.select_prev(),
@@ -546,6 +559,9 @@ impl Component for FileList {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.files.len() {
+                            if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+                                return Ok(None);
+                            }
                             // Click on already-selected row opens diff
                             if self.state.selected() == Some(idx) {
                                 return Ok(self.try_show_diff());
@@ -567,6 +583,9 @@ impl Component for FileList {
                     let content_y = click_area.y + 1; // +1 for border
                     if mouse.row >= content_y {
                         let idx = (mouse.row - content_y) as usize + self.state.offset();
+                        if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+                            return Ok(None);
+                        }
                         if let (Some(entry), Some(repo_id)) =
                             (self.files.get(idx), self.repo_id.clone())
                         {

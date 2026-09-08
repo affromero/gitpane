@@ -107,14 +107,32 @@ impl ListFilter {
     /// Position (0-based) of an underlying index within the matches, if it
     /// currently matches.
     pub fn position_of(&self, idx: usize) -> Option<usize> {
-        self.matches.iter().position(|&m| m == idx)
+        self.matches().iter().position(|&m| m == idx)
+    }
+
+    pub fn selected_match(&self, selected: Option<usize>) -> Option<usize> {
+        selected
+            .filter(|&i| self.position_of(i).is_some())
+            .or_else(|| self.visible_at(0))
+    }
+
+    pub fn step(&self, selected: Option<usize>, delta: isize) -> Option<usize> {
+        if self.matches.is_empty() {
+            return None;
+        }
+        let pos = selected.and_then(|i| self.position_of(i));
+        let next = match pos {
+            Some(pos) => (pos as isize + delta).rem_euclid(self.count() as isize) as usize,
+            None if delta > 0 => 0,
+            None => self.count() - 1,
+        };
+        self.visible_at(next)
     }
 }
 
 /// Split `text` into spans with the (first) case-insensitive occurrence of
-/// `query` styled as `match_style` and the rest as `base`. Works on byte
-/// boundaries; for non-ASCII case folding the offsets may drift, in which
-/// case the whole text is returned with the base style.
+/// `query` styled as `match_style` and the rest as `base`. Map lowercase byte
+/// offsets back to the original characters, including expanding case folds.
 pub(crate) fn highlight_matches<'a>(
     text: &'a str,
     query: &str,
@@ -129,7 +147,21 @@ pub(crate) fn highlight_matches<'a>(
     match lower.find(&q) {
         Some(start) => {
             let end = start + q.len();
-            if end <= text.len() && text.is_char_boundary(start) && text.is_char_boundary(end) {
+            let mut folded_offset = 0;
+            let mut original_start = None;
+            let mut original_end = None;
+            for (offset, ch) in text.char_indices() {
+                let next = folded_offset + ch.to_lowercase().map(char::len_utf8).sum::<usize>();
+                if folded_offset <= start && start < next {
+                    original_start = Some(offset);
+                }
+                if folded_offset < end && end <= next {
+                    original_end = Some(offset + ch.len_utf8());
+                    break;
+                }
+                folded_offset = next;
+            }
+            if let (Some(start), Some(end)) = (original_start, original_end) {
                 vec![
                     Span::styled(&text[..start], base),
                     Span::styled(&text[start..end], match_style),
@@ -146,6 +178,21 @@ pub(crate) fn highlight_matches<'a>(
 #[cfg(test)]
 mod list_filter_tests {
     use super::ListFilter;
+
+    #[test]
+    fn highlight_uses_original_offsets_after_expanding_case_fold() {
+        use ratatui::style::{Modifier, Style};
+        let base = Style::default();
+        let marked = base.add_modifier(Modifier::BOLD);
+        let spans = super::highlight_matches("İxx", "x", base, marked);
+        assert_eq!(
+            spans.iter().map(|s| s.content.as_ref()).collect::<String>(),
+            "İxx"
+        );
+        assert_eq!(spans[0].content, "İ");
+        assert_eq!(spans[1].content, "x");
+        assert_eq!(spans[1].style, marked);
+    }
 
     #[test]
     fn matches_are_case_insensitive_substrings() {

@@ -20,6 +20,9 @@ impl Component for GitGraph {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        if self.file_search_active() {
+            return Ok(self.handle_file_search_key(key));
+        }
         // When detail is open, Esc/keys are layered
         if let Some(ref mut detail) = self.commit_detail {
             // The diff pane only takes the keys once it is focused; while it is
@@ -50,6 +53,10 @@ impl Component for GitGraph {
 
             // Viewing commit file list
             match key.code {
+                KeyCode::Char('/') => {
+                    self.start_file_search();
+                    return Ok(None);
+                }
                 KeyCode::Esc => {
                     self.commit_detail = None;
                     if std::mem::take(&mut self.needs_reload) {
@@ -59,26 +66,16 @@ impl Component for GitGraph {
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if !detail.files.is_empty() {
-                        let i = detail
-                            .file_state
-                            .selected()
-                            .map(|i| (i + 1).min(detail.files.len() - 1))
-                            .unwrap_or(0);
-                        detail.file_state.select(Some(i));
+                        detail.step_file(1);
                     }
                     // The Diff pane follows the highlight, after the debounce.
-                    return Ok(self.schedule_commit_diff());
+                    return Ok(self.file_selection_changed());
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if !detail.files.is_empty() {
-                        let i = detail
-                            .file_state
-                            .selected()
-                            .map(|i| i.saturating_sub(1))
-                            .unwrap_or(0);
-                        detail.file_state.select(Some(i));
+                        detail.step_file(-1);
                     }
-                    return Ok(self.schedule_commit_diff());
+                    return Ok(self.file_selection_changed());
                 }
                 KeyCode::Enter => {
                     // Hand the keyboard to the diff so it can be scrolled, and
@@ -217,6 +214,9 @@ impl Component for GitGraph {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + detail.file_state.offset();
                         if idx < detail.files.len() {
+                            if !detail.file_matches(idx) {
+                                return Ok(None);
+                            }
                             // Highlighting a file (mouse or keys) shows its
                             // diff in the Diff pane, and returns the keyboard
                             // to the file list.
@@ -227,7 +227,7 @@ impl Component for GitGraph {
                     }
                 }
                 if file_highlight_moved {
-                    return Ok(self.schedule_commit_diff());
+                    return Ok(self.file_selection_changed());
                 }
 
                 Ok(None)
@@ -291,17 +291,12 @@ impl Component for GitGraph {
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
-                        let i = detail
-                            .file_state
-                            .selected()
-                            .map(|i| i.saturating_sub(1))
-                            .unwrap_or(0);
-                        detail.file_state.select(Some(i));
+                        detail.step_file(-1);
                         file_highlight_moved = true;
                     }
                 }
                 if file_highlight_moved {
-                    return Ok(self.schedule_commit_diff());
+                    return Ok(self.file_selection_changed());
                 }
                 self.select_prev();
                 Ok(None)
@@ -331,17 +326,12 @@ impl Component for GitGraph {
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
-                        let i = detail
-                            .file_state
-                            .selected()
-                            .map(|i| (i + 1).min(detail.files.len() - 1))
-                            .unwrap_or(0);
-                        detail.file_state.select(Some(i));
+                        detail.step_file(1);
                         file_highlight_moved = true;
                     }
                 }
                 if file_highlight_moved {
-                    return Ok(self.schedule_commit_diff());
+                    return Ok(self.file_selection_changed());
                 }
                 self.select_next();
                 Ok(None)

@@ -82,6 +82,25 @@ impl App {
             return Ok(());
         }
 
+        if !self.show_help {
+            let active = match self.focus {
+                FocusPanel::Changes => self.file_list.search_active(),
+                FocusPanel::Graph => self.git_graph.file_search_active(),
+                _ => false,
+            };
+            if active {
+                let action = match self.focus {
+                    FocusPanel::Changes => self.file_list.handle_key_event(key)?,
+                    FocusPanel::Graph => self.git_graph.handle_key_event(key)?,
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    self.action_tx.send(action)?;
+                }
+                return Ok(());
+            }
+        }
+
         // Help overlay: ? toggles, any other key dismisses
         if key.code == KeyCode::Char('?') {
             self.show_help = !self.show_help;

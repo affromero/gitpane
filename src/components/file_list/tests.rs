@@ -291,6 +291,68 @@ mod search_tests {
     }
 
     #[test]
+    fn search_opens_match_without_navigation_and_handles_refresh() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        let repo = RepoId(PathBuf::from("/r"));
+        fl.set_files(vec![entry("main.rs"), entry("lib.rs")], "r", repo.clone());
+        fl.handle_key_event(KeyCode::Char('/').into()).unwrap();
+        for c in "lib".chars() {
+            fl.handle_key_event(KeyCode::Char(c).into()).unwrap();
+        }
+        assert!(
+            matches!(fl.handle_key_event(KeyCode::Enter.into()).unwrap(),
+            Some(Action::ShowDiff(_, p)) if p == std::path::Path::new("lib.rs"))
+        );
+        fl.set_files(vec![entry("main.rs")], "r", repo);
+        assert!(
+            fl.handle_key_event(KeyCode::Enter.into())
+                .unwrap()
+                .is_none()
+        );
+        fl.set_files(
+            vec![entry("other.rs")],
+            "other",
+            RepoId(PathBuf::from("/other")),
+        );
+        assert!(!fl.search_active());
+        assert!(
+            matches!(fl.handle_key_event(KeyCode::Enter.into()).unwrap(),
+            Some(Action::ShowDiff(_, p)) if p == std::path::Path::new("other.rs"))
+        );
+    }
+
+    #[test]
+    fn clicking_nonmatch_does_not_replace_the_search_selection() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.set_files(
+            vec![entry("main.rs"), entry("lib.rs")],
+            "r",
+            RepoId(PathBuf::from("/r")),
+        );
+        fl.handle_key_event(KeyCode::Char('/').into()).unwrap();
+        fl.handle_key_event(KeyCode::Char('l').into()).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        for button in [MouseButton::Left, MouseButton::Right] {
+            assert!(
+                fl.handle_mouse_event(MouseEvent {
+                    kind: MouseEventKind::Down(button),
+                    column: 2,
+                    row: 1,
+                    modifiers: crossterm::event::KeyModifiers::NONE,
+                })
+                .unwrap()
+                .is_none()
+            );
+        }
+        assert!(
+            matches!(fl.handle_key_event(KeyCode::Enter.into()).unwrap(),
+            Some(Action::ShowDiff(_, p)) if p == std::path::Path::new("lib.rs"))
+        );
+    }
+
+    #[test]
     fn filter_jumps_to_matching_file_and_opens_it() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
         fl.set_files(
@@ -318,7 +380,7 @@ mod search_tests {
     }
 
     #[test]
-    fn filter_with_no_matches_keeps_selection() {
+    fn filter_with_no_matches_clears_selection_and_does_not_open_diff() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
         fl.set_files(vec![entry("a.txt")], "r", RepoId(PathBuf::from("/r")));
         fl.handle_key_event(KeyEvent::from(KeyCode::Char('/')))
@@ -329,7 +391,12 @@ mod search_tests {
         }
         assert_eq!(fl.filter.count(), 0);
         fl.select_next();
-        assert_eq!(fl.state.selected(), Some(0));
+        assert!(fl.selected_path().is_none());
+        assert!(
+            fl.handle_key_event(KeyCode::Enter.into())
+                .unwrap()
+                .is_none()
+        );
         // Esc clears the search and restores full navigation
         fl.handle_key_event(KeyEvent::from(KeyCode::Esc)).unwrap();
         assert!(!fl.filter.is_active());

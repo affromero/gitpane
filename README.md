@@ -186,6 +186,11 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 | `k` / `↑` | Previous file |
 | `Enter` | Open split diff view |
 | `Esc` / `h` / `←` | Close diff view |
+| `/` | Search file paths; use arrow keys to move between matches |
+
+While searching files, typed characters update the query, `Enter` opens the
+matching file, and `Esc` clears the query. The file list remains visible with
+matches highlighted. The same controls work in a commit's file list.
 
 ### Graph panel
 
@@ -196,7 +201,7 @@ Bind your own keys to shell commands on top of these, see [Custom keybindings](#
 | `h` / `l` | Scroll graph left / right |
 | `Enter` | Open commit files, then focus the diff to scroll it |
 | `Esc` | Leave diff → close files → back |
-| `/` | Search commits (message, author, short ID) |
+| `/` | Search commits, or file paths when commit files are open |
 | `n` / `N` | Next / previous search match |
 | `f` | Toggle first parent mode |
 | `c` | Collapse / expand branch |
@@ -680,7 +685,7 @@ src/
 ├── components/
 │   ├── mod.rs           # Component trait
 │   ├── repo_list/       # Left panel: repos, status, ◉ live marker
-│   ├── file_list.rs     # Middle panel: changed files + split diff
+│   ├── file_list/       # Middle panel: changed files + split diff
 │   ├── git_graph/       # Right panel: commit graph and drill down
 │   ├── context_menu.rs  # Right click overlay (grouped by topic)
 │   ├── path_input.rs    # Add repo / new worktree input overlay
