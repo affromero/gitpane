@@ -480,8 +480,8 @@ fn mock_graph_row() -> crate::git::graph::GraphRow {
 /// Removing a pinned submodule must not pollute `excluded_repos`: the walk
 /// never rediscovers a repo nested inside another listed repo, and the bare
 /// name would substring-match unrelated paths forever after.
-#[test]
-fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
+#[tokio::test]
+async fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "parent");
     let sub = make_submodule_repo(tmp.path(), "parent", "sub");
@@ -562,8 +562,8 @@ fn confirm_remove_repo_asks_before_removing() {
 /// Removing the repo whose path is the panels' active context (set by "Open
 /// in graph" on a submodule) must drop that context, or the panels keep
 /// rendering a repo that is no longer listed.
-#[test]
-fn removing_the_active_context_repo_clears_active_worktree() {
+#[tokio::test]
+async fn removing_the_active_context_repo_clears_active_worktree() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "parent");
     let sub = make_repo(
@@ -702,8 +702,8 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
 /// A plain repo nested inside another listed repo (real `.git` directory) IS
 /// rediscovered by the walk, so removing it must still exclude it — only
 /// gitlink checkouts skip the exclusion.
-#[test]
-fn removing_a_nested_plain_repo_still_excludes_it() {
+#[tokio::test]
+async fn removing_a_nested_plain_repo_still_excludes_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     make_repo(tmp.path(), "parent");
     let plain = make_repo(

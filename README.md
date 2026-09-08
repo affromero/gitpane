@@ -255,6 +255,8 @@ gitpane resolves its config file in this order (first existing file wins):
 
 If no file is found at any candidate path, gitpane uses the built in defaults (`root_dirs = ["~/Code"]`, `scan_depth = 2`). When saving after loading a file, gitpane writes back to the loaded path. When saving from defaults, it writes to `$GITPANE_CONFIG`, `$XDG_CONFIG_HOME/gitpane/config.toml`, `~/.config/gitpane/config.toml`, or the platform native location, in that order.
 
+Running instances using the same config share repo additions and removals. Visible panes refresh within about a second; sleeping panes refresh when they wake. Each instance keeps its selection and its `--root` or `--cwd` override. Set `[ui] sync_repos = false` to disable live synchronization, or use `gitpane --no-sync-repos` for one pane. An opted-out pane keeps its own repo view while running, but its changes still save to the shared config. Use a separate `GITPANE_CONFIG` file for a separate persistent repo list.
+
 gitpane logs the resolved path at startup (`tracing` info level on stderr).
 
 ```toml
@@ -285,6 +287,7 @@ doze_after_secs = 120         # Input-idle seconds before a visible pane stops p
                               # under tmux Doze; outside tmux this gates everything until input wakes it)
 
 [ui]
+sync_repos = true            # Refresh additions/removals from other running instances
 frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup
 update_position = "top-right" # Update notification position ("top-right" or "top-left")
@@ -294,6 +297,16 @@ expand_worktrees = true      # List each repo's worktrees on startup (`w` toggle
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
 label_max_len = 24       # Max length for branch/tag labels
 show_stats = true        # Show +N/-M diff stats per commit
+
+
+[git2]
+# libgit2 memory bounds (MiB). The library defaults (1 GiB pack window, 8 GiB
+# total mapped, 256 MiB object cache) suit 64-bit servers; on a workspace
+# containing multi-GiB packs they can push resident memory past 2 GiB.
+# 0 restores the libgit2 default for that knob.
+window_size_mib = 16
+window_mapped_limit_mib = 128
+cache_max_size_mib = 32
 
 [github]
 enabled = true           # Show the GitHub issues/PRs panel (via `gh`); opt-out, on by default

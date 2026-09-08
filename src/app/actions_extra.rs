@@ -792,6 +792,7 @@ impl App {
                                 Some((format!("save failed: {e}"), Instant::now()));
                         } else {
                             self.success_message = Some((format!("theme: {name}"), Instant::now()));
+                            self.handle_repo_admin(Action::DiscoverNewRepos)?;
                         }
                     }
                     Err(e) => {

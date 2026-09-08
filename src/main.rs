@@ -39,6 +39,9 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Command>,
+    /// Keep this instance's repo view independent of other running instances
+    #[arg(long)]
+    no_sync_repos: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -113,6 +116,32 @@ fn main() -> Result<()> {
     }
 }
 
+/// Apply the configured libgit2 memory bounds. Each knob is in MiB and `0`
+/// keeps the library default for it (see [`config::Git2Config`]). The window
+/// size is clamped to the mapped limit so a misconfigured value can never
+/// ask libgit2 to map a window it is not allowed to keep.
+fn apply_libgit2_limits(cfg: &config::Git2Config) {
+    unsafe {
+        let limit_bytes = if cfg.window_mapped_limit_mib > 0 {
+            cfg.window_mapped_limit_mib * 1024 * 1024
+        } else {
+            usize::MAX
+        };
+        if cfg.window_size_mib > 0 {
+            let size = (cfg.window_size_mib * 1024 * 1024).min(limit_bytes);
+            let _ = git2::opts::set_mwindow_size(size);
+        }
+        if cfg.window_mapped_limit_mib > 0 {
+            let limit = cfg.window_mapped_limit_mib * 1024 * 1024;
+            let _ = git2::opts::set_mwindow_mapped_limit(limit);
+        }
+        if cfg.cache_max_size_mib > 0 {
+            let size = (cfg.cache_max_size_mib * 1024 * 1024) as isize;
+            let _ = git2::opts::set_cache_max_size(size);
+        }
+    }
+}
+
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -127,7 +156,11 @@ async fn run() -> Result<()> {
     install_tracing()?;
 
     let mut config = config::Config::load()?;
+    config.runtime_no_sync_repos = cli.no_sync_repos;
 
+    // Bound libgit2 before any repository is opened; must run before the
+    // first git2 call (status polls, graph builds).
+    apply_libgit2_limits(&config.git2);
     if let Some(root) = cli.root {
         config.override_root(root);
     }
@@ -298,6 +331,14 @@ mod tests {
     fn cwd_is_optional() {
         let cli = Cli::try_parse_from(["gitpane"]).unwrap();
         assert!(!cli.cwd);
+    }
+
+    #[test]
+    fn repo_sync_can_be_disabled_for_one_pane() {
+        assert!(!Cli::try_parse_from(["gitpane"]).unwrap().no_sync_repos);
+        let cli = Cli::try_parse_from(["gitpane", "--no-sync-repos", "--cwd"]).unwrap();
+        assert!(cli.no_sync_repos);
+        assert!(cli.cwd);
     }
 
     #[test]

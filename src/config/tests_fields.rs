@@ -8,6 +8,18 @@ use std::{
 };
 
 #[test]
+fn repo_sync_defaults_on_and_can_be_disabled_without_persisting_cli_override() {
+    let mut config: Config = toml::from_str("[ui]\nframe_rate = 30\n").unwrap();
+    assert!(config.sync_repos_enabled());
+    config.runtime_no_sync_repos = true;
+    assert!(!config.sync_repos_enabled());
+    let loaded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    assert!(loaded.sync_repos_enabled());
+    let disabled: Config = toml::from_str("[ui]\nsync_repos = false\n").unwrap();
+    assert!(!disabled.sync_repos_enabled());
+}
+
+#[test]
 fn test_default_config_has_code_root() {
     let config = Config::default();
     assert!(!config.root_dirs.is_empty());
@@ -128,6 +140,27 @@ fn test_show_stats_roundtrip() {
     let serialized = toml::to_string_pretty(&config).unwrap();
     let loaded: Config = toml::from_str(&serialized).unwrap();
     assert!(!loaded.graph.show_stats);
+}
+
+#[test]
+fn test_git2_limits_defaults() {
+    let config: Config = toml::from_str("").unwrap();
+    assert_eq!(config.git2.window_size_mib, 16);
+    assert_eq!(config.git2.window_mapped_limit_mib, 128);
+    assert_eq!(config.git2.cache_max_size_mib, 32);
+}
+
+#[test]
+fn test_git2_limits_roundtrip_and_zero_means_default() {
+    let mut config = Config::default();
+    config.git2.window_size_mib = 0;
+    config.git2.window_mapped_limit_mib = 256;
+    config.git2.cache_max_size_mib = 64;
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(loaded.git2.window_size_mib, 0);
+    assert_eq!(loaded.git2.window_mapped_limit_mib, 256);
+    assert_eq!(loaded.git2.cache_max_size_mib, 64);
 }
 
 #[test]
