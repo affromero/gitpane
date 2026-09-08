@@ -20,6 +20,16 @@ pub(super) fn collect_change_summary(
     recurse_untracked_dirs: bool,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<ChangeSummary> {
+    if repo.is_bare() {
+        return Ok(ChangeSummary {
+            files: Vec::new(),
+            is_dirty: false,
+            has_submodules: false,
+            submodules: Vec::new(),
+            has_dirty_submodules: false,
+            has_unpushed_submodules: false,
+        });
+    }
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(recurse_untracked_dirs)
@@ -34,7 +44,15 @@ pub(super) fn collect_change_summary(
 
     for entry in statuses.iter() {
         let s = entry.status();
-        let file_path = PathBuf::from(entry.path().unwrap_or(""));
+        let file_path = entry
+            .index_to_workdir()
+            .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            .or_else(|| {
+                entry
+                    .head_to_index()
+                    .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("Git status entry has no path"))?;
 
         let file_status = if s.is_conflicted() {
             FileStatus::Conflicted
@@ -48,7 +66,11 @@ pub(super) fn collect_change_summary(
             FileStatus::Deleted
         } else if s.is_index_renamed() || s.is_wt_renamed() {
             FileStatus::Renamed
-        } else if s.is_index_modified() || s.is_wt_modified() {
+        } else if s.is_index_modified()
+            || s.is_wt_modified()
+            || s.is_index_typechange()
+            || s.is_wt_typechange()
+        {
             FileStatus::Modified
         } else {
             continue;

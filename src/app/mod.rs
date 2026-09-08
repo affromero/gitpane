@@ -282,6 +282,7 @@ struct ActiveWorktree {
 /// can be resumed with the chosen placement.
 struct PendingLaunch {
     dir: std::path::PathBuf,
+    target: std::path::PathBuf,
     command: Option<String>,
     base: Option<String>,
     label: &'static str,

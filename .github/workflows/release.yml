@@ -11,8 +11,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate tag, Cargo versions, and release notes
+        # Ubuntu provides Python 3.11+ for the stdlib tomllib parser.
+        run: python3 scripts/release_metadata.py --tag "$GITHUB_REF_NAME"
+
   build:
     name: Build (${{ matrix.target }})
+    needs: validate
     strategy:
       matrix:
         include:
@@ -62,7 +74,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
@@ -98,28 +110,14 @@ jobs:
           merge-multiple: true
 
       - name: Extract CHANGELOG for this tag
-        id: changelog
+        # This job also runs on Ubuntu with Python 3.11+.
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" { flag=1; print; next }
-            flag && /^## \[/ { exit }
-            flag { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "No CHANGELOG section for $VERSION; falling back to a stub." >&2
-            echo "## ${VERSION}" > release-notes.md
-            echo "" >> release-notes.md
-            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) for details." >> release-notes.md
-          else
-            echo "" >> release-notes.md
-            echo "---" >> release-notes.md
-            echo "" >> release-notes.md
-            echo "Full changelog: https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md" >> release-notes.md
-          fi
-          echo "----- release body -----"
+          python3 scripts/release_metadata.py --tag "$GITHUB_REF_NAME" --notes release-notes.md
+          echo "" >> release-notes.md
+          echo "---" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "Full changelog: https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md" >> release-notes.md
           cat release-notes.md
-          echo "------------------------"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v3.0.2
@@ -149,7 +147,7 @@ jobs:
         # non-error; real failures (e.g. 403 auth) must fail the job.
         run: |
           set +e
-          cargo publish 2>&1 | tee "$RUNNER_TEMP/publish.log"
+          cargo publish --locked 2>&1 | tee "$RUNNER_TEMP/publish.log"
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -eq 0 ]; then

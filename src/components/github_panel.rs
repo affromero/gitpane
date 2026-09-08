@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::action::Action;
 use crate::components::Component;
 use crate::git::github::{CheckState, GhItem, ItemDetail};
+use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
 /// One selectable row: either an issue or a pull request.
@@ -41,6 +42,7 @@ pub(crate) struct GithubPanel {
     pr_count: usize,
     state: ListState,
     repo_name: String,
+    repo_id: Option<RepoId>,
     /// Filter label shown in the title ("open" / "all" / "closed").
     state_label: String,
     status: PanelStatus,
@@ -70,6 +72,7 @@ impl GithubPanel {
             pr_count: 0,
             state: ListState::default(),
             repo_name: String::new(),
+            repo_id: None,
             state_label: "open".to_string(),
             status: PanelStatus::Loading,
             focused: false,
@@ -90,6 +93,24 @@ impl GithubPanel {
         self.theme = theme;
     }
 
+    pub fn set_target(&mut self, repo_id: Option<RepoId>, repo_name: &str, state_label: &str) {
+        if self.repo_id != repo_id || self.state_label != state_label {
+            self.clear_content();
+            self.status = PanelStatus::Loading;
+        }
+        self.repo_id = repo_id;
+        self.repo_name = repo_name.to_string();
+        self.state_label = state_label.to_string();
+    }
+
+    fn clear_content(&mut self) {
+        self.rows.clear();
+        self.issue_count = 0;
+        self.pr_count = 0;
+        self.state.select(None);
+        self.close_detail();
+    }
+
     /// Replace the panel's data. Selection is preserved when the repo is
     /// unchanged (a refetch of the same repo), reset to the top otherwise.
     pub fn set_data(
@@ -101,6 +122,7 @@ impl GithubPanel {
     ) {
         let same_repo = self.repo_name == repo_name;
         let prev = self.state.selected();
+        self.reset_if_new(repo_name);
         self.state_label = state_label.to_string();
         self.issue_count = issues.len();
         self.pr_count = prs.len();
@@ -129,11 +151,13 @@ impl GithubPanel {
 
     pub fn set_not_github(&mut self, repo_name: &str) {
         self.reset_if_new(repo_name);
+        self.clear_content();
         self.status = PanelStatus::NotGithub;
     }
 
     pub fn set_error(&mut self, repo_name: &str, message: String) {
         self.reset_if_new(repo_name);
+        self.clear_content();
         self.status = PanelStatus::Error(message);
     }
 
@@ -142,11 +166,7 @@ impl GithubPanel {
     /// flicker while new data loads.
     fn reset_if_new(&mut self, repo_name: &str) {
         if self.repo_name != repo_name {
-            self.rows.clear();
-            self.issue_count = 0;
-            self.pr_count = 0;
-            self.state.select(None);
-            self.close_detail();
+            self.clear_content();
         }
         self.repo_name = repo_name.to_string();
     }
@@ -165,6 +185,7 @@ impl GithubPanel {
 
     /// Close the detail pane and reset its scroll.
     pub fn close_detail(&mut self) {
+        self.detail_generation = self.detail_generation.wrapping_add(1);
         self.detail = None;
         self.detail_loading = false;
         self.detail_error = None;
@@ -318,7 +339,7 @@ impl GithubPanel {
                 PanelStatus::Loading => "Loading\u{2026}",
                 PanelStatus::NotGithub => "No github.com remote",
                 PanelStatus::Error(e) => e.as_str(),
-                PanelStatus::Ready => "No open issues or PRs",
+                PanelStatus::Ready => "No matching issues or PRs",
             };
             let paragraph = Paragraph::new(msg)
                 .style(Style::default().fg(f.empty_text))
@@ -690,6 +711,85 @@ mod tests {
 
         p.close_detail();
         assert!(!p.has_detail(), "closing clears the pane");
+    }
+
+    #[test]
+    fn closing_detail_rejects_its_pending_response() {
+        let mut p = panel();
+        p.set_data(vec![item(1)], vec![], "repo", "open");
+        let Some(Action::ShowGithubItem { generation, .. }) =
+            p.handle_key_event(KeyCode::Enter.into()).unwrap()
+        else {
+            panic!("expected a detail request")
+        };
+        p.handle_key_event(KeyCode::Esc.into()).unwrap();
+        p.set_detail(generation, Ok(detail(1)));
+        assert!(!p.has_detail(), "late response reopened the closed detail");
+    }
+
+    #[test]
+    fn switching_to_cached_repo_clears_previous_detail() {
+        let mut p = panel();
+        p.set_data(vec![item(1)], vec![], "first", "open");
+        let Some(Action::ShowGithubItem { generation, .. }) =
+            p.handle_key_event(KeyCode::Enter.into()).unwrap()
+        else {
+            panic!("expected a detail request")
+        };
+        p.set_detail(generation, Ok(detail(1)));
+        p.set_data(vec![item(2)], vec![], "second", "open");
+        assert!(!p.has_detail(), "new repo retained previous detail");
+        assert!(p.selected_url().unwrap().ends_with("/2"));
+    }
+
+    #[test]
+    fn repositories_with_same_name_reject_previous_detail_responses() {
+        let mut p = panel();
+        p.set_target(Some(RepoId("/first/repo".into())), "repo", "open");
+        p.set_data(vec![item(1)], vec![], "repo", "open");
+        let Some(Action::ShowGithubItem { generation, .. }) =
+            p.handle_key_event(KeyCode::Enter.into()).unwrap()
+        else {
+            panic!("expected a detail request")
+        };
+        p.set_target(Some(RepoId("/second/repo".into())), "repo", "open");
+        p.set_data(vec![item(2)], vec![], "repo", "open");
+        p.set_detail(generation, Ok(detail(1)));
+        assert!(!p.has_detail());
+        assert!(p.selected_url().unwrap().ends_with("/2"));
+    }
+
+    #[test]
+    fn changing_filter_clears_rows_until_matching_results_arrive() {
+        let mut p = panel();
+        let id = Some(RepoId("/repo".into()));
+        p.set_target(id.clone(), "repo", "open");
+        p.set_data(vec![item(1)], vec![], "repo", "open");
+        p.set_target(id, "repo", "closed");
+        p.set_loading("repo");
+        assert!(p.selected_url().is_none());
+        assert!(p.handle_key_event(KeyCode::Enter.into()).unwrap().is_none());
+        p.set_data(vec![item(2)], vec![], "repo", "closed");
+        assert!(p.selected_url().unwrap().ends_with("/2"));
+    }
+
+    #[test]
+    fn failed_refresh_surfaces_error_and_disables_old_rows() {
+        let mut p = panel();
+        p.set_data(vec![item(1)], vec![], "repo", "open");
+        p.set_error("repo", "Authentication failed".into());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| p.draw(f, f.area()).unwrap()).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Authentication failed"));
+        assert!(p.selected_url().is_none());
     }
 
     #[test]

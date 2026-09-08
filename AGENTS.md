@@ -81,7 +81,7 @@ map in [README.md#architecture](README.md#architecture). Key areas:
 - Test behavior and outcomes, not internals, and put tests next to the code they
   cover.
 - Prefer a pure, testable core: a function returns a plan or value, and a thin
-  caller performs the I/O (see `src/session/launcher.rs`).
+  caller performs the I/O (see `src/session/launcher/mod.rs`).
 - Validate or quote any user input that reaches a shell. argv launches avoid the
   shell entirely; `sh -c` paths quote every substituted value.
 

@@ -99,12 +99,12 @@ impl App {
                         let root = root.canonicalize().unwrap_or_else(|_| root.clone());
                         entry.path.starts_with(&root)
                     });
-                    let name = entry.name.clone();
+                    let exclusion = format!("path:{}", entry.path.display());
                     if under_root
                         && entry.path.join(".git").is_dir()
-                        && !config.excluded_repos.contains(&name)
+                        && !config.excluded_repos.contains(&exclusion)
                     {
-                        config.excluded_repos.push(name);
+                        config.excluded_repos.push(exclusion);
                     }
                     if let Err(e) = config.save() {
                         self.error_message = Some((format!("save failed: {e}"), Instant::now()));
@@ -128,6 +128,7 @@ impl App {
                         self.active_worktree = None;
                     }
                     self.repo_list.repos.remove(idx);
+                    self.prune_github_cache(std::slice::from_ref(&id.0));
                     // Fix selection
                     if self.repo_list.repos.is_empty() {
                         self.repo_list.state.select(None);

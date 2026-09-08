@@ -20,6 +20,8 @@ mod component;
 #[cfg(test)]
 mod detail_review_tests;
 mod file_search;
+#[cfg(test)]
+mod regression_tests;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -150,6 +152,9 @@ pub(crate) struct GitGraph {
     needs_reload: bool,
     /// True while a graph rebuild is running for the current repo.
     load_in_flight: bool,
+    /// Options captured by the current background build, independent of edits
+    /// made in the filter picker while its result is pending.
+    in_flight_key: Option<GraphCacheKey>,
     /// Consecutive aborted (panicked) builds since the last successful load.
     /// Bounds the auto-retry so a deterministically-panicking build can't
     /// replay forever under a watcher event storm.
@@ -214,6 +219,7 @@ impl GitGraph {
             horizontal_layout: false,
             needs_reload: false,
             load_in_flight: false,
+            in_flight_key: None,
             consecutive_aborts: 0,
             load_generation: 0,
             detail_generation: 0,
@@ -265,6 +271,7 @@ impl GitGraph {
         // previous repo, exactly as a fresh spawn would.
         if !force && let Some(cached) = self.graph_cache.get(&self.cache_key(&path)) {
             self.load_generation += 1;
+            self.in_flight_key = None;
             if !is_same_repo {
                 self.reset_view_state();
             }
@@ -287,6 +294,7 @@ impl GitGraph {
         let tx = tx.clone();
         let options = self.graph_options.clone();
         self.load_in_flight = true;
+        self.in_flight_key = Some(self.cache_key(&path));
         self.load_generation += 1;
         let load_gen = self.load_generation;
 
@@ -344,7 +352,7 @@ impl GitGraph {
     /// the cache-hit restore path, so both behave identically.
     fn reset_view_state(&mut self) {
         self.state.select(None);
-        self.commit_detail = None;
+        self.close_detail();
         self.needs_reload = false;
         self.consecutive_aborts = 0;
         self.search.clear();
@@ -392,11 +400,25 @@ impl GitGraph {
         self.error = Some(msg);
         self.loading = false;
         self.load_in_flight = false;
+        self.in_flight_key = None;
+        self.reload_pending();
     }
 
     pub fn set_rows(&mut self, mut rows: Vec<GraphRow>) {
+        if let Some(key) = self.in_flight_key.take()
+            && key != self.cache_key(&key.path)
+        {
+            self.load_in_flight = false;
+            self.needs_reload = false;
+            self.force_reload_repo(key.path, &self.repo_name.clone());
+            return;
+        }
         // Preserve selection position on refresh if possible
         let prev_selected = self.state.selected();
+        let selected_oid = self
+            .display_rows()
+            .get(prev_selected.unwrap_or(0))
+            .map(|row| row.oid);
         // Carry forward diff_stats from previous all_rows to avoid blink on refresh
         if !self.all_rows.is_empty() {
             let old_stats: std::collections::HashMap<git2::Oid, crate::git::graph::DiffStat> = self
@@ -439,16 +461,9 @@ impl GitGraph {
                 },
             );
         }
-        if !self.display_rows().is_empty() {
-            let idx = prev_selected
-                .map(|i| i.min(self.display_rows().len() - 1))
-                .unwrap_or(0);
-            self.state.select(Some(idx));
-        }
+        self.restore_selection(selected_oid, prev_selected);
 
-        if std::mem::take(&mut self.needs_reload) {
-            self.reload_graph();
-        }
+        self.reload_pending();
     }
 
     pub fn set_filter_branches(&mut self, branches: Vec<String>) {
@@ -514,6 +529,12 @@ impl GitGraph {
         self.commit_detail.is_some()
     }
 
+    pub(crate) fn close_detail(&mut self) {
+        self.commit_detail = None;
+        self.detail_generation = self.detail_generation.wrapping_add(1);
+        self.diff_select_generation = self.diff_select_generation.wrapping_add(1);
+    }
+
     pub fn set_needs_reload(&mut self) {
         self.needs_reload = true;
     }
@@ -533,6 +554,7 @@ impl GitGraph {
             return;
         }
         self.load_in_flight = false;
+        self.in_flight_key = None;
         self.loading = false;
         self.consecutive_aborts = self.consecutive_aborts.saturating_add(1);
 
@@ -544,9 +566,7 @@ impl GitGraph {
             return;
         }
 
-        if std::mem::take(&mut self.needs_reload) {
-            self.reload_graph();
-        }
+        self.reload_pending();
     }
 
     pub fn current_generation(&self) -> u64 {
@@ -683,6 +703,14 @@ impl GitGraph {
         }
     }
 
+    fn reload_pending(&mut self) {
+        if std::mem::take(&mut self.needs_reload)
+            && let Some(path) = self.repo_path.clone()
+        {
+            self.force_reload_repo(path, &self.repo_name.clone());
+        }
+    }
+
     /// Recompute segments and row_to_segment mapping from all_rows.
     fn recompute_segments(&mut self) {
         self.segments = crate::git::graph::compute_branch_segments(&self.all_rows);
@@ -707,8 +735,13 @@ impl GitGraph {
 
     /// Recompute `self.rows` from `self.all_rows`, collapsing groups.
     fn recompute_collapsed_rows(&mut self) {
+        let selected = self.state.selected();
+        let selected_oid = selected
+            .and_then(|i| self.display_rows().get(i))
+            .map(|row| row.oid);
         if self.collapsed_branches.is_empty() {
             self.rows.clear();
+            self.restore_selection(selected_oid, selected);
             return;
         }
 
@@ -754,6 +787,21 @@ impl GitGraph {
         }
 
         self.rows = rows;
+        self.restore_selection(selected_oid, selected);
+    }
+
+    fn restore_selection(&mut self, oid: Option<git2::Oid>, previous: Option<usize>) {
+        let rows = self.display_rows();
+        let selected = oid
+            .and_then(|oid| rows.iter().position(|row| row.oid == oid))
+            .or_else(|| (!rows.is_empty()).then(|| previous.unwrap_or(0).min(rows.len() - 1)));
+        self.state.select(selected);
+        self.update_search_matches();
+        if let Some(position) =
+            selected.and_then(|i| self.search.matches.iter().position(|&m| m == i))
+        {
+            self.search.current_match = Some(position);
+        }
     }
 
     pub fn selected_text(&self) -> Option<String> {

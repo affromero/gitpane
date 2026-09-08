@@ -70,7 +70,7 @@ mod tests {
             .unwrap();
         second.handle_event(Event::FocusGained).unwrap();
         assert!(second.repo_list.repos.is_empty());
-        assert!(second.config.excluded_repos.contains(&"repo".to_string()));
+        assert!(crate::git::scanner::discover_repos(&second.config).is_empty());
     }
 
     #[tokio::test]

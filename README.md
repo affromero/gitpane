@@ -274,7 +274,7 @@ scan_depth = 2
 # Always show these repos at the top
 pinned_repos = ["~/Code/important-project"]
 
-# Skip repos matching these directory names
+# Skip matching path substrings. Use "path:/absolute/repo" for one exact repo.
 excluded_repos = ["node_modules", ".cargo", "target"]
 
 [watch]

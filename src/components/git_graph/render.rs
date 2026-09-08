@@ -22,7 +22,7 @@ impl GitGraph {
         // Feasible integer boundary positions for this axis (short axes leave
         // no room between the stored 0.40/0.65 borders, so clamp in cells).
         let [b0, b1, b2] = detail_cell_bounds(axis, self.detail_split);
-        if !self.msg_dragged {
+        if self.horizontal_layout && !self.msg_dragged {
             let line_count = detail.message.lines().count().max(1) as u16;
             let want = msg_auto_cells(line_count, axis);
             let min_cells = detail_min_cells(axis);

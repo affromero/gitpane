@@ -58,10 +58,8 @@ impl Component for GitGraph {
                     return Ok(None);
                 }
                 KeyCode::Esc => {
-                    self.commit_detail = None;
-                    if std::mem::take(&mut self.needs_reload) {
-                        self.reload_graph();
-                    }
+                    self.close_detail();
+                    self.reload_pending();
                     return Ok(None);
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -89,6 +87,10 @@ impl Component for GitGraph {
 
         // No detail open — normal graph navigation
         match key.code {
+            KeyCode::Esc => {
+                self.close_detail();
+                Ok(None)
+            }
             KeyCode::Char('n') => {
                 self.search_next();
                 Ok(None)
@@ -181,9 +183,7 @@ impl Component for GitGraph {
                             }
                             self.state.select(Some(idx));
                             self.commit_detail = None;
-                            if std::mem::take(&mut self.needs_reload) {
-                                self.reload_graph();
-                            }
+                            self.reload_pending();
                             // A single click selects the commit and opens its
                             // changed files (and, via CommitFilesLoaded, the
                             // highlighted file's diff), so no second click is

@@ -53,7 +53,7 @@ pub(crate) fn commit_file_diff(
     let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
 
     let mut opts = DiffOptions::new();
-    opts.pathspec(file_path);
+    opts.pathspec(file_path).disable_pathspec_match(true);
 
     let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut opts))?;
 

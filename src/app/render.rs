@@ -1,6 +1,43 @@
 use super::*;
 
 impl App {
+    pub(super) fn normalize_panel_borders(&mut self, axis: u16, show_github: bool) {
+        if axis == 0 {
+            return;
+        }
+        let panels = if show_github { 4 } else { 3 };
+        let gap = 3.min(axis / panels);
+        let mut previous = 0;
+        for index in 0..panels - 1 {
+            let upper = axis - gap * (panels - index - 1);
+            let cell = ((self.border_frac[index as usize] * f64::from(axis)).round() as u16)
+                .clamp(previous + gap, upper);
+            self.border_frac[index as usize] = f64::from(cell) / f64::from(axis);
+            previous = cell;
+        }
+    }
+
+    pub(super) fn resize_panel_border(&mut self, axis: u16, position: u16, index: u8) {
+        if axis == 0 {
+            return;
+        }
+        self.normalize_panel_borders(axis, self.github_visible);
+        let panels = if self.github_visible { 4 } else { 3 };
+        let index = usize::from(index);
+        if index >= panels - 1 {
+            return;
+        }
+        let gap = 3.min(axis / panels as u16);
+        let cell = |i: usize| (self.border_frac[i] * f64::from(axis)).round() as u16;
+        let lower = if index == 0 { 0 } else { cell(index - 1) } + gap;
+        let upper = if index == panels - 2 {
+            axis
+        } else {
+            cell(index + 1)
+        } - gap;
+        self.border_frac[index] = f64::from(position.clamp(lower, upper)) / f64::from(axis);
+    }
+
     pub(super) fn clear_expired_messages(&mut self) -> bool {
         let had_error = self.error_message.is_some();
         let had_success = self.success_message.is_some();
@@ -40,19 +77,12 @@ impl App {
             self.focus = FocusPanel::Graph;
         }
 
-        // Keep the graph/github split right of the changes/graph split so the
-        // panel never inverts if the first two borders were dragged while the
-        // GitHub panel was hidden.
-        if show_github {
-            let axis = if self.horizontal_layout {
-                main_area.width
-            } else {
-                main_area.height
-            };
-            let min_gap = 3.0 / (axis.max(1) as f64);
-            self.border_frac[2] =
-                self.border_frac[2].clamp(self.border_frac[1] + min_gap, 1.0 - min_gap);
-        }
+        let axis = if self.horizontal_layout {
+            main_area.width
+        } else {
+            main_area.height
+        };
+        self.normalize_panel_borders(axis, show_github);
 
         let (repo_area, changes_area, graph_area, github_area) = if self.horizontal_layout {
             let w = main_area.width as f64;

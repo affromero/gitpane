@@ -191,20 +191,15 @@ impl App {
             | Action::UnstageFile(ref id, ref path)
             | Action::DiscardFileConfirmed(ref id, ref path, _) => {
                 if let Some(dir) = self.file_op_dir(id) {
-                    let mut args: Vec<String> = match action {
-                        Action::StageFile(..) => vec!["add".into(), "-A".into()],
-                        Action::UnstageFile(..) => vec!["reset".into(), "-q".into()],
-                        Action::DiscardFileConfirmed(_, _, true) => {
-                            vec!["clean".into(), "-fdq".into()]
-                        }
-                        Action::DiscardFileConfirmed(_, _, false) => {
-                            vec!["restore".into(), "--staged".into(), "--worktree".into()]
-                        }
+                    use crate::git::file_ops::FileOperation;
+                    let operation = match action {
+                        Action::StageFile(..) => FileOperation::Stage,
+                        Action::UnstageFile(..) => FileOperation::Unstage,
+                        Action::DiscardFileConfirmed(_, _, true) => FileOperation::DeleteUntracked,
+                        Action::DiscardFileConfirmed(_, _, false) => FileOperation::Discard,
                         _ => unreachable!(),
                     };
-                    args.push("--".into());
-                    args.push(path.to_string_lossy().into_owned());
-                    self.spawn_git_op_in(dir, id.clone(), args);
+                    self.spawn_file_op(dir, id.clone(), path.clone(), operation);
                 }
             }
             Action::CopyFilePath(ref id, ref path) => {
@@ -551,50 +546,12 @@ impl App {
                         let fp = file_path.clone();
                         let tx = self.action_tx.clone();
                         tokio::task::spawn_blocking(move || {
-                            let output = std::process::Command::new("git")
-                                .arg("-C")
-                                .arg(&path)
-                                .arg("diff")
-                                .arg("HEAD")
-                                .arg("--")
-                                .arg(&fp)
-                                .output();
-                            match output {
-                                Ok(o) => {
-                                    let mut text = String::from_utf8_lossy(&o.stdout).to_string();
-                                    if text.is_empty() {
-                                        text = String::from_utf8_lossy(&{
-                                            std::process::Command::new("git")
-                                                .arg("-C")
-                                                .arg(&path)
-                                                .arg("diff")
-                                                .arg("--no-index")
-                                                .arg("/dev/null")
-                                                .arg(&fp)
-                                                .output()
-                                                .map(|o| o.stdout)
-                                                .unwrap_or_default()
-                                        })
-                                        .to_string();
-                                    }
-                                    if text.is_empty() {
-                                        text = "(no diff available)".to_string();
-                                    }
-                                    let _ = tx.send(Action::DiffLoaded {
-                                        generation: diff_gen,
-                                        content: text,
-                                    });
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(Action::DiffLoaded {
-                                        generation: diff_gen,
-                                        content: format!(
-                                            "Failed to get diff: {}",
-                                            crate::git::describe_spawn_error(&e)
-                                        ),
-                                    });
-                                }
-                            }
+                            let content = crate::git::file_ops::diff(&path, &fp)
+                                .unwrap_or_else(|error| format!("Failed to get diff: {error}"));
+                            let _ = tx.send(Action::DiffLoaded {
+                                generation: diff_gen,
+                                content,
+                            });
                         });
                     }
                 }
@@ -744,8 +701,8 @@ impl App {
                     .chars()
                     .map(|c| if c == '\n' { ' ' } else { c })
                     .collect();
-                let truncated = if clean.len() > 120 {
-                    format!("{}...", &clean[..117])
+                let truncated = if clean.chars().count() > 120 {
+                    format!("{}...", clean.chars().take(117).collect::<String>())
                 } else {
                     clean
                 };
