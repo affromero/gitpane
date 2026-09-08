@@ -2,6 +2,193 @@ use super::*;
 use crate::git::status::StashEntry;
 use std::path::Path;
 
+mod file_search_input {
+    use super::*;
+    use crate::git::status::{FileEntry, FileStatus, SubmoduleWarn};
+    use crossterm::event::KeyEvent;
+
+    fn file(path: &str) -> FileEntry {
+        FileEntry {
+            path: path.into(),
+            status: FileStatus::Modified,
+            staged: false,
+            unstaged: true,
+            is_submodule: false,
+            submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
+        }
+    }
+
+    #[test]
+    fn search_consumes_shortcuts_and_escape_in_both_file_panels() {
+        for focus in [FocusPanel::Changes, FocusPanel::Graph] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = make_repo(tmp.path(), "repo");
+            let config = Config {
+                root_dirs: vec![tmp.path().to_path_buf()],
+                write_target_override: Some(tmp.path().join("config.toml")),
+                ..Config::default()
+            };
+            let mut app = App::new(config);
+            app.focus = focus;
+            let query = "qprtRasgyo?v";
+            app.file_list
+                .set_files(vec![file("other"), file(query)], "repo", RepoId(repo));
+            assert!(
+                app.git_graph
+                    .set_commit_files(
+                        "abc1234".into(),
+                        "subject".into(),
+                        vec![("M".into(), "other".into()), ("M".into(), query.into())]
+                    )
+                    .is_none()
+            );
+            drain_actions(&mut app);
+            app.handle_key_event(KeyCode::Char('/').into()).unwrap();
+            for c in query.chars() {
+                app.handle_key_event(KeyCode::Char(c).into()).unwrap();
+            }
+            let actions = drain_actions(&mut app);
+            assert!(
+                actions
+                    .iter()
+                    .all(|a| matches!(a, Action::ScheduleCommitDiff { .. })),
+                "search dispatched global actions: {actions:?}"
+            );
+            assert!(!app.show_help);
+            if focus == FocusPanel::Changes {
+                app.handle_key_event(KeyCode::Enter.into()).unwrap();
+                assert!(drain_actions(&mut app).iter().any(|a| matches!(a,
+                    Action::ShowDiff(_, path) if path == Path::new(query))));
+            }
+            app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+                .unwrap();
+            assert!(
+                drain_actions(&mut app)
+                    .iter()
+                    .any(|a| matches!(a, Action::Quit))
+            );
+            app.handle_key_event(KeyCode::Esc.into()).unwrap();
+            assert_eq!(app.focus, focus);
+            assert!(app.git_graph.has_detail());
+            assert!(!app.file_list.search_active());
+            assert!(!app.git_graph.file_search_active());
+        }
+    }
+
+    #[test]
+    fn unmatched_search_rejects_a_late_commit_diff() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(Config {
+            root_dirs: vec![tmp.path().to_path_buf()],
+            write_target_override: Some(tmp.path().join("config.toml")),
+            ..Config::default()
+        });
+        app.focus = FocusPanel::Graph;
+        assert!(
+            app.git_graph
+                .set_commit_files(
+                    "abc1234".into(),
+                    "subject".into(),
+                    vec![("M".into(), "main.rs".into())]
+                )
+                .is_none()
+        );
+        let generation = app.git_graph.current_detail_generation();
+        app.git_graph.set_commit_diff("OLD_PREVIEW".into());
+        app.handle_key_event(KeyCode::Char('/').into()).unwrap();
+        app.handle_key_event(KeyCode::Char('z').into()).unwrap();
+        app.handle_action_rest(Action::CommitDiffLoaded {
+            generation,
+            content: "LATE_PREVIEW".into(),
+        })
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|f| app.git_graph.draw(f, f.area()).unwrap())
+            .unwrap();
+        let output: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!output.contains("OLD_PREVIEW"));
+        assert!(!output.contains("LATE_PREVIEW"));
+        assert!(output.contains("No matches"));
+    }
+
+    #[test]
+    fn search_wheel_rejects_diff_from_previous_matching_file() {
+        use crossterm::event::{MouseEvent, MouseEventKind};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(Config {
+            root_dirs: vec![tmp.path().to_path_buf()],
+            write_target_override: Some(tmp.path().join("config.toml")),
+            ..Config::default()
+        });
+        app.focus = FocusPanel::Graph;
+        app.git_graph.horizontal_layout = true;
+        assert!(
+            app.git_graph
+                .set_commit_files(
+                    "abc1234".into(),
+                    "subject".into(),
+                    vec![
+                        ("M".into(), "lib.rs".into()),
+                        ("M".into(), "library.rs".into())
+                    ]
+                )
+                .is_none()
+        );
+        app.handle_key_event(KeyCode::Char('/').into()).unwrap();
+        app.handle_key_event(KeyCode::Char('l').into()).unwrap();
+        let generation = app.git_graph.current_detail_generation();
+        app.git_graph.set_commit_diff("OLD_PREVIEW".into());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 60)).unwrap();
+        terminal
+            .draw(|f| app.git_graph.draw(f, f.area()).unwrap())
+            .unwrap();
+        let row = (0..60)
+            .find(|&row| {
+                let text: String = (0..100)
+                    .map(|col| terminal.backend().buffer()[(col, row)].symbol())
+                    .collect();
+                text.contains("Files:")
+            })
+            .expect("file pane header visible");
+        app.git_graph
+            .handle_mouse_event(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 1,
+                row: row + 1,
+                modifiers: KeyModifiers::NONE,
+            })
+            .unwrap();
+        app.handle_action_rest(Action::CommitDiffLoaded {
+            generation,
+            content: "LATE_PREVIEW".into(),
+        })
+        .unwrap();
+        terminal
+            .draw(|f| app.git_graph.draw(f, f.area()).unwrap())
+            .unwrap();
+        let output: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!output.contains("OLD_PREVIEW"));
+        assert!(!output.contains("LATE_PREVIEW"));
+    }
+}
+
 #[test]
 fn refresh_decision_runs_without_previous_refresh() {
     let now = Instant::now();

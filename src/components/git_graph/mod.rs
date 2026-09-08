@@ -19,6 +19,8 @@ use cache::{
 mod component;
 #[cfg(test)]
 mod detail_review_tests;
+mod file_search;
+mod render;
 #[cfg(test)]
 mod tests;
 
@@ -64,6 +66,9 @@ struct CommitDetail {
     message: String,
     files: Vec<(String, String)>,
     file_state: ListState,
+    file_filter: crate::components::ListFilter,
+    file_searching: bool,
+    file_paths: Vec<String>,
     diff_content: Option<String>,
     diff_scroll: u16,
     /// True while the diff pane owns the keyboard, so `j`/`k` scroll the diff
@@ -483,8 +488,11 @@ impl GitGraph {
         self.commit_detail = Some(CommitDetail {
             oid,
             message,
-            files,
             file_state,
+            file_filter: crate::components::ListFilter::default(),
+            file_searching: false,
+            file_paths: files.iter().map(|(_, path)| path.clone()).collect(),
+            files,
             diff_content: None,
             diff_scroll: 0,
             diff_focused: false,
@@ -906,6 +914,9 @@ impl GitGraph {
     fn try_show_commit_diff(&mut self) -> Option<Action> {
         let detail = self.commit_detail.as_ref()?;
         let file_idx = detail.file_state.selected()?;
+        if !detail.file_matches(file_idx) {
+            return None;
+        }
         let (_, file_path) = detail.files.get(file_idx)?;
         let repo_path = self.repo_path.clone()?;
         self.diff_select_generation = self.diff_select_generation.wrapping_add(1);

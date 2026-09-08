@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::Component;
+use crate::components::{Component, ListFilter};
 use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
 use crate::theme::{FileListTheme, Theme};
@@ -33,6 +33,14 @@ pub(crate) struct FileList {
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
     theme: Arc<Theme>,
+    /// Substring filter over file paths (`/` to type; matches are highlighted
+    /// and `j`/`k` jump between them).
+    filter: ListFilter,
+    /// True while filter characters are being typed.
+    searching: bool,
+    /// Path strings mirroring `files`, kept in sync so the filter can rebuild
+    /// without re-allocating every keypress.
+    path_strings: Vec<String>,
 }
 
 impl FileList {
@@ -52,6 +60,9 @@ impl FileList {
             horizontal_layout: false,
             diff_generation: 0,
             theme,
+            filter: ListFilter::default(),
+            searching: false,
+            path_strings: Vec::new(),
         }
     }
 
@@ -64,11 +75,23 @@ impl FileList {
         let prev_selected = self.state.selected();
         let files_changed = !is_same_repo || self.files != files;
 
+        if !is_same_repo {
+            self.searching = false;
+            self.filter.clear();
+        }
+
         self.files = files;
+        self.path_strings = self
+            .files
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned())
+            .collect();
+        self.filter.rebuild(&self.path_strings);
         self.repo_name = repo_name.to_string();
         self.repo_id = Some(repo_id);
 
         if files_changed {
+            self.diff_generation += 1;
             self.diff_content = None;
             self.diff_scroll = 0;
         }
@@ -84,6 +107,22 @@ impl FileList {
         } else {
             self.state.select(Some(0));
         }
+        self.normalize_search_selection();
+    }
+
+    pub fn search_active(&self) -> bool {
+        self.searching && !self.viewing_diff()
+    }
+
+    fn normalize_search_selection(&mut self) {
+        self.state
+            .select(self.filter.selected_match(self.state.selected()));
+    }
+
+    fn rebuild_search(&mut self) {
+        self.filter.rebuild(&self.path_strings);
+        self.normalize_search_selection();
+        self.diff_generation += 1;
     }
 
     pub fn set_diff(&mut self, content: String) {
@@ -92,6 +131,10 @@ impl FileList {
     }
 
     fn select_next(&mut self) {
+        if self.filter.is_active() || self.searching {
+            self.filtered_step(1);
+            return;
+        }
         if self.files.is_empty() {
             return;
         }
@@ -103,6 +146,10 @@ impl FileList {
     }
 
     fn select_prev(&mut self) {
+        if self.filter.is_active() || self.searching {
+            self.filtered_step(-1);
+            return;
+        }
         if self.files.is_empty() {
             return;
         }
@@ -111,6 +158,13 @@ impl FileList {
             None => 0,
         };
         self.state.select(Some(i));
+    }
+
+    /// Move selection to the next/previous matching file (wrapping), matching
+    /// the graph search behavior. No-op when nothing matches.
+    fn filtered_step(&mut self, delta: isize) {
+        self.state
+            .select(self.filter.step(self.state.selected(), delta));
     }
 
     pub fn viewing_diff(&self) -> bool {
@@ -160,6 +214,9 @@ impl FileList {
 
     fn try_show_diff(&mut self) -> Option<Action> {
         let idx = self.state.selected()?;
+        if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+            return None;
+        }
         let repo_id = self.repo_id.clone()?;
         let file = self.files.get(idx)?;
         self.diff_generation += 1;
@@ -177,7 +234,11 @@ impl FileList {
         let title = if self.repo_name.is_empty() {
             " Changes ".to_string()
         } else {
-            format!(" Changes — {} ", self.repo_name)
+            let mut t = format!(" Changes — {} ", self.repo_name);
+            if self.searching || self.filter.is_active() {
+                t = format!("{t} /{}▏ ", self.filter.query());
+            }
+            t
         };
 
         let block = Block::default()
@@ -201,7 +262,12 @@ impl FileList {
         let items: Vec<ListItem> = self
             .files
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(file_index, entry)| {
+                let mut item_style = Style::default();
+                if self.filter.is_active() && self.filter.position_of(file_index).is_some() {
+                    item_style = item_style.add_modifier(Modifier::BOLD);
+                }
                 let color = match entry.status {
                     FileStatus::Modified => t.status_modified,
                     FileStatus::Added => t.status_added,
@@ -230,22 +296,55 @@ impl FileList {
                 } else {
                     t.regular_path
                 };
-                spans.push(Span::styled(
-                    entry.path.to_string_lossy().to_string(),
+                let path_str = &self.path_strings[file_index];
+                spans.extend(crate::components::highlight_matches(
+                    path_str,
+                    self.filter.query(),
                     Style::default().fg(path_color),
+                    Style::default()
+                        .fg(t.border_focused)
+                        .add_modifier(Modifier::BOLD),
                 ));
 
-                ListItem::new(Line::from(spans))
+                ListItem::new(Line::from(spans)).style(item_style)
             })
             .collect();
 
-        let list = List::new(items).block(block).highlight_style(
+        // No-matches note when the filter hides everything (very large lists).
+        let list = if self.filter.is_active() && self.filter.count() == 0 {
+            let mut items = items;
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  no matching files ",
+                Style::default().fg(t.empty_text),
+            ))));
+            List::new(items).block(block)
+        } else {
+            List::new(items).block(block)
+        };
+        let list = list.highlight_style(
             Style::default()
                 .bg(t.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
 
         frame.render_stateful_widget(list, area, &mut self.state);
+
+        // Bottom input line: makes the typing mode unmistakable even while the
+        // query is still empty (it would otherwise look like nothing happened).
+        if self.searching || self.filter.is_active() {
+            let input = format!(" /{}▏ ", self.filter.query());
+            let over = Rect::new(
+                area.x + 1,
+                area.y + area.height.saturating_sub(1),
+                (area.width.saturating_sub(2)).min(input.chars().count() as u16),
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new(input)
+                    .style(Style::default().fg(t.border_focused).bg(t.selection_bg)),
+                over,
+            );
+        }
     }
 
     fn draw_diff(&self, frame: &mut Frame, area: Rect) {
@@ -394,7 +493,41 @@ impl Component for FileList {
             return Ok(None);
         }
 
+        if self.searching {
+            match key.code {
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.rebuild_search();
+                }
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.rebuild_search();
+                }
+                KeyCode::Esc => {
+                    self.searching = false;
+                    self.filter.clear();
+                    self.rebuild_search();
+                }
+                KeyCode::Down => self.select_next(),
+                KeyCode::Up => self.select_prev(),
+                KeyCode::Enter => {
+                    // No matches: Enter must not open the previously
+                    // selected (non-matching) file's diff.
+                    if self.filter.count() == 0 {
+                        return Ok(None);
+                    }
+                    return Ok(self.try_show_diff());
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+
         match key.code {
+            KeyCode::Char('/') => {
+                self.searching = true;
+                Ok(None)
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
                 Ok(None)
@@ -426,6 +559,9 @@ impl Component for FileList {
                         let visual_row = (mouse.row - content_y) as usize;
                         let idx = visual_row + self.state.offset();
                         if idx < self.files.len() {
+                            if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+                                return Ok(None);
+                            }
                             // Click on already-selected row opens diff
                             if self.state.selected() == Some(idx) {
                                 return Ok(self.try_show_diff());
@@ -447,6 +583,9 @@ impl Component for FileList {
                     let content_y = click_area.y + 1; // +1 for border
                     if mouse.row >= content_y {
                         let idx = (mouse.row - content_y) as usize + self.state.offset();
+                        if self.filter.is_active() && self.filter.position_of(idx).is_none() {
+                            return Ok(None);
+                        }
                         if let (Some(entry), Some(repo_id)) =
                             (self.files.get(idx), self.repo_id.clone())
                         {
@@ -530,272 +669,4 @@ impl Component for FileList {
 }
 
 #[cfg(test)]
-mod tag_tests {
-    use super::*;
-
-    fn rendered(
-        state: Option<SubmoduleState>,
-        head: Option<SubmoduleHead>,
-        warn: SubmoduleWarn,
-    ) -> String {
-        let theme = FileListTheme::default();
-        submodule_tag_spans(&state, &head, &warn, &theme)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<String>()
-    }
-
-    #[test]
-    fn modified_clean() {
-        assert_eq!(
-            rendered(
-                Some(SubmoduleState::Modified),
-                None,
-                SubmoduleWarn::default()
-            ),
-            "[sub: +commit] "
-        );
-    }
-
-    #[test]
-    fn modified_with_unpushed() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 3,
-            pointer_unreachable: false,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Modified), None, warn),
-            "[sub: +commit \u{2191}3] "
-        );
-    }
-
-    #[test]
-    fn modified_with_unreachable_takes_precedence_over_unpushed() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 5,
-            pointer_unreachable: true,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Modified), None, warn),
-            "[sub: +commit \u{26a0}unreach] "
-        );
-    }
-
-    #[test]
-    fn dirty_clean() {
-        assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), None, SubmoduleWarn::default()),
-            "[sub: ~dirty] "
-        );
-    }
-
-    #[test]
-    fn dirty_with_unpushed() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 1,
-            pointer_unreachable: false,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), None, warn),
-            "[sub: ~dirty \u{2191}1] "
-        );
-    }
-
-    #[test]
-    fn dirty_with_unreachable() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 0,
-            pointer_unreachable: true,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Dirty), None, warn),
-            "[sub: ~dirty \u{26a0}unreach] "
-        );
-    }
-
-    #[test]
-    fn uninitialized_skips_warn() {
-        // Even with warn fields set, uninitialized always renders just `-uninit`.
-        let warn = SubmoduleWarn {
-            unpushed_commits: 7,
-            pointer_unreachable: true,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Uninitialized), None, warn),
-            "[sub: -uninit] "
-        );
-    }
-
-    #[test]
-    fn unreach_only_synthetic_row() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 0,
-            pointer_unreachable: true,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(rendered(None, None, warn), "[sub: \u{26a0}unreach] ");
-    }
-
-    #[test]
-    fn unpushed_only_synthetic_row() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 4,
-            pointer_unreachable: false,
-            needs_merge_to_default: false,
-        };
-        assert_eq!(rendered(None, None, warn), "[sub: \u{2191}4] ");
-    }
-
-    #[test]
-    fn no_state_no_warn_falls_back_to_plain_tag() {
-        assert_eq!(
-            rendered(None, None, SubmoduleWarn::default()),
-            "[submodule] "
-        );
-    }
-
-    #[test]
-    fn modified_with_branch() {
-        assert_eq!(
-            rendered(
-                Some(SubmoduleState::Modified),
-                Some(SubmoduleHead::Branch("feature".to_string())),
-                SubmoduleWarn::default(),
-            ),
-            "[sub: +commit @feature] "
-        );
-    }
-
-    #[test]
-    fn dirty_detached() {
-        assert_eq!(
-            rendered(
-                Some(SubmoduleState::Dirty),
-                Some(SubmoduleHead::Detached),
-                SubmoduleWarn::default(),
-            ),
-            "[sub: ~dirty @detached] "
-        );
-    }
-
-    #[test]
-    fn modified_needs_merge_to_default() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 0,
-            pointer_unreachable: false,
-            needs_merge_to_default: true,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Modified), None, warn),
-            "[sub: +commit \u{219b}main] "
-        );
-    }
-
-    #[test]
-    fn composed_branch_unpushed_and_needs_merge() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 3,
-            pointer_unreachable: false,
-            needs_merge_to_default: true,
-        };
-        assert_eq!(
-            rendered(
-                Some(SubmoduleState::Modified),
-                Some(SubmoduleHead::Branch("feature".to_string())),
-                warn,
-            ),
-            "[sub: +commit @feature \u{2191}3 \u{219b}main] "
-        );
-    }
-
-    #[test]
-    fn unreachable_dominates_needs_merge() {
-        // On no remote at all: only `⚠unreach`, never `↛main`.
-        let warn = SubmoduleWarn {
-            unpushed_commits: 0,
-            pointer_unreachable: true,
-            needs_merge_to_default: true,
-        };
-        assert_eq!(
-            rendered(Some(SubmoduleState::Modified), None, warn),
-            "[sub: +commit \u{26a0}unreach] "
-        );
-    }
-
-    #[test]
-    fn uninitialized_suppresses_branch_and_merge() {
-        let warn = SubmoduleWarn {
-            unpushed_commits: 0,
-            pointer_unreachable: false,
-            needs_merge_to_default: true,
-        };
-        assert_eq!(
-            rendered(
-                Some(SubmoduleState::Uninitialized),
-                Some(SubmoduleHead::Branch("x".to_string())),
-                warn,
-            ),
-            "[sub: -uninit] "
-        );
-    }
-}
-
-#[cfg(test)]
-mod selected_menu_tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    fn entry(path: &str, status: FileStatus, staged: bool, unstaged: bool) -> FileEntry {
-        FileEntry {
-            path: PathBuf::from(path),
-            status,
-            staged,
-            unstaged,
-            is_submodule: false,
-            submodule_state: None,
-            submodule_warn: SubmoduleWarn::default(),
-            submodule_head: None,
-        }
-    }
-
-    #[test]
-    fn selected_menu_builds_a_file_context_menu_action() {
-        let mut list = FileList::new(Arc::new(Theme::default()));
-        list.render_area = Rect::new(0, 0, 60, 24);
-        list.set_files(
-            vec![
-                entry("a.rs", FileStatus::Modified, false, true),
-                entry("b.rs", FileStatus::Untracked, false, true),
-            ],
-            "repo",
-            RepoId(PathBuf::from("/repo")),
-        );
-        list.state.select(Some(1));
-        let action = list.selected_menu().expect("menu for selected row");
-        assert!(matches!(
-            action,
-            Action::ShowFileContextMenu {
-                id,
-                path,
-                row: 2,
-                col: 59,
-                staged: false,
-                unstaged: true,
-                is_untracked: true,
-                is_submodule: false,
-            } if id.0.as_path() == std::path::Path::new("/repo")
-                && path.as_path() == std::path::Path::new("b.rs")
-        ));
-    }
-
-    #[test]
-    fn selected_menu_none_without_files() {
-        let list = FileList::new(Arc::new(Theme::default()));
-        assert!(list.selected_menu().is_none());
-    }
-}
+mod tests;

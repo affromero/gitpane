@@ -211,6 +211,13 @@ impl App {
         self.status_bar.sort_order = self.sort_order;
         self.status_bar.error = self.error_message.clone();
         self.status_bar.success = self.success_message.clone();
+        // Only inside a filter category does the status bar swap its repo
+        // legend for the picker hint; the root screen keeps the legend.
+        self.status_bar.overlay_hint = if self.graph_filter_picker.is_filtering() {
+            self.graph_filter_picker.hint_text()
+        } else {
+            None
+        };
         self.status_bar.draw(frame, status_area)?;
 
         // Overlays rendered last
