@@ -4,6 +4,24 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-08
+
+### Added
+- Resize the commit message, changed files, and diff panes by dragging their borders. ([#68](https://github.com/affromero/gitpane/pull/68), closes [#67](https://github.com/affromero/gitpane/issues/67)) Thanks @expoli.
+- Search incrementally in graph filters, the Changes pane, and a commit's changed files. Matching rows stay selected as results change, with Unicode-aware highlighting. ([#70](https://github.com/affromero/gitpane/pull/70), closes [#69](https://github.com/affromero/gitpane/issues/69)) Thanks @expoli.
+
+### Fixed
+- Bound libgit2 pack windows and object caches to keep large repositories from consuming excessive memory. ([#66](https://github.com/affromero/gitpane/pull/66), closes [#65](https://github.com/affromero/gitpane/issues/65)) Thanks @expoli for the report and fix.
+- Repository additions and removals now synchronize across running instances without overwriting concurrent config changes. ([#72](https://github.com/affromero/gitpane/pull/72), closes [#71](https://github.com/affromero/gitpane/issues/71))
+- File actions and diff previews treat filenames literally. Rename operations handle both paths, and discard refuses to overwrite a file recreated at the original path. ([#74](https://github.com/affromero/gitpane/pull/74), closes [#73](https://github.com/affromero/gitpane/issues/73))
+- Late graph and GitHub responses cannot reopen closed details or show content from another repository or filter. Graph refreshes preserve pending updates and rebuild search matches. ([#74](https://github.com/affromero/gitpane/pull/74))
+- Small terminal layouts and long Unicode error messages no longer crash the app. Commit messages remain readable in narrow layouts. ([#74](https://github.com/affromero/gitpane/pull/74))
+- Status includes file-type changes and supports bare repositories. Pinned linked worktrees receive Git metadata updates. ([#74](https://github.com/affromero/gitpane/pull/74))
+- Configured file openers use a directory as their working directory, review commands expand their base ref, and Windows launcher and watcher paths use compatible spellings. Removing one repository preserves others with the same name. ([#74](https://github.com/affromero/gitpane/pull/74))
+
+### Changed
+- Release builds validate the tag, Cargo versions, and matching release notes before building or publishing. ([#74](https://github.com/affromero/gitpane/pull/74))
+
 ## [0.15.1] - 2026-09-05
 
 ### Fixed
