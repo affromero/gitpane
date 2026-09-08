@@ -2,7 +2,7 @@ use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
@@ -16,6 +16,40 @@ use crate::git::graph_render;
 use super::*;
 
 impl GitGraph {
+    /// The split used for this frame's detail layout: `detail_split` with the
+    /// message|files border overridden by the message's line count while the
+    /// user has not dragged that border (see `msg_dragged`).
+    fn detail_split_with_auto_msg(&self, area: Rect, detail: &CommitDetail) -> [f64; 3] {
+        let axis = if self.horizontal_layout {
+            area.height
+        } else {
+            area.width
+        };
+        // Feasible integer boundary positions for this axis (short axes leave
+        // no room between the stored 0.40/0.65 borders, so clamp in cells).
+        let [b0, b1, b2] = detail_cell_bounds(axis, self.detail_split);
+        if !self.msg_dragged {
+            let line_count = detail.message.lines().count().max(1) as u16;
+            let want = msg_auto_cells(line_count, axis);
+            let min_cells = detail_min_cells(axis);
+            // Message|files border sits `want` cells below the graph border,
+            // clamped so the message and files panes each keep a minimum.
+            let b1 = b0
+                .saturating_add(want)
+                .clamp(b0 + min_cells, b2 - min_cells);
+            return [
+                b0 as f64 / axis as f64,
+                b1 as f64 / axis as f64,
+                b2 as f64 / axis as f64,
+            ];
+        }
+        [
+            b0 as f64 / axis as f64,
+            b1 as f64 / axis as f64,
+            b2 as f64 / axis as f64,
+        ]
+    }
+
     fn filter_summary(&self) -> Option<String> {
         let mut parts = Vec::new();
         if let Some(branches) = &self.graph_options.filters.branches {
@@ -149,24 +183,14 @@ impl GitGraph {
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
-    fn draw_commit_files(
+    fn draw_commit_message(
         detail: &mut CommitDetail,
         frame: &mut Frame,
         area: Rect,
         theme: &crate::theme::GraphTheme,
     ) {
-        let title = format!(" Files — {} ", &detail.oid[..7.min(detail.oid.len())]);
-
-        let msg_line_count = detail.message.lines().count().max(1) as u16;
-        let msg_height = (msg_line_count + 2).min(area.height / 3).clamp(3, 8);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(msg_height), Constraint::Min(3)])
-            .split(area);
-
-        detail.msg_area = chunks[0];
-        detail.file_list_area = chunks[1];
+        let title = format!(" Message — {} ", &detail.oid[..7.min(detail.oid.len())]);
+        detail.msg_area = area;
 
         let msg_block = Block::default()
             .title(title)
@@ -178,9 +202,20 @@ impl GitGraph {
             .block(msg_block)
             .wrap(Wrap { trim: false })
             .scroll((detail.msg_scroll, 0));
-        frame.render_widget(msg_paragraph, chunks[0]);
+        frame.render_widget(msg_paragraph, area);
+    }
+
+    fn draw_commit_file_list(
+        detail: &mut CommitDetail,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &crate::theme::GraphTheme,
+    ) {
+        let title = format!(" Files — {} ", &detail.oid[..7.min(detail.oid.len())]);
+        detail.file_list_area = area;
 
         let files_block = Block::default()
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.commit_files_border));
 
@@ -188,7 +223,7 @@ impl GitGraph {
             let paragraph = Paragraph::new("No files changed")
                 .style(Style::default().fg(theme.commit_files_empty))
                 .block(files_block);
-            frame.render_widget(paragraph, chunks[1]);
+            frame.render_widget(paragraph, area);
             return;
         }
 
@@ -220,7 +255,7 @@ impl GitGraph {
                 .add_modifier(Modifier::BOLD),
         );
 
-        frame.render_stateful_widget(list, chunks[1], &mut detail.file_state);
+        frame.render_stateful_widget(list, area, &mut detail.file_state);
     }
 
     fn draw_commit_diff(
@@ -270,6 +305,129 @@ impl GitGraph {
     }
 }
 
+/// ±2 cells hit zone for grabbing a commit-detail border.
+const DETAIL_GRAB_ZONE: u16 = 2;
+
+/// Split the commit-detail `area` into graph / message / files / diff rects
+/// along the detail layout axis. `horizontal_layout` = the outer panels are
+/// side by side, so the detail splits vertically (historical convention).
+/// `split` holds the graph|message, message|files and files|diff fractions.
+/// Each pane keeps at least `detail_min_cells(axis)` cells on the axis.
+fn detail_chunks(area: Rect, split: [f64; 3], horizontal_layout: bool) -> [Rect; 4] {
+    let axis = if horizontal_layout {
+        area.height
+    } else {
+        area.width
+    };
+    let [b0, b1, b2] = detail_cell_bounds(axis, split);
+    let make = |start: u16, len: u16, area: Rect, vertical: bool| {
+        if vertical {
+            Rect {
+                y: area.y + start,
+                height: len,
+                ..area
+            }
+        } else {
+            Rect {
+                x: area.x + start,
+                width: len,
+                ..area
+            }
+        }
+    };
+    [
+        make(0, b0, area, horizontal_layout),
+        make(b0, b1 - b0, area, horizontal_layout),
+        make(b1, b2 - b1, area, horizontal_layout),
+        make(b2, axis - b2, area, horizontal_layout),
+    ]
+}
+
+/// The minimum number of cells each detail pane keeps on the axis. Capped at
+/// three, but never more than a quarter of the axis: four panes each need a
+/// quarter, so a short axis (e.g. 10 cells) drops the floor to `axis / 4`
+/// cells per pane, otherwise the clamp bounds below would invert.
+fn detail_min_cells(axis: u16) -> u16 {
+    3u16.min(axis / 4)
+}
+
+/// Feasible integer boundary positions (cells on the detail axis) for a
+/// three-way split, derived from the desired fractional `split`. Each pane
+/// keeps at least `detail_min_cells(axis)` cells. The clamping happens in
+/// integer cell space, so float rounding can never produce an inverted
+/// (min > max) range that panics the layout.
+fn detail_cell_bounds(axis: u16, split: [f64; 3]) -> [u16; 3] {
+    if axis == 0 {
+        return [0, 0, 0];
+    }
+    let min_cells = detail_min_cells(axis);
+    let axis_f = axis as f64;
+    // Desired boundary positions (graph|message, message|files, files|diff).
+    let d0 = (split[0] * axis_f).round() as u16;
+    let d1 = (split[1] * axis_f).round() as u16;
+    let d2 = (split[2] * axis_f).round() as u16;
+    // Clamp in order; each pane keeps at least `min_cells` cells.
+    let b0 = d0.clamp(min_cells, axis - 3 * min_cells);
+    let b1 = d1.clamp(b0 + min_cells, axis - 2 * min_cells);
+    let b2 = d2.clamp(b1 + min_cells, axis - min_cells);
+    [b0, b1, b2]
+}
+
+/// Auto height (in cells) for the commit message block: follows the message's
+/// line count, capped at 40% of the available axis, at least 3 cells.
+fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
+    (line_count + 2).min(axis * 40 / 100).max(3)
+}
+
+/// Maximum scroll offset (rows) for a wrapping paragraph inside a bordered
+/// block: the content's wrapped row count (each source line wrapped at the
+/// inner width using display-width word wrapping, exactly as ratatui renders
+/// it) minus the rows visible between the borders. `0` when the content fits
+/// or the viewport is too small to matter.
+fn max_scroll_lines(text: &str, viewport_height: u16, viewport_width: u16) -> u16 {
+    if viewport_height <= 2 || viewport_width <= 2 {
+        return 0;
+    }
+    let inner = viewport_width - 2;
+    // Use the same wrapping ratatui applies when rendering the paragraph
+    // (display width + word boundaries), so wide (CJK) glyphs and long words
+    // don't leave the content end unreachable.
+    let content_rows = Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .line_count(inner) as u16;
+    content_rows.saturating_sub(viewport_height - 2)
+}
+
+/// Axis coordinates (row in a vertical detail layout, column in a horizontal
+/// one) of the commit-detail borders: 0 = graph|message, 1 = message|files,
+/// 2 = files|diff. The files|diff border is absent until a diff is loaded.
+fn detail_border_positions(
+    graph: Rect,
+    message: Rect,
+    files: Rect,
+    diff: Rect,
+    vertical: bool,
+) -> [Option<u16>; 3] {
+    let end = |r: Rect| {
+        if vertical {
+            r.y + r.height
+        } else {
+            r.x + r.width
+        }
+    };
+    let live = |r: Rect| r.width > 0 && r.height > 0;
+    let has_diff = live(diff);
+    [
+        live(graph).then(|| end(graph)),
+        live(message).then(|| end(message)),
+        if has_diff {
+            live(files).then(|| end(files))
+        } else {
+            None
+        },
+    ]
+}
+
 impl Component for GitGraph {
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.action_tx = Some(tx);
@@ -288,7 +446,14 @@ impl Component for GitGraph {
                         detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        detail.diff_scroll = detail.diff_scroll.saturating_add(1);
+                        let max = detail
+                            .diff_content
+                            .as_deref()
+                            .map(|c| {
+                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
+                            })
+                            .unwrap_or(0);
+                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
@@ -392,10 +557,32 @@ impl Component for GitGraph {
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        let vertical = self.horizontal_layout;
+        let axis_pos = if vertical { mouse.row } else { mouse.column };
+        let dpos = detail_border_positions(
+            self.graph_list_area,
+            self.msg_area,
+            self.files_area,
+            self.diff_area,
+            vertical,
+        );
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                let mut candidates = Vec::new();
+                for (i, p) in dpos.iter().enumerate() {
+                    if let Some(p) = *p {
+                        candidates.push((i as u8, axis_pos.abs_diff(p)));
+                    }
+                }
+                self.dragging_detail_border = candidates
+                    .into_iter()
+                    .filter(|(_, d)| *d <= DETAIL_GRAB_ZONE)
+                    .min_by_key(|(_, d)| *d)
+                    .map(|(id, _)| id);
+                // Record the grab but keep processing the click, matching the
+                // outer-panel border behavior: the drag engages on Drag only,
+                // and a plain click near a border still reaches the content.
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
-
                 // Click in graph list area
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
@@ -460,6 +647,52 @@ impl Component for GitGraph {
 
                 Ok(None)
             }
+
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(border) = self.dragging_detail_border {
+                    let area = self.render_area;
+                    let (axis, origin) = if vertical {
+                        (area.height, area.y)
+                    } else {
+                        (area.width, area.x)
+                    };
+                    let rel = axis_pos.saturating_sub(origin) as f64 / axis.max(1) as f64;
+                    // Start from the split already clamped to this axis: the
+                    // stored borders may be infeasible for a small area, and
+                    // clamping `rel` against them could invert (min > max) and
+                    // panic. Clamp in integer cell space below.
+                    let [mut b0, mut b1, mut b2] = detail_cell_bounds(axis, self.detail_split);
+                    let min_cells = detail_min_cells(axis);
+                    // `rel` is the pointer position as a fraction of the axis;
+                    // convert to a cell, then clamp onto the pane boundary.
+                    let at = (rel * axis as f64).round() as u16;
+                    match border {
+                        0 => {
+                            b0 = at.clamp(min_cells, b1 - min_cells);
+                        }
+                        1 => {
+                            b1 = at.clamp(b0 + min_cells, b2 - min_cells);
+                            self.msg_dragged = true;
+                        }
+                        2 => {
+                            b2 = at.clamp(b1 + min_cells, axis - min_cells);
+                        }
+                        _ => {}
+                    }
+                    self.detail_split = [
+                        b0 as f64 / axis as f64,
+                        b1 as f64 / axis as f64,
+                        b2 as f64 / axis as f64,
+                    ];
+                    Ok(None)
+                } else {
+                    Ok(None)
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging_detail_border.is_some() => {
+                self.dragging_detail_border = None;
+                Ok(None)
+            }
             MouseEventKind::ScrollUp => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
                 let mut file_highlight_moved = false;
@@ -493,11 +726,23 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        detail.diff_scroll = detail.diff_scroll.saturating_add(1);
+                        let max = detail
+                            .diff_content
+                            .as_deref()
+                            .map(|c| {
+                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
+                            })
+                            .unwrap_or(0);
+                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        detail.msg_scroll = detail.msg_scroll.saturating_add(1);
+                        let max = max_scroll_lines(
+                            &detail.message,
+                            detail.msg_area.height,
+                            detail.msg_area.width,
+                        );
+                        detail.msg_scroll = (detail.msg_scroll + 1).min(max);
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -547,54 +792,41 @@ impl Component for GitGraph {
 
         match &self.commit_detail {
             Some(detail) if detail.diff_content.is_some() => {
-                // Graph 40% | Files 25% | Diff 35%
-                let dir = if self.horizontal_layout {
-                    Direction::Vertical
-                } else {
-                    Direction::Horizontal
-                };
-                let chunks = Layout::default()
-                    .direction(dir)
-                    .constraints([
-                        Constraint::Percentage(40),
-                        Constraint::Percentage(25),
-                        Constraint::Percentage(35),
-                    ])
-                    .split(area);
-
+                let split = self.detail_split_with_auto_msg(area, detail);
+                let chunks = detail_chunks(area, split, self.horizontal_layout);
                 self.graph_list_area = chunks[0];
-                self.files_area = chunks[1];
-                self.diff_area = chunks[2];
+                self.msg_area = chunks[1];
+                self.files_area = chunks[2];
+                self.diff_area = chunks[3];
 
                 self.draw_graph_list(frame, chunks[0]);
                 let graph_theme = self.theme.graph.clone();
                 let detail = self.commit_detail.as_mut().unwrap();
-                Self::draw_commit_files(detail, frame, chunks[1], &graph_theme);
-                Self::draw_commit_diff(detail, frame, chunks[2], &graph_theme);
+                Self::draw_commit_message(detail, frame, chunks[1], &graph_theme);
+                Self::draw_commit_file_list(detail, frame, chunks[2], &graph_theme);
+                Self::draw_commit_diff(detail, frame, chunks[3], &graph_theme);
             }
-            Some(_) => {
-                // Graph 50% | Files 50%
-                let dir = if self.horizontal_layout {
-                    Direction::Vertical
-                } else {
-                    Direction::Horizontal
-                };
-                let chunks = Layout::default()
-                    .direction(dir)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(area);
+            Some(detail) => {
+                // No diff yet: graph | message | files along the same axis.
+                let split = self.detail_split_with_auto_msg(area, detail);
+                let mut chunks =
+                    detail_chunks(area, [split[0], split[1], 1.0], self.horizontal_layout);
+                chunks[3] = Rect::default();
 
                 self.graph_list_area = chunks[0];
-                self.files_area = chunks[1];
+                self.msg_area = chunks[1];
+                self.files_area = chunks[2];
                 self.diff_area = Rect::default();
 
                 self.draw_graph_list(frame, chunks[0]);
                 let graph_theme = self.theme.graph.clone();
                 let detail = self.commit_detail.as_mut().unwrap();
-                Self::draw_commit_files(detail, frame, chunks[1], &graph_theme);
+                Self::draw_commit_message(detail, frame, chunks[1], &graph_theme);
+                Self::draw_commit_file_list(detail, frame, chunks[2], &graph_theme);
             }
             None => {
                 self.graph_list_area = area;
+                self.msg_area = Rect::default();
                 self.files_area = Rect::default();
                 self.diff_area = Rect::default();
 
@@ -628,5 +860,88 @@ impl Component for GitGraph {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod detail_layout_tests {
+    use super::{detail_border_positions, detail_chunks, max_scroll_lines, msg_auto_cells};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn detail_chunks_matches_default_split() {
+        let area = Rect::new(0, 0, 60, 100);
+        let [g, m, f, d] = detail_chunks(area, [0.40, 0.50, 0.65], true);
+        assert_eq!(g.height, 40);
+        assert_eq!(m.height, 10);
+        assert_eq!(f.height, 15);
+        assert_eq!(d.height, 35);
+        assert!(g.y < m.y && m.y < f.y && f.y < d.y);
+        assert_eq!((g.y, m.y, f.y, d.y), (0, 40, 50, 65));
+    }
+
+    #[test]
+    fn detail_chunks_horizontal_axis() {
+        let area = Rect::new(5, 5, 100, 10);
+        let [g, m, f, d] = detail_chunks(area, [0.5, 0.75, 0.9], false);
+        assert_eq!(g.width, 50);
+        assert_eq!(m.width, 25);
+        assert_eq!(f.width, 15);
+        assert_eq!(d.width, 10);
+        assert_eq!((g.x, m.x, f.x, d.x), (5, 55, 80, 95));
+    }
+
+    #[test]
+    fn detail_chunks_clamps_min_block() {
+        let area = Rect::new(0, 0, 40, 40);
+        let [g, m, f, d] = detail_chunks(area, [0.01, 0.5, 0.99], true);
+        assert!(g.height >= 3 && m.height >= 3 && f.height >= 3 && d.height >= 3);
+        assert_eq!(g.height + m.height + f.height + d.height, 40);
+        let [g2, m2, f2, d2] = detail_chunks(area, [0.99, 0.01, 0.01], true);
+        assert!(g2.height >= 3 && m2.height >= 3 && f2.height >= 3 && d2.height >= 3);
+    }
+
+    #[test]
+    fn msg_auto_cells_follows_lines_with_cap() {
+        assert_eq!(msg_auto_cells(1, 30), 3);
+        assert_eq!(msg_auto_cells(4, 30), 6);
+        assert_eq!(msg_auto_cells(50, 30), 12);
+    }
+
+    #[test]
+    fn max_scroll_lines_stops_at_content_end() {
+        // Fits in 10 visible rows: no scrolling allowed.
+        assert_eq!(max_scroll_lines("short", 12, 80), 0);
+        // 20 wrapped rows in 10 visible rows: max offset 10.
+        let text = (0..20)
+            .map(|_| "x".repeat(60))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(max_scroll_lines(&text, 12, 80), 10);
+        // Long lines wrap; 3 source lines of 40 chars at inner width 10 -> 12 rows.
+        let long = ["a".repeat(40), "b".repeat(40), "c".repeat(40)].join("\n");
+        assert_eq!(max_scroll_lines(&long, 8, 12), 6); // 12 rows - 6 visible
+        // Degenerate viewport.
+        assert_eq!(max_scroll_lines("anything", 1, 80), 0);
+        assert_eq!(max_scroll_lines("anything", 12, 1), 0);
+    }
+
+    #[test]
+    fn detail_border_positions_tracks_loaded_blocks() {
+        let graph = Rect::new(0, 0, 20, 40);
+        let message = Rect::new(0, 40, 20, 6);
+        let files = Rect::new(0, 46, 20, 19);
+        let diff = Rect::new(0, 65, 20, 35);
+        let [b0, b1, b2] = detail_border_positions(graph, message, files, diff, true);
+        assert_eq!(b0, Some(40));
+        assert_eq!(b1, Some(46));
+        assert_eq!(b2, Some(65));
+        // No diff: the files|diff border is absent, the message border stays.
+        let [_, b1n, b2n] = detail_border_positions(graph, message, files, Rect::default(), true);
+        assert_eq!(b1n, Some(46));
+        assert_eq!(b2n, None);
+        // message border absent when the detail was never drawn
+        let [_, b1z, _] = detail_border_positions(graph, Rect::default(), files, diff, true);
+        assert_eq!(b1z, None);
     }
 }
