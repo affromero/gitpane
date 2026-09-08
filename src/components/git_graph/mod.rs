@@ -19,6 +19,7 @@ use cache::{
 mod component;
 #[cfg(test)]
 mod detail_review_tests;
+mod render;
 #[cfg(test)]
 mod tests;
 
