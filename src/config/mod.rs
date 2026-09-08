@@ -6,6 +6,7 @@ use crate::theme::{LoadThemeError, Theme, load_theme};
 
 mod defaults;
 mod load;
+mod sync;
 mod terminal;
 #[cfg(test)]
 mod test_support;
@@ -35,6 +36,8 @@ pub(crate) struct Config {
     /// remove/exclude a repo, rescan, commit a theme).
     #[serde(skip)]
     pub runtime_root_override: Option<PathBuf>,
+    #[serde(skip)]
+    pub runtime_no_sync_repos: bool,
     #[serde(default)]
     pub excluded_repos: Vec<String>,
     #[serde(default)]
@@ -82,6 +85,9 @@ pub(crate) struct Config {
     pub(crate) loaded_path: Option<PathBuf>,
     #[serde(skip, default)]
     pub(crate) write_target_override: Option<PathBuf>,
+    /// Last accepted local values, used to merge only this instance's edits.
+    #[serde(skip)]
+    pub(crate) saved_snapshot: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -152,6 +158,9 @@ pub(crate) struct UiConfig {
     /// many worktrees make the list too tall; `w` still toggles either way.
     #[serde(default = "default_expand_worktrees")]
     pub expand_worktrees: bool,
+    /// Refresh additions and removals made by other running instances.
+    #[serde(default = "default_sync_repos")]
+    pub sync_repos: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -333,7 +342,7 @@ impl Config {
         default_write_path(&RealEnv).unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
         // A test that saves without an explicit target would silently
         // overwrite the developer's real config (this happened: app tests
         // exercising AddRepo/RemoveRepo clobbered ~/.config/gitpane). Fail
@@ -390,6 +399,7 @@ impl Config {
         };
 
         config.resolve_theme(env);
+        config.saved_snapshot = Some(toml::Value::try_from(&config)?);
         Ok(config)
     }
 
@@ -452,7 +462,7 @@ impl Config {
         }
     }
 
-    pub(crate) fn save_with_env(&self, env: &dyn ConfigEnv) -> Result<()> {
+    pub(crate) fn save_with_env(&mut self, env: &dyn ConfigEnv) -> Result<()> {
         let config_path = self
             .write_target_override
             .clone()
@@ -460,12 +470,7 @@ impl Config {
             .or_else(|| default_write_path(env))
             .ok_or_else(|| eyre!("no writable config path available"))?;
 
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let contents = toml::to_string_pretty(self)?;
-        std::fs::write(&config_path, contents)?;
-        Ok(())
+        self.save_to_path(&config_path)
     }
 
     /// Config files that exist on disk but are ignored because another file

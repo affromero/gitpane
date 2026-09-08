@@ -39,6 +39,9 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Command>,
+    /// Keep this instance's repo view independent of other running instances
+    #[arg(long)]
+    no_sync_repos: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -153,6 +156,7 @@ async fn run() -> Result<()> {
     install_tracing()?;
 
     let mut config = config::Config::load()?;
+    config.runtime_no_sync_repos = cli.no_sync_repos;
 
     // Bound libgit2 before any repository is opened; must run before the
     // first git2 call (status polls, graph builds).
@@ -327,6 +331,14 @@ mod tests {
     fn cwd_is_optional() {
         let cli = Cli::try_parse_from(["gitpane"]).unwrap();
         assert!(!cli.cwd);
+    }
+
+    #[test]
+    fn repo_sync_can_be_disabled_for_one_pane() {
+        assert!(!Cli::try_parse_from(["gitpane"]).unwrap().no_sync_repos);
+        let cli = Cli::try_parse_from(["gitpane", "--no-sync-repos", "--cwd"]).unwrap();
+        assert!(cli.no_sync_repos);
+        assert!(cli.cwd);
     }
 
     #[test]

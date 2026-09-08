@@ -8,6 +8,18 @@ use std::{
 };
 
 #[test]
+fn repo_sync_defaults_on_and_can_be_disabled_without_persisting_cli_override() {
+    let mut config: Config = toml::from_str("[ui]\nframe_rate = 30\n").unwrap();
+    assert!(config.sync_repos_enabled());
+    config.runtime_no_sync_repos = true;
+    assert!(!config.sync_repos_enabled());
+    let loaded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    assert!(loaded.sync_repos_enabled());
+    let disabled: Config = toml::from_str("[ui]\nsync_repos = false\n").unwrap();
+    assert!(!disabled.sync_repos_enabled());
+}
+
+#[test]
 fn test_default_config_has_code_root() {
     let config = Config::default();
     assert!(!config.root_dirs.is_empty());

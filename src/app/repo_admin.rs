@@ -5,6 +5,14 @@ impl App {
     /// and filesystem-driven rescans. Split from `handle_action_rest` so
     /// each dispatch file stays under the line cap.
     pub(super) fn handle_repo_admin(&mut self, action: Action) -> Result<()> {
+        if matches!(
+            action,
+            Action::AddRepo(_) | Action::RemoveRepo(_) | Action::RescanRepos
+        ) && let Err(e) = self.refresh_shared_membership()
+        {
+            self.error_message = Some((format!("config sync failed: {e}"), Instant::now()));
+            return Ok(());
+        }
         match action {
             Action::OpenAddRepo => {
                 self.path_input.show();
@@ -34,12 +42,15 @@ impl App {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| path.to_string_lossy().to_string());
-                        self.config.add_pinned_repo(path.clone());
-                        if let Err(e) = self.config.save() {
+                        let mut config = self.config.clone();
+                        config.add_pinned_repo(path.clone());
+                        if let Err(e) = config.save() {
                             tracing::error!("Failed to save config: {}", e);
                             self.error_message =
                                 Some((format!("save failed: {e}"), Instant::now()));
+                            return Ok(());
                         }
+                        self.config = config;
                         let repo_id = RepoId(path.clone());
                         let display = self.repo_list.display_for(&path);
                         let gitlink = path.join(".git").is_file();
@@ -69,16 +80,12 @@ impl App {
             }
             Action::RemoveRepo(ref id) => {
                 if let Some(idx) = self.repo_list.resolve_index(id) {
-                    // Clean up tracking sets for the removed repo
-                    self.pending_status.remove(id);
-                    self.dirty_repos.remove(id);
-                    self.last_refresh.remove(id);
-                    self.refresh_scheduled.remove(id);
+                    let mut config = self.config.clone();
                     let entry = &self.repo_list.repos[idx];
-                    // Drop cached graph snapshots for the removed repo.
-                    self.git_graph.invalidate_repo(&entry.path);
                     // Remove from pinned if it was pinned
-                    self.config.pinned_repos.retain(|p| *p != entry.path);
+                    config
+                        .pinned_repos
+                        .retain(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) != entry.path);
                     // Exclude only repos the walk can rediscover: it
                     // promotes real `.git` directories (including a plain
                     // repo nested inside another one) but never gitlink
@@ -95,10 +102,21 @@ impl App {
                     let name = entry.name.clone();
                     if under_root
                         && entry.path.join(".git").is_dir()
-                        && !self.config.excluded_repos.contains(&name)
+                        && !config.excluded_repos.contains(&name)
                     {
-                        self.config.excluded_repos.push(name);
+                        config.excluded_repos.push(name);
                     }
+                    if let Err(e) = config.save() {
+                        self.error_message = Some((format!("save failed: {e}"), Instant::now()));
+                        return Ok(());
+                    }
+                    self.config = config;
+                    self.pending_status.remove(id);
+                    self.dirty_repos.remove(id);
+                    self.last_refresh.remove(id);
+                    self.refresh_scheduled.remove(id);
+                    // Drop cached graph snapshots for the removed repo.
+                    self.git_graph.invalidate_repo(&entry.path);
                     // A removed repo can be the graph/changes panels' current
                     // path context (via "Open in graph"): drop it so the
                     // panels fall back to the selected repo.
@@ -108,10 +126,6 @@ impl App {
                         .is_some_and(|aw| aw.path.starts_with(&entry.path))
                     {
                         self.active_worktree = None;
-                    }
-                    if let Err(e) = self.config.save() {
-                        tracing::error!("Failed to save config: {}", e);
-                        self.error_message = Some((format!("save failed: {e}"), Instant::now()));
                     }
                     self.repo_list.repos.remove(idx);
                     // Fix selection
@@ -135,6 +149,13 @@ impl App {
                 self.sync_selection();
             }
             Action::RescanRepos => {
+                let mut config = self.config.clone();
+                config.excluded_repos.clear();
+                if let Err(e) = config.save() {
+                    self.error_message = Some((format!("save failed: {e}"), Instant::now()));
+                    return Ok(());
+                }
+                self.config = config;
                 // Clear tracking sets — old paths are stale after rescan
                 self.pending_status.clear();
                 self.dirty_repos.clear();
@@ -143,12 +164,6 @@ impl App {
                 // The repo set is rebuilt from scratch; cached graphs for
                 // vanished paths are dead weight.
                 self.git_graph.invalidate_graph_cache();
-                // Clear user-added exclusions, save, and re-discover repos
-                self.config.excluded_repos.clear();
-                if let Err(e) = self.config.save() {
-                    tracing::error!("Failed to save config: {}", e);
-                    self.error_message = Some((format!("save failed: {e}"), Instant::now()));
-                }
                 // The list is rebuilt from scratch, so carry the selection
                 // across by identity (a worktree subrow falls back to its
                 // parent repo row — the fresh list has no statuses yet).
@@ -222,6 +237,11 @@ impl App {
                 }
             }
             _ => {}
+        }
+        if matches!(action, Action::AddRepo(_) | Action::RemoveRepo(_)) {
+            // A concurrent writer may have contributed membership changes
+            // during save. Apply the merged set in this instance too.
+            self.handle_repo_admin(Action::DiscoverNewRepos)?;
         }
         Ok(())
     }
