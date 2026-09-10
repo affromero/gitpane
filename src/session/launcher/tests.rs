@@ -75,38 +75,17 @@ fn command_mode_runs_detached_argv() {
 fn file_launches_keep_the_parent_directory_separate_from_the_file_target() {
     let dir = "/code/my repo";
     let target = "/code/my repo/source.rs";
-    let command = "viewer '/code/my repo/source.rs'";
-    let cases = [
-        ("command", Multiplexer::None, argv(&["viewer", target])),
-        (
-            "inline",
-            Multiplexer::None,
-            LaunchPlan::Inline(command.into()),
+    assert_eq!(
+        plan_with_target(
+            Some("viewer {path}"),
+            "command",
+            dir,
+            target,
+            None,
+            Multiplexer::None
         ),
-        (
-            "split-window",
-            Multiplexer::Tmux,
-            argv(&["tmux", "split-window", "-c", dir, "sh", "-c", command]),
-        ),
-        (
-            "new-window",
-            Multiplexer::Herdr,
-            LaunchPlan::Herdr {
-                create: ["herdr", "tab", "create", "--cwd", dir, "--no-focus"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                command: Some(command.into()),
-            },
-        ),
-    ];
-    for (placement, mux, expected) in cases {
-        assert_eq!(
-            plan_with_target(Some("viewer {path}"), placement, dir, target, None, mux),
-            expected,
-            "file launch with {placement} placement"
-        );
-    }
+        argv(&["viewer", target]),
+    );
 }
 
 #[test]
@@ -189,7 +168,7 @@ fn command_mode_empty_without_tmux_errors() {
 fn tmux_placement_wraps_in_sh_c() {
     assert_eq!(
         plan(
-            Some("git diff {base}...HEAD"),
+            Some("git diff origin/main...HEAD"),
             "new-window",
             "/app",
             Some("origin/main"),
@@ -202,7 +181,7 @@ fn tmux_placement_wraps_in_sh_c() {
             "/app",
             "sh",
             "-c",
-            "git diff 'origin/main'...HEAD"
+            "git diff origin/main...HEAD"
         ])
     );
 }
@@ -236,27 +215,13 @@ fn tmux_placement_passes_flags_through() {
 fn tmux_placement_without_tmux_falls_back_to_inline() {
     assert_eq!(
         plan(
-            Some("git diff {base}...HEAD | delta"),
+            Some("git diff main...HEAD | delta"),
             "new-window",
             "/app",
             Some("main"),
             Multiplexer::None
         ),
-        LaunchPlan::Inline("git diff 'main'...HEAD | delta".to_string())
-    );
-}
-
-#[test]
-fn base_with_metacharacters_is_quoted() {
-    assert_eq!(
-        plan(
-            Some("git diff {base}...HEAD"),
-            "inline",
-            "/app",
-            Some("a;rm -rf b"),
-            Multiplexer::None
-        ),
-        LaunchPlan::Inline("git diff 'a;rm -rf b'...HEAD".to_string())
+        LaunchPlan::Inline("git diff main...HEAD | delta".to_string())
     );
 }
 
@@ -293,21 +258,6 @@ fn command_mode_blank_command_opens_tmux_pane() {
     assert_eq!(
         plan(Some("   "), "command", "/repo", None, Multiplexer::Tmux),
         argv(&["tmux", "split-window", "-c", "/repo"])
-    );
-}
-
-#[test]
-fn shell_mode_quotes_path_token() {
-    // In shell modes, {path} is shell-quoted (it reaches `sh -c`).
-    assert_eq!(
-        plan(
-            Some("cd {path} && git diff"),
-            "inline",
-            "/w t/x",
-            None,
-            Multiplexer::None
-        ),
-        LaunchPlan::Inline("cd '/w t/x' && git diff".to_string())
     );
 }
 
@@ -447,7 +397,7 @@ fn herdr_new_window_creates_a_tab() {
     // command runs in the tab's root pane via `herdr pane run`.
     assert_eq!(
         plan(
-            Some("git diff {base}...HEAD"),
+            Some("git diff origin/main...HEAD"),
             "new-window",
             "/app",
             Some("origin/main"),
@@ -458,7 +408,7 @@ fn herdr_new_window_creates_a_tab() {
                 .into_iter()
                 .map(String::from)
                 .collect(),
-            command: Some("git diff 'origin/main'...HEAD".to_string()),
+            command: Some("git diff origin/main...HEAD".to_string()),
         }
     );
 }

@@ -14,7 +14,7 @@ pub(crate) fn arguments(
     selected: &Path,
     operation: FileOperation,
 ) -> color_eyre::Result<Vec<String>> {
-    let words = match operation {
+    let mut words = match operation {
         FileOperation::Stage => vec!["add", "-A"],
         FileOperation::Unstage => vec!["reset", "-q"],
         FileOperation::Discard => vec!["restore", "--staged", "--worktree"],
@@ -27,6 +27,20 @@ pub(crate) fn arguments(
         FileOperation::DeleteUntracked | FileOperation::Stage
     ) {
         let repo = git2::Repository::open(repo_path)?;
+        if matches!(operation, FileOperation::Discard) {
+            match repo.head() {
+                Ok(_) => {}
+                Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+                    if !repo.status_file(selected)?.is_index_new() {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Cannot discard a path that is not a staged addition before the first commit"
+                        ));
+                    }
+                    words = vec!["rm", "-f"];
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         let mut options = git2::StatusOptions::new();
         options.include_untracked(true).renames_head_to_index(true);
         let statuses = repo.statuses(Some(&mut options))?;
@@ -68,26 +82,38 @@ pub(crate) fn arguments(
 
 pub(crate) fn diff(repo_path: &Path, selected: &Path) -> color_eyre::Result<String> {
     let repo = git2::Repository::open(repo_path)?;
-    let untracked = repo.status_file(selected)?.is_wt_new();
+    let untracked = repo_path.join(selected).is_dir() || repo.status_file(selected)?.is_wt_new();
+    if untracked {
+        let mut options = git2::DiffOptions::new();
+        options
+            .include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .show_untracked_content(true)
+            .disable_pathspec_match(true)
+            .pathspec(selected);
+        let diff = repo.diff_index_to_workdir(None, Some(&mut options))?;
+        let mut text = String::new();
+        super::commit_files::diff_to_string(&diff, &mut text)?;
+        return Ok(if text.is_empty() {
+            "(no diff available)".into()
+        } else {
+            text
+        });
+    }
     let mut command = super::process::git_command(repo_path);
     command.current_dir(repo_path);
-    if untracked {
-        command
-            .args(["diff", "--no-index", "--", "/dev/null"])
-            .arg(selected);
-    } else {
-        let mut args = arguments(repo_path, selected, FileOperation::Diff)?;
-        if repo.head().is_err() {
+    let mut args = arguments(repo_path, selected, FileOperation::Diff)?;
+    match repo.head() {
+        Ok(_) => {}
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
             // An unborn branch has an index but no HEAD tree yet.
-            if !repo.is_empty()? {
-                return Err(color_eyre::eyre::eyre!("Cannot resolve repository HEAD"));
-            }
             args[2] = "--cached".to_owned();
         }
-        command.args(args);
+        Err(error) => return Err(error.into()),
     }
+    command.args(args);
     let output = command.output()?;
-    if !(output.status.success() || untracked && output.status.code() == Some(1)) {
+    if !output.status.success() {
         return Err(color_eyre::eyre::eyre!(
             "{}",
             String::from_utf8_lossy(&output.stderr).trim()

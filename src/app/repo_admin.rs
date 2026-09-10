@@ -66,6 +66,7 @@ impl App {
                         // SelectRepo below can land on the new row instead of
                         // silently no-op'ing against the stale row model.
                         self.sort_repos();
+                        self.rebuild_watcher();
                         self.action_tx.send(Action::RefreshRepo(repo_id.clone()))?;
                         self.action_tx.send(Action::SelectRepo(repo_id))?;
                     }
@@ -128,6 +129,7 @@ impl App {
                         self.active_worktree = None;
                     }
                     self.repo_list.repos.remove(idx);
+                    self.rebuild_watcher();
                     self.prune_github_cache(std::slice::from_ref(&id.0));
                     // Fix selection
                     if self.repo_list.repos.is_empty() {

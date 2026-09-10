@@ -46,6 +46,30 @@ mod repo_admin;
 #[cfg(test)]
 mod tests;
 
+#[derive(Default)]
+struct WatcherSlot {
+    requested: u64,
+    current: Option<(u64, RepoWatcher)>,
+}
+
+impl WatcherSlot {
+    fn request(&mut self) -> u64 {
+        self.requested = self
+            .requested
+            .checked_add(1)
+            .expect("watcher generation exhausted");
+        self.requested
+    }
+
+    fn install(&mut self, generation: u64, watcher: RepoWatcher) -> bool {
+        if generation != self.requested {
+            return false;
+        }
+        self.current = Some((generation, watcher));
+        true
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FocusPanel {
     Repos,
@@ -252,7 +276,7 @@ pub(crate) struct App {
     /// (which stops the underlying watches) only fires when we deliberately
     /// replace it via `rebuild_watcher`. Shared so the watcher can be built on
     /// a blocking thread and dropped into this slot once ready.
-    watcher: Arc<Mutex<Option<RepoWatcher>>>,
+    watcher: Arc<Mutex<WatcherSlot>>,
     /// Clone of `Tui::event_tx` so `rebuild_watcher` can run outside `run()`.
     tui_event_tx: Option<UnboundedSender<Event>>,
     /// Wall-clock of the last `DiscoverNewRepos` dispatch driven by a
@@ -426,7 +450,7 @@ impl App {
             active_worktree: None,
             liveness_probe_in_flight: false,
             theme,
-            watcher: Arc::new(Mutex::new(None)),
+            watcher: Arc::new(Mutex::new(WatcherSlot::default())),
             tui_event_tx: None,
             last_discovery: None,
             discovery_pending: false,
@@ -536,6 +560,9 @@ impl App {
         let exclude_dirs = self.config.watch.watch_exclude_dirs.clone();
         let watch_worktree_dirs = self.config.watch.watch_worktree_dirs;
         let slot = Arc::clone(&self.watcher);
+        // Request and installation use the same lock, so an older build can
+        // never replace watches requested for a newer membership snapshot.
+        let generation = slot.lock().unwrap().request();
         let repo_count = repo_paths.len();
         tokio::task::spawn_blocking(move || {
             let started = std::time::Instant::now();
@@ -548,7 +575,9 @@ impl App {
                 watch_worktree_dirs,
             ) {
                 Ok(w) => {
-                    *slot.lock().unwrap() = Some(w);
+                    if !slot.lock().unwrap().install(generation, w) {
+                        return;
+                    }
                     tracing::info!(
                         "filesystem watcher ready: {} repos in {:?}",
                         repo_count,

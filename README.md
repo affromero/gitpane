@@ -337,7 +337,7 @@ command = "tmux new-window -c {path}"   # new tmux window instead of a pane
 # command = "cursor {path}"             # or your editor: code, zed, nvim wrapper, ...
 ```
 
-The template is split on whitespace and run directly (no shell), so `{path}` is safe even with spaces, but other template arguments cannot contain spaces. Need a pipe or quoting? Wrap it: `command = "sh -c 'code {path}'"`.
+With `placement = "command"`, the template is split on whitespace and run directly, so `{path}` remains one argument even with spaces. Other template arguments cannot contain spaces. For shell quoting or pipes, use `placement = "inline"` with a command such as `command = 'code "{path}"'`. Use `split-window` or `new-window` to run the shell command in a multiplexer pane or window.
 
 **Example launchers** (set as `[open] command`):
 
@@ -401,7 +401,7 @@ command = "git diff {base}...HEAD | delta --side-by-side"
 # placement = "split-window -h"  # beside gitpane instead of a new window (default)
 ```
 
-The command runs via `sh -c` in the target directory, so pipes work; `{base}` and `{path}` are shell-quoted before substitution. `[review] placement` uses the same vocabulary as `[open] placement` (default `new-window`), so the same `split-window -h -t <named>` recipes direct the review window wherever you like. Viewers worth a look:
+The command runs via `sh -c` in the target directory, so pipes work. `{base}` and `{path}` preserve their literal argument values whether unquoted, single-quoted, or double-quoted in the template. Templates with placeholders reject nested shell substitutions, heredocs, and escaped placeholders. Put complex shell logic in a wrapper script that receives placeholders as quoted arguments, such as `review-script "{path}" "{base}"`. Do not pass them as code to `eval`, `sh -c`, or another interpreter. `[review] placement` uses the same vocabulary as `[open] placement` (default `new-window`), so the same `split-window -h -t <named>` recipes direct the review window wherever you like. Viewers worth a look:
 
 | Tool | What it gives |
 |------|---------------|
