@@ -69,8 +69,8 @@ pub(crate) fn arguments(
 pub(crate) fn diff(repo_path: &Path, selected: &Path) -> color_eyre::Result<String> {
     let repo = git2::Repository::open(repo_path)?;
     let untracked = repo.status_file(selected)?.is_wt_new();
-    let mut command = std::process::Command::new("git");
-    command.arg("-C").arg(repo_path).current_dir(repo_path);
+    let mut command = super::process::git_command(repo_path);
+    command.current_dir(repo_path);
     if untracked {
         command
             .args(["diff", "--no-index", "--", "/dev/null"])

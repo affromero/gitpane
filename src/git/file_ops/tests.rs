@@ -2,9 +2,7 @@ use super::*;
 use git2::Repository;
 
 fn git(path: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
+    let out = crate::git::process::git_command(path)
         .args(args)
         .output()
         .unwrap();
@@ -39,9 +37,7 @@ fn fixture(names: &[&str]) -> (tempfile::TempDir, Repository) {
 
 fn apply(path: &Path, name: &str, operation: FileOperation) {
     let args = arguments(path, Path::new(name), operation).unwrap();
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
+    let out = crate::git::process::git_command(path)
         .args(&args)
         .output()
         .unwrap();
@@ -56,6 +52,9 @@ fn apply(path: &Path, name: &str, operation: FileOperation) {
 #[cfg(unix)]
 #[test]
 fn selected_pattern_filename_does_not_change_other_files_or_index_entries() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     for selected in ["*.txt", ":(glob)*.txt", "[ab].txt"] {
         let (tmp, repo) = fixture(&[selected, "a.txt"]);
         for name in [selected, "a.txt"] {
@@ -106,6 +105,9 @@ fn selected_pattern_filename_does_not_change_other_files_or_index_entries() {
 #[cfg(unix)]
 #[test]
 fn deleting_untracked_pattern_filename_preserves_other_files() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, _) = fixture(&["tracked"]);
     for name in ["*.draft", "important.draft"] {
         std::fs::write(tmp.path().join(name), "draft").unwrap();
@@ -117,6 +119,9 @@ fn deleting_untracked_pattern_filename_preserves_other_files() {
 
 #[test]
 fn rename_actions_update_both_paths_and_preserve_other_staged_changes() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     for operation in [
         FileOperation::Stage,
         FileOperation::Unstage,
@@ -164,6 +169,9 @@ fn rename_actions_update_both_paths_and_preserve_other_staged_changes() {
 #[cfg(unix)]
 #[test]
 fn selected_diff_excludes_other_pattern_matches_in_worktree_and_commit() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, repo) = fixture(&["*.txt", "other.txt"]);
     for (name, text) in [("*.txt", "SELECTED"), ("other.txt", "UNRELATED")] {
         std::fs::write(tmp.path().join(name), text).unwrap();
@@ -179,6 +187,9 @@ fn selected_diff_excludes_other_pattern_matches_in_worktree_and_commit() {
 
 #[test]
 fn untracked_diff_reads_from_selected_repository() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, _) = fixture(&["tracked"]);
     std::fs::write(tmp.path().join("untracked"), "NEW CONTENT").unwrap();
     assert!(
@@ -190,6 +201,9 @@ fn untracked_diff_reads_from_selected_repository() {
 
 #[test]
 fn staging_rename_does_not_stage_a_recreated_source_file() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, repo) = fixture(&["old"]);
     git(tmp.path(), &["mv", "old", "new"]);
     std::fs::write(tmp.path().join("old"), "unrelated replacement").unwrap();
@@ -201,6 +215,9 @@ fn staging_rename_does_not_stage_a_recreated_source_file() {
 
 #[test]
 fn discarding_rename_refuses_to_overwrite_a_recreated_source() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, repo) = fixture(&["old"]);
     git(tmp.path(), &["mv", "old", "new"]);
     std::fs::write(tmp.path().join("old"), "unrelated replacement").unwrap();
@@ -224,6 +241,9 @@ fn discarding_rename_refuses_to_overwrite_a_recreated_source() {
 #[cfg(unix)]
 #[test]
 fn discarding_rename_preserves_a_recreated_dangling_symlink() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     let (tmp, repo) = fixture(&["old"]);
     git(tmp.path(), &["mv", "old", "new"]);
     std::os::unix::fs::symlink("missing-target", tmp.path().join("old")).unwrap();

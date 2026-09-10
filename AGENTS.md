@@ -8,6 +8,9 @@ human-facing overview, see [README.md](README.md).
 
 - Rust edition 2024, MSRV **1.88.0**. Install a matching toolchain (rustup recommended).
 - No services or network access are needed to build, run, or test.
+- Full integration coverage requires `git` on PATH, plus `sh` and `sleep` on
+  Unix. CLI tests use `crate::git::git_test_available()` to skip only missing
+  Git, with a reason visible under `--nocapture`; broken Git must fail tests.
 - Optional tooling for the full local suite: `cargo install cargo-audit cargo-llvm-cov`,
   plus [`just`](https://github.com/casey/just) for the task recipes below.
 
@@ -33,6 +36,11 @@ CI runs the same checks and treats every warning as an error, so `just ci` must
 pass before you push. Tests are inline `#[cfg(test)]` modules in the binary
 target, so a plain `cargo test --lib` finds nothing. Use `just test` or
 `cargo test --bin gitpane`.
+
+For changes to tests or subprocess dependencies, also run
+`python3 scripts/check_test_environment.py` on Linux or macOS. This runs every
+test harness with only `sh` and `sleep` on its PATH. Missing-Git skips count as
+passed in Rust's summary, so the normal suite with Git remains required.
 
 ## Pre-commit hooks (required)
 
@@ -84,6 +92,9 @@ map in [README.md#architecture](README.md#architecture). Key areas:
   caller performs the I/O (see `src/session/launcher/mod.rs`).
 - Validate or quote any user input that reaches a shell. argv launches avoid the
   shell entirely; `sh -c` paths quote every substituted value.
+- Use `crate::git::process::git_command(path)` for repository-scoped Git
+  subprocesses, including test fixtures. It clears inherited hook variables
+  so commands cannot target the calling repository instead of `path`.
 
 ## Pull requests
 

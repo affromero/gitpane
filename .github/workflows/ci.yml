@@ -34,9 +34,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-      - name: Test release metadata validation
+      - name: Test CI scripts
         # Ubuntu provides Python 3.11+ for the stdlib tomllib parser.
-        run: python3 -B -m unittest discover -s scripts -p 'test_release_metadata.py'
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -77,8 +77,15 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Require Git for full integration coverage
+        run: git --version
+
       - name: Run tests
         run: cargo test --all-targets --all-features
+
+      - name: Run tests without Git
+        if: runner.os != 'Windows'
+        run: python3 scripts/check_test_environment.py
 
       - name: Build release binary
         run: cargo build --release

@@ -3,24 +3,6 @@ use super::*;
 use std::{fs, path::Path};
 use tempfile::TempDir;
 
-/// Strip the git environment a hook injects (`GIT_DIR`, `GIT_INDEX_FILE`, …).
-/// This suite runs under the pre-push hook, whose env would otherwise redirect
-/// a spawned `git` at the outer repo instead of the test's temp repo.
-fn clear_inherited_git_env(cmd: &mut std::process::Command) {
-    for var in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_PREFIX",
-        "GIT_COMMON_DIR",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_NAMESPACE",
-    ] {
-        cmd.env_remove(var);
-    }
-}
-
 #[test]
 fn test_ahead_count_when_no_upstream_with_remote_ref() {
     // Local branch with no configured upstream but with a remote-tracking
@@ -193,6 +175,9 @@ fn fingerprint_buckets_remote_separately_from_local() {
 
 #[test]
 fn query_status_detects_commit_in_linked_worktree() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     // End-to-end through the public entry point with a real linked worktree:
     // a commit made inside the worktree (on its own branch) must change the
     // root's `refs` fingerprint while leaving the root's checked-out HEAD
@@ -203,23 +188,17 @@ fn query_status_detects_commit_in_linked_worktree() {
     fs::create_dir_all(&root).unwrap();
 
     let git = |args: &[&str], cwd: &Path| -> bool {
-        let mut cmd = std::process::Command::new("git");
+        let mut cmd = crate::git::process::git_command(cwd);
         cmd.args(args)
             .current_dir(cwd)
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "t@t")
             .env("GIT_COMMITTER_NAME", "Test")
             .env("GIT_COMMITTER_EMAIL", "t@t");
-        // Clear the git env a hook injects (this suite runs under the pre-push
-        // hook), so operations target `cwd`'s repo and not the outer one.
-        clear_inherited_git_env(&mut cmd);
         cmd.status().map(|s| s.success()).unwrap_or(false)
     };
 
-    if !git(&["init", "-q"], &root) {
-        eprintln!("skipping query_status_detects_commit_in_linked_worktree: git unavailable");
-        return;
-    }
+    assert!(git(&["init", "-q"], &root), "git init failed");
     assert!(git(&["commit", "-q", "--allow-empty", "-m", "init"], &root));
     // Linked worktree checked out on its own branch (shares root refs/heads).
     assert!(git(

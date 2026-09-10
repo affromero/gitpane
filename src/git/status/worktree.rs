@@ -81,10 +81,8 @@ pub(super) fn collect_worktree_info(
 pub(super) fn fetch_remote_silent(path: &Path) -> bool {
     use wait_timeout::ChildExt;
 
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(path)
-        .arg("fetch")
+    let mut cmd = crate::git::process::git_command(path);
+    cmd.arg("fetch")
         .arg("--quiet")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
