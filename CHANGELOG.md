@@ -4,6 +4,21 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-10
+
+### Fixed
+- Tests that require Git now skip when Git is absent and still fail when it is broken. CI covers restricted test environments. ([#80](https://github.com/affromero/gitpane/pull/80), [#77](https://github.com/affromero/gitpane/issues/77)) Reported by @DoomHammer.
+- Repository commands ignore inherited Git hook variables so operations and tests target the intended repository. ([#80](https://github.com/affromero/gitpane/pull/80))
+- Push and pull treat remote names as literal operands. Quoted command placeholders preserve filenames and refs without executing shell substitutions. ([#82](https://github.com/affromero/gitpane/pull/82))
+- Adding or removing repositories updates filesystem watches, and older watcher builds cannot replace newer repository sets. ([#82](https://github.com/affromero/gitpane/pull/82))
+- Untracked directories show nested file diffs. Discard works for selected staged additions before the first commit, and failed submodule queries surface errors. ([#82](https://github.com/affromero/gitpane/pull/82))
+- Default file opening, revealing, and GitHub links use native Windows file and URL associations. ([#82](https://github.com/affromero/gitpane/pull/82))
+
+### Changed
+- Release publication requires successful CI, documentation, security, coverage, and secret scanning. CI tests extracted source packages, including tests without Git on Unix. ([#82](https://github.com/affromero/gitpane/pull/82))
+- Shell templates with placeholders reject nested substitutions, heredocs, extended quoting, and escaped placeholders. Use a wrapper script for complex shell commands. ([#82](https://github.com/affromero/gitpane/pull/82))
+- Update toml to 1.1.5 and the GitHub release action to 3.0.3. ([#79](https://github.com/affromero/gitpane/pull/79), [#78](https://github.com/affromero/gitpane/pull/78)) Thanks @dependabot.
+
 ## [0.16.0] - 2026-09-08
 
 ### Added
