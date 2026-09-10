@@ -133,6 +133,23 @@ pub(crate) fn resolve_sync_remote(
     preferred_remote(&repo)
 }
 
+/// Keep repository and branch operands literal when selecting a sync remote.
+pub(crate) fn sync_arguments(
+    path: &std::path::Path,
+    branch: &str,
+    push: bool,
+    mut args: Vec<String>,
+) -> Vec<String> {
+    if !branch.is_empty()
+        && branch != "(no branch)"
+        && branch != "HEAD"
+        && let Some(remote) = resolve_sync_remote(path, branch, push)
+    {
+        args.extend(["--".into(), remote, branch.into()]);
+    }
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,7 +159,7 @@ mod tests {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "git::file_ops::tests::untracked_diff_reads_from_selected_repository",
+                "git::file_ops::tests::tracked_diff_includes_staged_and_unstaged_content_only_for_selected_file",
                 "--nocapture",
             ])
             .env("PATH", directory)
@@ -207,6 +224,9 @@ mod tests {
             "git::file_ops::tests::rename_actions_update_both_paths_and_preserve_other_staged_changes",
             "git::file_ops::tests::selected_diff_excludes_other_pattern_matches_in_worktree_and_commit",
             "git::file_ops::tests::untracked_diff_reads_from_selected_repository",
+            "git::file_ops::tests::tracked_diff_includes_staged_and_unstaged_content_only_for_selected_file",
+            "git::file_ops::tests::discarding_staged_addition_before_first_commit_preserves_other_changes",
+            "git::tests::pushing_to_a_flag_named_remote_cannot_force_divergent_history",
             "git::file_ops::tests::staging_rename_does_not_stage_a_recreated_source_file",
             "git::file_ops::tests::discarding_rename_refuses_to_overwrite_a_recreated_source",
             "git::file_ops::tests::discarding_rename_preserves_a_recreated_dangling_symlink",
@@ -281,6 +301,76 @@ mod tests {
             resolve_sync_remote(tmp.path(), "main", false).as_deref(),
             Some("origin")
         );
+    }
+
+    #[test]
+    fn pushing_to_a_flag_named_remote_cannot_force_divergent_history() {
+        if !git_test_available() {
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let local_path = tmp.path().join("local");
+        let remote_path = tmp.path().join("remote");
+        let repo = git2::Repository::init(&local_path).unwrap();
+        let remote = git2::Repository::init_bare(&remote_path).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("push.default", "current")
+            .unwrap();
+        for name in ["--force", "main"] {
+            repo.remote(name, remote_path.to_str().unwrap()).unwrap();
+        }
+        let commit = |text: &str| {
+            std::fs::write(local_path.join("file"), text).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("file")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            let parents: Vec<_> = repo
+                .head()
+                .ok()
+                .map(|head| head.peel_to_commit().unwrap())
+                .into_iter()
+                .collect();
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                text,
+                &tree,
+                &parents.iter().collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        let first = commit("first");
+        let remote_tip = commit("remote change");
+        let initial_push = process::git_command(&local_path)
+            .args(["push", "--", "--force", "main"])
+            .output()
+            .unwrap();
+        assert!(
+            initial_push.status.success(),
+            "{}",
+            String::from_utf8_lossy(&initial_push.stderr)
+        );
+        repo.reset(
+            &repo.find_object(first, None).unwrap(),
+            git2::ResetType::Hard,
+            None,
+        )
+        .unwrap();
+        let local_tip = commit("divergent local change");
+        let args = sync_arguments(&local_path, "main", true, vec!["push".into()]);
+        let output = process::git_command(&local_path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("rejected"));
+        assert_eq!(remote.refname_to_id("refs/heads/main").unwrap(), remote_tip);
+        assert_eq!(repo.head().unwrap().target(), Some(local_tip));
     }
 
     #[test]

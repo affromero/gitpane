@@ -11,6 +11,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  docs:
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: read
+
+  security:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
+  coverage:
+    uses: ./.github/workflows/coverage.yml
+    permissions:
+      contents: read
+
+  gitleaks:
+    uses: ./.github/workflows/gitleaks.yml
+    permissions:
+      contents: read
+
   validate:
     name: Validate release metadata
     runs-on: ubuntu-latest
@@ -98,7 +123,7 @@ jobs:
 
   release:
     name: Upload Assets
-    needs: build
+    needs: [build, ci, docs, security, coverage, gitleaks]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -106,6 +131,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          pattern: gitpane-*
           path: artifacts
           merge-multiple: true
 

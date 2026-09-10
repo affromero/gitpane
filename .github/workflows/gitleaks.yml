@@ -2,6 +2,7 @@ name: Gitleaks
 
 # Scan the repository for committed secrets and keys on every push and PR.
 on:
+  workflow_call:
   push:
   pull_request:
 

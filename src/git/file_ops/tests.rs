@@ -187,15 +187,140 @@ fn selected_diff_excludes_other_pattern_matches_in_worktree_and_commit() {
 
 #[test]
 fn untracked_diff_reads_from_selected_repository() {
-    if !crate::git::git_test_available() {
-        return;
-    }
     let (tmp, _) = fixture(&["tracked"]);
     std::fs::write(tmp.path().join("untracked"), "NEW CONTENT").unwrap();
     assert!(
         diff(tmp.path(), Path::new("untracked"))
             .unwrap()
             .contains("NEW CONTENT")
+    );
+}
+
+#[test]
+fn untracked_directory_diff_includes_nested_files_and_preserves_index() {
+    let (tmp, repo) = fixture(&["tracked"]);
+    std::fs::create_dir_all(tmp.path().join("new/nested")).unwrap();
+    std::fs::write(tmp.path().join("new/first"), "FIRST CONTENT\n").unwrap();
+    std::fs::write(tmp.path().join("new/nested/second"), "NESTED CONTENT\n").unwrap();
+    std::fs::write(tmp.path().join("unrelated"), "EXCLUDED CONTENT\n").unwrap();
+    let index_before = std::fs::read(repo.path().join("index")).unwrap();
+    let text = diff(tmp.path(), Path::new("new/")).unwrap();
+    assert!(text.contains("FIRST CONTENT"));
+    assert!(text.contains("NESTED CONTENT"));
+    assert!(!text.contains("EXCLUDED CONTENT"));
+    assert_eq!(
+        std::fs::read(repo.path().join("index")).unwrap(),
+        index_before
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn untracked_pattern_directory_diff_is_literal_and_does_not_follow_symlinks() {
+    let (tmp, _) = fixture(&["tracked"]);
+    std::fs::create_dir(tmp.path().join("*.draft")).unwrap();
+    std::fs::create_dir(tmp.path().join("other.draft")).unwrap();
+    std::fs::write(tmp.path().join("*.draft/file"), "SELECTED CONTENT\n").unwrap();
+    std::fs::write(tmp.path().join("other.draft/file"), "UNRELATED CONTENT\n").unwrap();
+    std::os::unix::fs::symlink("../other.draft/file", tmp.path().join("*.draft/link")).unwrap();
+    let text = diff(tmp.path(), Path::new("*.draft/")).unwrap();
+    assert!(text.contains("SELECTED CONTENT"));
+    assert!(text.contains("../other.draft/file"));
+    assert!(!text.contains("UNRELATED CONTENT"));
+}
+
+#[test]
+fn untracked_binary_diff_reports_binary_content() {
+    let (tmp, _) = fixture(&["tracked"]);
+    std::fs::write(tmp.path().join("binary"), b"\0\x01\x02").unwrap();
+    let text = diff(tmp.path(), Path::new("binary")).unwrap();
+    assert!(text.contains("binary"));
+    assert!(text.contains("Binary"));
+}
+
+#[test]
+fn tracked_diff_includes_staged_and_unstaged_content_only_for_selected_file() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (tmp, repo) = fixture(&["selected", "other"]);
+    std::fs::write(tmp.path().join("selected"), "STAGED CONTENT\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("selected")).unwrap();
+    index.write().unwrap();
+    std::fs::write(
+        tmp.path().join("selected"),
+        "STAGED CONTENT\nUNSTAGED CONTENT\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("other"), "UNRELATED CONTENT\n").unwrap();
+    let text = diff(tmp.path(), Path::new("selected")).unwrap();
+    assert!(text.contains("STAGED CONTENT"));
+    assert!(text.contains("UNSTAGED CONTENT"));
+    assert!(!text.contains("UNRELATED CONTENT"));
+}
+
+#[test]
+fn discarding_staged_addition_before_first_commit_preserves_other_changes() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    for name in ["selected", "other"] {
+        std::fs::write(tmp.path().join(name), format!("{name} content\n")).unwrap();
+    }
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("selected")).unwrap();
+    index.add_path(Path::new("other")).unwrap();
+    index.write().unwrap();
+    std::fs::write(tmp.path().join("untracked"), "untracked content\n").unwrap();
+    std::fs::write(tmp.path().join("selected"), "edited staged addition\n").unwrap();
+    apply(tmp.path(), "selected", FileOperation::Discard);
+    let repo = Repository::open(tmp.path()).unwrap();
+    assert!(!tmp.path().join("selected").exists());
+    assert!(
+        repo.index()
+            .unwrap()
+            .get_path(Path::new("selected"), 0)
+            .is_none()
+    );
+    assert!(repo.status_file(Path::new("other")).unwrap().is_index_new());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("other")).unwrap(),
+        "other content\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("untracked")).unwrap(),
+        "untracked content\n"
+    );
+}
+
+#[test]
+fn unborn_discard_refuses_untracked_paths_and_directories() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    std::fs::create_dir(tmp.path().join("directory")).unwrap();
+    std::fs::write(tmp.path().join("directory/staged"), "staged content").unwrap();
+    std::fs::write(tmp.path().join("untracked"), "untracked content").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("directory/staged")).unwrap();
+    index.write().unwrap();
+    let index_before = std::fs::read(repo.path().join("index")).unwrap();
+    for selected in ["untracked", "directory/"] {
+        assert!(arguments(tmp.path(), Path::new(selected), FileOperation::Discard).is_err());
+    }
+    assert_eq!(
+        std::fs::read(repo.path().join("index")).unwrap(),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("directory/staged")).unwrap(),
+        "staged content"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("untracked")).unwrap(),
+        "untracked content"
     );
 }
 

@@ -1,5 +1,6 @@
 use super::*;
 mod robustness;
+mod watcher_membership;
 use crate::git::status::StashEntry;
 use std::path::Path;
 

@@ -331,3 +331,21 @@ fn run_git_op_capturing_registers_and_unregisters() {
         "killable registry not empty after run_git_op_capturing"
     );
 }
+#[test]
+fn failed_git_queries_report_stderr_instead_of_empty_content() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    git2::Repository::init(tmp.path()).unwrap();
+    let output = super::git_command(tmp.path())
+        .args(["log", "missing-reference"])
+        .output();
+    let error = super::output_text(output).unwrap_err().to_string();
+    assert!(error.contains("missing-reference"));
+    assert!(error.contains("failed"));
+    let output = super::git_command(tmp.path())
+        .args(["status", "--short"])
+        .output();
+    assert!(super::output_text(output).unwrap().is_empty());
+}

@@ -42,6 +42,11 @@ For changes to tests or subprocess dependencies, also run
 test harness with only `sh` and `sleep` on its PATH. Missing-Git skips count as
 passed in Rust's summary, so the normal suite with Git remains required.
 
+Before a release, also run `python3.14 scripts/check_source_package.py`. It
+extracts the Cargo source archive into a temporary directory and runs its tests
+with a fresh build target, including the no-Git check on Unix. CI runs this on
+Linux, macOS, and Windows, and publication requires all release checks to pass.
+
 ## Pre-commit hooks (required)
 
 Install them before contributing:

@@ -101,7 +101,7 @@ pub(crate) fn batch_diff_stats(
     Ok(results)
 }
 
-fn diff_to_string(diff: &Diff<'_>, output: &mut String) -> color_eyre::Result<()> {
+pub(super) fn diff_to_string(diff: &Diff<'_>, output: &mut String) -> color_eyre::Result<()> {
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
         let prefix = match line.origin() {
             '+' => "+",

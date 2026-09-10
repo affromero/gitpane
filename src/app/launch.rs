@@ -109,8 +109,19 @@ impl App {
 
     /// Spawn an OS opener (`open` / `xdg-open`) detached. Shares the launch
     /// machinery used by `[open]`/`[review]`, just without a config template.
+    #[cfg(not(windows))]
     pub(super) fn os_open(&self, argv: Vec<String>, cwd: std::path::PathBuf, label: &'static str) {
         spawn_detached(argv, cwd, self.action_tx.clone(), label);
+    }
+
+    #[cfg(windows)]
+    pub(super) fn os_open_windows(&self, target: std::path::PathBuf, label: &'static str) {
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = crate::session::opener::open(&target) {
+                let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
+            }
+        });
     }
 
     /// Open a changed file: via the configured `[open]` command when set (so
@@ -127,19 +138,24 @@ impl App {
         if request.command.is_some() {
             self.launch_open_request(request, tui)?;
         } else {
-            let opener = if cfg!(target_os = "macos") {
-                "open"
-            } else {
-                "xdg-open"
-            };
-            self.os_open(
-                vec![
-                    opener.to_string(),
-                    request.target.to_string_lossy().into_owned(),
-                ],
-                request.dir,
-                "open",
-            );
+            #[cfg(windows)]
+            self.os_open_windows(request.target, "open");
+            #[cfg(not(windows))]
+            {
+                let opener = if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                };
+                self.os_open(
+                    vec![
+                        opener.to_string(),
+                        request.target.to_string_lossy().into_owned(),
+                    ],
+                    request.dir,
+                    "open",
+                );
+            }
         }
         Ok(())
     }
@@ -161,7 +177,7 @@ impl App {
     }
 
     /// Reveal a changed file in the OS file manager: Finder selects it on macOS
-    /// (`open -R`); elsewhere open the enclosing folder (`xdg-open <dir>`).
+    /// (`open -R`); elsewhere open the enclosing folder with the platform opener.
     pub(super) fn reveal_file_external(&self, id: &RepoId, rel: &std::path::Path) {
         let Some(abs) = self.file_op_dir(id).map(|d| d.join(rel)) else {
             return;
@@ -170,19 +186,24 @@ impl App {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| abs.clone());
-        let argv = if cfg!(target_os = "macos") {
-            vec![
-                "open".to_string(),
-                "-R".to_string(),
-                abs.to_string_lossy().into_owned(),
-            ]
-        } else {
-            vec![
-                "xdg-open".to_string(),
-                parent.to_string_lossy().into_owned(),
-            ]
-        };
-        self.os_open(argv, parent, "reveal");
+        #[cfg(windows)]
+        self.os_open_windows(parent, "reveal");
+        #[cfg(not(windows))]
+        {
+            let argv = if cfg!(target_os = "macos") {
+                vec![
+                    "open".to_string(),
+                    "-R".to_string(),
+                    abs.to_string_lossy().into_owned(),
+                ]
+            } else {
+                vec![
+                    "xdg-open".to_string(),
+                    parent.to_string_lossy().into_owned(),
+                ]
+            };
+            self.os_open(argv, parent, "reveal");
+        }
     }
     /// Execute a [`crate::session::launcher::LaunchPlan`] for a verb (`open`/`review`)
     /// targeting `dir`. Needs `tui` so an `Inline` plan can suspend the TUI,

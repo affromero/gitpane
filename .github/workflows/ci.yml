@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: [main]
     tags: ["v*"]
@@ -80,12 +81,20 @@ jobs:
       - name: Require Git for full integration coverage
         run: git --version
 
+      - name: Install Python for package validation
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       - name: Run tests
-        run: cargo test --all-targets --all-features
+        run: cargo test --locked --all-targets --all-features
 
       - name: Run tests without Git
         if: runner.os != 'Windows'
         run: python3 scripts/check_test_environment.py
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --locked --release
+
+      - name: Test distributed source package
+        run: python3 scripts/check_source_package.py

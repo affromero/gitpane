@@ -10,6 +10,8 @@
 
 use crate::session::env::Multiplexer;
 
+mod shell;
+
 /// How a verb places the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Placement {
@@ -81,14 +83,6 @@ fn substitute_argv(template: &str, dir: &str, base: Option<&str>) -> Vec<String>
         .split_whitespace()
         .map(|tok| substitute_placeholders(tok, dir, base))
         .collect()
-}
-
-/// Substitute `{path}` and `{base}` into a template destined for `sh -c`,
-/// shell-quoting each value so a path with spaces or a ref with shell
-/// metacharacters cannot break out of the command.
-fn substitute_shell(template: &str, dir: &str, base: Option<&str>) -> String {
-    let base = base.map(shell_single_quote);
-    substitute_placeholders(template, &shell_single_quote(dir), base.as_deref())
 }
 
 /// Parse a placement string. `command`/`inline`/`ask` are keywords; anything
@@ -171,6 +165,14 @@ pub(crate) fn plan_with_target(
         Err(e) => return LaunchPlan::Error(e),
     };
     let cmd = command.filter(|c| !c.trim().is_empty());
+    let shell = if matches!(placement, Placement::Command) {
+        None
+    } else {
+        match cmd.map(|c| shell::substitute(c, target, base)).transpose() {
+            Ok(command) => command,
+            Err(error) => return LaunchPlan::Error(error),
+        }
+    };
     match placement {
         Placement::Command => match cmd {
             Some(c) => LaunchPlan::Spawn(substitute_argv(c, target, base)),
@@ -190,39 +192,32 @@ pub(crate) fn plan_with_target(
                 }
             },
         },
-        Placement::Tmux(flags) => {
-            let shell = cmd.map(|c| substitute_shell(c, target, base));
-            match mux {
-                Multiplexer::Tmux => {
-                    LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref()))
-                }
-                Multiplexer::Herdr => match herdr_create_argv(&flags, dir) {
-                    Ok(create) => LaunchPlan::Herdr {
-                        create,
-                        command: shell,
-                    },
-                    Err(e) => LaunchPlan::Error(e),
+        Placement::Tmux(flags) => match mux {
+            Multiplexer::Tmux => LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref())),
+            Multiplexer::Herdr => match herdr_create_argv(&flags, dir) {
+                Ok(create) => LaunchPlan::Herdr {
+                    create,
+                    command: shell,
                 },
-                Multiplexer::None => {
-                    if let Some(s) = shell {
-                        LaunchPlan::Inline(s)
-                    } else {
-                        LaunchPlan::Error(
-                            "run gitpane inside tmux or herdr for this placement".into(),
-                        )
-                    }
+                Err(e) => LaunchPlan::Error(e),
+            },
+            Multiplexer::None => {
+                if let Some(s) = shell {
+                    LaunchPlan::Inline(s)
+                } else {
+                    LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
                 }
             }
-        }
-        Placement::Inline => match cmd {
-            Some(c) => LaunchPlan::Inline(substitute_shell(c, target, base)),
+        },
+        Placement::Inline => match shell {
+            Some(command) => LaunchPlan::Inline(command),
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
         Placement::Ask => match mux {
             Multiplexer::Tmux | Multiplexer::Herdr => LaunchPlan::Ask,
             Multiplexer::None => {
-                if let Some(c) = cmd {
-                    LaunchPlan::Inline(substitute_shell(c, target, base))
+                if let Some(command) = shell {
+                    LaunchPlan::Inline(command)
                 } else {
                     LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
                 }
@@ -480,3 +475,6 @@ pub(crate) fn forward_right_click_in_herdr() {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod tests_shell;

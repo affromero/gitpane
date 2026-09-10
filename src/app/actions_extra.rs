@@ -262,16 +262,7 @@ impl App {
                         // remote) or the repo has no remote. `"HEAD"` is the
                         // git2 shorthand for a detached HEAD — no branch to
                         // sync, so run bare and let git report it.
-                        let mut git_args = git_op;
-                        if !branch.is_empty()
-                            && branch != "(no branch)"
-                            && branch != "HEAD"
-                            && let Some(remote) =
-                                crate::git::resolve_sync_remote(&path, &branch, is_push)
-                        {
-                            git_args.push(remote);
-                            git_args.push(branch);
-                        }
+                        let git_args = crate::git::sync_arguments(&path, &branch, is_push, git_op);
                         let output = crate::git::process::run_git_op_capturing(&path, &git_args);
                         match output {
                             Ok(o) if o.status.success() => {
@@ -466,20 +457,23 @@ impl App {
                                 let output = crate::git::process::git_command(&submodule_abs)
                                     .args(["diff", "HEAD"])
                                     .output();
-                                let body = match output {
-                                    Ok(o) => {
-                                        let text = String::from_utf8_lossy(&o.stdout).to_string();
+                                let body = match crate::git::process::output_text(output) {
+                                    Ok(text) => {
                                         if text.is_empty() {
                                             // Fallback: show status
-                                            let status_out =
+                                            let status_out = crate::git::process::output_text(
                                                 crate::git::process::git_command(&submodule_abs)
                                                     .args(["status", "--short"])
-                                                    .output()
-                                                    .map(|o| {
-                                                        String::from_utf8_lossy(&o.stdout)
-                                                            .to_string()
-                                                    })
-                                                    .unwrap_or_default();
+                                                    .output(),
+                                            );
+                                            let status_out = match status_out {
+                                                Ok(text) => text,
+                                                Err(error) => {
+                                                    let _ =
+                                                        tx.send(Action::Error(error.to_string()));
+                                                    return;
+                                                }
+                                            };
                                             if status_out.is_empty() {
                                                 "(no changes detected)".to_string()
                                             } else {
@@ -490,10 +484,10 @@ impl App {
                                         }
                                     }
                                     Err(e) => {
-                                        format!(
-                                            "Failed to get submodule diff: {}",
-                                            crate::git::describe_spawn_error(&e)
-                                        )
+                                        let _ = tx.send(Action::Error(format!(
+                                            "Failed to get submodule diff: {e}"
+                                        )));
+                                        return;
                                     }
                                 };
                                 let _ = tx.send(Action::DiffLoaded {
@@ -512,19 +506,20 @@ impl App {
                                 let output = crate::git::process::git_command(&submodule_abs)
                                     .args(["log", "--oneline", "--graph", &range])
                                     .output();
-                                let body = match output {
-                                    Ok(o) => {
-                                        let text = String::from_utf8_lossy(&o.stdout).to_string();
+                                let body = match crate::git::process::output_text(output) {
+                                    Ok(text) => {
                                         if text.is_empty() {
                                             "(no commits in range)".to_string()
                                         } else {
                                             text
                                         }
                                     }
-                                    Err(e) => format!(
-                                        "Failed to get submodule log: {}",
-                                        crate::git::describe_spawn_error(&e)
-                                    ),
+                                    Err(e) => {
+                                        let _ = tx.send(Action::Error(format!(
+                                            "Failed to get submodule log: {e}"
+                                        )));
+                                        return;
+                                    }
                                 };
                                 let _ = tx.send(Action::DiffLoaded {
                                     generation: diff_gen,
@@ -665,13 +660,19 @@ impl App {
                 self.github_fetched(repo_id, generation, result);
             }
             Action::OpenUrl(ref url) => {
-                let opener = if cfg!(target_os = "macos") {
-                    "open"
-                } else {
-                    "xdg-open"
-                };
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
+                #[cfg(windows)]
+                self.os_open_windows(std::path::PathBuf::from(url), "github");
+                #[cfg(not(windows))]
+                {
+                    let opener = if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                    self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
+                }
             }
             Action::ShowGithubItem {
                 url,

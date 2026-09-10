@@ -37,6 +37,23 @@ pub(crate) fn git_command(path: &Path) -> std::process::Command {
     cmd
 }
 
+/// Decode Git output only after checking both spawn and command failures.
+pub(crate) fn output_text(
+    output: std::io::Result<std::process::Output>,
+) -> color_eyre::Result<String> {
+    let output = output
+        .map_err(|error| color_eyre::eyre::eyre!("{}", super::describe_spawn_error(&error)))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Git command failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Seconds a user-initiated mutating git op (pull/push/submodule, and the file
 /// and worktree ops) may run before it is killed as a process group. Long
 /// enough to let a large transfer finish, but bounded so a stalled connection
