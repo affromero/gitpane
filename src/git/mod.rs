@@ -178,6 +178,75 @@ mod tests {
         assert_git_dependency_failure(directory.path(), "cannot execute git --version");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn hook_environment_cannot_redirect_repository_operations() {
+        if !git_test_available() {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        repo.index().unwrap().write().unwrap();
+        std::fs::write(directory.path().join("sentinel"), "preserve this checkout").unwrap();
+        let snapshot = || {
+            walkdir::WalkDir::new(directory.path())
+                .into_iter()
+                .map(Result::unwrap)
+                .filter(|entry| entry.file_type().is_file())
+                .map(|entry| {
+                    let path = entry.into_path();
+                    let contents = std::fs::read(&path).unwrap();
+                    (path, contents)
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = snapshot();
+        let tests = [
+            "git::file_ops::tests::selected_pattern_filename_does_not_change_other_files_or_index_entries",
+            "git::file_ops::tests::deleting_untracked_pattern_filename_preserves_other_files",
+            "git::file_ops::tests::rename_actions_update_both_paths_and_preserve_other_staged_changes",
+            "git::file_ops::tests::selected_diff_excludes_other_pattern_matches_in_worktree_and_commit",
+            "git::file_ops::tests::untracked_diff_reads_from_selected_repository",
+            "git::file_ops::tests::staging_rename_does_not_stage_a_recreated_source_file",
+            "git::file_ops::tests::discarding_rename_refuses_to_overwrite_a_recreated_source",
+            "git::file_ops::tests::discarding_rename_preserves_a_recreated_dangling_symlink",
+            "app::launch::tests::configured_file_open_passes_file_to_editor_with_directory_cwd",
+            "app::launch::tests::placement_picker_preserves_file_target_and_directory_cwd",
+            "git::process::tests::run_git_op_capturing_registers_and_unregisters",
+            "git::status::tests_refs::query_status_detects_commit_in_linked_worktree",
+            "watcher::tests::watch_dirs_respects_gitignore",
+        ];
+        // Every injected path refers to this sacrificial repository. Even a
+        // regression must never direct a test operation at the real checkout.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .args(tests)
+            .current_dir(directory.path())
+            .env("GIT_DIR", repo.path())
+            .env("GIT_WORK_TREE", directory.path())
+            .env("GIT_INDEX_FILE", repo.path().join("index"))
+            .env("GIT_COMMON_DIR", repo.path())
+            .env("GIT_OBJECT_DIRECTORY", repo.path().join("objects"))
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            .env_remove("GIT_PREFIX")
+            .env_remove("GIT_NAMESPACE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            snapshot() == before,
+            "test operations modified the inherited repository\n{stdout}\n{stderr}"
+        );
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        for name in tests {
+            assert!(
+                stdout.contains(&format!("test {name} ... ok")),
+                "expected integration test did not pass: {name}\n{stdout}\n{stderr}"
+            );
+        }
+    }
+
     #[test]
     fn describe_spawn_error_flags_missing_git() {
         let err = io::Error::new(io::ErrorKind::NotFound, "No such file or directory");

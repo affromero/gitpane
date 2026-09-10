@@ -463,9 +463,7 @@ impl App {
                                     label,
                                     "─".repeat(40),
                                 );
-                                let output = std::process::Command::new("git")
-                                    .arg("-C")
-                                    .arg(&submodule_abs)
+                                let output = crate::git::process::git_command(&submodule_abs)
                                     .args(["diff", "HEAD"])
                                     .output();
                                 let body = match output {
@@ -473,15 +471,15 @@ impl App {
                                         let text = String::from_utf8_lossy(&o.stdout).to_string();
                                         if text.is_empty() {
                                             // Fallback: show status
-                                            let status_out = std::process::Command::new("git")
-                                                .arg("-C")
-                                                .arg(&submodule_abs)
-                                                .args(["status", "--short"])
-                                                .output()
-                                                .map(|o| {
-                                                    String::from_utf8_lossy(&o.stdout).to_string()
-                                                })
-                                                .unwrap_or_default();
+                                            let status_out =
+                                                crate::git::process::git_command(&submodule_abs)
+                                                    .args(["status", "--short"])
+                                                    .output()
+                                                    .map(|o| {
+                                                        String::from_utf8_lossy(&o.stdout)
+                                                            .to_string()
+                                                    })
+                                                    .unwrap_or_default();
                                             if status_out.is_empty() {
                                                 "(no changes detected)".to_string()
                                             } else {
@@ -511,9 +509,7 @@ impl App {
                                     "─".repeat(40),
                                 );
                                 let range = format!("{}..{}", old_oid, new_oid);
-                                let output = std::process::Command::new("git")
-                                    .arg("-C")
-                                    .arg(&submodule_abs)
+                                let output = crate::git::process::git_command(&submodule_abs)
                                     .args(["log", "--oneline", "--graph", &range])
                                     .output();
                                 let body = match output {

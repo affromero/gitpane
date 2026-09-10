@@ -92,6 +92,9 @@ map in [README.md#architecture](README.md#architecture). Key areas:
   caller performs the I/O (see `src/session/launcher/mod.rs`).
 - Validate or quote any user input that reaches a shell. argv launches avoid the
   shell entirely; `sh -c` paths quote every substituted value.
+- Use `crate::git::process::git_command(path)` for repository-scoped Git
+  subprocesses, including test fixtures. It clears inherited hook variables
+  so commands cannot target the calling repository instead of `path`.
 
 ## Pull requests
 

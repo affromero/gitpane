@@ -12,6 +12,31 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+/// Keep explicit repository selection independent of the Git hook that may
+/// have launched gitpane or its tests. Preserve authentication and user config.
+pub(crate) fn clear_inherited_git_env(cmd: &mut std::process::Command) {
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        cmd.env_remove(var);
+    }
+}
+
+/// Construct a Git command scoped to `path`, even when called from a hook.
+pub(crate) fn git_command(path: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    clear_inherited_git_env(&mut cmd);
+    cmd.arg("-C").arg(path);
+    cmd
+}
+
 /// Seconds a user-initiated mutating git op (pull/push/submodule, and the file
 /// and worktree ops) may run before it is killed as a process group. Long
 /// enough to let a large transfer finish, but bounded so a stalled connection
@@ -122,12 +147,8 @@ pub(crate) fn run_git_op_capturing(
     args: &[String],
 ) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(path)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut cmd = git_command(path);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = spawn_killable(&mut cmd)?;
     let pid = child.id() as i32;
     let result = capture_with_timeout(&mut child, MUTATING_OP_TIMEOUT);
@@ -145,12 +166,8 @@ pub(crate) fn run_git_op_capturing(
     args: &[String],
 ) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(path)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut cmd = git_command(path);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.output()
 }
 

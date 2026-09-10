@@ -2,9 +2,7 @@ use super::*;
 use git2::Repository;
 
 fn git(path: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
+    let out = crate::git::process::git_command(path)
         .args(args)
         .output()
         .unwrap();
@@ -39,9 +37,7 @@ fn fixture(names: &[&str]) -> (tempfile::TempDir, Repository) {
 
 fn apply(path: &Path, name: &str, operation: FileOperation) {
     let args = arguments(path, Path::new(name), operation).unwrap();
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
+    let out = crate::git::process::git_command(path)
         .args(&args)
         .output()
         .unwrap();

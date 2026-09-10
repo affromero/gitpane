@@ -811,7 +811,9 @@ mod tests {
         let crate::session::launcher::LaunchPlan::Spawn(argv) = plan else {
             panic!("expected an argv launch")
         };
-        let output = std::process::Command::new(&argv[0])
+        let mut command = std::process::Command::new(&argv[0]);
+        crate::git::process::clear_inherited_git_env(&mut command);
+        let output = command
             .args(&argv[1..])
             .current_dir(&request.dir)
             .output()

@@ -258,9 +258,8 @@ fn run_git_op_capturing_registers_and_unregisters() {
 
     let tmp = tempfile::TempDir::new().unwrap();
     let path = tmp.path().to_path_buf();
-    let init = std::process::Command::new("git")
+    let init = super::git_command(&path)
         .arg("init")
-        .arg(&path)
         .status()
         .expect("run git init");
     assert!(init.success(), "git init failed: {init}");

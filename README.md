@@ -650,6 +650,10 @@ The normal CI test run requires Git and exercises the CLI integration tests.
 For full coverage in a Nix package, include `git` in the package arguments and
 set `nativeCheckInputs = [ git ];`.
 
+Repository-scoped Git commands clear inherited hook variables such as
+`GIT_DIR` and `GIT_INDEX_FILE`. Tests also verify that running under a Git hook
+cannot redirect operations into the calling checkout.
+
 Install the local hooks before contributing:
 
 ```bash
