@@ -755,6 +755,9 @@ mod tests {
 
     #[test]
     fn watch_dirs_respects_gitignore() {
+        if !crate::git::git_test_available() {
+            return;
+        }
         // `ignore` only applies .gitignore inside a real git repo (require_git
         // defaults to true), so we actually `git init` rather than fake `.git`.
         let tmp = tempfile::TempDir::new().unwrap();
@@ -777,11 +780,8 @@ mod tests {
         ] {
             init_cmd.env_remove(var);
         }
-        let initialized = init_cmd.status().map(|s| s.success()).unwrap_or(false);
-        if !initialized {
-            eprintln!("skipping watch_dirs_respects_gitignore: git is not available");
-            return;
-        }
+        let initialized = init_cmd.status().expect("run git init");
+        assert!(initialized.success(), "git init failed: {initialized}");
 
         std::fs::write(root.join(".gitignore"), "data/\n").unwrap();
         std::fs::create_dir(root.join("src")).unwrap();

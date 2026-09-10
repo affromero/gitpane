@@ -193,6 +193,9 @@ fn fingerprint_buckets_remote_separately_from_local() {
 
 #[test]
 fn query_status_detects_commit_in_linked_worktree() {
+    if !crate::git::git_test_available() {
+        return;
+    }
     // End-to-end through the public entry point with a real linked worktree:
     // a commit made inside the worktree (on its own branch) must change the
     // root's `refs` fingerprint while leaving the root's checked-out HEAD
@@ -216,10 +219,7 @@ fn query_status_detects_commit_in_linked_worktree() {
         cmd.status().map(|s| s.success()).unwrap_or(false)
     };
 
-    if !git(&["init", "-q"], &root) {
-        eprintln!("skipping query_status_detects_commit_in_linked_worktree: git unavailable");
-        return;
-    }
+    assert!(git(&["init", "-q"], &root), "git init failed");
     assert!(git(&["commit", "-q", "--allow-empty", "-m", "init"], &root));
     // Linked worktree checked out on its own branch (shares root refs/heads).
     assert!(git(

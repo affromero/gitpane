@@ -41,6 +41,37 @@ pub(crate) fn git_available() -> bool {
     })
 }
 
+/// Skip CLI integration tests only when Git is missing. A broken installation
+/// must fail the test instead of silently reducing coverage.
+#[cfg(test)]
+pub(crate) fn git_test_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    let available = *AVAILABLE.get_or_init(|| {
+        match std::process::Command::new("git").arg("--version").output() {
+            Ok(output) => {
+                assert!(
+                    output.status.success(),
+                    "git --version failed ({}): {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                true
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => panic!("cannot execute git --version: {error}"),
+        }
+    });
+    if !available {
+        eprintln!(
+            "skipping {}: git is not on PATH; install Git to run this integration test",
+            std::thread::current()
+                .name()
+                .unwrap_or("Git integration test")
+        );
+    }
+    available
+}
+
 /// The remote gitpane should treat as canonical for `repo` when nothing more
 /// specific is configured: `origin` if present, else the lexicographically
 /// first remote (stable even when config order is not). Gerrit and mirror
@@ -105,6 +136,47 @@ pub(crate) fn resolve_sync_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn assert_git_dependency_failure(directory: &std::path::Path, message: &str) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::file_ops::tests::untracked_diff_reads_from_selected_repository",
+                "--nocapture",
+            ])
+            .env("PATH", directory)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(101));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{stderr}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_integration_tests_fail_when_git_exits_unsuccessfully() {
+        let directory = tempfile::tempdir().unwrap();
+        // The test harness rejects `--version`, providing an executable that
+        // exits unsuccessfully without needing a shell or a Git installation.
+        std::os::unix::fs::symlink(
+            std::env::current_exe().unwrap(),
+            directory.path().join("git"),
+        )
+        .unwrap();
+        assert_git_dependency_failure(directory.path(), "git --version failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_integration_tests_fail_when_git_is_not_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let git = directory.path().join("git");
+        std::fs::write(&git, "").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_git_dependency_failure(directory.path(), "cannot execute git --version");
+    }
 
     #[test]
     fn describe_spawn_error_flags_missing_git() {

@@ -637,6 +637,19 @@ CI runs formatting, clippy, MSRV checks, docs, tests, and release builds across
 Linux, macOS, and Windows. Security and coverage run as separate workflows so
 their README badges map to real checks.
 
+Install Git on PATH for full integration coverage. On Unix, the process tests
+also require `sh` and `sleep`. If Git is missing, CLI integration tests return
+early and print a skip reason with `cargo test -- --nocapture`. Rust counts
+these early returns as passed, so this is partial coverage. A Git executable
+that fails or cannot be executed causes the tests to fail.
+
+Linux and macOS CI also run `python3 scripts/check_test_environment.py`, which
+builds the tests and runs them with only `sh` and `sleep` on the child PATH.
+This catches accidental Git dependencies in environments such as Nix builds.
+The normal CI test run requires Git and exercises the CLI integration tests.
+For full coverage in a Nix package, include `git` in the package arguments and
+set `nativeCheckInputs = [ git ];`.
+
 Install the local hooks before contributing:
 
 ```bash

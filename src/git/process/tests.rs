@@ -248,6 +248,9 @@ fn capture_with_timeout_success_does_not_kill_descendant() {
 #[test]
 fn run_git_op_capturing_registers_and_unregisters() {
     use std::time::Duration;
+    if !crate::git::git_test_available() {
+        return;
+    }
     let _lock = super::TEST_KILL_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -258,12 +261,9 @@ fn run_git_op_capturing_registers_and_unregisters() {
     let init = std::process::Command::new("git")
         .arg("init")
         .arg(&path)
-        .status();
-    // Skip (don't panic) when git is unavailable, matching the repo's pattern.
-    if !matches!(init, Ok(s) if s.success()) {
-        eprintln!("skipping run_git_op_capturing test: 'git init' failed");
-        return;
-    }
+        .status()
+        .expect("run git init");
+    assert!(init.success(), "git init failed: {init}");
 
     // The alias records the sleep pid in a file once the whole git -> sh ->
     // sleep tree is up; waiting on that (rather than on registration alone)

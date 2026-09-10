@@ -833,6 +833,9 @@ mod tests {
 
     #[test]
     fn configured_file_open_passes_file_to_editor_with_directory_cwd() {
+        if !crate::git::git_test_available() {
+            return;
+        }
         let (_temp, app, id, file) = file_open_app();
         let request = app
             .file_open_request(&id, std::path::Path::new("source file.rs"))
@@ -842,6 +845,9 @@ mod tests {
 
     #[test]
     fn placement_picker_preserves_file_target_and_directory_cwd() {
+        if !crate::git::git_test_available() {
+            return;
+        }
         let (_temp, mut app, id, file) = file_open_app();
         // Herdr choices are local data, so no real multiplexer is needed.
         app.mux = crate::session::env::Multiplexer::Herdr;
