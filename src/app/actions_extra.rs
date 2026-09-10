@@ -660,13 +660,19 @@ impl App {
                 self.github_fetched(repo_id, generation, result);
             }
             Action::OpenUrl(ref url) => {
-                let opener = if cfg!(target_os = "macos") {
-                    "open"
-                } else {
-                    "xdg-open"
-                };
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
+                #[cfg(windows)]
+                self.os_open_windows(std::path::PathBuf::from(url), "github");
+                #[cfg(not(windows))]
+                {
+                    let opener = if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                    self.os_open(vec![opener.to_string(), url.clone()], cwd, "github");
+                }
             }
             Action::ShowGithubItem {
                 url,

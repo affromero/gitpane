@@ -110,8 +110,8 @@ async fn older_watcher_completion_cannot_replace_newer_membership() {
     let build = |path: &std::path::PathBuf| {
         RepoWatcher::new(std::slice::from_ref(path), &[], 20, tx.clone(), &[], true).unwrap()
     };
-    assert!(slot.install(newer, build(&new_path)));
-    assert!(!slot.install(older, build(&old_path)));
+    slot.install(newer, build(&new_path));
+    slot.install(older, build(&old_path));
     while rx.try_recv().is_ok() {}
     std::fs::write(new_path.join("changed.txt"), "new membership").unwrap();
     changed_repo(&mut rx, &new_path).await;

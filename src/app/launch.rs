@@ -115,7 +115,7 @@ impl App {
     }
 
     #[cfg(windows)]
-    fn os_open_windows(&self, target: std::path::PathBuf, label: &'static str) {
+    pub(super) fn os_open_windows(&self, target: std::path::PathBuf, label: &'static str) {
         let tx = self.action_tx.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(error) = crate::session::opener::open(&target) {

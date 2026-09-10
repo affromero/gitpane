@@ -17,50 +17,58 @@ fn run(command: &str, directory: &std::path::Path) -> String {
 #[test]
 fn shell_launches_preserve_values_in_each_quote_context_without_executing_them() {
     let directory = tempfile::tempdir().unwrap();
-    let target = "source café ' \" $(touch INJECTED) `touch INJECTED` {base}\nfile.rs";
-    let base = "branch'\";touch INJECTED;${HOME} {path}";
-    for template in [
-        "printf '%s\\n' {path} {base}",
-        "printf '%s\\n' \"{path}\" \"{base}\"",
-        "printf '%s\\n' '{path}' '{base}'",
-        "# ignored '\" {path} ${HOME}\nprintf '%s\\n' {path} {base}",
-        "printf '%s\\n' pre{path}post 'pre{base}post'",
+    for (target, base) in [
+        ("source$(touch INJECTED).rs", "main"),
+        ("source.rs", "base$(touch INJECTED)"),
+        (
+            "source café ' \" $(touch INJECTED) `touch INJECTED` {base}\nfile.rs",
+            "branch'\";touch INJECTED;${HOME} {path}",
+        ),
     ] {
-        for (placement, mux) in [
-            ("inline", Multiplexer::None),
-            ("new-window", Multiplexer::None),
-            ("split-window", Multiplexer::Tmux),
-            ("new-window", Multiplexer::Herdr),
+        for template in [
+            "printf '%s\\n' {path} {base}",
+            "printf '%s\\n' \"{path}\" \"{base}\"",
+            "printf '%s\\n' '{path}' '{base}'",
+            "# ignored '\" {path} ${HOME}\nprintf '%s\\n' {path} {base}",
+            "printf '%s\\n' pre{path}post 'pre{base}post'",
         ] {
-            let dir = directory.path().to_str().unwrap();
-            let launch = plan_with_target(Some(template), placement, dir, target, Some(base), mux);
-            let command = match launch {
-                LaunchPlan::Inline(command) => command,
-                LaunchPlan::Spawn(argv) => {
-                    assert_eq!(&argv[..4], ["tmux", "split-window", "-c", dir]);
-                    assert_eq!(&argv[4..6], ["sh", "-c"]);
-                    argv[6].clone()
-                }
-                LaunchPlan::Herdr { create, command } => {
-                    assert_eq!(
-                        create,
-                        ["herdr", "tab", "create", "--cwd", dir, "--no-focus"]
-                    );
-                    command.expect("configured command")
-                }
-                other => panic!("unexpected launch: {other:?}"),
-            };
-            let expected = if template.contains("pre{path}") {
-                format!("pre{target}post\npre{base}post\n")
-            } else {
-                format!("{target}\n{base}\n")
-            };
-            assert_eq!(
-                run(&command, directory.path()),
-                expected,
-                "{template} / {placement}"
-            );
-            assert!(!directory.path().join("INJECTED").exists());
+            for (placement, mux) in [
+                ("inline", Multiplexer::None),
+                ("new-window", Multiplexer::None),
+                ("split-window", Multiplexer::Tmux),
+                ("new-window", Multiplexer::Herdr),
+            ] {
+                let dir = directory.path().to_str().unwrap();
+                let launch =
+                    plan_with_target(Some(template), placement, dir, target, Some(base), mux);
+                let command = match launch {
+                    LaunchPlan::Inline(command) => command,
+                    LaunchPlan::Spawn(argv) => {
+                        assert_eq!(&argv[..4], ["tmux", "split-window", "-c", dir]);
+                        assert_eq!(&argv[4..6], ["sh", "-c"]);
+                        argv[6].clone()
+                    }
+                    LaunchPlan::Herdr { create, command } => {
+                        assert_eq!(
+                            create,
+                            ["herdr", "tab", "create", "--cwd", dir, "--no-focus"]
+                        );
+                        command.expect("configured command")
+                    }
+                    other => panic!("unexpected launch: {other:?}"),
+                };
+                let expected = if template.contains("pre{path}") {
+                    format!("pre{target}post\npre{base}post\n")
+                } else {
+                    format!("{target}\n{base}\n")
+                };
+                let output = run(&command, directory.path());
+                assert!(
+                    !directory.path().join("INJECTED").exists(),
+                    "placeholder executed shell code: {template}"
+                );
+                assert_eq!(output, expected, "{template} / {placement}");
+            }
         }
     }
 }

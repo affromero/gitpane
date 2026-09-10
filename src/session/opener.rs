@@ -1,4 +1,4 @@
-//! Windows file associations. Paths go directly to the platform API as data.
+//! Windows file and URL associations. Targets reach the platform API as data.
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
@@ -79,6 +79,19 @@ fn open_with(path: &Path, execute: impl FnOnce(&[u16]) -> isize) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_links_reach_the_default_browser_with_query_parameters_intact() {
+        let url = "https://github.com/affromero/gitpane/issues/77?name=space%20here&value=%25";
+        open_with(Path::new(url), |target| {
+            assert_eq!(
+                String::from_utf16(&target[..target.len() - 1]).unwrap(),
+                url
+            );
+            33
+        })
+        .unwrap();
+    }
 
     #[test]
     fn file_association_receives_literal_unicode_and_shell_characters() {
