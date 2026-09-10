@@ -1,5 +1,40 @@
 use super::*;
 
+#[tokio::test]
+async fn local_poll_removes_deleted_repositories_without_watcher_events() {
+    for delete_metadata_only in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("repo");
+        git2::Repository::init(&path).unwrap();
+        let path = path.canonicalize().unwrap();
+        let mut config = Config {
+            root_dirs: vec![],
+            pinned_repos: vec![path.clone()],
+            ..Config::default()
+        };
+        config.ui.show_liveness = false;
+        let mut app = App::new(config);
+        assert_eq!(app.repo_list.repos.len(), 1);
+        let deleted = if delete_metadata_only {
+            path.join(".git")
+        } else {
+            path.clone()
+        };
+        std::fs::remove_dir_all(deleted).unwrap();
+        app.poll_local();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !app.repo_list.repos.is_empty() {
+                let action = app.action_rx.recv().await.unwrap();
+                app.handle_repo_admin(action).unwrap();
+            }
+        })
+        .await
+        .expect("local poll left a deleted repository in the workspace");
+        assert!(app.pending_status.is_empty());
+        assert_eq!(app.config.pinned_repos, vec![path]);
+    }
+}
+
 async fn wait_for_watcher(app: &App) {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {

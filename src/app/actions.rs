@@ -233,65 +233,7 @@ impl App {
                     });
                 }
             }
-            Action::PollLocal => {
-                // Probe live panes once per poll so repos/worktrees get a
-                // marker. One `tmux list-panes` (or `herdr pane list`) call,
-                // off-thread; empty set otherwise.
-                if self.config.ui.show_liveness && !self.liveness_probe_in_flight {
-                    self.liveness_probe_in_flight = true;
-                    let tx = self.action_tx.clone();
-                    let mux = self.mux;
-                    tokio::task::spawn_blocking(move || {
-                        let panes = match mux {
-                            crate::session::env::Multiplexer::Tmux => {
-                                crate::session::liveness::tmux_pane_sessions()
-                            }
-                            crate::session::env::Multiplexer::Herdr => {
-                                crate::session::liveness::herdr_live_panes()
-                            }
-                            crate::session::env::Multiplexer::None => Vec::new(),
-                        };
-                        let _ = tx.send(Action::LiveSessionsLoaded(panes));
-                    });
-                }
-                // Fast local status poll (no network, no spinner)
-                let sub_cfg = self.config.submodules.clone();
-                for entry in self.repo_list.repos.iter() {
-                    let repo_id = RepoId(entry.path.clone());
-                    if entry.git_op || self.pending_status.contains(&repo_id) {
-                        continue;
-                    }
-                    self.pending_status.insert(repo_id.clone());
-                    let path = entry.path.clone();
-                    let tx = self.action_tx.clone();
-                    let sem = self.poll_semaphore.clone();
-                    let sub_cfg = sub_cfg.clone();
-                    tokio::spawn(async move {
-                        let _permit = sem.acquire().await;
-                        let guard = StatusGuard::new(repo_id.clone(), tx.clone());
-                        tokio::task::spawn_blocking(move || match crate::git::status::query_status(
-                            &path, &sub_cfg,
-                        ) {
-                            Ok(s) => {
-                                let _ = tx.send(Action::RepoStatusUpdated {
-                                    id: repo_id.clone(),
-                                    status: s,
-                                });
-                                guard.complete();
-                            }
-                            Err(e) => {
-                                guard.complete();
-                                let _ = tx.send(Action::StatusQueryDone(repo_id));
-                                tracing::debug!("Local poll failed for {}: {}", path.display(), e);
-                            }
-                        })
-                        .await
-                    });
-                }
-
-                // Also re-query the active worktree so its changes update live
-                self.refresh_active_worktree();
-            }
+            Action::PollLocal => self.poll_local(),
             Action::PollFetch => {
                 // Remote fetch poll (updates ahead/behind, no spinner)
                 let sub_cfg = self.config.submodules.clone();
@@ -514,6 +456,69 @@ impl App {
             other => self.handle_action_rest(other)?,
         }
         Ok(())
+    }
+
+    pub(super) fn poll_local(&mut self) {
+        // Probe live panes once per poll so repos/worktrees get a
+        // marker. One `tmux list-panes` (or `herdr pane list`) call,
+        // off-thread; empty set otherwise.
+        if self.config.ui.show_liveness && !self.liveness_probe_in_flight {
+            self.liveness_probe_in_flight = true;
+            let tx = self.action_tx.clone();
+            let mux = self.mux;
+            tokio::task::spawn_blocking(move || {
+                let panes = match mux {
+                    crate::session::env::Multiplexer::Tmux => {
+                        crate::session::liveness::tmux_pane_sessions()
+                    }
+                    crate::session::env::Multiplexer::Herdr => {
+                        crate::session::liveness::herdr_live_panes()
+                    }
+                    crate::session::env::Multiplexer::None => Vec::new(),
+                };
+                let _ = tx.send(Action::LiveSessionsLoaded(panes));
+            });
+        }
+        // Fast local status poll (no network, no spinner)
+        let sub_cfg = self.config.submodules.clone();
+        for entry in self.repo_list.repos.iter() {
+            let repo_id = RepoId(entry.path.clone());
+            if entry.git_op || self.pending_status.contains(&repo_id) {
+                continue;
+            }
+            self.pending_status.insert(repo_id.clone());
+            let path = entry.path.clone();
+            let tx = self.action_tx.clone();
+            let sem = self.poll_semaphore.clone();
+            let sub_cfg = sub_cfg.clone();
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                let guard = StatusGuard::new(repo_id.clone(), tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    match crate::git::status::query_status(&path, &sub_cfg) {
+                        Ok(s) => {
+                            let _ = tx.send(Action::RepoStatusUpdated {
+                                id: repo_id.clone(),
+                                status: s,
+                            });
+                            guard.complete();
+                        }
+                        Err(e) => {
+                            guard.complete();
+                            let _ = tx.send(Action::StatusQueryDone(repo_id));
+                            tracing::debug!("Local poll failed for {}: {}", path.display(), e);
+                            if !crate::git::scanner::is_repo_root(&path) {
+                                let _ = tx.send(Action::DiscoverNewRepos);
+                            }
+                        }
+                    }
+                })
+                .await
+            });
+        }
+
+        // Also re-query the active worktree so its changes update live
+        self.refresh_active_worktree();
     }
 
     /// Copy `text` to the system clipboard, reusing a long-lived `Clipboard`
