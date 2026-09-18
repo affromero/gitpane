@@ -120,6 +120,7 @@ Click a changed file (or press Enter) to see its diff side by side. File list st
 ### Commit detail drill down
 Click a commit in the graph to see its files, and the diff follows whichever file is highlighted as you move through the list. Press Enter (or click inside the diff) to focus it for scrolling. Layered Esc dismissal: leave the diff → close files → graph.
 
+While a pane has more rows than fit, it shows a scroll indicator: a thumb in the pane's right column and a `seen/total` counter in its title (`12/340`), so reaching the end reads `340/340` and the thumb lands on the last row of its track. The commit message, the file list and the diff all use it, as does the changes panel's diff. A pane that fits keeps its full width and shows neither.
 <img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
 ## Features

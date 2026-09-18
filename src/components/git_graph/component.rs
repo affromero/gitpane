@@ -5,13 +5,30 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::components::scroll_pane;
 
 use super::*;
 
 use super::render::{
     DETAIL_GRAB_ZONE, detail_border_positions, detail_cell_bounds, detail_chunks, detail_min_cells,
-    max_scroll_lines,
 };
+
+/// One `j`/`k` or wheel step of the commit diff, clamped to what the pane as
+/// last drawn can show (its own column is reserved by the scroll indicator, so
+/// the wrap width — and therefore the last screenful — comes from `area`).
+fn step_diff_scroll(content: Option<&str>, area: Rect, scroll: u16, delta: i16) -> u16 {
+    match content {
+        Some(content) => {
+            scroll_pane::clamp_text_offset(content, area, scroll.saturating_add_signed(delta))
+        }
+        None => 0,
+    }
+}
+
+/// One wheel step of the commit message pane, clamped the same way.
+fn step_msg_scroll(message: &str, area: Rect, scroll: u16, delta: i16) -> u16 {
+    scroll_pane::clamp_text_offset(message, area, scroll.saturating_add_signed(delta))
+}
 
 impl Component for GitGraph {
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
@@ -34,17 +51,20 @@ impl Component for GitGraph {
                         detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        let max = detail
-                            .diff_content
-                            .as_deref()
-                            .map(|c| {
-                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
-                            })
-                            .unwrap_or(0);
-                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            1,
+                        );
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            -1,
+                        );
                     }
                     _ => {}
                 }
@@ -283,11 +303,21 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            -1,
+                        );
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        detail.msg_scroll = detail.msg_scroll.saturating_sub(1);
+                        detail.msg_scroll = step_msg_scroll(
+                            &detail.message,
+                            detail.msg_area,
+                            detail.msg_scroll,
+                            -1,
+                        );
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -306,23 +336,17 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        let max = detail
-                            .diff_content
-                            .as_deref()
-                            .map(|c| {
-                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
-                            })
-                            .unwrap_or(0);
-                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            1,
+                        );
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        let max = max_scroll_lines(
-                            &detail.message,
-                            detail.msg_area.height,
-                            detail.msg_area.width,
-                        );
-                        detail.msg_scroll = (detail.msg_scroll + 1).min(max);
+                        detail.msg_scroll =
+                            step_msg_scroll(&detail.message, detail.msg_area, detail.msg_scroll, 1);
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -444,7 +468,8 @@ impl Component for GitGraph {
 #[cfg(test)]
 mod detail_layout_tests {
     use super::super::render::msg_auto_cells;
-    use super::{detail_border_positions, detail_chunks, max_scroll_lines};
+    use super::{detail_border_positions, detail_chunks};
+    use crate::components::scroll_pane::{self, ScrollLayout, bordered_inner};
     use ratatui::layout::Rect;
 
     #[test]
@@ -488,21 +513,35 @@ mod detail_layout_tests {
     }
 
     #[test]
-    fn max_scroll_lines_stops_at_content_end() {
-        // Fits in 10 visible rows: no scrolling allowed.
-        assert_eq!(max_scroll_lines("short", 12, 80), 0);
-        // 20 wrapped rows in 10 visible rows: max offset 10.
+    fn pane_scrolling_stops_at_content_end() {
+        // Largest offset the drawn pane allows; the same clamp a key or wheel
+        // step applies.
+        let max_offset =
+            |text: &str, pane: Rect| scroll_pane::clamp_text_offset(text, pane, u16::MAX);
+        // Fits inside the pane: no scrolling allowed.
+        let pane = Rect::new(0, 0, 82, 12); // 80x10 inside the borders
+        assert_eq!(max_offset("short", pane), 0);
+        // 20 rows overflowing a 10-row pane: the offset stops one screenful
+        // before the end, so the last row is the last row shown.
         let text = (0..20)
             .map(|_| "x".repeat(60))
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(max_scroll_lines(&text, 12, 80), 10);
-        // Long lines wrap; 3 source lines of 40 chars at inner width 10 -> 12 rows.
+        assert_eq!(max_offset(&text, pane), 10);
+        // Long lines wrap at the width left over beside the scroll indicator
+        // (10 - 1 thumb = 9), and the clamp follows that count.
         let long = ["a".repeat(40), "b".repeat(40), "c".repeat(40)].join("\n");
-        assert_eq!(max_scroll_lines(&long, 8, 12), 6); // 12 rows - 6 visible
-        // Degenerate viewport.
-        assert_eq!(max_scroll_lines("anything", 1, 80), 0);
-        assert_eq!(max_scroll_lines("anything", 12, 1), 0);
+        let small = Rect::new(0, 0, 12, 8); // 10x6 inside the borders
+        assert_eq!(scroll_pane::wrapped_rows(&long, 9), 15);
+        assert_eq!(max_offset(&long, small), 9); // 15 rows - 6 visible
+        // Degenerate panes: too narrow to spare a column never gets one.
+        let narrow = Rect::new(0, 0, 1, 80);
+        assert_eq!(max_offset(&text, narrow), 0);
+        assert!(
+            ScrollLayout::for_text(&text, bordered_inner(narrow), 0)
+                .bar
+                .is_none()
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub(crate) mod graph_menu;
 pub(crate) mod path_input;
 pub(crate) mod picker;
 pub(crate) mod repo_list;
+pub(crate) mod scroll_pane;
 pub(crate) mod status_bar;
 pub(crate) mod theme_picker;
 

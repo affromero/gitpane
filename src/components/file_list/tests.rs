@@ -402,3 +402,138 @@ mod search_tests {
         assert!(!fl.filter.is_active());
     }
 }
+
+#[cfg(test)]
+mod diff_scroll_indicator_tests {
+    use super::*;
+    use crate::components::scroll_pane::{THUMB, TRACK};
+
+    /// A `FileList` showing a diff of `lines` rows, drawn so the diff pane's
+    /// geometry is known.
+    fn list_with_diff(
+        lines: usize,
+    ) -> (FileList, ratatui::Terminal<ratatui::backend::TestBackend>) {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.set_diff(
+            (0..lines)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        (fl, terminal)
+    }
+
+    /// Every row of the rendered frame as a string.
+    fn rows(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The scroll-indicator column inside the diff pane, top row first.
+    fn indicator_column(
+        terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+        pane: Rect,
+    ) -> String {
+        let rows = rows(terminal);
+        let x = usize::from(pane.x + pane.width - 2);
+        (pane.y + 1..pane.y + pane.height - 1)
+            .map(|y| rows[usize::from(y)].chars().nth(x).unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn diff_counter_tracks_the_scroll_and_never_scrolls_past_the_end() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let visible = pane.height - 2;
+        assert!(visible > 0 && visible < 60, "pane shows {visible} of 60");
+
+        // Top of the diff: counter counts the rows on screen, no blank space yet.
+        assert!(rows(&terminal)[usize::from(pane.y)].contains(&format!("{visible}/60")));
+        assert!(indicator_column(&terminal, pane).starts_with(THUMB));
+
+        // Scrolling down far past the end parks on the last screenful: the pane
+        // keeps its content instead of scrolling into empty rows.
+        for _ in 0..200 {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char('j')))
+                .unwrap();
+        }
+        assert_eq!(fl.diff_scroll, 60 - visible);
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        assert!(rows(&terminal)[usize::from(pane.y)].contains("60/60"));
+        assert!(indicator_column(&terminal, pane).ends_with(THUMB));
+
+        // And back up stops at the top.
+        for _ in 0..200 {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char('k')))
+                .unwrap();
+        }
+        assert_eq!(fl.diff_scroll, 0);
+    }
+
+    #[test]
+    fn diff_that_fits_shows_no_indicator() {
+        let (fl, terminal) = list_with_diff(3);
+        let pane = fl.diff_area;
+        assert!(!indicator_column(&terminal, pane).contains(THUMB));
+        let title = &rows(&terminal)[usize::from(pane.y)];
+        assert!(
+            !title
+                .split_whitespace()
+                .any(|token| token
+                    .split_once('/')
+                    .is_some_and(|(seen, total)| !seen.is_empty()
+                        && seen.bytes().all(|b| b.is_ascii_digit())
+                        && !total.is_empty()
+                        && total.bytes().all(|b| b.is_ascii_digit()))),
+            "a diff that fits keeps a bare title: {title:?}"
+        );
+    }
+
+    #[test]
+    fn diff_track_is_drawn_beside_the_wrapped_content() {
+        // A line far longer than the pane wraps inside the narrowed content
+        // column: the wrapped text has to reach the content column that sits
+        // right beside the thumb, proving the thumb claims a column of its own
+        // instead of covering the text's last one.
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // Six wrapped lines to overflow the pane, then a short one.
+        let long = format!("+{}\n", "x".repeat(500));
+        fl.set_diff(long.repeat(6) + "+short\n");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        let pane = fl.diff_area;
+
+        let column = indicator_column(&terminal, pane);
+        assert!(
+            column.contains(TRACK) && column.chars().all(|c| c == '█' || c == '│'),
+            "indicator column: {column:?}"
+        );
+
+        // The last content column (the cell left of the thumb) carries the
+        // wrapped line's 500th character, not a trace of the indicator.
+        let cell = |row: u16, x: u16| terminal.backend().buffer()[(x, row)].symbol().to_owned();
+        let content_right = pane.x + pane.width - 3;
+        let first_row = pane.y + 1;
+        assert_eq!(
+            cell(first_row, content_right),
+            "x",
+            "wrapped content fills the pane up to the indicator column"
+        );
+        let bar_cell = cell(first_row, content_right + 1);
+        assert!(
+            bar_cell == THUMB || bar_cell == TRACK,
+            "the column beside the content belongs to the indicator: {bar_cell:?}"
+        );
+    }
+}

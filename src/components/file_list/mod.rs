@@ -5,12 +5,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
+use crate::components::scroll_pane::{self, BarColors};
 use crate::components::{Component, ListFilter};
 use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
@@ -347,7 +348,16 @@ impl FileList {
         }
     }
 
-    fn draw_diff(&self, frame: &mut Frame, area: Rect) {
+    /// `offset` clamped to the diff pane's last screenful, so a scroll past the
+    /// end parks on the final row instead of scrolling into blank space.
+    fn clamp_diff_scroll(&self, offset: u16) -> u16 {
+        match self.diff_content.as_deref() {
+            Some(content) => scroll_pane::clamp_text_offset(content, self.diff_area, offset),
+            None => 0,
+        }
+    }
+
+    fn draw_diff(&mut self, frame: &mut Frame, area: Rect) {
         let Some(ref content) = self.diff_content else {
             return;
         };
@@ -377,12 +387,19 @@ impl FileList {
             })
             .collect();
 
-        let paragraph = Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((self.diff_scroll, 0));
-
-        frame.render_widget(paragraph, area);
+        let gauge = scroll_pane::render_pane(
+            frame,
+            area,
+            block,
+            content,
+            lines,
+            self.diff_scroll,
+            BarColors {
+                thumb: t.diff_scrollbar_thumb,
+                track: t.diff_scrollbar_track,
+            },
+        );
+        self.diff_scroll = gauge.offset();
     }
 }
 
@@ -483,10 +500,12 @@ impl Component for FileList {
                     self.diff_scroll = 0;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    self.diff_scroll = self.diff_scroll.saturating_add(1);
+                    let next = self.diff_scroll.saturating_add(1);
+                    self.diff_scroll = self.clamp_diff_scroll(next);
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    self.diff_scroll = self.diff_scroll.saturating_sub(1);
+                    let next = self.diff_scroll.saturating_sub(1);
+                    self.diff_scroll = self.clamp_diff_scroll(next);
                 }
                 _ => {}
             }
@@ -612,7 +631,8 @@ impl Component for FileList {
                 if self.viewing_diff() {
                     let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
                     if self.diff_area.contains(pos) {
-                        self.diff_scroll = self.diff_scroll.saturating_sub(1);
+                        let next = self.diff_scroll.saturating_sub(1);
+                        self.diff_scroll = self.clamp_diff_scroll(next);
                     } else {
                         self.select_prev();
                     }
@@ -625,7 +645,8 @@ impl Component for FileList {
                 if self.viewing_diff() {
                     let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
                     if self.diff_area.contains(pos) {
-                        self.diff_scroll = self.diff_scroll.saturating_add(1);
+                        let next = self.diff_scroll.saturating_add(1);
+                        self.diff_scroll = self.clamp_diff_scroll(next);
                     } else {
                         self.select_next();
                     }

@@ -4,15 +4,17 @@
 //! actual widget draw and mouse paths (not just the pure layout helpers):
 //!   1. P1 — drawing commit detail panicked at an ordinary 80x22 terminal
 //!      because the stored 0.40/0.65 split left an inverted clamp range.
-//!   2. P2 — `max_scroll_lines` counted Unicode scalar values while the
-//!      paragraph wraps by display width, so a CJK message's end was
-//!      unreachable (wheel scroll stuck before the last line).
+//!   2. P2 — the message pane's max scroll counted Unicode scalar values while
+//!      the paragraph wraps by display width, so a CJK message's end was
+//!      unreachable (wheel scroll stuck before the last line). The clamp now lives
+//!      in `crate::components::scroll_pane`, which wraps by display width and
+//!      accounts for the column its own scroll indicator takes.
 
 use super::tests::{MOCK_OID, mock_row};
 use super::*;
 use crate::components::Component;
+use crate::components::scroll_pane::{ScrollLayout, bordered_inner};
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{Terminal, backend::TestBackend};
 
 /// A graph with one commit, horizontal detail layout, and a message made of 100
@@ -63,14 +65,30 @@ fn review_wheel_reaches_end_of_wrapped_unicode_message() {
     }
 
     let scroll = graph.commit_detail.as_ref().unwrap().msg_scroll;
-    let inner = graph.msg_area.width - 2;
-    let content_rows = Paragraph::new(graph.commit_detail.as_ref().unwrap().message.as_str())
-        .wrap(Wrap { trim: false })
-        .line_count(inner) as u16;
-    let expected = content_rows.saturating_sub(graph.msg_area.height - 2);
+    // The max offset the pane allows, at the wrap width left beside the scroll
+    // indicator's column.
+    let message = graph.commit_detail.as_ref().unwrap().message.clone();
+    let layout = ScrollLayout::for_text(&message, bordered_inner(graph.msg_area), 0);
     assert_eq!(
-        scroll, expected,
+        scroll,
+        layout.gauge.max_offset(),
         "message scroll must reach the content end (wrapped by display width)"
+    );
+
+    // And the end really is on screen: the tail of the message was drawn.
+    terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
+    let buffer = terminal.backend().buffer();
+    let drawn: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+    assert!(
+        drawn.contains("END"),
+        "the last line of the message must be reachable: {drawn:?}"
     );
 }
 
