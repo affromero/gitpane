@@ -120,6 +120,8 @@ Click a changed file (or press Enter) to see its diff side by side. File list st
 ### Commit detail drill down
 Click a commit in the graph to see its files, and the diff follows whichever file is highlighted as you move through the list. Press Enter (or click inside the diff) to focus it for scrolling. Layered Esc dismissal: leave the diff → close files → graph.
 
+Panes also size themselves to what they hold: the message to its lines, the file list to one row per file, so a commit that touches two files always shows both instead of being collapsed by a long message. The diff keeps its own share of the panel. Drag a border to take any of that back by hand.
+
 <img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
 ## Features

@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- A long commit message no longer collapses the commit file list to a single row: the list keeps one row per file, sharing the space below the graph pane with the message, and the diff keeps its own share. Dragging the files|diff border still overrides it. ([#85](https://github.com/affromero/gitpane/issues/85))
+
 ## [0.16.1] - 2026-09-10
 
 ### Fixed
