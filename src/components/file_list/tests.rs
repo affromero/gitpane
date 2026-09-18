@@ -406,7 +406,9 @@ mod search_tests {
 #[cfg(test)]
 mod diff_scroll_indicator_tests {
     use super::*;
-    use crate::components::scroll_pane::{THUMB, TRACK};
+    use crate::components::scroll_pane::{ScrollLayout, THUMB, TRACK, bordered_inner};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use std::path::PathBuf;
 
     /// A `FileList` showing a diff of `lines` rows, drawn so the diff pane's
     /// geometry is known.
@@ -535,5 +537,194 @@ mod diff_scroll_indicator_tests {
             bar_cell == THUMB || bar_cell == TRACK,
             "the column beside the content belongs to the indicator: {bar_cell:?}"
         );
+    }
+
+    /// One mouse event, the way the `App` routes them to the panel under the
+    /// pointer.
+    fn mouse(fl: &mut FileList, kind: MouseEventKind, column: u16, row: u16) -> Option<Action> {
+        fl.handle_mouse_event(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap()
+    }
+
+    /// The largest offset the diff pane as drawn allows.
+    fn diff_max(fl: &FileList) -> u16 {
+        ScrollLayout::for_text(
+            fl.diff_content.as_deref().unwrap(),
+            bordered_inner(fl.diff_area),
+            0,
+        )
+        .gauge
+        .max_offset()
+    }
+
+    #[test]
+    fn clicking_and_dragging_the_diff_indicator_scrubs_the_pane() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let bar = pane.x + pane.width - 2;
+        let max = diff_max(&fl);
+
+        // Click the middle of the track: the pane jumps to the middle.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + pane.height / 2,
+        );
+        let middle = fl.diff_scroll;
+        assert!(
+            middle > 0 && middle < max,
+            "a click in the middle of the track must land in the middle: {middle} of {max}"
+        );
+
+        // Click the bottom, then drag up to the top: the drag keeps scrubbing.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, max);
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert_eq!(fl.diff_scroll, 0);
+        // Sideways motion keeps the grab: only the row matters.
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            pane.x + 2,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, max);
+
+        // Releasing ends the grab, so later motion is not a scrub.
+        mouse(
+            &mut fl,
+            MouseEventKind::Up(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert_eq!(fl.diff_scroll, max, "a drag without a press must not scrub");
+
+        // The frame after a scrub shows the position it selected.
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        assert!(rows(&terminal)[usize::from(pane.y)].contains("60/60"));
+    }
+
+    #[test]
+    fn clicking_beside_the_diff_indicator_does_not_scrub() {
+        let (mut fl, _) = list_with_diff(60);
+        let pane = fl.diff_area;
+        // One column left of the indicator is content, not the scrollbar.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            pane.x + pane.width - 3,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, 0);
+        assert!(!fl.dragging_scrollbar);
+    }
+
+    fn entry(path: &str) -> FileEntry {
+        FileEntry {
+            path: PathBuf::from(path),
+            status: FileStatus::Modified,
+            staged: false,
+            unstaged: true,
+            is_submodule: false,
+            submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
+        }
+    }
+
+    #[test]
+    fn a_file_row_click_at_the_indicator_column_still_selects_the_row() {
+        // Stacked split (`horizontal_layout`): the file list and the diff share the
+        // indicator's column, so only the row tells them apart.
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.horizontal_layout = true;
+        fl.set_files(
+            vec![entry("a.rs"), entry("b.rs"), entry("c.rs")],
+            "repo",
+            RepoId(PathBuf::from("/repo")),
+        );
+        fl.set_diff(
+            (0..60)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+
+        let diff = fl.diff_area;
+        let row = fl.file_list_area.y + 2; // second file row
+        let column = diff.x + diff.width - 2; // the indicator's column
+        assert!(
+            fl.file_list_area
+                .contains(ratatui::layout::Position::new(column, row)),
+            "the row click has to be inside the list"
+        );
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+        );
+        assert_eq!(
+            fl.state.selected(),
+            Some(1),
+            "a click above the diff pane must select the file row"
+        );
+        assert_eq!(fl.diff_scroll, 0, "and must not scrub the diff");
+    }
+
+    #[test]
+    fn a_cancelled_grab_stops_scrubbing_the_diff() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let bar = pane.x + pane.width - 2;
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert!(fl.dragging_scrollbar, "the press armed the grab");
+
+        fl.cancel_drag();
+        assert!(!fl.dragging_scrollbar);
+        fl.set_diff(
+            (0..60)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, 0, "a cancelled grab must not scrub");
     }
 }

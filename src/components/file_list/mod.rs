@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::scroll_pane::{self, BarColors};
+use crate::components::scroll_pane::{self, BarColors, ScrollLayout};
 use crate::components::{Component, ListFilter};
 use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
@@ -30,6 +30,9 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
+    /// True while the diff's scroll indicator is held down, so the drag keeps
+    /// scrubbing even if the pointer leaves the indicator column.
+    dragging_scrollbar: bool,
     pub horizontal_layout: bool,
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
@@ -58,6 +61,7 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
+            dragging_scrollbar: false,
             horizontal_layout: false,
             diff_generation: 0,
             theme,
@@ -357,6 +361,27 @@ impl FileList {
         }
     }
 
+    /// Whether `pos` points at the diff pane's scroll indicator. The app asks
+    /// before arming a panel-border drag: the indicator runs alongside the panel
+    /// seam, and losing the grab to the seam would resize panels instead of
+    /// scrolling the diff.
+    pub(crate) fn is_on_scroll_indicator(&self, pos: ratatui::layout::Position) -> bool {
+        self.diff_scroll_layout()
+            .and_then(|layout| scroll_pane::scrub_offset(layout, pos))
+            .is_some()
+    }
+
+    /// The diff pane's scroll layout as the last frame drew it, or `None` while
+    /// there is no diff. The offset does not enter what a scrub needs.
+    fn diff_scroll_layout(&self) -> Option<ScrollLayout> {
+        let content = self.diff_content.as_deref()?;
+        Some(ScrollLayout::for_text(
+            content,
+            scroll_pane::bordered_inner(self.diff_area),
+            0,
+        ))
+    }
+
     fn draw_diff(&mut self, frame: &mut Frame, area: Rect) {
         let Some(ref content) = self.diff_content else {
             return;
@@ -487,6 +512,10 @@ fn submodule_tag_spans(
 }
 
 impl Component for FileList {
+    fn cancel_drag(&mut self) {
+        self.dragging_scrollbar = false;
+    }
+
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.action_tx = Some(tx);
         Ok(())
@@ -564,6 +593,18 @@ impl Component for FileList {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                self.dragging_scrollbar = false;
+
+                // The diff's scroll indicator belongs to the diff pane, not to its
+                // rows: clicking it jumps there, and the grab scrubs until release.
+                if let Some(offset) = self
+                    .diff_scroll_layout()
+                    .and_then(|layout| scroll_pane::scrub_offset(layout, pos))
+                {
+                    self.diff_scroll = offset;
+                    self.dragging_scrollbar = true;
+                    return Ok(None);
+                }
 
                 // In split mode, clicks in file_list_area select files
                 let click_area = if self.viewing_diff() {
@@ -625,6 +666,19 @@ impl Component for FileList {
                         }
                     }
                 }
+                Ok(None)
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging_scrollbar => {
+                if let Some(offset) = self
+                    .diff_scroll_layout()
+                    .and_then(|layout| scroll_pane::scrub_row_offset(layout, mouse.row))
+                {
+                    self.diff_scroll = offset;
+                }
+                Ok(None)
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging_scrollbar = false;
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {

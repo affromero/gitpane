@@ -5,13 +5,13 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::components::scroll_pane;
 
 use super::*;
 
 use super::render::{
     DETAIL_GRAB_ZONE, detail_border_positions, detail_cell_bounds, detail_chunks, detail_min_cells,
 };
+use crate::components::scroll_pane::{self, ScrollLayout};
 
 /// One `j`/`k` or wheel step of the commit diff, clamped to what the pane as
 /// last drawn can show (its own column is reserved by the scroll indicator, so
@@ -30,7 +30,137 @@ fn step_msg_scroll(message: &str, area: Rect, scroll: u16, delta: i16) -> u16 {
     scroll_pane::clamp_text_offset(message, area, scroll.saturating_add_signed(delta))
 }
 
+impl GitGraph {
+    /// The scroll layout of one commit-detail pane, as the last frame drew it.
+    /// Offsets do not enter the layout that a scrub needs (the column and its
+    /// extent depend only on the content and the pane), so `0` is passed through.
+    fn pane_layout(&self, pane: DetailPane) -> Option<ScrollLayout> {
+        let detail = self.commit_detail.as_ref()?;
+        match pane {
+            DetailPane::Message => Some(ScrollLayout::for_text(
+                &detail.message,
+                scroll_pane::bordered_inner(self.msg_area),
+                0,
+            )),
+            DetailPane::Files => Some(ScrollLayout::for_list(
+                detail.files.len(),
+                scroll_pane::bordered_inner(self.files_area),
+                0,
+            )),
+            DetailPane::Diff => Some(ScrollLayout::for_text(
+                detail.diff_content.as_deref()?,
+                scroll_pane::bordered_inner(self.diff_area),
+                0,
+            )),
+        }
+    }
+
+    /// Whether `pos` points at one of this panel's scroll indicators. The app asks
+    /// before arming a panel-border drag: the indicators run alongside the panel
+    /// seam, and losing the grab to the seam would resize panels instead of
+    /// scrolling the pane.
+    pub(crate) fn is_on_scroll_indicator(&self, pos: ratatui::layout::Position) -> bool {
+        self.indicator_at(pos).is_some()
+    }
+
+    /// The pane whose scroll indicator sits under `pos`, and the offset that
+    /// point selects on it.
+    fn indicator_at(&self, pos: ratatui::layout::Position) -> Option<(DetailPane, u16)> {
+        DetailPane::ALL.into_iter().find_map(|pane| {
+            let offset = scroll_pane::scrub_offset(self.pane_layout(pane)?, pos)?;
+            Some((pane, offset))
+        })
+    }
+
+    /// Move the pane a scroll-indicator grab came from to `offset`. The file list
+    /// scrolls by moving its highlight, so a scrub there may schedule a new diff.
+    fn scrub_to(&mut self, pane: DetailPane, offset: u16) -> Option<Action> {
+        match pane {
+            DetailPane::Message => {
+                if let Some(detail) = self.commit_detail.as_mut() {
+                    detail.msg_scroll = offset;
+                }
+                None
+            }
+            DetailPane::Diff => {
+                if let Some(detail) = self.commit_detail.as_mut() {
+                    detail.diff_scroll = offset;
+                    // Grabbing the diff's indicator is interacting with the diff:
+                    // hand it the keyboard, like a click inside the pane does.
+                    detail.diff_focused = true;
+                }
+                None
+            }
+            DetailPane::Files => self.scrub_file_highlight(offset),
+        }
+    }
+
+    /// A scrub on the file list moves the list's window, which a ratatui list only
+    /// expresses through its offset and its highlight: both are set, so the frame
+    /// that follows shows the screenful the pointer asked for (setting the
+    /// highlight alone would let the list re-scroll to keep it visible).
+    fn scrub_file_highlight(&mut self, offset: u16) -> Option<Action> {
+        let files = self.commit_detail.as_ref()?.files.len();
+        if files == 0 {
+            return None;
+        }
+        let index = self.nearest_file_row(usize::from(offset).min(files - 1))?;
+        let detail = self.commit_detail.as_mut()?;
+        let already_there =
+            detail.file_state.selected() == Some(index) && detail.file_state.offset() == index;
+        // Grabbing the list's indicator hands it the keyboard, the way a row click
+        // does, even when the grab lands on the row already highlighted.
+        detail.diff_focused = false;
+        // Re-request anyway when the pane has no diff to show: that is the state a
+        // failed or still-running load leaves behind, and the scrub is then the
+        // user's way to ask again (a row click does the same).
+        if already_there && detail.diff_content.is_some() {
+            return None;
+        }
+        detail.file_state.select(Some(index));
+        *detail.file_state.offset_mut() = index;
+        self.file_selection_changed()
+    }
+
+    /// The row a scrub should land on: `index` itself, or the closest row the
+    /// active filter still matches. The list draws every row (matches are only
+    /// bolded), so snapping keeps the scrollbar usable while filtering instead of
+    /// dying on the rows a click would refuse.
+    fn nearest_file_row(&self, index: usize) -> Option<usize> {
+        let detail = self.commit_detail.as_ref()?;
+        if detail.file_matches(index) {
+            return Some(index);
+        }
+        let matches = detail.file_filter.matches();
+        let after = matches.partition_point(|row| *row < index);
+        let before = after.checked_sub(1);
+        match (before.and_then(|i| matches.get(i)), matches.get(after)) {
+            (Some(before), Some(after)) => Some(if index - *before <= *after - index {
+                *before
+            } else {
+                *after
+            }),
+            (Some(before), None) => Some(*before),
+            (None, Some(after)) => Some(*after),
+            (None, None) => None,
+        }
+    }
+
+    /// Continue a scroll-indicator drag: only the row matters, so a pointer that
+    /// wanders sideways keeps scrubbing the pane it grabbed.
+    fn scrub_drag(&mut self, pos: ratatui::layout::Position) -> Option<Action> {
+        let pane = self.scrubbing?;
+        let offset = scroll_pane::scrub_row_offset(self.pane_layout(pane)?, pos.y)?;
+        self.scrub_to(pane, offset)
+    }
+}
+
 impl Component for GitGraph {
+    fn cancel_drag(&mut self) {
+        self.dragging_detail_border = None;
+        self.scrubbing = None;
+    }
+
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.action_tx = Some(tx);
         Ok(())
@@ -172,6 +302,8 @@ impl Component for GitGraph {
         );
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // A fresh press always ends a previous indicator grab.
+                self.scrubbing = None;
                 let mut candidates = Vec::new();
                 for (i, p) in dpos.iter().enumerate() {
                     if let Some(p) = *p {
@@ -187,6 +319,15 @@ impl Component for GitGraph {
                 // outer-panel border behavior: the drag engages on Drag only,
                 // and a plain click near a border still reaches the content.
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                // A pane's scroll indicator belongs to the pane, not to its rows,
+                // and not to the detail border it runs alongside either: the
+                // column's end rows sit inside a border's grab zone, where a drag
+                // would otherwise resize the split instead of scrolling.
+                if let Some((pane, offset)) = self.indicator_at(pos) {
+                    self.dragging_detail_border = None;
+                    self.scrubbing = Some(pane);
+                    return Ok(self.scrub_to(pane, offset));
+                }
                 // Click in graph list area
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
@@ -254,6 +395,10 @@ impl Component for GitGraph {
             }
 
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.dragging_detail_border.is_none() && self.scrubbing.is_some() {
+                    let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                    return Ok(self.scrub_drag(pos));
+                }
                 if let Some(border) = self.dragging_detail_border {
                     let area = self.render_area;
                     let (axis, origin) = if vertical {
@@ -294,8 +439,9 @@ impl Component for GitGraph {
                     Ok(None)
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) if self.dragging_detail_border.is_some() => {
+            MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging_detail_border = None;
+                self.scrubbing = None;
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {

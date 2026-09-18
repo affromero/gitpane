@@ -12,7 +12,7 @@
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Paragraph, Wrap},
@@ -211,6 +211,46 @@ fn split_off_bar(inner: Rect) -> (Rect, Rect) {
     (content, bar)
 }
 
+/// The offset a pointer `row` cells down a `track`-row indicator column selects.
+///
+/// The top row is the start of the content and the last row its end, so a click
+/// lands where it points and a drag scrubs the whole pane. A track with no room to
+/// travel selects the top.
+pub(crate) fn offset_for_track_row(gauge: ScrollGauge, track: u16, row: u16) -> u16 {
+    let last = track.saturating_sub(1);
+    if last == 0 {
+        return 0;
+    }
+    let rows = usize::from(row.min(last));
+    let max = usize::from(gauge.max_offset());
+    // Rounded to nearest, so the middle of the track is the middle of the content.
+    ((rows * max + usize::from(last) / 2) / usize::from(last)) as u16
+}
+
+/// The offset a click at `pos` selects on `layout`'s indicator column, or `None`
+/// when `pos` misses it — the caller then treats the click as content. The whole
+/// bar rect is tested, not just its column: panes stacked along one axis share
+/// that column, so the row is what says which pane was grabbed.
+/// `layout` must be the layout the pane was last drawn with.
+pub(crate) fn scrub_offset(layout: ScrollLayout, pos: Position) -> Option<u16> {
+    let bar = layout.bar?;
+    if !bar.contains(pos) {
+        return None;
+    }
+    scrub_row_offset(layout, pos.y)
+}
+
+/// The offset a row of `layout`'s indicator column selects, ignoring the column's
+/// x: a drag that wanders sideways keeps scrubbing the pane it grabbed.
+pub(crate) fn scrub_row_offset(layout: ScrollLayout, row: u16) -> Option<u16> {
+    let bar = layout.bar?;
+    Some(offset_for_track_row(
+        layout.gauge,
+        bar.height,
+        row.saturating_sub(bar.y),
+    ))
+}
+
 /// `text` split into styled lines exactly as `Paragraph::new(text)` splits it, so
 /// the rows measured from `text` always match the rows painted from the lines.
 pub(crate) fn styled_lines(text: &str, style: Style) -> Vec<Line<'static>> {
@@ -352,6 +392,7 @@ pub(crate) fn render_counter(frame: &mut Frame, pane: Rect, gauge: ScrollGauge, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::layout::Position;
     use ratatui::{Terminal, backend::TestBackend, widgets::Borders};
 
     #[test]
@@ -493,6 +534,56 @@ mod tests {
         // The thumb agrees: flush with the last row of the track.
         let (start, len) = thumb_range(gauge, 12);
         assert_eq!(start + len, 12);
+    }
+
+    #[test]
+    fn track_row_selects_the_offset_it_points_at() {
+        let gauge = ScrollGauge::new(340, 10, 0); // max offset 330
+        let track = 12;
+        assert_eq!(offset_for_track_row(gauge, track, 0), 0);
+        assert_eq!(offset_for_track_row(gauge, track, 1), 30);
+        assert_eq!(offset_for_track_row(gauge, track, 6), 180); // middle of the track
+        assert_eq!(offset_for_track_row(gauge, track, 11), 330);
+        // Rows beyond the track clamp to its ends.
+        assert_eq!(offset_for_track_row(gauge, track, 99), 330);
+        // A one-row track has nowhere to travel, and content that fits has
+        // nothing to jump through.
+        assert_eq!(offset_for_track_row(gauge, 1, 0), 0);
+        assert_eq!(
+            offset_for_track_row(ScrollGauge::new(5, 10, 0), track, 11),
+            0
+        );
+    }
+
+    #[test]
+    fn scrub_hit_tests_the_whole_indicator_bar() {
+        let pane = Rect::new(30, 1, 20, 12); // 18x10 inside the borders
+        let text = "x\n".repeat(50);
+        let layout = ScrollLayout::for_text(&text, bordered_inner(pane), 0);
+        let bar = layout.bar.expect("overflowing content has an indicator");
+        assert_eq!(bar.x, pane.x + pane.width - 2);
+        assert_eq!(bar.height, 10);
+        let max = layout.gauge.max_offset();
+
+        // Clicking the column selects a position along the content.
+        assert_eq!(scrub_offset(layout, Position::new(bar.x, bar.y)), Some(0));
+        assert_eq!(
+            scrub_offset(layout, Position::new(bar.x, bar.y + bar.height - 1)),
+            Some(max)
+        );
+        // One column further left is content, not indicator.
+        assert!(scrub_offset(layout, Position::new(bar.x - 1, bar.y)).is_none());
+        // Rows above and below the bar belong to the neighbouring pane on the same
+        // column — panes stacked along one axis share it.
+        assert!(scrub_offset(layout, Position::new(bar.x, bar.y - 1)).is_none());
+        assert!(scrub_offset(layout, Position::new(bar.x, bar.y + bar.height)).is_none());
+        // A pane whose content fits has no column to grab.
+        let fits = ScrollLayout::for_text("one line", bordered_inner(pane), 0);
+        assert!(scrub_offset(fits, Position::new(bar.x, bar.y)).is_none());
+        // A drag keeps scrubbing when it wanders off the column, clamped to the
+        // track's ends.
+        assert_eq!(scrub_row_offset(layout, 0), Some(0), "above the track");
+        assert_eq!(scrub_row_offset(layout, bar.y + 100), Some(max));
     }
 
     #[test]

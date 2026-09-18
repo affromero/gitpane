@@ -23,6 +23,8 @@ mod file_search;
 #[cfg(test)]
 mod regression_tests;
 mod render;
+#[cfg(test)]
+mod scroll_indicator_tests;
 mod search;
 #[cfg(test)]
 mod tests;
@@ -84,6 +86,24 @@ struct CommitDetail {
     msg_area: Rect,
     /// Rendered rect for the file list block (set during draw).
     file_list_area: Rect,
+}
+
+/// The three scrollable commit-detail panes. They are laid out along one axis, so
+/// a scroll-indicator grab has to remember which pane it took hold of: the drag
+/// then keeps scrubbing that pane even if the pointer leaves its column.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DetailPane {
+    Message,
+    Files,
+    Diff,
+}
+
+impl DetailPane {
+    /// Hit-test order for the indicator columns. The panes sit along one axis, so
+    /// their bars are disjoint and at most one can contain a point: stacked panes
+    /// even share the bar's column, which is why a hit test has to match the whole
+    /// bar rect (only the row tells those apart, and the graph list above them).
+    pub(super) const ALL: [Self; 3] = [Self::Message, Self::Files, Self::Diff];
 }
 
 struct SearchState {
@@ -189,6 +209,10 @@ pub(crate) struct GitGraph {
     /// Which commit-detail border is being dragged: 0 = graph|message,
     /// 1 = message|files, 2 = files|diff.
     dragging_detail_border: Option<u8>,
+    /// The commit-detail pane whose scroll indicator is being dragged, if any.
+    /// Kept for the whole drag so the pane keeps scrubbing when the pointer
+    /// wanders off its column.
+    scrubbing: Option<DetailPane>,
 }
 
 impl GitGraph {
@@ -232,6 +256,7 @@ impl GitGraph {
             detail_split: [0.40, 0.50, 0.65],
             msg_dragged: false,
             dragging_detail_border: None,
+            scrubbing: None,
         }
     }
 

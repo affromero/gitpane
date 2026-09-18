@@ -6,6 +6,7 @@ All notable changes to gitpane are documented here.
 
 ### Added
 - Scroll indicators for the commit-detail panes (message, files, diff) and the changes-panel diff: a thumb in the pane's right column plus a `seen/total` counter in the title, so a long diff shows how far it has scrolled and the end reads `total/total`. Panes whose content fits keep their full width and show neither. ([#86](https://github.com/affromero/gitpane/issues/86))
+- The indicators are interactive: click one to jump to that position, or hold and drag the thumb to scrub the pane. In the file list the window follows the pointer, so the diff keeps up with the row you land on.
 - Theme tokens for the indicators: `graph.commit_scrollbar_thumb` / `graph.commit_scrollbar_track` and `file_list.diff_scrollbar_thumb` / `file_list.diff_scrollbar_track`.
 
 ### Fixed

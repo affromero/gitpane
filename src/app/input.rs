@@ -363,6 +363,16 @@ impl App {
         let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
         const GRAB_ZONE: u16 = 2; // ±2 cells hit zone for border grab
 
+        // A press anywhere starts a new gesture, so it ends any drag a panel is
+        // still holding: a release outside the panel that started the drag is
+        // routed to whatever is under the pointer, never back to that panel.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.repo_list.cancel_drag();
+            self.file_list.cancel_drag();
+            self.git_graph.cancel_drag();
+            self.github_panel.cancel_drag();
+        }
+
         // Border dragging for panel resize (works in both orientations)
         if self.repo_area.width > 0 {
             // Compute border positions and mouse coordinate along the layout
@@ -395,19 +405,29 @@ impl App {
 
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    // Grab the nearest border within the hit zone.
-                    let mut candidates = vec![
-                        (0u8, mouse_pos.abs_diff(border1)),
-                        (1, mouse_pos.abs_diff(border2)),
-                    ];
-                    if self.github_visible {
-                        candidates.push((2, mouse_pos.abs_diff(border3)));
+                    // A panel's own interactive target outranks the seam it runs
+                    // alongside: the scroll indicators sit next to the panel border,
+                    // and losing their grab to it would resize panels instead of
+                    // scrolling the pane. The press still propagates below.
+                    if self.git_graph.is_on_scroll_indicator(pos)
+                        || self.file_list.is_on_scroll_indicator(pos)
+                    {
+                        self.dragging_border = None;
+                    } else {
+                        // Grab the nearest border within the hit zone.
+                        let mut candidates = vec![
+                            (0u8, mouse_pos.abs_diff(border1)),
+                            (1, mouse_pos.abs_diff(border2)),
+                        ];
+                        if self.github_visible {
+                            candidates.push((2, mouse_pos.abs_diff(border3)));
+                        }
+                        self.dragging_border = candidates
+                            .into_iter()
+                            .filter(|(_, d)| *d <= GRAB_ZONE)
+                            .min_by_key(|(_, d)| *d)
+                            .map(|(id, _)| id);
                     }
-                    self.dragging_border = candidates
-                        .into_iter()
-                        .filter(|(_, d)| *d <= GRAB_ZONE)
-                        .min_by_key(|(_, d)| *d)
-                        .map(|(id, _)| id);
                     // Don't return — let the click propagate to panels
                     // so items near borders remain clickable. The drag
                     // will only engage on MouseEventKind::Drag.
