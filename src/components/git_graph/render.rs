@@ -26,11 +26,25 @@ impl GitGraph {
             let line_count = detail.message.lines().count().max(1) as u16;
             let want = msg_auto_cells(line_count, axis);
             let min_cells = detail_min_cells(axis);
+            let lower = b0.saturating_add(min_cells);
+            // Below the graph pane and above the diff's share, the message and the
+            // file list share the room: the list takes what its files need, but
+            // leaves a third of the room to the message — a two-file commit must
+            // not be squashed into a one-row list, and a long message must not
+            // starve the list either. A border the user dragged by hand keeps the
+            // position they chose.
+            let keep = if self.files_dragged {
+                min_cells
+            } else {
+                let room = b2.saturating_sub(lower);
+                files_auto_cells(detail.files.len(), axis)
+                    .min(room.saturating_sub(room / 3))
+                    .max(min_cells)
+            };
             // Message|files border sits `want` cells below the graph border,
             // clamped so the message and files panes each keep a minimum.
-            let b1 = b0
-                .saturating_add(want)
-                .clamp(b0 + min_cells, b2 - min_cells);
+            let upper = b2.saturating_sub(keep).max(lower);
+            let b1 = b0.saturating_add(want).clamp(lower, upper);
             return [
                 b0 as f64 / axis as f64,
                 b1 as f64 / axis as f64,
@@ -382,6 +396,17 @@ pub(super) fn detail_cell_bounds(axis: u16, split: [f64; 3]) -> [u16; 3] {
 /// line count, capped at 40% of the available axis, at least 3 cells.
 pub(super) fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
     (line_count + 2).min(axis * 40 / 100).max(3)
+}
+
+/// Auto height (in cells) for the commit file list: one row per file plus its two
+/// borders, capped at 30% of the available axis, at least 3 cells (one row).
+///
+/// The list does not wrap, so its content size is exact: reserving it is what
+/// keeps a two-file commit from being squashed into a single row by a long
+/// message above it.
+pub(super) fn files_auto_cells(rows: usize, axis: u16) -> u16 {
+    let rows = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
+    rows.clamp(3, (axis * 30 / 100).max(3))
 }
 
 /// Maximum scroll offset (rows) for a wrapping paragraph inside a bordered

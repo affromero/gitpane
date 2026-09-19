@@ -185,6 +185,9 @@ pub(crate) struct GitGraph {
     /// True once the user drags the message|files border, after which
     /// `detail_split[1]` overrides the auto-sized message height.
     msg_dragged: bool,
+    /// True once the user drags the files|diff border, after which
+    /// `detail_split[2]` overrides the rows reserved for the file list.
+    files_dragged: bool,
     /// Which commit-detail border is being dragged: 0 = graph|message,
     /// 1 = message|files, 2 = files|diff.
     dragging_detail_border: Option<u8>,
@@ -230,6 +233,7 @@ impl GitGraph {
             theme_generation: 0,
             detail_split: [0.40, 0.50, 0.65],
             msg_dragged: false,
+            files_dragged: false,
             dragging_detail_border: None,
         }
     }
