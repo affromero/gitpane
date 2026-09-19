@@ -24,7 +24,8 @@ impl GitGraph {
         // no room between the stored 0.40/0.65 borders, so clamp in cells).
         let [b0, b1, b2] = detail_cell_bounds(axis, self.detail_split);
         if self.horizontal_layout && !self.msg_dragged {
-            let line_count = detail.message.lines().count().max(1) as u16;
+            let line_count =
+                u16::try_from(detail.message.lines().count().max(1)).unwrap_or(u16::MAX);
             let want = msg_auto_cells(line_count, axis);
             let min_cells = detail_min_cells(axis);
             let lower = b0.saturating_add(min_cells);
@@ -438,7 +439,12 @@ pub(super) fn detail_cell_bounds(axis: u16, split: [f64; 3]) -> [u16; 3] {
 /// Auto height (in cells) for the commit message block: follows the message's
 /// line count, capped at 40% of the available axis, at least 3 cells.
 pub(super) fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
-    (line_count + 2).min(axis * 40 / 100).max(3)
+    // usize math: `line_count + 2` overflows u16 for a message past 65 533
+    // lines, and `axis * 40` for an axis past 1 638 — both representable, so
+    // the arithmetic runs wide and only the result narrows back.
+    let lines = usize::from(line_count).saturating_add(2);
+    let cap = usize::from(axis) * 40 / 100;
+    lines.min(cap).max(3) as u16
 }
 
 /// Auto height (in cells) for the commit file list: one row per file plus its two
@@ -449,7 +455,10 @@ pub(super) fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
 /// message above it.
 pub(super) fn files_auto_cells(rows: usize, axis: u16) -> u16 {
     let rows = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
-    rows.clamp(3, (axis * 30 / 100).max(3))
+    // Same wide arithmetic as `msg_auto_cells`: `axis * 30` overflows u16
+    // past an axis of 2 184.
+    let cap = (usize::from(axis) * 30 / 100).max(3);
+    rows.clamp(3, cap as u16)
 }
 
 /// Axis coordinates (row in a vertical detail layout, column in a horizontal

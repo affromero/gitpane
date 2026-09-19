@@ -660,6 +660,18 @@ mod detail_layout_tests {
     }
 
     #[test]
+    fn auto_cell_helpers_stay_inside_u16() {
+        // A 65 533-line message used to overflow `line_count + 2` in debug
+        // builds; an axis past 1 638 (message) or 2 184 (files) used to
+        // overflow the cap's multiply. All representable, none may panic.
+        assert_eq!(msg_auto_cells(u16::MAX, 100), 40);
+        assert_eq!(msg_auto_cells(u16::MAX, 30), 12);
+        assert_eq!(msg_auto_cells(1, u16::MAX), 3);
+        assert_eq!(files_auto_cells(30, u16::MAX), 32);
+        assert_eq!(files_auto_cells(0, 0), 3);
+    }
+
+    #[test]
     fn files_auto_cells_reserves_a_row_per_file_with_cap() {
         assert_eq!(files_auto_cells(2, 60), 4, "two files, two rows");
         assert_eq!(files_auto_cells(30, 60), 18, "capped at 30% of the axis");
