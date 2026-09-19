@@ -426,6 +426,7 @@ impl Component for GitGraph {
                         }
                         2 => {
                             b2 = at.clamp(b1 + min_cells, axis - min_cells);
+                            self.files_dragged = true;
                         }
                         _ => {}
                     }
@@ -613,7 +614,7 @@ impl Component for GitGraph {
 
 #[cfg(test)]
 mod detail_layout_tests {
-    use super::super::render::msg_auto_cells;
+    use super::super::render::{files_auto_cells, msg_auto_cells};
     use super::{detail_border_positions, detail_chunks};
     use crate::components::scroll_pane::{self, ScrollLayout, bordered_inner};
     use ratatui::layout::Rect;
@@ -656,6 +657,21 @@ mod detail_layout_tests {
         assert_eq!(msg_auto_cells(1, 30), 3);
         assert_eq!(msg_auto_cells(4, 30), 6);
         assert_eq!(msg_auto_cells(50, 30), 12);
+    }
+
+    #[test]
+    fn files_auto_cells_reserves_a_row_per_file_with_cap() {
+        assert_eq!(files_auto_cells(2, 60), 4, "two files, two rows");
+        assert_eq!(files_auto_cells(30, 60), 18, "capped at 30% of the axis");
+        assert_eq!(files_auto_cells(0, 60), 3, "an empty list keeps one row");
+        assert_eq!(
+            files_auto_cells(9, 10),
+            3,
+            "never more than the axis allows"
+        );
+        // No overflow on absurd input, and never a panic from a min > max clamp.
+        assert_eq!(files_auto_cells(usize::MAX, 60), 18);
+        assert_eq!(files_auto_cells(5, 0), 3);
     }
 
     #[test]

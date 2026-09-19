@@ -10,6 +10,7 @@ All notable changes to gitpane are documented here.
 - Theme tokens for the indicators: `graph.commit_scrollbar_thumb` / `graph.commit_scrollbar_track` and `file_list.diff_scrollbar_thumb` / `file_list.diff_scrollbar_track`.
 
 ### Fixed
+- A long commit message no longer collapses the commit file list to a single row: the list keeps one row per file, sharing the space below the graph pane with the message, and the diff keeps its own share. Dragging the files|diff border still overrides it. ([#85](https://github.com/affromero/gitpane/issues/85))
 - The changes-panel diff no longer scrolls past its last screenful into blank rows; its scroll offset is clamped to what the pane shows.
 
 ### Notes

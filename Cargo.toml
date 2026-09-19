@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 git2 = { version = "0.21", features = ["vendored-openssl"] }
 walkdir = "2"
 ignore = "0.4"
-dirs = "6"
+dirs = "7"
 notify = "8"
 notify-debouncer-full = "0.7"
 ureq = "3"

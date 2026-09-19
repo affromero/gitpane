@@ -1,7 +1,7 @@
-//! Regression tests from the commit-detail-panes PR review (issues #68).
+//! Regression tests for the commit-detail panes, covered through the actual
+//! widget draw and mouse paths rather than the pure layout helpers.
 //!
-//! Two bugs were reported during review and are covered here through the
-//! actual widget draw and mouse paths (not just the pure layout helpers):
+//! From the commit-detail-panes PR review (issues #68):
 //!   1. P1 — drawing commit detail panicked at an ordinary 80x22 terminal
 //!      because the stored 0.40/0.65 split left an inverted clamp range.
 //!   2. P2 — the message pane's max scroll counted Unicode scalar values while
@@ -9,6 +9,10 @@
 //!      unreachable (wheel scroll stuck before the last line). The clamp now lives
 //!      in `crate::components::scroll_pane`, which wraps by display width and
 //!      accounts for the column its own scroll indicator takes.
+//!
+//! Reported later (#85):
+//!   3. A long commit message auto-sized the message pane until the file list was
+//!      left with a single row, hiding files.
 
 use super::tests::{MOCK_OID, mock_row};
 use super::*;
@@ -155,4 +159,60 @@ fn review_detail_renders_small_sizes_in_both_orientations() {
             terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
         }
     }
+}
+
+#[test]
+fn a_two_file_commit_keeps_room_for_both_files() {
+    // A long commit message used to auto-size the message pane until the file list
+    // was left with a single row, hiding the second file. The list now reserves a
+    // row per file, at the message's expense.
+    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+    graph.repo_path = Some(std::path::PathBuf::from("/repo"));
+    graph.set_rows(vec![mock_row("abc1234", "first", "Alice")]);
+    graph.horizontal_layout = true;
+    let message = (0..20)
+        .map(|i| format!("message line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = graph.set_commit_files(
+        MOCK_OID.to_string(),
+        message,
+        vec![
+            ("M".to_string(), "file0.rs".to_string()),
+            ("M".to_string(), "file1.rs".to_string()),
+        ],
+    );
+    graph.set_commit_diff(
+        (0..10)
+            .map(|i| format!("+line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 40)).unwrap();
+    terminal
+        .draw(|frame| graph.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rendered: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    for name in ["file0.rs", "file1.rs"] {
+        assert!(
+            rendered.contains(name),
+            "{name} must be on screen, not scrolled out of a one-row list:\n{rendered}"
+        );
+    }
+    // The message pane keeps a usable share of the axis for itself.
+    assert!(
+        graph.msg_area.height >= 5,
+        "the message pane must not be starved either: {:?}",
+        graph.msg_area
+    );
 }
