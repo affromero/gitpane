@@ -7,6 +7,7 @@ pub(crate) mod graph_menu;
 pub(crate) mod path_input;
 pub(crate) mod picker;
 pub(crate) mod repo_list;
+pub(crate) mod scroll_pane;
 pub(crate) mod status_bar;
 pub(crate) mod theme_picker;
 
@@ -43,6 +44,12 @@ pub(crate) trait Component {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()>;
+
+    /// Drop any in-flight mouse drag. The app calls this on every press: mouse
+    /// events are routed by pointer position, so a drag released outside the panel
+    /// that started it is never delivered to that panel and would otherwise stay
+    /// armed for the next drag that wanders in.
+    fn cancel_drag(&mut self) {}
 }
 
 /// Case-insensitive substring filter over a list of item strings.

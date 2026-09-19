@@ -10,10 +10,163 @@ use super::*;
 
 use super::render::{
     DETAIL_GRAB_ZONE, detail_border_positions, detail_cell_bounds, detail_chunks, detail_min_cells,
-    max_scroll_lines,
 };
+use crate::components::scroll_pane::{self, ScrollLayout};
+
+/// One `j`/`k` or wheel step of the commit diff, clamped to what the pane as
+/// last drawn can show (its own column is reserved by the scroll indicator, so
+/// the wrap width — and therefore the last screenful — comes from `area`).
+fn step_diff_scroll(content: Option<&str>, area: Rect, scroll: u16, delta: i16) -> u16 {
+    match content {
+        Some(content) => {
+            scroll_pane::clamp_text_offset(content, area, scroll.saturating_add_signed(delta))
+        }
+        None => 0,
+    }
+}
+
+/// One wheel step of the commit message pane, clamped the same way.
+fn step_msg_scroll(message: &str, area: Rect, scroll: u16, delta: i16) -> u16 {
+    scroll_pane::clamp_text_offset(message, area, scroll.saturating_add_signed(delta))
+}
+
+impl GitGraph {
+    /// The scroll layout of one commit-detail pane, as the last frame drew it.
+    /// Offsets do not enter the layout that a scrub needs (the column and its
+    /// extent depend only on the content and the pane), so `0` is passed through.
+    fn pane_layout(&self, pane: DetailPane) -> Option<ScrollLayout> {
+        let detail = self.commit_detail.as_ref()?;
+        match pane {
+            DetailPane::Message => Some(ScrollLayout::for_text(
+                &detail.message,
+                scroll_pane::bordered_inner(self.msg_area),
+                0,
+            )),
+            DetailPane::Files => Some(ScrollLayout::for_list(
+                detail.files.len(),
+                scroll_pane::bordered_inner(self.files_area),
+                0,
+            )),
+            DetailPane::Diff => Some(ScrollLayout::for_text(
+                detail.diff_content.as_deref()?,
+                scroll_pane::bordered_inner(self.diff_area),
+                0,
+            )),
+        }
+    }
+
+    /// Whether `pos` points at one of this panel's scroll indicators. The app asks
+    /// before arming a panel-border drag: the indicators run alongside the panel
+    /// seam, and losing the grab to the seam would resize panels instead of
+    /// scrolling the pane.
+    pub(crate) fn is_on_scroll_indicator(&self, pos: ratatui::layout::Position) -> bool {
+        self.indicator_at(pos).is_some()
+    }
+
+    /// The pane whose scroll indicator sits under `pos`, the offset that point
+    /// selects on it, and the layout that computed both — the grab stores the
+    /// layout so the drag never re-counts the pane's rows.
+    fn indicator_at(
+        &self,
+        pos: ratatui::layout::Position,
+    ) -> Option<(DetailPane, u16, ScrollLayout)> {
+        DetailPane::ALL.into_iter().find_map(|pane| {
+            let layout = self.pane_layout(pane)?;
+            let offset = scroll_pane::scrub_offset(layout, pos)?;
+            Some((pane, offset, layout))
+        })
+    }
+
+    /// Move the pane a scroll-indicator grab came from to `offset`. The file list
+    /// scrolls by moving its highlight, so a scrub there may schedule a new diff.
+    fn scrub_to(&mut self, pane: DetailPane, offset: u16) -> Option<Action> {
+        match pane {
+            DetailPane::Message => {
+                if let Some(detail) = self.commit_detail.as_mut() {
+                    detail.msg_scroll = offset;
+                }
+                None
+            }
+            DetailPane::Diff => {
+                if let Some(detail) = self.commit_detail.as_mut() {
+                    detail.diff_scroll = offset;
+                    // Grabbing the diff's indicator is interacting with the diff:
+                    // hand it the keyboard, like a click inside the pane does.
+                    detail.diff_focused = true;
+                }
+                None
+            }
+            DetailPane::Files => self.scrub_file_highlight(offset),
+        }
+    }
+
+    /// A scrub on the file list moves the list's window, which a ratatui list only
+    /// expresses through its offset and its highlight: both are set, so the frame
+    /// that follows shows the screenful the pointer asked for (setting the
+    /// highlight alone would let the list re-scroll to keep it visible).
+    fn scrub_file_highlight(&mut self, offset: u16) -> Option<Action> {
+        let detail = self.commit_detail.as_mut()?;
+        // Grabbing the list's indicator hands it the keyboard, the way a row
+        // click does — even when the scrub then has nowhere to land (an empty
+        // list, or a filter with no matches).
+        detail.diff_focused = false;
+        let files = detail.files.len();
+        if files == 0 {
+            return None;
+        }
+        let index = Self::nearest_file_row(detail, usize::from(offset).min(files - 1))?;
+        let already_there =
+            detail.file_state.selected() == Some(index) && detail.file_state.offset() == index;
+        // Re-request anyway when the pane has no diff to show: that is the state a
+        // failed or still-running load leaves behind, and the scrub is then the
+        // user's way to ask again (a row click does the same).
+        if already_there && detail.diff_content.is_some() {
+            return None;
+        }
+        detail.file_state.select(Some(index));
+        *detail.file_state.offset_mut() = index;
+        self.file_selection_changed()
+    }
+
+    /// The row a scrub should land on: `index` itself, or the closest row the
+    /// active filter still matches. The list draws every row (matches are only
+    /// bolded), so snapping keeps the scrollbar usable while filtering instead of
+    /// dying on the rows a click would refuse.
+    fn nearest_file_row(detail: &CommitDetail, index: usize) -> Option<usize> {
+        if detail.file_matches(index) {
+            return Some(index);
+        }
+        let matches = detail.file_filter.matches();
+        let after = matches.partition_point(|row| *row < index);
+        let before = after.checked_sub(1);
+        match (before.and_then(|i| matches.get(i)), matches.get(after)) {
+            (Some(before), Some(after)) => Some(if index - *before <= *after - index {
+                *before
+            } else {
+                *after
+            }),
+            (Some(before), None) => Some(*before),
+            (None, Some(after)) => Some(*after),
+            (None, None) => None,
+        }
+    }
+
+    /// Continue a scroll-indicator drag: only the row matters, so a pointer that
+    /// wanders sideways keeps scrubbing the pane it grabbed. The layout is the
+    /// one the grab stored, so a drag over a long pane costs no re-count.
+    fn scrub_drag(&mut self, pos: ratatui::layout::Position) -> Option<Action> {
+        let (pane, layout) = *self.scrubbing.as_ref()?;
+        let offset = scroll_pane::scrub_row_offset(layout, pos.y)?;
+        self.scrub_to(pane, offset)
+    }
+}
 
 impl Component for GitGraph {
+    fn cancel_drag(&mut self) {
+        self.dragging_detail_border = None;
+        self.scrubbing = None;
+    }
+
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.action_tx = Some(tx);
         Ok(())
@@ -34,17 +187,20 @@ impl Component for GitGraph {
                         detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        let max = detail
-                            .diff_content
-                            .as_deref()
-                            .map(|c| {
-                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
-                            })
-                            .unwrap_or(0);
-                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            1,
+                        );
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            -1,
+                        );
                     }
                     _ => {}
                 }
@@ -152,6 +308,8 @@ impl Component for GitGraph {
         );
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // A fresh press always ends a previous indicator grab.
+                self.scrubbing = None;
                 let mut candidates = Vec::new();
                 for (i, p) in dpos.iter().enumerate() {
                     if let Some(p) = *p {
@@ -167,6 +325,15 @@ impl Component for GitGraph {
                 // outer-panel border behavior: the drag engages on Drag only,
                 // and a plain click near a border still reaches the content.
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                // A pane's scroll indicator belongs to the pane, not to its rows,
+                // and not to the detail border it runs alongside either: the
+                // column's end rows sit inside a border's grab zone, where a drag
+                // would otherwise resize the split instead of scrolling.
+                if let Some((pane, offset, layout)) = self.indicator_at(pos) {
+                    self.dragging_detail_border = None;
+                    self.scrubbing = Some((pane, layout));
+                    return Ok(self.scrub_to(pane, offset));
+                }
                 // Click in graph list area
                 if self.graph_list_area.contains(pos) {
                     let content_y = self.graph_list_area.y + 1;
@@ -234,6 +401,10 @@ impl Component for GitGraph {
             }
 
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.dragging_detail_border.is_none() && self.scrubbing.is_some() {
+                    let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+                    return Ok(self.scrub_drag(pos));
+                }
                 if let Some(border) = self.dragging_detail_border {
                     let area = self.render_area;
                     let (axis, origin) = if vertical {
@@ -275,8 +446,9 @@ impl Component for GitGraph {
                     Ok(None)
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) if self.dragging_detail_border.is_some() => {
+            MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging_detail_border = None;
+                self.scrubbing = None;
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {
@@ -284,11 +456,21 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        detail.diff_scroll = detail.diff_scroll.saturating_sub(1);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            -1,
+                        );
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        detail.msg_scroll = detail.msg_scroll.saturating_sub(1);
+                        detail.msg_scroll = step_msg_scroll(
+                            &detail.message,
+                            detail.msg_area,
+                            detail.msg_scroll,
+                            -1,
+                        );
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -307,23 +489,17 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        let max = detail
-                            .diff_content
-                            .as_deref()
-                            .map(|c| {
-                                max_scroll_lines(c, self.diff_area.height, self.diff_area.width)
-                            })
-                            .unwrap_or(0);
-                        detail.diff_scroll = (detail.diff_scroll + 1).min(max);
+                        detail.diff_scroll = step_diff_scroll(
+                            detail.diff_content.as_deref(),
+                            self.diff_area,
+                            detail.diff_scroll,
+                            1,
+                        );
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        let max = max_scroll_lines(
-                            &detail.message,
-                            detail.msg_area.height,
-                            detail.msg_area.width,
-                        );
-                        detail.msg_scroll = (detail.msg_scroll + 1).min(max);
+                        detail.msg_scroll =
+                            step_msg_scroll(&detail.message, detail.msg_area, detail.msg_scroll, 1);
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -445,7 +621,8 @@ impl Component for GitGraph {
 #[cfg(test)]
 mod detail_layout_tests {
     use super::super::render::{files_auto_cells, msg_auto_cells};
-    use super::{detail_border_positions, detail_chunks, max_scroll_lines};
+    use super::{detail_border_positions, detail_chunks};
+    use crate::components::scroll_pane::{self, ScrollLayout, bordered_inner};
     use ratatui::layout::Rect;
 
     #[test]
@@ -489,6 +666,18 @@ mod detail_layout_tests {
     }
 
     #[test]
+    fn auto_cell_helpers_stay_inside_u16() {
+        // A 65 533-line message used to overflow `line_count + 2` in debug
+        // builds; an axis past 1 638 (message) or 2 184 (files) used to
+        // overflow the cap's multiply. All representable, none may panic.
+        assert_eq!(msg_auto_cells(u16::MAX, 100), 40);
+        assert_eq!(msg_auto_cells(u16::MAX, 30), 12);
+        assert_eq!(msg_auto_cells(1, u16::MAX), 3);
+        assert_eq!(files_auto_cells(30, u16::MAX), 32);
+        assert_eq!(files_auto_cells(0, 0), 3);
+    }
+
+    #[test]
     fn files_auto_cells_reserves_a_row_per_file_with_cap() {
         assert_eq!(files_auto_cells(2, 60), 4, "two files, two rows");
         assert_eq!(files_auto_cells(30, 60), 18, "capped at 30% of the axis");
@@ -504,21 +693,35 @@ mod detail_layout_tests {
     }
 
     #[test]
-    fn max_scroll_lines_stops_at_content_end() {
-        // Fits in 10 visible rows: no scrolling allowed.
-        assert_eq!(max_scroll_lines("short", 12, 80), 0);
-        // 20 wrapped rows in 10 visible rows: max offset 10.
+    fn pane_scrolling_stops_at_content_end() {
+        // Largest offset the drawn pane allows; the same clamp a key or wheel
+        // step applies.
+        let max_offset =
+            |text: &str, pane: Rect| scroll_pane::clamp_text_offset(text, pane, u16::MAX);
+        // Fits inside the pane: no scrolling allowed.
+        let pane = Rect::new(0, 0, 82, 12); // 80x10 inside the borders
+        assert_eq!(max_offset("short", pane), 0);
+        // 20 rows overflowing a 10-row pane: the offset stops one screenful
+        // before the end, so the last row is the last row shown.
         let text = (0..20)
             .map(|_| "x".repeat(60))
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(max_scroll_lines(&text, 12, 80), 10);
-        // Long lines wrap; 3 source lines of 40 chars at inner width 10 -> 12 rows.
+        assert_eq!(max_offset(&text, pane), 10);
+        // Long lines wrap at the width left over beside the scroll indicator
+        // (10 - 1 thumb = 9), and the clamp follows that count.
         let long = ["a".repeat(40), "b".repeat(40), "c".repeat(40)].join("\n");
-        assert_eq!(max_scroll_lines(&long, 8, 12), 6); // 12 rows - 6 visible
-        // Degenerate viewport.
-        assert_eq!(max_scroll_lines("anything", 1, 80), 0);
-        assert_eq!(max_scroll_lines("anything", 12, 1), 0);
+        let small = Rect::new(0, 0, 12, 8); // 10x6 inside the borders
+        assert_eq!(scroll_pane::wrapped_rows(&long, 9), 15);
+        assert_eq!(max_offset(&long, small), 9); // 15 rows - 6 visible
+        // Degenerate panes: too narrow to spare a column never gets one.
+        let narrow = Rect::new(0, 0, 1, 80);
+        assert_eq!(max_offset(&text, narrow), 0);
+        assert!(
+            ScrollLayout::for_text(&text, bordered_inner(narrow), 0)
+                .bar
+                .is_none()
+        );
     }
 
     #[test]

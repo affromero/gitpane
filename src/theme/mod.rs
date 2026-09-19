@@ -144,6 +144,9 @@ pub(crate) struct FileListTheme {
     pub submodule_unreachable: Color,
     pub submodule_branch: Color,
     pub submodule_needs_merge: Color,
+    /// Scroll indicator of the changes-panel diff: thumb and its track.
+    pub diff_scrollbar_thumb: Color,
+    pub diff_scrollbar_track: Color,
 }
 
 impl Default for FileListTheme {
@@ -172,6 +175,8 @@ impl Default for FileListTheme {
             submodule_unreachable: Color::LightRed,
             submodule_branch: Color::Cyan,
             submodule_needs_merge: Color::Yellow,
+            diff_scrollbar_thumb: Color::Cyan,
+            diff_scrollbar_track: Color::DarkGray,
         }
     }
 }
@@ -209,6 +214,9 @@ pub(crate) struct GraphTheme {
     pub commit_diff_hunk: Color,
     pub commit_diff_meta: Color,
     pub commit_diff_context: Color,
+    /// Scroll indicator of the commit-detail panes: thumb and its track.
+    pub commit_scrollbar_thumb: Color,
+    pub commit_scrollbar_track: Color,
     pub search_overlay_fg: Color,
     pub search_overlay_bg: Color,
     pub lane_palette: Vec<Color>,
@@ -257,6 +265,8 @@ impl Default for GraphTheme {
             commit_diff_hunk: Color::Cyan,
             commit_diff_meta: Color::DarkGray,
             commit_diff_context: Color::White,
+            commit_scrollbar_thumb: Color::Cyan,
+            commit_scrollbar_track: Color::DarkGray,
             search_overlay_fg: Color::White,
             search_overlay_bg: Color::DarkGray,
             lane_palette: vec![

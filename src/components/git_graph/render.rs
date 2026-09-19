@@ -1,10 +1,11 @@
+use crate::components::scroll_pane::{self, BarColors, ScrollGauge, ScrollLayout};
 use crate::git::graph_render;
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
 use super::*;
@@ -23,7 +24,8 @@ impl GitGraph {
         // no room between the stored 0.40/0.65 borders, so clamp in cells).
         let [b0, b1, b2] = detail_cell_bounds(axis, self.detail_split);
         if self.horizontal_layout && !self.msg_dragged {
-            let line_count = detail.message.lines().count().max(1) as u16;
+            let line_count =
+                u16::try_from(detail.message.lines().count().max(1)).unwrap_or(u16::MAX);
             let want = msg_auto_cells(line_count, axis);
             let min_cells = detail_min_cells(axis);
             let lower = b0.saturating_add(min_cells);
@@ -191,6 +193,8 @@ impl GitGraph {
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
+    /// Body pane of the commit detail: wrapped message plus a scroll indicator
+    /// (its own column is reserved only while the message overflows).
     pub(super) fn draw_commit_message(
         detail: &mut CommitDetail,
         frame: &mut Frame,
@@ -205,12 +209,17 @@ impl GitGraph {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.commit_msg_border));
 
-        let msg_paragraph = Paragraph::new(detail.message.as_str())
-            .style(Style::default().fg(theme.commit_msg_text))
-            .block(msg_block)
-            .wrap(Wrap { trim: false })
-            .scroll((detail.msg_scroll, 0));
-        frame.render_widget(msg_paragraph, area);
+        let style = Style::default().fg(theme.commit_msg_text);
+        let gauge = scroll_pane::render_pane(
+            frame,
+            area,
+            msg_block,
+            &detail.message,
+            scroll_pane::styled_lines(&detail.message, style),
+            detail.msg_scroll,
+            scroll_bar_colors(theme),
+        );
+        detail.msg_scroll = gauge.offset();
     }
 
     pub(super) fn draw_commit_file_list(
@@ -268,59 +277,94 @@ impl GitGraph {
             })
             .collect();
 
-        let list = List::new(items).block(files_block).highlight_style(
+        // The block is painted on its own so the list can be inset by the thumb
+        // column, and so the counter (which needs the offset the list settles on)
+        // can be drawn over the top border afterwards. Whether the thumb shows at
+        // all depends only on there being more files than rows, not on the offset.
+        let layout = ScrollLayout::for_list(
+            detail.files.len(),
+            files_block.inner(area),
+            detail.file_state.offset(),
+        );
+        frame.render_widget(files_block, area);
+
+        let list = List::new(items).highlight_style(
             Style::default()
                 .bg(theme.selection_bg)
                 .add_modifier(Modifier::BOLD),
         );
+        frame.render_stateful_widget(list, layout.content, &mut detail.file_state);
 
-        frame.render_stateful_widget(list, area, &mut detail.file_state);
+        let colors = scroll_bar_colors(theme);
+        let settled = ScrollGauge::new(
+            detail.files.len(),
+            layout.gauge.visible(),
+            scroll_pane::offset_u16(detail.file_state.offset()),
+        );
+        if let Some(bar) = layout.bar {
+            scroll_pane::render_bar(frame, bar, settled, colors);
+        }
+        scroll_pane::render_counter(frame, area, settled, colors);
     }
 
     pub(super) fn draw_commit_diff(
-        detail: &CommitDetail,
+        detail: &mut CommitDetail,
         frame: &mut Frame,
         area: Rect,
         theme: &crate::theme::GraphTheme,
     ) {
-        let Some(ref content) = detail.diff_content else {
-            return;
+        let gauge = {
+            let Some(ref content) = detail.diff_content else {
+                return;
+            };
+
+            let title = if detail.diff_focused {
+                " Commit Diff (Esc to leave) "
+            } else {
+                " Commit Diff (Enter to scroll) "
+            };
+            let block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.commit_diff_border));
+
+            let lines: Vec<Line> = content
+                .lines()
+                .map(|line| {
+                    let style = if line.starts_with('+') && !line.starts_with("+++") {
+                        Style::default().fg(theme.commit_diff_added)
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        Style::default().fg(theme.commit_diff_removed)
+                    } else if line.starts_with("@@") {
+                        Style::default().fg(theme.commit_diff_hunk)
+                    } else if line.starts_with("diff ") || line.starts_with("index ") {
+                        Style::default().fg(theme.commit_diff_meta)
+                    } else {
+                        Style::default().fg(theme.commit_diff_context)
+                    };
+                    Line::from(Span::styled(line, style))
+                })
+                .collect();
+
+            scroll_pane::render_pane(
+                frame,
+                area,
+                block,
+                content,
+                lines,
+                detail.diff_scroll,
+                scroll_bar_colors(theme),
+            )
         };
+        detail.diff_scroll = gauge.offset();
+    }
+}
 
-        let title = if detail.diff_focused {
-            " Commit Diff (Esc to leave) "
-        } else {
-            " Commit Diff (Enter to scroll) "
-        };
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.commit_diff_border));
-
-        let lines: Vec<Line> = content
-            .lines()
-            .map(|line| {
-                let style = if line.starts_with('+') && !line.starts_with("+++") {
-                    Style::default().fg(theme.commit_diff_added)
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    Style::default().fg(theme.commit_diff_removed)
-                } else if line.starts_with("@@") {
-                    Style::default().fg(theme.commit_diff_hunk)
-                } else if line.starts_with("diff ") || line.starts_with("index ") {
-                    Style::default().fg(theme.commit_diff_meta)
-                } else {
-                    Style::default().fg(theme.commit_diff_context)
-                };
-                Line::from(Span::styled(line, style))
-            })
-            .collect();
-
-        let paragraph = Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((detail.diff_scroll, 0));
-
-        frame.render_widget(paragraph, area);
+/// The commit-detail panes share one scroll-indicator palette.
+fn scroll_bar_colors(theme: &crate::theme::GraphTheme) -> BarColors {
+    BarColors {
+        thumb: theme.commit_scrollbar_thumb,
+        track: theme.commit_scrollbar_track,
     }
 }
 
@@ -395,7 +439,12 @@ pub(super) fn detail_cell_bounds(axis: u16, split: [f64; 3]) -> [u16; 3] {
 /// Auto height (in cells) for the commit message block: follows the message's
 /// line count, capped at 40% of the available axis, at least 3 cells.
 pub(super) fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
-    (line_count + 2).min(axis * 40 / 100).max(3)
+    // usize math: `line_count + 2` overflows u16 for a message past 65 533
+    // lines, and `axis * 40` for an axis past 1 638 — both representable, so
+    // the arithmetic runs wide and only the result narrows back.
+    let lines = usize::from(line_count).saturating_add(2);
+    let cap = usize::from(axis) * 40 / 100;
+    lines.min(cap).max(3) as u16
 }
 
 /// Auto height (in cells) for the commit file list: one row per file plus its two
@@ -406,26 +455,10 @@ pub(super) fn msg_auto_cells(line_count: u16, axis: u16) -> u16 {
 /// message above it.
 pub(super) fn files_auto_cells(rows: usize, axis: u16) -> u16 {
     let rows = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
-    rows.clamp(3, (axis * 30 / 100).max(3))
-}
-
-/// Maximum scroll offset (rows) for a wrapping paragraph inside a bordered
-/// block: the content's wrapped row count (each source line wrapped at the
-/// inner width using display-width word wrapping, exactly as ratatui renders
-/// it) minus the rows visible between the borders. `0` when the content fits
-/// or the viewport is too small to matter.
-pub(super) fn max_scroll_lines(text: &str, viewport_height: u16, viewport_width: u16) -> u16 {
-    if viewport_height <= 2 || viewport_width <= 2 {
-        return 0;
-    }
-    let inner = viewport_width - 2;
-    // Use the same wrapping ratatui applies when rendering the paragraph
-    // (display width + word boundaries), so wide (CJK) glyphs and long words
-    // don't leave the content end unreachable.
-    let content_rows = Paragraph::new(text)
-        .wrap(Wrap { trim: false })
-        .line_count(inner) as u16;
-    content_rows.saturating_sub(viewport_height - 2)
+    // Same wide arithmetic as `msg_auto_cells`: `axis * 30` overflows u16
+    // past an axis of 2 184.
+    let cap = (usize::from(axis) * 30 / 100).max(3);
+    rows.clamp(3, cap as u16)
 }
 
 /// Axis coordinates (row in a vertical detail layout, column in a horizontal

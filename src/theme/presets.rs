@@ -53,6 +53,9 @@ pub(crate) fn muted() -> Theme {
     t.file_list.submodule_unreachable = Color::Indexed(167);
     t.file_list.submodule_branch = Color::Indexed(73);
     t.file_list.submodule_needs_merge = Color::Indexed(178);
+    // Scroll indicators: the thumb echoes the pane border, the track recedes.
+    t.file_list.diff_scrollbar_thumb = Color::Indexed(73);
+    t.file_list.diff_scrollbar_track = Color::Indexed(238);
 
     // Graph: paragraph + commit colors muted, palettes desaturated.
     t.graph.border_focused = Color::Indexed(73);
@@ -75,6 +78,8 @@ pub(crate) fn muted() -> Theme {
     t.graph.commit_diff_removed = Color::Indexed(167);
     t.graph.commit_diff_hunk = Color::Indexed(73);
     t.graph.commit_diff_context = Color::Indexed(252);
+    t.graph.commit_scrollbar_thumb = Color::Indexed(73);
+    t.graph.commit_scrollbar_track = Color::Indexed(238);
     t.graph.search_overlay_fg = Color::Indexed(252);
     t.graph.lane_palette = vec![
         Color::Indexed(167), // soft red

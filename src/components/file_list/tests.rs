@@ -402,3 +402,329 @@ mod search_tests {
         assert!(!fl.filter.is_active());
     }
 }
+
+#[cfg(test)]
+mod diff_scroll_indicator_tests {
+    use super::*;
+    use crate::components::scroll_pane::{ScrollLayout, THUMB, TRACK, bordered_inner};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use std::path::PathBuf;
+
+    /// A `FileList` showing a diff of `lines` rows, drawn so the diff pane's
+    /// geometry is known.
+    fn list_with_diff(
+        lines: usize,
+    ) -> (FileList, ratatui::Terminal<ratatui::backend::TestBackend>) {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.set_diff(
+            (0..lines)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        (fl, terminal)
+    }
+
+    /// Every row of the rendered frame as a string.
+    fn rows(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The scroll-indicator column inside the diff pane, top row first.
+    fn indicator_column(
+        terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+        pane: Rect,
+    ) -> String {
+        let rows = rows(terminal);
+        let x = usize::from(pane.x + pane.width - 2);
+        (pane.y + 1..pane.y + pane.height - 1)
+            .map(|y| rows[usize::from(y)].chars().nth(x).unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn diff_counter_tracks_the_scroll_and_never_scrolls_past_the_end() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let visible = pane.height - 2;
+        assert!(visible > 0 && visible < 60, "pane shows {visible} of 60");
+
+        // Top of the diff: counter counts the rows on screen, no blank space yet.
+        assert!(rows(&terminal)[usize::from(pane.y)].contains(&format!("{visible}/60")));
+        assert!(indicator_column(&terminal, pane).starts_with(THUMB));
+
+        // Scrolling down far past the end parks on the last screenful: the pane
+        // keeps its content instead of scrolling into empty rows.
+        for _ in 0..200 {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char('j')))
+                .unwrap();
+        }
+        assert_eq!(fl.diff_scroll, 60 - visible);
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        assert!(rows(&terminal)[usize::from(pane.y)].contains("60/60"));
+        assert!(indicator_column(&terminal, pane).ends_with(THUMB));
+
+        // And back up stops at the top.
+        for _ in 0..200 {
+            fl.handle_key_event(KeyEvent::from(KeyCode::Char('k')))
+                .unwrap();
+        }
+        assert_eq!(fl.diff_scroll, 0);
+    }
+
+    #[test]
+    fn diff_that_fits_shows_no_indicator() {
+        let (fl, terminal) = list_with_diff(3);
+        let pane = fl.diff_area;
+        assert!(!indicator_column(&terminal, pane).contains(THUMB));
+        let title = &rows(&terminal)[usize::from(pane.y)];
+        assert!(
+            !title
+                .split_whitespace()
+                .any(|token| token
+                    .split_once('/')
+                    .is_some_and(|(seen, total)| !seen.is_empty()
+                        && seen.bytes().all(|b| b.is_ascii_digit())
+                        && !total.is_empty()
+                        && total.bytes().all(|b| b.is_ascii_digit()))),
+            "a diff that fits keeps a bare title: {title:?}"
+        );
+    }
+
+    #[test]
+    fn diff_track_is_drawn_beside_the_wrapped_content() {
+        // A line far longer than the pane wraps inside the narrowed content
+        // column: the wrapped text has to reach the content column that sits
+        // right beside the thumb, proving the thumb claims a column of its own
+        // instead of covering the text's last one.
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // Six wrapped lines to overflow the pane, then a short one.
+        let long = format!("+{}\n", "x".repeat(500));
+        fl.set_diff(long.repeat(6) + "+short\n");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        let pane = fl.diff_area;
+
+        let column = indicator_column(&terminal, pane);
+        assert!(
+            column.contains(TRACK) && column.chars().all(|c| c == '█' || c == '│'),
+            "indicator column: {column:?}"
+        );
+
+        // The last content column (the cell left of the thumb) carries the
+        // wrapped line's 500th character, not a trace of the indicator.
+        let cell = |row: u16, x: u16| terminal.backend().buffer()[(x, row)].symbol().to_owned();
+        let content_right = pane.x + pane.width - 3;
+        let first_row = pane.y + 1;
+        assert_eq!(
+            cell(first_row, content_right),
+            "x",
+            "wrapped content fills the pane up to the indicator column"
+        );
+        let bar_cell = cell(first_row, content_right + 1);
+        assert!(
+            bar_cell == THUMB || bar_cell == TRACK,
+            "the column beside the content belongs to the indicator: {bar_cell:?}"
+        );
+    }
+
+    /// One mouse event, the way the `App` routes them to the panel under the
+    /// pointer.
+    fn mouse(fl: &mut FileList, kind: MouseEventKind, column: u16, row: u16) -> Option<Action> {
+        fl.handle_mouse_event(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap()
+    }
+
+    /// The largest offset the diff pane as drawn allows.
+    fn diff_max(fl: &FileList) -> u16 {
+        ScrollLayout::for_text(
+            fl.diff_content.as_deref().unwrap(),
+            bordered_inner(fl.diff_area),
+            0,
+        )
+        .gauge
+        .max_offset()
+    }
+
+    #[test]
+    fn clicking_and_dragging_the_diff_indicator_scrubs_the_pane() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let bar = pane.x + pane.width - 2;
+        let max = diff_max(&fl);
+
+        // Click the middle of the track: the pane jumps to the middle.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + pane.height / 2,
+        );
+        let middle = fl.diff_scroll;
+        assert!(
+            middle > 0 && middle < max,
+            "a click in the middle of the track must land in the middle: {middle} of {max}"
+        );
+
+        // Click the bottom, then drag up to the top: the drag keeps scrubbing.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, max);
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert_eq!(fl.diff_scroll, 0);
+        // Sideways motion keeps the grab: only the row matters.
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            pane.x + 2,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, max);
+
+        // Releasing ends the grab, so later motion is not a scrub.
+        mouse(
+            &mut fl,
+            MouseEventKind::Up(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert_eq!(fl.diff_scroll, max, "a drag without a press must not scrub");
+
+        // The frame after a scrub shows the position it selected.
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        assert!(rows(&terminal)[usize::from(pane.y)].contains("60/60"));
+    }
+
+    #[test]
+    fn clicking_beside_the_diff_indicator_does_not_scrub() {
+        let (mut fl, _) = list_with_diff(60);
+        let pane = fl.diff_area;
+        // One column left of the indicator is content, not the scrollbar.
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            pane.x + pane.width - 3,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, 0);
+        assert!(fl.dragging_scrollbar.is_none());
+    }
+
+    fn entry(path: &str) -> FileEntry {
+        FileEntry {
+            path: PathBuf::from(path),
+            status: FileStatus::Modified,
+            staged: false,
+            unstaged: true,
+            is_submodule: false,
+            submodule_state: None,
+            submodule_warn: SubmoduleWarn::default(),
+            submodule_head: None,
+        }
+    }
+
+    #[test]
+    fn a_file_row_click_at_the_indicator_column_still_selects_the_row() {
+        // Stacked split (`horizontal_layout`): the file list and the diff share the
+        // indicator's column, so only the row tells them apart.
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.horizontal_layout = true;
+        fl.set_files(
+            vec![entry("a.rs"), entry("b.rs"), entry("c.rs")],
+            "repo",
+            RepoId(PathBuf::from("/repo")),
+        );
+        fl.set_diff(
+            (0..60)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+
+        let diff = fl.diff_area;
+        let row = fl.file_list_area.y + 2; // second file row
+        let column = diff.x + diff.width - 2; // the indicator's column
+        assert!(
+            fl.file_list_area
+                .contains(ratatui::layout::Position::new(column, row)),
+            "the row click has to be inside the list"
+        );
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+        );
+        assert_eq!(
+            fl.state.selected(),
+            Some(1),
+            "a click above the diff pane must select the file row"
+        );
+        assert_eq!(fl.diff_scroll, 0, "and must not scrub the diff");
+    }
+
+    #[test]
+    fn a_cancelled_grab_stops_scrubbing_the_diff() {
+        let (mut fl, mut terminal) = list_with_diff(60);
+        let pane = fl.diff_area;
+        let bar = pane.x + pane.width - 2;
+        mouse(
+            &mut fl,
+            MouseEventKind::Down(MouseButton::Left),
+            bar,
+            pane.y + 1,
+        );
+        assert!(fl.dragging_scrollbar.is_some(), "the press armed the grab");
+
+        fl.cancel_drag();
+        assert!(fl.dragging_scrollbar.is_none());
+        fl.set_diff(
+            (0..60)
+                .map(|i| format!("+line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        mouse(
+            &mut fl,
+            MouseEventKind::Drag(MouseButton::Left),
+            bar,
+            pane.y + pane.height - 2,
+        );
+        assert_eq!(fl.diff_scroll, 0, "a cancelled grab must not scrub");
+    }
+}

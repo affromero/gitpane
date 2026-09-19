@@ -122,6 +122,10 @@ Click a commit in the graph to see its files, and the diff follows whichever fil
 
 Panes also size themselves to what they hold: the message to its lines, the file list to one row per file, so a commit that touches two files always shows both instead of being collapsed by a long message. The diff keeps its own share of the panel. Drag a border to take any of that back by hand.
 
+While a pane has more rows than fit, it shows a scroll indicator: a thumb in the pane's right column and a `seen/total` counter in its title (`12/340`), so reaching the end reads `340/340` and the thumb lands on the last row of its track. The commit message, the file list and the diff all use it, as does the changes panel's diff. A pane that fits keeps its full width and shows neither.
+
+The indicator is also the fastest way through a long pane: click it to jump to that position (the counter follows) or hold and drag the thumb to scrub, in the message, files and diff panes alike.
+
 <img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
 ## Features
@@ -133,8 +137,8 @@ Panes also size themselves to what they hold: the message to its lines, the file
 - **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane (or herdr pane) open inside it, so at a glance you can see which parallel agents are actively working where. tmux and herdr; toggle with `[ui] show_liveness`.
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
-- **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them.
-- **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere.
+- **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them. Panes with more rows than fit carry a scrollbar thumb and a `seen/total` counter (`12/340`, ending at `340/340`), so a long diff never hides how much is left.
+- **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere, and click or drag a scroll indicator to jump through a long pane.
 - **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state, plus `p`/`P` pull/push shortcuts. A branch with a configured upstream is pulled/pushed bare so git's own config (including renamed upstream branches) decides the destination; without one, gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit/mirror setups) and passes `<remote> <branch>` explicitly.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
 - **Sort repos**: Cycle between alphabetical and dirty first with `s`.
@@ -230,6 +234,7 @@ Each pull request row shows its rolled-up CI status: a green `✓` when checks p
 |--------|--------|
 | Left click | Select item, switch panel focus |
 | Click selected row | Open diff / commit detail |
+| Click / drag a scroll indicator | Jump to that position / scrub through the pane |
 | Right click (repo list) | Context menu (push, pull, copy path) |
 | Scroll wheel | Navigate lists or scroll diffs |
 | `Menu` | Keyboard context menu — same menu as right-click, for terminals and multiplexers (e.g. herdr) that intercept the gesture |

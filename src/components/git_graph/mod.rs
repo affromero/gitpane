@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
+use crate::components::scroll_pane::ScrollLayout;
 use crate::git::graph::{BranchSegment, GraphBuilder, GraphFilters, GraphOptions, GraphRow};
 use crate::theme::Theme;
 
@@ -23,6 +24,9 @@ mod file_search;
 #[cfg(test)]
 mod regression_tests;
 mod render;
+#[cfg(test)]
+mod scroll_indicator_tests;
+mod search;
 #[cfg(test)]
 mod tests;
 
@@ -83,6 +87,24 @@ struct CommitDetail {
     msg_area: Rect,
     /// Rendered rect for the file list block (set during draw).
     file_list_area: Rect,
+}
+
+/// The three scrollable commit-detail panes. They are laid out along one axis, so
+/// a scroll-indicator grab has to remember which pane it took hold of: the drag
+/// then keeps scrubbing that pane even if the pointer leaves its column.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DetailPane {
+    Message,
+    Files,
+    Diff,
+}
+
+impl DetailPane {
+    /// Hit-test order for the indicator columns. The panes sit along one axis, so
+    /// their bars are disjoint and at most one can contain a point: stacked panes
+    /// even share the bar's column, which is why a hit test has to match the whole
+    /// bar rect (only the row tells those apart, and the graph list above them).
+    pub(super) const ALL: [Self; 3] = [Self::Message, Self::Files, Self::Diff];
 }
 
 struct SearchState {
@@ -191,6 +213,13 @@ pub(crate) struct GitGraph {
     /// Which commit-detail border is being dragged: 0 = graph|message,
     /// 1 = message|files, 2 = files|diff.
     dragging_detail_border: Option<u8>,
+    /// The commit-detail pane whose scroll indicator is being dragged, with the
+    /// scroll layout as it was at the grab. Kept for the whole drag so the pane
+    /// keeps scrubbing when the pointer wanders off its column; keeping the
+    /// layout spares every Drag event a re-count of the pane's wrapped rows.
+    /// A layout that goes stale mid-drag (content reloaded under the drag)
+    /// self-heals at the next press, which re-grabs afresh.
+    scrubbing: Option<(DetailPane, ScrollLayout)>,
 }
 
 impl GitGraph {
@@ -235,6 +264,7 @@ impl GitGraph {
             msg_dragged: false,
             files_dragged: false,
             dragging_detail_border: None,
+            scrubbing: None,
         }
     }
 
@@ -820,84 +850,6 @@ impl GitGraph {
         let idx = self.state.selected()?;
         let row = self.display_rows().get(idx)?;
         Some(format!("{} {}", row.short_id, row.message))
-    }
-
-    pub fn search_visible(&self) -> bool {
-        self.search.visible
-    }
-
-    pub fn handle_search_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        match key.code {
-            KeyCode::Esc => {
-                self.search.visible = false;
-            }
-            KeyCode::Enter => {
-                self.search.visible = false;
-                // Jump to first match if any
-                if let Some(&idx) = self.search.matches.first() {
-                    self.search.current_match = Some(0);
-                    self.state.select(Some(idx));
-                }
-            }
-            KeyCode::Backspace => {
-                self.search.input.pop();
-                self.update_search_matches();
-            }
-            KeyCode::Char(c) => {
-                self.search.input.push(c);
-                self.update_search_matches();
-            }
-            _ => {}
-        }
-        Ok(None)
-    }
-
-    fn update_search_matches(&mut self) {
-        self.search.current_match = None;
-        if self.search.input.is_empty() {
-            self.search.matches.clear();
-            return;
-        }
-        let query = self.search.input.to_lowercase();
-        let matches: Vec<usize> = self
-            .display_rows()
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| {
-                row.message.to_lowercase().contains(&query)
-                    || row.author.to_lowercase().contains(&query)
-                    || row.short_id.to_lowercase().contains(&query)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if !matches.is_empty() {
-            self.search.current_match = Some(0);
-        }
-        self.search.matches = matches;
-    }
-
-    fn search_next(&mut self) {
-        if self.search.matches.is_empty() {
-            return;
-        }
-        let next = match self.search.current_match {
-            Some(i) => (i + 1) % self.search.matches.len(),
-            None => 0,
-        };
-        self.search.current_match = Some(next);
-        self.state.select(Some(self.search.matches[next]));
-    }
-
-    fn search_prev(&mut self) {
-        if self.search.matches.is_empty() {
-            return;
-        }
-        let prev = match self.search.current_match {
-            Some(0) | None => self.search.matches.len() - 1,
-            Some(i) => i - 1,
-        };
-        self.search.current_match = Some(prev);
-        self.state.select(Some(self.search.matches[prev]));
     }
 
     fn select_next(&mut self) {
