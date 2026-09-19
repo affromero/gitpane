@@ -638,7 +638,7 @@ mod diff_scroll_indicator_tests {
             pane.y + pane.height - 2,
         );
         assert_eq!(fl.diff_scroll, 0);
-        assert!(!fl.dragging_scrollbar);
+        assert!(fl.dragging_scrollbar.is_none());
     }
 
     fn entry(path: &str) -> FileEntry {
@@ -708,10 +708,10 @@ mod diff_scroll_indicator_tests {
             bar,
             pane.y + 1,
         );
-        assert!(fl.dragging_scrollbar, "the press armed the grab");
+        assert!(fl.dragging_scrollbar.is_some(), "the press armed the grab");
 
         fl.cancel_drag();
-        assert!(!fl.dragging_scrollbar);
+        assert!(fl.dragging_scrollbar.is_none());
         fl.set_diff(
             (0..60)
                 .map(|i| format!("+line {i}"))

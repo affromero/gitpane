@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
+use crate::components::scroll_pane::ScrollLayout;
 use crate::git::graph::{BranchSegment, GraphBuilder, GraphFilters, GraphOptions, GraphRow};
 use crate::theme::Theme;
 
@@ -212,10 +213,13 @@ pub(crate) struct GitGraph {
     /// Which commit-detail border is being dragged: 0 = graph|message,
     /// 1 = message|files, 2 = files|diff.
     dragging_detail_border: Option<u8>,
-    /// The commit-detail pane whose scroll indicator is being dragged, if any.
-    /// Kept for the whole drag so the pane keeps scrubbing when the pointer
-    /// wanders off its column.
-    scrubbing: Option<DetailPane>,
+    /// The commit-detail pane whose scroll indicator is being dragged, with the
+    /// scroll layout as it was at the grab. Kept for the whole drag so the pane
+    /// keeps scrubbing when the pointer wanders off its column; keeping the
+    /// layout spares every Drag event a re-count of the pane's wrapped rows.
+    /// A layout that goes stale mid-drag (content reloaded under the drag)
+    /// self-heals at the next press, which re-grabs afresh.
+    scrubbing: Option<(DetailPane, ScrollLayout)>,
 }
 
 impl GitGraph {

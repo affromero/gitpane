@@ -30,9 +30,12 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
-    /// True while the diff's scroll indicator is held down, so the drag keeps
-    /// scrubbing even if the pointer leaves the indicator column.
-    dragging_scrollbar: bool,
+    /// The diff's scroll indicator grab, with the scroll layout as it was at
+    /// the grab. Kept for the whole drag so the scrub survives the pointer
+    /// leaving the indicator column, and so Drag events cost no re-count of
+    /// the diff's wrapped rows. A layout that goes stale mid-drag (a new diff
+    /// landing under the drag) self-heals at the next press.
+    dragging_scrollbar: Option<ScrollLayout>,
     pub horizontal_layout: bool,
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
@@ -61,7 +64,7 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
-            dragging_scrollbar: false,
+            dragging_scrollbar: None,
             horizontal_layout: false,
             diff_generation: 0,
             theme,
@@ -513,7 +516,7 @@ fn submodule_tag_spans(
 
 impl Component for FileList {
     fn cancel_drag(&mut self) {
-        self.dragging_scrollbar = false;
+        self.dragging_scrollbar = None;
     }
 
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
@@ -593,16 +596,15 @@ impl Component for FileList {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
-                self.dragging_scrollbar = false;
+                self.dragging_scrollbar = None;
 
                 // The diff's scroll indicator belongs to the diff pane, not to its
                 // rows: clicking it jumps there, and the grab scrubs until release.
-                if let Some(offset) = self
-                    .diff_scroll_layout()
-                    .and_then(|layout| scroll_pane::scrub_offset(layout, pos))
+                if let Some(layout) = self.diff_scroll_layout()
+                    && let Some(offset) = scroll_pane::scrub_offset(layout, pos)
                 {
                     self.diff_scroll = offset;
-                    self.dragging_scrollbar = true;
+                    self.dragging_scrollbar = Some(layout);
                     return Ok(None);
                 }
 
@@ -668,17 +670,17 @@ impl Component for FileList {
                 }
                 Ok(None)
             }
-            MouseEventKind::Drag(MouseButton::Left) if self.dragging_scrollbar => {
-                if let Some(offset) = self
-                    .diff_scroll_layout()
-                    .and_then(|layout| scroll_pane::scrub_row_offset(layout, mouse.row))
-                {
-                    self.diff_scroll = offset;
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(layout) = self.dragging_scrollbar {
+                    if let Some(offset) = scroll_pane::scrub_row_offset(layout, mouse.row) {
+                        self.diff_scroll = offset;
+                    }
+                    return Ok(None);
                 }
                 Ok(None)
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.dragging_scrollbar = false;
+                self.dragging_scrollbar = None;
                 Ok(None)
             }
             MouseEventKind::ScrollUp => {

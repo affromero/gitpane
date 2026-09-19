@@ -618,6 +618,40 @@ fn a_scrub_with_a_filter_moves_the_highlight_between_matches() {
 }
 
 #[test]
+fn a_scrub_with_a_filter_that_matches_nothing_still_hands_over_the_keyboard() {
+    // A zero-match filter leaves the scrub nowhere to land, but the grab is
+    // still an interaction with the list: the keyboard changes hands just
+    // like any other files-indicator grab.
+    let mut graph = detail_with(2, 30, 10);
+    {
+        let detail = graph.commit_detail.as_mut().unwrap();
+        detail.diff_focused = true;
+        detail.file_filter.push('z');
+        detail.file_filter.rebuild(&detail.file_paths);
+    }
+    assert_eq!(
+        graph.commit_detail.as_ref().unwrap().file_filter.count(),
+        0,
+        "fixture: the filter must match nothing"
+    );
+    draw(&mut graph);
+
+    let pane = graph.files_area;
+    mouse(
+        &mut graph,
+        MouseEventKind::Down(MouseButton::Left),
+        bar_x(pane),
+        pane.y + 1,
+    );
+    let detail = graph.commit_detail.as_ref().unwrap();
+    assert!(
+        !detail.diff_focused,
+        "the grab must hand the keyboard to the list"
+    );
+    assert!(graph.scrubbing.is_some(), "the press armed the grab");
+}
+
+#[test]
 fn a_scrub_on_the_highlighted_row_still_asks_for_its_diff() {
     // A failed or still-running diff load leaves the highlight on row 0 with no
     // content: grabbing the indicator there must ask again, the way a row click

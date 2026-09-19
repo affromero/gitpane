@@ -63,12 +63,17 @@ impl GitGraph {
         self.indicator_at(pos).is_some()
     }
 
-    /// The pane whose scroll indicator sits under `pos`, and the offset that
-    /// point selects on it.
-    fn indicator_at(&self, pos: ratatui::layout::Position) -> Option<(DetailPane, u16)> {
+    /// The pane whose scroll indicator sits under `pos`, the offset that point
+    /// selects on it, and the layout that computed both — the grab stores the
+    /// layout so the drag never re-counts the pane's rows.
+    fn indicator_at(
+        &self,
+        pos: ratatui::layout::Position,
+    ) -> Option<(DetailPane, u16, ScrollLayout)> {
         DetailPane::ALL.into_iter().find_map(|pane| {
-            let offset = scroll_pane::scrub_offset(self.pane_layout(pane)?, pos)?;
-            Some((pane, offset))
+            let layout = self.pane_layout(pane)?;
+            let offset = scroll_pane::scrub_offset(layout, pos)?;
+            Some((pane, offset, layout))
         })
     }
 
@@ -100,17 +105,18 @@ impl GitGraph {
     /// that follows shows the screenful the pointer asked for (setting the
     /// highlight alone would let the list re-scroll to keep it visible).
     fn scrub_file_highlight(&mut self, offset: u16) -> Option<Action> {
-        let files = self.commit_detail.as_ref()?.files.len();
+        let detail = self.commit_detail.as_mut()?;
+        // Grabbing the list's indicator hands it the keyboard, the way a row
+        // click does — even when the scrub then has nowhere to land (an empty
+        // list, or a filter with no matches).
+        detail.diff_focused = false;
+        let files = detail.files.len();
         if files == 0 {
             return None;
         }
-        let index = self.nearest_file_row(usize::from(offset).min(files - 1))?;
-        let detail = self.commit_detail.as_mut()?;
+        let index = Self::nearest_file_row(detail, usize::from(offset).min(files - 1))?;
         let already_there =
             detail.file_state.selected() == Some(index) && detail.file_state.offset() == index;
-        // Grabbing the list's indicator hands it the keyboard, the way a row click
-        // does, even when the grab lands on the row already highlighted.
-        detail.diff_focused = false;
         // Re-request anyway when the pane has no diff to show: that is the state a
         // failed or still-running load leaves behind, and the scrub is then the
         // user's way to ask again (a row click does the same).
@@ -126,8 +132,7 @@ impl GitGraph {
     /// active filter still matches. The list draws every row (matches are only
     /// bolded), so snapping keeps the scrollbar usable while filtering instead of
     /// dying on the rows a click would refuse.
-    fn nearest_file_row(&self, index: usize) -> Option<usize> {
-        let detail = self.commit_detail.as_ref()?;
+    fn nearest_file_row(detail: &CommitDetail, index: usize) -> Option<usize> {
         if detail.file_matches(index) {
             return Some(index);
         }
@@ -147,10 +152,11 @@ impl GitGraph {
     }
 
     /// Continue a scroll-indicator drag: only the row matters, so a pointer that
-    /// wanders sideways keeps scrubbing the pane it grabbed.
+    /// wanders sideways keeps scrubbing the pane it grabbed. The layout is the
+    /// one the grab stored, so a drag over a long pane costs no re-count.
     fn scrub_drag(&mut self, pos: ratatui::layout::Position) -> Option<Action> {
-        let pane = self.scrubbing?;
-        let offset = scroll_pane::scrub_row_offset(self.pane_layout(pane)?, pos.y)?;
+        let (pane, layout) = *self.scrubbing.as_ref()?;
+        let offset = scroll_pane::scrub_row_offset(layout, pos.y)?;
         self.scrub_to(pane, offset)
     }
 }
@@ -323,9 +329,9 @@ impl Component for GitGraph {
                 // and not to the detail border it runs alongside either: the
                 // column's end rows sit inside a border's grab zone, where a drag
                 // would otherwise resize the split instead of scrolling.
-                if let Some((pane, offset)) = self.indicator_at(pos) {
+                if let Some((pane, offset, layout)) = self.indicator_at(pos) {
                     self.dragging_detail_border = None;
-                    self.scrubbing = Some(pane);
+                    self.scrubbing = Some((pane, layout));
                     return Ok(self.scrub_to(pane, offset));
                 }
                 // Click in graph list area
