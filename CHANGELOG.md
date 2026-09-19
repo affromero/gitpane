@@ -4,17 +4,23 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-19
+
 ### Added
-- Scroll indicators for the commit-detail panes (message, files, diff) and the changes-panel diff: a thumb in the pane's right column plus a `seen/total` counter in the title, so a long diff shows how far it has scrolled and the end reads `total/total`. Panes whose content fits keep their full width and show neither. ([#86](https://github.com/affromero/gitpane/issues/86))
-- The indicators are interactive: click one to jump to that position, or hold and drag the thumb to scrub the pane. In the file list the window follows the pointer, so the diff keeps up with the row you land on.
-- Theme tokens for the indicators: `graph.commit_scrollbar_thumb` / `graph.commit_scrollbar_track` and `file_list.diff_scrollbar_thumb` / `file_list.diff_scrollbar_track`.
+- Scrollable commit messages, file lists, and diffs show a thumb and `seen/total` counter when content overflows. Click the track to jump or drag the thumb to scrub. Theme tokens control each indicator's thumb and track. ([#89](https://github.com/affromero/gitpane/pull/89), closes [#86](https://github.com/affromero/gitpane/issues/86)) Thanks @expoli for the report and implementation.
 
 ### Fixed
-- A long commit message no longer collapses the commit file list to a single row: the list keeps one row per file, sharing the space below the graph pane with the message, and the diff keeps its own share. Dragging the files|diff border still overrides it. ([#85](https://github.com/affromero/gitpane/issues/85))
-- The changes-panel diff no longer scrolls past its last screenful into blank rows; its scroll offset is clamped to what the pane shows.
+- A long commit message no longer collapses the commit file list to one row. The list keeps one row per file while the diff keeps its share of the available space. ([#88](https://github.com/affromero/gitpane/pull/88), closes [#85](https://github.com/affromero/gitpane/issues/85)) Thanks @expoli for the report and fix.
+- Changes-panel diffs stop at the final screenful instead of scrolling into blank rows. ([#89](https://github.com/affromero/gitpane/pull/89)) Thanks @expoli.
+- Repositories deleted from disk disappear during the next local poll, including repositories whose `.git` entry was removed. ([`f3ae22f`](https://github.com/affromero/gitpane/commit/f3ae22f))
+- Update rustls to 0.23.45 to resolve RUSTSEC-2026-0285. ([`dcb5371`](https://github.com/affromero/gitpane/commit/dcb5371), closes [#87](https://github.com/affromero/gitpane/issues/87)) Reported by @expoli.
+
+### Changed
+- Update dirs to 7.0.0 and ureq to 3.4.1. ([#83](https://github.com/affromero/gitpane/pull/83))
+- Update actions/setup-python from 6 to 7. ([#84](https://github.com/affromero/gitpane/pull/84))
 
 ### Notes
-- A pane whose content exceeds 65535 wrapped rows stops at that row: `Paragraph` scrolls in `u16` rows. Such content reports its reachable end (`total/total`) so the counter and the thumb never disagree; the rows past it need an external diff tool.
+- A pane stops at 65,535 wrapped rows because ratatui `Paragraph` scroll offsets use `u16`. The indicator reports the reachable end as `total/total`. ([#89](https://github.com/affromero/gitpane/pull/89))
 
 ## [0.16.1] - 2026-09-10
 
