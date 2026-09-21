@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::scroll_pane::ScrollLayout;
+use crate::components::scroll_pane::{self, ScrollLayout};
 use crate::git::graph::{BranchSegment, GraphBuilder, GraphFilters, GraphOptions, GraphRow};
 use crate::theme::Theme;
 
@@ -77,12 +77,26 @@ struct CommitDetail {
     file_paths: Vec<String>,
     diff_content: Option<String>,
     diff_scroll: u16,
+    /// Memoized row index for `diff_content` (see `scroll_pane::PaneRows`),
+    /// keyed by the content version and the content width — the only inputs
+    /// the index has. Building it re-wraps the whole document, which a large
+    /// diff cannot pay on every frame, scroll step, or click; the per-frame
+    /// overflow check that decides the width is viewport-bounded and stays
+    /// outside the cache.
+    diff_rows: Option<(u64, u16, scroll_pane::PaneRows)>,
+    /// Bumped whenever `diff_content` changes, so the index cache can tell a
+    /// stale entry from a current one.
+    diff_content_version: u64,
     /// True while the diff pane owns the keyboard, so `j`/`k` scroll the diff
     /// instead of moving the file highlight. The diff shows itself as soon as a
     /// file is highlighted, so its presence alone must not capture the keys;
     /// only `Enter` on a file row or a click inside the diff focuses it.
     diff_focused: bool,
     msg_scroll: u16,
+    /// Memoized row index for `message` (see `scroll_pane::PaneRows`), keyed by
+    /// the content width — the message never swaps in place (a new commit opens
+    /// a new `CommitDetail`), so no version key is needed.
+    msg_rows: Option<(u16, scroll_pane::PaneRows)>,
     /// Rendered rect for the commit message block (set during draw).
     msg_area: Rect,
     /// Rendered rect for the file list block (set during draw).
@@ -544,6 +558,9 @@ impl GitGraph {
             files,
             diff_content: None,
             diff_scroll: 0,
+            diff_rows: None,
+            diff_content_version: 0,
+            msg_rows: None,
             diff_focused: false,
             msg_scroll: 0,
             msg_area: Rect::default(),
@@ -555,6 +572,7 @@ impl GitGraph {
     pub fn set_commit_diff(&mut self, content: String) {
         if let Some(ref mut detail) = self.commit_detail {
             detail.diff_content = Some(content);
+            detail.diff_content_version = detail.diff_content_version.wrapping_add(1);
             detail.diff_scroll = 0;
         }
     }

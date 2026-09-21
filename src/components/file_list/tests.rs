@@ -727,4 +727,64 @@ mod diff_scroll_indicator_tests {
         );
         assert_eq!(fl.diff_scroll, 0, "a cancelled grab must not scrub");
     }
+
+    #[test]
+    fn diff_rows_cache_is_invalidated_when_the_content_changes() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.diff_area = Rect::new(0, 0, 82, 24);
+        fl.set_diff("a\nb\nc\n".repeat(10));
+        assert!(fl.ensure_diff_rows(fl.diff_area), "a diff exists");
+        let first = fl
+            .diff_rows
+            .as_ref()
+            .expect("cache filled")
+            .2
+            .index()
+            .total();
+        let width = bordered_inner(fl.diff_area).width - 1; // beside the thumb
+        assert_eq!(
+            fl.diff_rows.as_ref().map(|(v, w, _)| (*v, *w)),
+            Some((fl.diff_content_version, width)),
+            "the index is memoized under (content version, content width)"
+        );
+        assert!(fl.ensure_diff_rows(fl.diff_area), "a hit rebuilds nothing");
+
+        // Same width, different content: a stale entry would lie about the row
+        // count, so the version bump on set_diff must force a rebuild.
+        fl.set_diff("x\n".repeat(60));
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
+        assert_eq!((*v, *w), (fl.diff_content_version, width));
+        assert_ne!(rows.index().total(), first);
+        assert_eq!(rows.index().total(), 60);
+    }
+
+    #[test]
+    fn diff_rows_cache_tracks_the_content_width() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // Long enough to overflow both pane widths, so the thumb column is
+        // taken and the content width is the inner width minus one.
+        fl.set_diff("word ".repeat(1000));
+        fl.diff_area = Rect::new(0, 0, 82, 24);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (wide_width, wide_rows) = {
+            let (_, w, rows) = fl.diff_rows.as_ref().expect("cache filled");
+            (*w, rows.index().total())
+        };
+        let content_width_used_in_key = wide_width;
+        // The same content at another width (a panel resize) must re-key, not
+        // serve windows wrapped for the old width.
+        fl.diff_area = Rect::new(0, 0, 42, 24);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
+        assert_eq!(*w, bordered_inner(fl.diff_area).width - 1);
+        assert_ne!(
+            *w, wide_width,
+            "the width beside the thumb follows the pane"
+        );
+        assert_eq!(*v, fl.diff_content_version);
+        // The narrower pane wraps the same words into more rows.
+        assert!(rows.index().total() > wide_rows);
+        let _ = content_width_used_in_key;
+    }
 }

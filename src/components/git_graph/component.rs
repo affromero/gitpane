@@ -15,43 +15,55 @@ use crate::components::scroll_pane::{self, ScrollLayout};
 
 /// One `j`/`k` or wheel step of the commit diff, clamped to what the pane as
 /// last drawn can show (its own column is reserved by the scroll indicator, so
-/// the wrap width — and therefore the last screenful — comes from `area`).
-fn step_diff_scroll(content: Option<&str>, area: Rect, scroll: u16, delta: i16) -> u16 {
-    match content {
-        Some(content) => {
-            scroll_pane::clamp_text_offset(content, area, scroll.saturating_add_signed(delta))
-        }
-        None => 0,
+/// the wrap width — and therefore the last screenful — comes from `pane`).
+/// The clamp reads the memoized row index, so a large diff is wrapped once per
+/// (content, width), not once per step.
+fn step_diff_scroll(detail: &mut CommitDetail, pane: Rect, delta: i16) {
+    let scroll = detail.diff_scroll;
+    if !detail.ensure_diff_rows(pane) {
+        detail.diff_scroll = 0;
+        return;
     }
+    detail.diff_scroll = detail
+        .diff_scroll_layout_for(pane, scroll.saturating_add_signed(delta))
+        .map(|layout| layout.gauge.offset())
+        .unwrap_or(0);
 }
 
-/// One wheel step of the commit message pane, clamped the same way.
-fn step_msg_scroll(message: &str, area: Rect, scroll: u16, delta: i16) -> u16 {
-    scroll_pane::clamp_text_offset(message, area, scroll.saturating_add_signed(delta))
+/// One `j`/`k` or wheel step of the commit message pane, clamped the same way.
+fn step_msg_scroll(detail: &mut CommitDetail, pane: Rect, delta: i16) {
+    let scroll = detail.msg_scroll;
+    detail.ensure_msg_rows(pane);
+    detail.msg_scroll = detail
+        .msg_scroll_layout_for(pane, scroll.saturating_add_signed(delta))
+        .map(|layout| layout.gauge.offset())
+        .unwrap_or(0);
 }
 
 impl GitGraph {
     /// The scroll layout of one commit-detail pane, as the last frame drew it.
     /// Offsets do not enter the layout that a scrub needs (the column and its
     /// extent depend only on the content and the pane), so `0` is passed through.
-    fn pane_layout(&self, pane: DetailPane) -> Option<ScrollLayout> {
-        let detail = self.commit_detail.as_ref()?;
+    fn pane_layout(&mut self, pane: DetailPane) -> Option<ScrollLayout> {
+        let detail = self.commit_detail.as_mut()?;
         match pane {
-            DetailPane::Message => Some(ScrollLayout::for_text(
-                &detail.message,
-                scroll_pane::bordered_inner(self.msg_area),
-                0,
-            )),
+            DetailPane::Message => {
+                let pane_rect = self.msg_area;
+                detail.ensure_msg_rows(pane_rect);
+                detail.msg_scroll_layout_for(pane_rect, 0)
+            }
             DetailPane::Files => Some(ScrollLayout::for_list(
                 detail.files.len(),
                 scroll_pane::bordered_inner(self.files_area),
                 0,
             )),
-            DetailPane::Diff => Some(ScrollLayout::for_text(
-                detail.diff_content.as_deref()?,
-                scroll_pane::bordered_inner(self.diff_area),
-                0,
-            )),
+            DetailPane::Diff => {
+                let pane_rect = self.diff_area;
+                if !detail.ensure_diff_rows(pane_rect) {
+                    return None;
+                }
+                detail.diff_scroll_layout_for(pane_rect, 0)
+            }
         }
     }
 
@@ -59,7 +71,7 @@ impl GitGraph {
     /// before arming a panel-border drag: the indicators run alongside the panel
     /// seam, and losing the grab to the seam would resize panels instead of
     /// scrolling the pane.
-    pub(crate) fn is_on_scroll_indicator(&self, pos: ratatui::layout::Position) -> bool {
+    pub(crate) fn is_on_scroll_indicator(&mut self, pos: ratatui::layout::Position) -> bool {
         self.indicator_at(pos).is_some()
     }
 
@@ -67,7 +79,7 @@ impl GitGraph {
     /// selects on it, and the layout that computed both — the grab stores the
     /// layout so the drag never re-counts the pane's rows.
     fn indicator_at(
-        &self,
+        &mut self,
         pos: ratatui::layout::Position,
     ) -> Option<(DetailPane, u16, ScrollLayout)> {
         DetailPane::ALL.into_iter().find_map(|pane| {
@@ -161,6 +173,97 @@ impl GitGraph {
     }
 }
 
+impl CommitDetail {
+    /// Populate the diff's row-index cache when stale. The overflow check that
+    /// decides the width is viewport-bounded; the O(document) index build runs
+    /// only on a cache miss. Returns false when there is no diff.
+    pub(super) fn ensure_diff_rows(&mut self, pane: Rect) -> bool {
+        let Some(content) = self.diff_content.as_deref() else {
+            return false;
+        };
+        let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
+        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
+            && inner.width >= 2;
+        let content_width = inner.width - u16::from(bar);
+        let version = self.diff_content_version;
+        let hit = matches!(
+            &self.diff_rows,
+            Some((v, w, _)) if *v == version && *w == content_width
+        );
+        if !hit {
+            self.diff_rows = Some((
+                version,
+                content_width,
+                scroll_pane::pane_rows(content, content_width),
+            ));
+        }
+        true
+    }
+
+    /// The diff pane's scroll layout at `offset`, from the cache that
+    /// [`Self::ensure_diff_rows`] refreshed.
+    pub(super) fn diff_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
+        let content = self.diff_content.as_deref()?;
+        let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
+        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
+            && inner.width >= 2;
+        let (_, cached_width, rows) = self.diff_rows.as_ref()?;
+        debug_assert_eq!(
+            *cached_width,
+            inner.width - u16::from(bar),
+            "ensure_diff_rows must run before this for the current pane"
+        );
+        Some(scroll_pane::pane_scroll_layout(
+            inner,
+            bar,
+            rows.index(),
+            offset,
+        ))
+    }
+
+    /// Populate the message's row-index cache when the content width changed.
+    pub(super) fn ensure_msg_rows(&mut self, pane: Rect) {
+        let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
+        let bar = scroll_pane::fitting_row_count(&self.message, inner.width, visible).is_none()
+            && inner.width >= 2;
+        let content_width = inner.width - u16::from(bar);
+        let hit = matches!(&self.msg_rows, Some((w, _)) if *w == content_width);
+        if !hit {
+            self.msg_rows = Some((
+                content_width,
+                scroll_pane::pane_rows(&self.message, content_width),
+            ));
+        }
+    }
+
+    /// The message pane's scroll layout at `offset`, from the cache that
+    /// [`Self::ensure_msg_rows`] refreshed.
+    pub(super) fn msg_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
+        let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
+        let bar = scroll_pane::fitting_row_count(&self.message, inner.width, visible).is_none()
+            && inner.width >= 2;
+        let (cached_width, rows) = {
+            let (w, rows) = self.msg_rows.as_ref()?;
+            (*w, rows)
+        };
+        debug_assert_eq!(
+            cached_width,
+            inner.width - u16::from(bar),
+            "ensure_msg_rows must run before this for the current pane"
+        );
+        Some(scroll_pane::pane_scroll_layout(
+            inner,
+            bar,
+            rows.index(),
+            offset,
+        ))
+    }
+}
+
 impl Component for GitGraph {
     fn cancel_drag(&mut self) {
         self.dragging_detail_border = None;
@@ -187,20 +290,10 @@ impl Component for GitGraph {
                         detail.diff_focused = false;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        detail.diff_scroll = step_diff_scroll(
-                            detail.diff_content.as_deref(),
-                            self.diff_area,
-                            detail.diff_scroll,
-                            1,
-                        );
+                        step_diff_scroll(detail, self.diff_area, 1);
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        detail.diff_scroll = step_diff_scroll(
-                            detail.diff_content.as_deref(),
-                            self.diff_area,
-                            detail.diff_scroll,
-                            -1,
-                        );
+                        step_diff_scroll(detail, self.diff_area, -1);
                     }
                     _ => {}
                 }
@@ -456,21 +549,11 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        detail.diff_scroll = step_diff_scroll(
-                            detail.diff_content.as_deref(),
-                            self.diff_area,
-                            detail.diff_scroll,
-                            -1,
-                        );
+                        step_diff_scroll(detail, self.diff_area, -1);
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        detail.msg_scroll = step_msg_scroll(
-                            &detail.message,
-                            detail.msg_area,
-                            detail.msg_scroll,
-                            -1,
-                        );
+                        step_msg_scroll(detail, detail.msg_area, -1);
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {
@@ -489,17 +572,11 @@ impl Component for GitGraph {
                 let mut file_highlight_moved = false;
                 if let Some(ref mut detail) = self.commit_detail {
                     if self.diff_area.contains(pos) && detail.diff_content.is_some() {
-                        detail.diff_scroll = step_diff_scroll(
-                            detail.diff_content.as_deref(),
-                            self.diff_area,
-                            detail.diff_scroll,
-                            1,
-                        );
+                        step_diff_scroll(detail, self.diff_area, 1);
                         return Ok(None);
                     }
                     if detail.msg_area.contains(pos) {
-                        detail.msg_scroll =
-                            step_msg_scroll(&detail.message, detail.msg_area, detail.msg_scroll, 1);
+                        step_msg_scroll(detail, detail.msg_area, 1);
                         return Ok(None);
                     }
                     if detail.file_list_area.contains(pos) && !detail.files.is_empty() {

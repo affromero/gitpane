@@ -209,14 +209,27 @@ impl GitGraph {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.commit_msg_border));
 
-        let style = Style::default().fg(theme.commit_msg_text);
-        let gauge = scroll_pane::render_pane(
+        detail.ensure_msg_rows(area);
+        let Some(layout) = detail.msg_scroll_layout_for(area, detail.msg_scroll) else {
+            return;
+        };
+        let Some((_, rows)) = detail.msg_rows.as_ref() else {
+            return;
+        };
+        let (lines, skip) = scroll_pane::window_lines(
+            &detail.message,
+            rows.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |_| Style::default().fg(theme.commit_msg_text),
+        );
+        let gauge = scroll_pane::render_window_pane(
             frame,
             area,
             msg_block,
-            &detail.message,
-            scroll_pane::styled_lines(&detail.message, style),
-            detail.msg_scroll,
+            lines,
+            skip,
+            layout,
             scroll_bar_colors(theme),
         );
         detail.msg_scroll = gauge.offset();
@@ -313,50 +326,63 @@ impl GitGraph {
         area: Rect,
         theme: &crate::theme::GraphTheme,
     ) {
-        let gauge = {
-            let Some(ref content) = detail.diff_content else {
-                return;
-            };
-
-            let title = if detail.diff_focused {
-                " Commit Diff (Esc to leave) "
-            } else {
-                " Commit Diff (Enter to scroll) "
-            };
-            let block = Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.commit_diff_border));
-
-            let lines: Vec<Line> = content
-                .lines()
-                .map(|line| {
-                    let style = if line.starts_with('+') && !line.starts_with("+++") {
-                        Style::default().fg(theme.commit_diff_added)
-                    } else if line.starts_with('-') && !line.starts_with("---") {
-                        Style::default().fg(theme.commit_diff_removed)
-                    } else if line.starts_with("@@") {
-                        Style::default().fg(theme.commit_diff_hunk)
-                    } else if line.starts_with("diff ") || line.starts_with("index ") {
-                        Style::default().fg(theme.commit_diff_meta)
-                    } else {
-                        Style::default().fg(theme.commit_diff_context)
-                    };
-                    Line::from(Span::styled(line, style))
-                })
-                .collect();
-
-            scroll_pane::render_pane(
-                frame,
-                area,
-                block,
-                content,
-                lines,
-                detail.diff_scroll,
-                scroll_bar_colors(theme),
-            )
+        let title = if detail.diff_focused {
+            " Commit Diff (Esc to leave) "
+        } else {
+            " Commit Diff (Enter to scroll) "
         };
+        if !detail.ensure_diff_rows(area) {
+            return;
+        }
+        let Some(ref content) = detail.diff_content else {
+            return;
+        };
+        let Some(layout) = detail.diff_scroll_layout_for(area, detail.diff_scroll) else {
+            return;
+        };
+        let Some((_, _, rows)) = detail.diff_rows.as_ref() else {
+            return;
+        };
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.commit_diff_border));
+
+        // Only the viewport's rows are built and wrapped (the index locates the
+        // window), so a long diff scrolls as fast at the bottom as at the top.
+        let (lines, skip) = scroll_pane::window_lines(
+            content,
+            rows.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |line| commit_diff_line_style(line, theme),
+        );
+        let gauge = scroll_pane::render_window_pane(
+            frame,
+            area,
+            block,
+            lines,
+            skip,
+            layout,
+            scroll_bar_colors(theme),
+        );
         detail.diff_scroll = gauge.offset();
+    }
+}
+
+/// The style of one diff line, from its prefix: added, removed, hunk header,
+/// file metadata, or context.
+fn commit_diff_line_style(line: &str, theme: &crate::theme::GraphTheme) -> Style {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        Style::default().fg(theme.commit_diff_added)
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Style::default().fg(theme.commit_diff_removed)
+    } else if line.starts_with("@@") {
+        Style::default().fg(theme.commit_diff_hunk)
+    } else if line.starts_with("diff ") || line.starts_with("index ") {
+        Style::default().fg(theme.commit_diff_meta)
+    } else {
+        Style::default().fg(theme.commit_diff_context)
     }
 }
 
