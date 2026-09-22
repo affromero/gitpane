@@ -378,12 +378,22 @@ impl FileList {
             return false;
         };
         let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
         let version = self.diff_content_version;
         let hit = matches!(
             &self.diff_rows,
             Some((v, w, _)) if *v == version && *w == inner.width
         );
-        if !hit {
+        if hit {
+            // A height-only resize flips the thumb decision without touching
+            // the cache key: re-aim the index at the width the current
+            // decision implies (O(1) to detect via the cached full-width
+            // count; the re-count runs only when the decision actually
+            // flipped).
+            let (_, _, rows) = self.diff_rows.as_mut().expect("hit");
+            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+            rows.retarget(content, inner.width - u16::from(bar));
+        } else {
             self.diff_rows = Some((
                 version,
                 inner.width,

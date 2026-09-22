@@ -182,12 +182,20 @@ impl CommitDetail {
             return false;
         };
         let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
         let version = self.diff_content_version;
         let hit = matches!(
             &self.diff_rows,
             Some((v, w, _)) if *v == version && *w == inner.width
         );
-        if !hit {
+        if hit {
+            // A height-only resize flips the thumb decision without touching
+            // the cache key: re-aim the index at the width the current
+            // decision implies.
+            let (_, _, rows) = self.diff_rows.as_mut().expect("hit");
+            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+            rows.retarget(content, inner.width - u16::from(bar));
+        } else {
             self.diff_rows = Some((
                 version,
                 inner.width,
@@ -212,8 +220,15 @@ impl CommitDetail {
     /// Populate the message's row-index cache when the content width changed.
     pub(super) fn ensure_msg_rows(&mut self, pane: Rect) {
         let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
         let hit = matches!(&self.msg_rows, Some((w, _)) if *w == inner.width);
-        if !hit {
+        if hit {
+            // Height-only resize: re-aim the index at the width the current
+            // thumb decision implies (see `ensure_diff_rows`).
+            let (_, rows) = self.msg_rows.as_mut().expect("hit");
+            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+            rows.retarget(&self.message, inner.width - u16::from(bar));
+        } else {
             self.msg_rows = Some((
                 inner.width,
                 scroll_pane::pane_rows(&self.message, inner.width, usize::from(inner.height)),

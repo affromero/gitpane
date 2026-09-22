@@ -79,6 +79,63 @@ mod pane_tests {
         }
     }
 
+    /// A height-only resize flips the thumb decision without changing the
+    /// cache key (text, inner width): the index must be re-counted at the
+    /// width the new decision implies, or the layout lies about its extent.
+    #[test]
+    fn retarget_follows_a_height_only_resize() {
+        // 360 cells of run-together text: at inner width 20 that wraps to 18
+        // rows, at width 19 (beside a thumb) to 19 rows.
+        let text = "x".repeat(360);
+        // Taller than the content: it fits, so the index counts at width 20.
+        let mut rows = pane_rows(&text, 20, 30);
+        assert_eq!(rows.index().index_width(), 20);
+        assert!(rows.total_at_full_width() <= 30);
+
+        // Shorter than the content: it overflows, the thumb column appears,
+        // and the index must move to width 19.
+        rows.retarget(&text, 19);
+        assert_eq!(rows.index().index_width(), 19);
+        assert!(rows.index().total() > rows.total_at_full_width());
+        // And back: widening again restores the full-width index.
+        rows.retarget(&text, 20);
+        assert_eq!(rows.index().index_width(), 20);
+        assert_eq!(rows.index().total(), rows.total_at_full_width());
+    }
+
+    /// A line wrapping to 65,536+ rows must not overflow the u16 scratch
+    /// height: extraction is capped at the reachable rows and chunked, and a
+    /// viewport just past row 0 still renders correctly.
+    #[test]
+    fn extraction_caps_at_the_reachable_rows() {
+        let text = "x".repeat(65_536); // wraps to 65,536 rows at width 1
+        let index = row_index(&text, 1);
+        assert_eq!(index.total(), 65_536);
+        let rows = index.huge_rows(0).expect("huge line is pre-wrapped");
+        assert_eq!(rows.len(), 65_536, "capped at the reachable row count");
+        assert_eq!(rows[0], "x");
+        assert_eq!(rows[65_535], "x");
+
+        // A viewport sitting at offset 1 renders rows 1.. and never
+        // underflows the cached row slice.
+        let inner = Rect::new(0, 0, 3, 4); // content width 1 beside the thumb
+        let pane = pane_rows(&text, inner.width, usize::from(inner.height));
+        let layout = pane_scroll_layout(inner, &pane, 1);
+        let lines = window_lines(
+            &text,
+            pane.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |_| Style::default(),
+        );
+        assert_eq!(lines.len(), usize::from(layout.content.height));
+        for line in &lines {
+            // The content width here is 2 cells, so each cached row holds
+            // exactly two characters.
+            assert_eq!(line.spans[0].content.as_ref(), "xx");
+        }
+    }
+
     /// Windows are sliced by the byte ranges the index stores, so the slice
     /// must match what `str::lines()` yields, including CRLF line endings and
     /// a trailing newline on the last line.

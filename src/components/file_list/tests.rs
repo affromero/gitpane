@@ -763,6 +763,40 @@ mod diff_scroll_indicator_tests {
     }
 
     #[test]
+    fn a_height_only_resize_re_aims_the_index_at_the_new_content_width() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // 30 rows: fits a 32-row viewport, overflows a 12-row one.
+        fl.set_diff("line\n".repeat(30));
+        fl.diff_area = Rect::new(0, 0, 82, 34);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let no_bar = scroll_pane::pane_scroll_layout(
+            bordered_inner(fl.diff_area),
+            &fl.diff_rows.as_ref().expect("cache").2,
+            0,
+        );
+        assert!(no_bar.bar.is_none());
+
+        // Shorter, same width: the thumb decision flips, and the cached index
+        // must be re-aimed at the width beside the thumb -- not served at the
+        // stale full width.
+        fl.diff_area = Rect::new(0, 0, 82, 14);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache reused");
+        assert_eq!(
+            (*v, *w),
+            (fl.diff_content_version, bordered_inner(fl.diff_area).width)
+        );
+        let layout = scroll_pane::pane_scroll_layout(bordered_inner(fl.diff_area), rows, 0);
+        assert!(layout.bar.is_some(), "the thumb appears after the shrink");
+        assert_eq!(
+            rows.index().index_width(),
+            bordered_inner(fl.diff_area).width - 1
+        );
+        assert_eq!(rows.index().total(), 30);
+        assert!(fl.ensure_diff_rows(fl.diff_area), "cache still hits");
+    }
+
+    #[test]
     fn diff_rows_cache_tracks_the_content_width() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
         // Long enough to overflow both pane widths, so the thumb column is

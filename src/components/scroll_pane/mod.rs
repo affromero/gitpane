@@ -241,15 +241,26 @@ const HUGE_LINE_ROWS: usize = 256;
 /// spaces `trim: false` preserves) carry the sentinel, unwritten cells do not.
 fn wrapped_rows_exact(line: &str, width: u16, count: usize) -> Vec<String> {
     const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
-    let rows = count.max(1) as u16;
-    let area = Rect::new(0, 0, width, rows);
-    let mut buf = Buffer::empty(area);
+    /// Rows extracted per scratch render, so the buffer stays
+    /// `width x CHUNK_ROWS` cells no matter how many rows the line wraps to.
+    const CHUNK_ROWS: usize = 1024;
+    /// Rows beyond this are unreachable: `ScrollGauge` caps offsets at
+    /// `u16::MAX`, so pane rows stop at that index.
+    const MAX_ROWS: usize = u16::MAX as usize + 1;
+
+    let count = count.min(MAX_ROWS);
     let line = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
-    Paragraph::new(line)
-        .wrap(Wrap { trim: false })
-        .render(area, &mut buf);
-    (0..rows)
-        .map(|y| {
+    let mut rows = Vec::with_capacity(count);
+    let mut done = 0usize;
+    while done < count {
+        let take = (count - done).min(CHUNK_ROWS) as u16;
+        let area = Rect::new(0, 0, width, take);
+        let mut buf = Buffer::empty(area);
+        Paragraph::new(line.clone())
+            .wrap(Wrap { trim: false })
+            .scroll((done as u16, 0))
+            .render(area, &mut buf);
+        for y in 0..take {
             // A row's content is exactly its sentinel-styled cells: hidden
             // continuation cells of wide graphemes and the tail after the row
             // are both `Reset`, so collecting the sentinel cells and skipping
@@ -261,9 +272,11 @@ fn wrapped_rows_exact(line: &str, width: u16, count: usize) -> Vec<String> {
                     row.push_str(cell.symbol());
                 }
             }
-            row
-        })
-        .collect()
+            rows.push(row);
+        }
+        done += take as usize;
+    }
+    rows
 }
 
 /// The [`RowIndex`] for `text` at `width`.
@@ -405,6 +418,16 @@ impl PaneRows {
     /// Exact wrapped-row count at the pane's full inner width.
     pub(crate) fn total_at_full_width(&self) -> usize {
         self.total_at_full_width
+    }
+
+    /// Re-count the index at `content_width` when the pane's height flipped
+    /// the thumb decision since it was built: a height-only resize changes
+    /// which width the viewport renders at without changing the cache key
+    /// (text version, inner width). The full-width count stays valid.
+    pub(crate) fn retarget(&mut self, text: &str, content_width: u16) {
+        if self.index.index_width() != content_width {
+            self.index = row_index(text, content_width);
+        }
     }
 }
 
