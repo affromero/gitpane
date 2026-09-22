@@ -216,7 +216,7 @@ impl GitGraph {
         let Some((_, rows)) = detail.msg_rows.as_ref() else {
             return;
         };
-        let (lines, skip) = scroll_pane::window_lines(
+        let lines = scroll_pane::window_lines(
             &detail.message,
             rows.index(),
             layout.gauge.offset(),
@@ -228,7 +228,6 @@ impl GitGraph {
             area,
             msg_block,
             lines,
-            skip,
             layout,
             scroll_bar_colors(theme),
         );
@@ -350,7 +349,7 @@ impl GitGraph {
 
         // Only the viewport's rows are built and wrapped (the index locates the
         // window), so a long diff scrolls as fast at the bottom as at the top.
-        let (lines, skip) = scroll_pane::window_lines(
+        let lines = scroll_pane::window_lines(
             content,
             rows.index(),
             layout.gauge.offset(),
@@ -362,7 +361,6 @@ impl GitGraph {
             area,
             block,
             lines,
-            skip,
             layout,
             scroll_bar_colors(theme),
         );

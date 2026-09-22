@@ -10,13 +10,15 @@
 //! rendered into — because the thumb has to sit inside the border, and the
 //! content has to wrap one column narrower than the pane while it does.
 
+use ratatui::buffer::Buffer;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Block, Paragraph, Widget, Wrap},
 };
+use std::collections::HashMap;
 
 /// Thumb glyph; the track is a thin rail so the thumb reads as the moving part.
 pub(crate) const THUMB: &str = "\u{2588}"; // █
@@ -200,41 +202,151 @@ pub(crate) fn clamp_text_offset(text: &str, pane: Rect, offset: u16) -> u16 {
 
 /// Prefix sums of per-source-line wrapped row counts for one text at one
 /// width — the index a windowed pane binary-searches to find which source
-/// lines cover the viewport. Building it is O(document), so it is memoized by
-/// the caller (keyed by the text and the width, the only inputs it has); the
-/// per-frame work afterwards is O(viewport). Wrapping is measured per line
-/// with the same `Paragraph` the pane renders with, so the totals agree with
-/// a whole-document count by construction (spec:
-/// `per_line_counts_sum_to_the_whole_document_count`).
+/// lines cover the viewport, plus the byte range of each source line so the
+/// window is sliced out in O(1) instead of scanning from the top of the
+/// document. Building it is O(document), so it is memoized by the caller
+/// (keyed by the text and the width, the only inputs it has); the per-frame
+/// work afterwards is O(viewport) no matter where the viewport sits.
+///
+/// Wrapping is measured per line with the same `Paragraph` the pane renders
+/// with, so the totals agree with a whole-document count by construction
+/// (spec: `per_line_counts_sum_to_the_whole_document_count`).
 pub(crate) struct RowIndex {
     /// `cum[i]` = wrapped rows of the first `i` source lines; `cum[0] == 0` and
     /// the last entry is the document's total. Strictly increasing: every line
     /// wraps to at least one row.
     cum: Vec<u32>,
+    /// `starts[i]` = byte offset of source line `i` in the indexed text, as
+    /// yielded by `str::lines()`.
+    starts: Vec<u32>,
+    /// Pre-wrapped rows for the pathological lines a viewport can cover only
+    /// partially — a minified JSON or JS blob wraps into thousands of rows,
+    /// and handing the whole line to `Paragraph` per frame would re-wrap all
+    /// of it on every interaction. Extracted once, here, with the sentinel
+    /// renderer below; normal-sized lines are wrapped per frame instead,
+    /// where the cost is bounded by the viewport.
+    huge: HashMap<u32, Vec<String>>,
+    /// The width every count, byte range and pre-wrapped row was measured at.
+    width: u16,
+}
+
+/// Lines wrapping to at least this many rows are pre-wrapped at index build
+/// time (see [`RowIndex::huge`]).
+const HUGE_LINE_ROWS: usize = 256;
+
+/// The wrapped rows of one source line, extracted exactly: the line is
+/// rendered through the same `Paragraph` the pane paints with into a scratch
+/// buffer, under a sentinel color, so each row runs from the buffer's left
+/// edge to the last sentinel-styled cell — written cells (including trailing
+/// spaces `trim: false` preserves) carry the sentinel, unwritten cells do not.
+fn wrapped_rows_exact(line: &str, width: u16, count: usize) -> Vec<String> {
+    const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
+    let rows = count.max(1) as u16;
+    let area = Rect::new(0, 0, width, rows);
+    let mut buf = Buffer::empty(area);
+    let line = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
+    Paragraph::new(line)
+        .wrap(Wrap { trim: false })
+        .render(area, &mut buf);
+    (0..rows)
+        .map(|y| {
+            // A row's content is exactly its sentinel-styled cells: hidden
+            // continuation cells of wide graphemes and the tail after the row
+            // are both `Reset`, so collecting the sentinel cells and skipping
+            // everything else reconstructs the row byte-exactly.
+            let mut row = String::new();
+            for x in 0..width {
+                let cell = &buf[(x, y)];
+                if cell.fg == SENTINEL {
+                    row.push_str(cell.symbol());
+                }
+            }
+            row
+        })
+        .collect()
 }
 
 /// The [`RowIndex`] for `text` at `width`.
 pub(crate) fn row_index(text: &str, width: u16) -> RowIndex {
     let mut cum = Vec::with_capacity(text.lines().count().saturating_add(2));
+    let mut starts = Vec::with_capacity(cum.capacity());
     cum.push(0);
     if text.is_empty() {
         // `Paragraph` renders the empty text as one blank row while `lines()`
         // yields none — match it so totals agree everywhere.
         cum.push(1);
-        return RowIndex { cum };
+        return RowIndex {
+            cum,
+            starts,
+            huge: HashMap::new(),
+            width,
+        };
     }
+    let base = text.as_ptr() as usize;
     let mut total: u32 = 0;
-    for line in text.lines() {
-        total = total.saturating_add(u32::try_from(wrapped_rows(line, width)).unwrap_or(u32::MAX));
+    let mut huge: HashMap<u32, Vec<String>> = HashMap::new();
+    for (i, line) in text.lines().enumerate() {
+        starts.push(u32::try_from(line.as_ptr() as usize - base).unwrap_or(u32::MAX));
+        let count = wrapped_rows(line, width);
+        if count >= HUGE_LINE_ROWS {
+            huge.insert(
+                u32::try_from(i).unwrap_or(u32::MAX),
+                wrapped_rows_exact(line, width, count),
+            );
+        }
+        total = total.saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
         cum.push(total);
     }
-    RowIndex { cum }
+    RowIndex {
+        cum,
+        starts,
+        huge,
+        width,
+    }
 }
 
 impl RowIndex {
     /// The document's wrapped row count at this index's width.
     pub(crate) fn total(&self) -> usize {
         self.cum.last().map_or(0, |&c| c as usize)
+    }
+
+    /// The width every count and pre-wrapped row was measured at.
+    pub(crate) fn index_width(&self) -> u16 {
+        self.width
+    }
+
+    /// The wrapped rows of one source line at this index's width.
+    pub(crate) fn line_row_count(&self, line: usize) -> usize {
+        (self.cum[line + 1] - self.cum[line]) as usize
+    }
+
+    /// Pre-wrapped rows for a huge source line, if it was cached at build.
+    pub(crate) fn huge_rows(&self, line: usize) -> Option<&[String]> {
+        let i = u32::try_from(line).ok()?;
+        self.huge.get(&i).map(Vec::as_slice)
+    }
+
+    /// Source line `line` as a `str` slice of `text`, byte-range equivalent to
+    /// what `str::lines()` yields (terminator stripped, CRLF included).
+    pub(crate) fn line_slice<'t>(&self, text: &'t str, line: usize) -> &'t str {
+        let bytes = text.as_bytes();
+        let s = self.starts[line] as usize;
+        let mut e = if line + 1 < self.starts.len() {
+            self.starts[line + 1] as usize
+        } else {
+            text.len()
+        };
+        // Strip the terminator `lines()` strips: a newline, plus a CR right
+        // before it (covers both interior lines and the last line, whether or
+        // not the text ends with a newline).
+        if e > s && bytes[e - 1] == b'\n' {
+            e -= 1;
+            if e > s && bytes[e - 1] == b'\r' {
+                e -= 1;
+            }
+        }
+        &text[s..e]
     }
 
     /// The source-line window covering wrapped rows `first..first+rows`:
@@ -247,27 +359,41 @@ impl RowIndex {
             .partition_point(|&c| (c as usize) <= first_row)
             .saturating_sub(1);
         let target = first_row.saturating_add(rows);
+        // `cum.len() - 1` is the number of source lines: a target past the
+        // end (bottom-clamped viewports) selects every remaining line.
         let end = self
             .cum
             .partition_point(|&c| (c as usize) < target)
             .max(start + 1)
-            .min(self.cum.len());
+            .min(self.cum.len() - 1);
         let skip = first_row - self.cum[start] as usize;
         (start, end - start, skip)
     }
 }
 
-/// A pane's memoized row index, the O(document) part of the virtual layout.
-/// The caller caches it keyed by (text version, content width) — the only
-/// inputs [`row_index`] counts with.
+/// A pane's memoized layout facts: the row index at the content width, plus
+/// the exact wrapped-row count at the pane's full inner width. The caller
+/// caches it keyed by (text version, inner width). Keeping the full-width
+/// count means the thumb decision (`count > visible`) is O(1) per frame and
+/// re-evaluated against the current height — a huge single line is never
+/// re-wrapped to re-decide it.
 pub(crate) struct PaneRows {
     index: RowIndex,
+    total_at_full_width: usize,
 }
 
-/// The [`PaneRows`] for `text` counted at `content_width`.
-pub(crate) fn pane_rows(text: &str, content_width: u16) -> PaneRows {
+/// The [`PaneRows`] for `text` in a pane whose inner area is `inner_width`
+/// cells wide and `visible` rows tall.
+pub(crate) fn pane_rows(text: &str, inner_width: u16, visible: usize) -> PaneRows {
+    // Exact count at the full inner width: the thumb decision. For content
+    // that fits, the full width IS the content width and this index serves
+    // both; the extra wrap only happens once per (content, width).
+    let total_at_full_width = wrapped_rows(text, inner_width);
+    let bar = total_at_full_width > visible && inner_width >= 2;
+    let content_width = inner_width - u16::from(bar);
     PaneRows {
         index: row_index(text, content_width),
+        total_at_full_width,
     }
 }
 
@@ -275,41 +401,27 @@ impl PaneRows {
     pub(crate) fn index(&self) -> &RowIndex {
         &self.index
     }
+
+    /// Exact wrapped-row count at the pane's full inner width.
+    pub(crate) fn total_at_full_width(&self) -> usize {
+        self.total_at_full_width
+    }
 }
 
-/// Whether `text` fits `visible` rows at `width`, counted with an early exit
-/// bounded by the viewport — the per-frame overflow check a virtual pane makes
-/// before touching its cached index. `Some(total)` = fits (`total` is exact);
-/// `None` = overflows (the count stopped as soon as that was known).
-pub(crate) fn fitting_row_count(text: &str, width: u16, visible: usize) -> Option<usize> {
-    if width == 0 {
-        return Some(0);
-    }
-    let mut total = 0usize;
-    for line in text.lines() {
-        total += wrapped_rows(line, width);
-        if total > visible {
-            return None;
-        }
-    }
-    if text.is_empty() {
-        total += 1; // `Paragraph` renders the empty text as one blank row
-    }
-    Some(total)
-}
-
-/// The frame's scroll layout from the per-frame overflow decision (`bar`) and
-/// the cached index. `bar` must mean "content overflows and the inner area can
-/// spare a column", and the index must be counted at the width that decision
-/// implies (the inner width minus the thumb column).
-pub(crate) fn pane_scroll_layout(
-    inner: Rect,
-    bar: bool,
-    index: &RowIndex,
-    offset: u16,
-) -> ScrollLayout {
-    let gauge = ScrollGauge::new(index.total(), usize::from(inner.height), offset);
-    if bar && inner.width >= 2 {
+/// The frame's scroll layout from `rows`: the thumb decision is the cached
+/// full-width count against the pane's current height (O(1), so a huge single
+/// line is never re-wrapped for it), and the index must have been counted at
+/// the content width that decision implies.
+pub(crate) fn pane_scroll_layout(inner: Rect, rows: &PaneRows, offset: u16) -> ScrollLayout {
+    let visible = usize::from(inner.height);
+    let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+    debug_assert_eq!(
+        rows.index().index_width(),
+        inner.width - u16::from(bar),
+        "the index must be (re)built for the current pane size"
+    );
+    let gauge = ScrollGauge::new(rows.index().total(), visible, offset);
+    if bar {
         let (content, bar_rect) = split_off_bar(inner);
         ScrollLayout {
             content,
@@ -482,25 +594,52 @@ pub(crate) fn thumb_range(gauge: ScrollGauge, track: u16) -> (u16, u16) {
     (start as u16, len as u16)
 }
 
-/// The viewport's rows of `text`, as styled lines: the window `index` locates
-/// for `offset` over a `height`-row viewport, each source line styled by
-/// `line_style`, plus the rows to skip inside the window's first line. Pair
-/// with [`render_window_pane`].
-pub(crate) fn window_lines<'a>(
-    text: &'a str,
+/// The viewport's rows of `text`, as final styled lines: the window `index`
+/// locates for `offset` over a `height`-row viewport, wrapped to the index's
+/// width and styled per source line by `line_style`. Rows are sliced from the
+/// text by byte range and huge lines come from the index's pre-wrapped cache,
+/// so the cost is O(viewport) wherever the viewport sits. Pair with
+/// [`render_window_pane`].
+pub(crate) fn window_lines(
+    text: &str,
     index: &RowIndex,
     offset: u16,
     height: usize,
     line_style: impl Fn(&str) -> Style,
-) -> (Vec<Line<'a>>, u16) {
-    let (start, line_count, skip) = index.window_range(usize::from(offset), height);
-    let lines = text
-        .lines()
-        .skip(start)
-        .take(line_count)
-        .map(|line| Line::from(Span::styled(line, line_style(line))))
-        .collect();
-    (lines, u16::try_from(skip).unwrap_or(u16::MAX))
+) -> Vec<Line<'static>> {
+    if text.is_empty() {
+        // `Paragraph` would render the empty text as one blank row; match it.
+        return vec![Line::from(Span::styled("", line_style("")))];
+    }
+    let (start, line_count, mut skip) = index.window_range(usize::from(offset), height);
+    let mut budget = height;
+    let mut rows: Vec<Line> = Vec::with_capacity(height + 1);
+    for k in 0..line_count {
+        if budget == 0 {
+            break;
+        }
+        let line = index.line_slice(text, start + k);
+        let style = line_style(line);
+        if let Some(pre) = index.huge_rows(start + k) {
+            // Pre-wrapped at index build: slice the viewport's rows directly.
+            for row in pre.iter().skip(skip).take(budget) {
+                rows.push(Line::from(Span::styled(row.clone(), style)));
+            }
+            budget -= (pre.len() - skip).min(budget);
+        } else {
+            // A normal line: the viewport covers at most its whole wrapped
+            // output, so wrapping it here costs at most the viewport.
+            let count = index.line_row_count(start + k);
+            let take = count.saturating_sub(skip).min(budget);
+            let extracted = wrapped_rows_exact(line, index.index_width(), count);
+            for row in extracted.iter().skip(skip).take(take) {
+                rows.push(Line::from(Span::styled(row.clone(), style)));
+            }
+            budget -= take;
+        }
+        skip = 0;
+    }
+    rows
 }
 
 /// [`render_pane`] painting pre-built window rows ([`window_lines`]): the block
@@ -514,7 +653,6 @@ pub(crate) fn render_window_pane<'a>(
     pane: Rect,
     block: Block<'a>,
     lines: Vec<Line<'a>>,
-    skip: u16,
     layout: ScrollLayout,
     colors: BarColors,
 ) -> ScrollGauge {
@@ -528,9 +666,9 @@ pub(crate) fn render_window_pane<'a>(
     }
     frame.render_widget(block, pane);
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((skip, 0));
+    // The rows arrive already wrapped to the layout's width, so no `Wrap`:
+    // wrapping again would re-flow pre-wrapped rows.
+    let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, layout.content);
 
     if let Some(bar) = layout.bar {

@@ -369,29 +369,25 @@ impl FileList {
         }
     }
 
-    /// Populate the row-index cache when stale (content version or content
-    /// width changed). The overflow check that decides the width is
-    /// viewport-bounded; the O(document) index build runs only when the cache
-    /// misses. Returns false when there is no diff.
+    /// Populate the row-index cache when stale (content version or pane width
+    /// changed). The O(document) index build runs only on a cache miss — the
+    /// thumb decision is part of the cached facts, never re-derived per frame.
+    /// Returns false when there is no diff.
     fn ensure_diff_rows(&mut self, pane: Rect) -> bool {
         let Some(content) = self.diff_content.as_deref() else {
             return false;
         };
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
-            && inner.width >= 2;
-        let content_width = inner.width - u16::from(bar);
         let version = self.diff_content_version;
         let hit = matches!(
             &self.diff_rows,
-            Some((v, w, _)) if *v == version && *w == content_width
+            Some((v, w, _)) if *v == version && *w == inner.width
         );
         if !hit {
             self.diff_rows = Some((
                 version,
-                content_width,
-                scroll_pane::pane_rows(content, content_width),
+                inner.width,
+                scroll_pane::pane_rows(content, inner.width, usize::from(inner.height)),
             ));
         }
         true
@@ -402,23 +398,13 @@ impl FileList {
     /// rect — the same rect every consumer measures, so one entry serves them
     /// all.
     fn diff_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
-        let content = self.diff_content.as_deref()?;
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
-            && inner.width >= 2;
         let (_, cached_width, rows) = self.diff_rows.as_ref()?;
         debug_assert_eq!(
-            *cached_width,
-            inner.width - u16::from(bar),
+            *cached_width, inner.width,
             "ensure_diff_rows must run before this for the current pane"
         );
-        Some(scroll_pane::pane_scroll_layout(
-            inner,
-            bar,
-            rows.index(),
-            offset,
-        ))
+        Some(scroll_pane::pane_scroll_layout(inner, rows, offset))
     }
 
     /// `offset` clamped to the diff pane's last screenful, so a scroll past the
@@ -478,8 +464,9 @@ impl FileList {
             .border_style(Style::default().fg(t.diff_border));
 
         // Only the viewport's rows are built and wrapped (the index locates the
-        // window), so a long diff scrolls as fast at the bottom as at the top.
-        let (lines, skip) = scroll_pane::window_lines(
+        // window by byte range), so a long diff scrolls as fast at the bottom
+        // as at the top.
+        let lines = scroll_pane::window_lines(
             content,
             rows.index(),
             layout.gauge.offset(),
@@ -491,7 +478,6 @@ impl FileList {
             pane,
             block,
             lines,
-            skip,
             layout,
             BarColors {
                 thumb: t.diff_scrollbar_thumb,

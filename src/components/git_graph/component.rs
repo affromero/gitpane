@@ -182,20 +182,16 @@ impl CommitDetail {
             return false;
         };
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
-            && inner.width >= 2;
-        let content_width = inner.width - u16::from(bar);
         let version = self.diff_content_version;
         let hit = matches!(
             &self.diff_rows,
-            Some((v, w, _)) if *v == version && *w == content_width
+            Some((v, w, _)) if *v == version && *w == inner.width
         );
         if !hit {
             self.diff_rows = Some((
                 version,
-                content_width,
-                scroll_pane::pane_rows(content, content_width),
+                inner.width,
+                scroll_pane::pane_rows(content, inner.width, usize::from(inner.height)),
             ));
         }
         true
@@ -204,37 +200,23 @@ impl CommitDetail {
     /// The diff pane's scroll layout at `offset`, from the cache that
     /// [`Self::ensure_diff_rows`] refreshed.
     pub(super) fn diff_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
-        let content = self.diff_content.as_deref()?;
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(content, inner.width, visible).is_none()
-            && inner.width >= 2;
         let (_, cached_width, rows) = self.diff_rows.as_ref()?;
         debug_assert_eq!(
-            *cached_width,
-            inner.width - u16::from(bar),
+            *cached_width, inner.width,
             "ensure_diff_rows must run before this for the current pane"
         );
-        Some(scroll_pane::pane_scroll_layout(
-            inner,
-            bar,
-            rows.index(),
-            offset,
-        ))
+        Some(scroll_pane::pane_scroll_layout(inner, rows, offset))
     }
 
     /// Populate the message's row-index cache when the content width changed.
     pub(super) fn ensure_msg_rows(&mut self, pane: Rect) {
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(&self.message, inner.width, visible).is_none()
-            && inner.width >= 2;
-        let content_width = inner.width - u16::from(bar);
-        let hit = matches!(&self.msg_rows, Some((w, _)) if *w == content_width);
+        let hit = matches!(&self.msg_rows, Some((w, _)) if *w == inner.width);
         if !hit {
             self.msg_rows = Some((
-                content_width,
-                scroll_pane::pane_rows(&self.message, content_width),
+                inner.width,
+                scroll_pane::pane_rows(&self.message, inner.width, usize::from(inner.height)),
             ));
         }
     }
@@ -243,24 +225,8 @@ impl CommitDetail {
     /// [`Self::ensure_msg_rows`] refreshed.
     pub(super) fn msg_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
         let inner = scroll_pane::bordered_inner(pane);
-        let visible = usize::from(inner.height);
-        let bar = scroll_pane::fitting_row_count(&self.message, inner.width, visible).is_none()
-            && inner.width >= 2;
-        let (cached_width, rows) = {
-            let (w, rows) = self.msg_rows.as_ref()?;
-            (*w, rows)
-        };
-        debug_assert_eq!(
-            cached_width,
-            inner.width - u16::from(bar),
-            "ensure_msg_rows must run before this for the current pane"
-        );
-        Some(scroll_pane::pane_scroll_layout(
-            inner,
-            bar,
-            rows.index(),
-            offset,
-        ))
+        let (_, rows) = self.msg_rows.as_ref()?;
+        Some(scroll_pane::pane_scroll_layout(inner, rows, offset))
     }
 }
 

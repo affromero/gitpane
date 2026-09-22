@@ -13,6 +13,89 @@ use ratatui::{
 
 #[cfg(test)]
 mod pane_tests {
+
+    /// A genuinely large single line (minified JSON/JS shape) must not fall
+    /// back to whole-line processing per interaction: the index pre-wraps it
+    /// once (the `huge` cache) and every viewport afterwards slices rows from
+    /// that cache, at any offset.
+    #[test]
+    fn huge_single_line_is_pre_wrapped_and_renders_from_the_cache() {
+        // One line of ~35k chars: it wraps to ~450 rows at width 80, well
+        // past the huge threshold, covering a viewport many times over.
+        let text = format!("{}{}{}", "{\"a\":1,".repeat(4000), "z".repeat(400), "}");
+        let index = row_index(&text, 80);
+        let total = index.total();
+        assert!(
+            total > HUGE_LINE_ROWS,
+            "the line must wrap past the huge threshold: {total}"
+        );
+        assert!(
+            index.huge_rows(0).is_some(),
+            "the single line is pre-wrapped into the index cache"
+        );
+        assert_eq!(index.huge_rows(0).expect("rows").len(), total);
+
+        // Windows at the top, middle, and end agree with the whole-document
+        // renderer, row for row.
+        let style = Style::default().fg(Color::Cyan);
+        for offset in [
+            0u16,
+            1,
+            (total / 2).min(usize::from(u16::MAX)) as u16,
+            u16::MAX,
+        ] {
+            let inner = Rect::new(0, 0, 82, 24);
+            let rows = pane_rows(&text, inner.width, usize::from(inner.height));
+            let layout = pane_scroll_layout(inner, &rows, offset);
+            let virtual_rows = window_lines(
+                &text,
+                rows.index(),
+                layout.gauge.offset(),
+                usize::from(layout.content.height),
+                |_| style,
+            );
+            let reference = {
+                let width = inner.width - 1;
+                let all = wrapped_rows(&text, width);
+                let skip = usize::from(layout.gauge.offset()).min(all.saturating_sub(1));
+                (0..usize::from(layout.content.height))
+                    .map(|r| {
+                        let i = skip + r;
+                        // Re-derive the row content with the same renderer.
+                        wrapped_rows_exact(&text, width, all)[i.min(all - 1)].clone()
+                    })
+                    .map(|row| Line::from(Span::styled(row, style)))
+                    .collect::<Vec<_>>()
+            };
+            let got: Vec<&str> = virtual_rows
+                .iter()
+                .map(|l| l.spans[0].content.as_ref())
+                .collect();
+            let want: Vec<&str> = reference
+                .iter()
+                .map(|l| l.spans[0].content.as_ref())
+                .collect();
+            assert_eq!(got, want, "window drift at offset {offset}");
+        }
+    }
+
+    /// Windows are sliced by the byte ranges the index stores, so the slice
+    /// must match what `str::lines()` yields, including CRLF line endings and
+    /// a trailing newline on the last line.
+    #[test]
+    fn line_slice_matches_lines_semantics() {
+        let text = "alpha\r\nbeta\ngamma-with-\r-inside\nlast no newline";
+        let index = row_index(text, 40);
+        assert_eq!(index.line_slice(text, 0), "alpha");
+        assert_eq!(index.line_slice(text, 1), "beta");
+        assert_eq!(index.line_slice(text, 2), "gamma-with-\r-inside");
+        assert_eq!(index.line_slice(text, 3), "last no newline");
+
+        let crlf = "one\r\ntwo\r\n";
+        let index = row_index(crlf, 40);
+        assert_eq!(index.line_slice(crlf, 0), "one");
+        assert_eq!(index.line_slice(crlf, 1), "two");
+    }
     use super::*;
 
     /// The windowed pane must be row-exact with the whole-document pane: same
@@ -56,12 +139,8 @@ mod pane_tests {
             Rect::new(0, 0, 120, 40),
             Rect::new(5, 5, 3, 4),
         ];
-        let pane_rows_of = |text: &str, inner: Rect| {
-            let visible = usize::from(inner.height);
-            let bar = fitting_row_count(text, inner.width, visible).is_none() && inner.width >= 2;
-            let content_width = inner.width - u16::from(bar);
-            (bar, pane_rows(text, content_width))
-        };
+        let pane_rows_of =
+            |text: &str, inner: Rect| pane_rows(text, inner.width, usize::from(inner.height));
         let frame_rows = |paint: &dyn Fn(&mut Frame)| {
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).unwrap();
@@ -81,8 +160,8 @@ mod pane_tests {
             for size in sizes {
                 let pane = size;
                 let inner = bordered_inner(pane);
-                let (bar, rows) = pane_rows_of(text, inner);
-                let layout = pane_scroll_layout(inner, bar, rows.index(), 0);
+                let rows = pane_rows_of(text, inner);
+                let layout = pane_scroll_layout(inner, &rows, 0);
                 let max = layout.gauge.max_offset();
                 for offset in [0u16, 1, max / 2, max.saturating_sub(1), max, u16::MAX] {
                     let block = || Block::default().title(" Diff ").borders(Borders::ALL);
@@ -99,15 +178,15 @@ mod pane_tests {
                         );
                     });
                     let new = frame_rows(&|f| {
-                        let layout = pane_scroll_layout(inner, bar, rows.index(), offset);
-                        let (lines, skip) = window_lines(
+                        let layout = pane_scroll_layout(inner, &rows, offset);
+                        let lines = window_lines(
                             text,
                             rows.index(),
                             layout.gauge.offset(),
                             usize::from(layout.content.height),
                             |_| style,
                         );
-                        render_window_pane(f, pane, block(), lines, skip, layout, colors);
+                        render_window_pane(f, pane, block(), lines, layout, colors);
                     });
                     assert_eq!(
                         old,
