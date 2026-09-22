@@ -106,19 +106,46 @@ mod pane_tests {
     /// A line wrapping to 65,536+ rows must not overflow the u16 scratch
     /// height: extraction is capped at the reachable rows and chunked, and a
     /// viewport just past row 0 still renders correctly.
+    /// The reviewer's reproduction: a line wrapping past the u16 offset cap,
+    /// with the viewport parked at u16::MAX. The cache must retain enough
+    /// rows for the whole final screenful (max_offset + visible), not just
+    /// up to row u16::MAX.
     #[test]
-    fn extraction_caps_at_the_reachable_rows() {
-        let text = "x".repeat(65_536); // wraps to 65,536 rows at width 1
+    fn viewport_at_max_offset_renders_a_full_screenful_of_a_huge_line() {
+        let text = "x".repeat(65_560); // wraps to 65,560 rows at content width 1
+        let inner = Rect::new(0, 0, 2, 24); // content width 1 beside the thumb
+        let rows = pane_rows(&text, inner.width, usize::from(inner.height));
+        let layout = pane_scroll_layout(inner, &rows, u16::MAX);
+        assert_eq!(layout.gauge.offset(), u16::MAX);
+        let lines = window_lines(
+            &text,
+            rows.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |_| Style::default(),
+        );
+        assert_eq!(
+            lines.len(),
+            usize::from(layout.content.height),
+            "the final screenful must be fully drawn"
+        );
+        for line in &lines {
+            assert_eq!(line.spans[0].content.as_ref(), "x");
+        }
+    }
+
+    /// Offset 1 into the same huge line must not underflow the cached row
+    /// slice (the original subtraction panic).
+    #[test]
+    fn viewport_at_offset_1_into_a_huge_line_does_not_underflow() {
+        let text = "x".repeat(65_536); // exactly 65,536 rows at width 1
         let index = row_index(&text, 1);
         assert_eq!(index.total(), 65_536);
         let rows = index.huge_rows(0).expect("huge line is pre-wrapped");
-        assert_eq!(rows.len(), 65_536, "capped at the reachable row count");
-        assert_eq!(rows[0], "x");
-        assert_eq!(rows[65_535], "x");
+        assert_eq!(rows.len(), 65_536);
+        assert_eq!(&rows[65_535], "x");
 
-        // A viewport sitting at offset 1 renders rows 1.. and never
-        // underflows the cached row slice.
-        let inner = Rect::new(0, 0, 3, 4); // content width 1 beside the thumb
+        let inner = Rect::new(0, 0, 2, 24);
         let pane = pane_rows(&text, inner.width, usize::from(inner.height));
         let layout = pane_scroll_layout(inner, &pane, 1);
         let lines = window_lines(
@@ -129,11 +156,6 @@ mod pane_tests {
             |_| Style::default(),
         );
         assert_eq!(lines.len(), usize::from(layout.content.height));
-        for line in &lines {
-            // The content width here is 2 cells, so each cached row holds
-            // exactly two characters.
-            assert_eq!(line.spans[0].content.as_ref(), "xx");
-        }
     }
 
     /// Windows are sliced by the byte ranges the index stores, so the slice

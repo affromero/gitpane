@@ -234,37 +234,28 @@ pub(crate) struct RowIndex {
 /// time (see [`RowIndex::huge`]).
 const HUGE_LINE_ROWS: usize = 256;
 
-/// The wrapped rows of one source line, extracted exactly: the line is
-/// rendered through the same `Paragraph` the pane paints with into a scratch
-/// buffer, under a sentinel color, so each row runs from the buffer's left
-/// edge to the last sentinel-styled cell — written cells (including trailing
-/// spaces `trim: false` preserves) carry the sentinel, unwritten cells do not.
-fn wrapped_rows_exact(line: &str, width: u16, count: usize) -> Vec<String> {
+fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
     const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
     /// Rows extracted per scratch render, so the buffer stays
     /// `width x CHUNK_ROWS` cells no matter how many rows the line wraps to.
     const CHUNK_ROWS: usize = 1024;
-    /// Rows beyond this are unreachable: `ScrollGauge` caps offsets at
-    /// `u16::MAX`, so pane rows stop at that index.
-    const MAX_ROWS: usize = u16::MAX as usize + 1;
-
-    let count = count.min(MAX_ROWS);
-    let line = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
-    let mut rows = Vec::with_capacity(count);
-    let mut done = 0usize;
-    while done < count {
-        let take = (count - done).min(CHUNK_ROWS) as u16;
+    if line.is_empty() {
+        // The composer yields one empty row for an empty line.
+        return vec![String::new()];
+    }
+    let styled = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
+    let mut rows = Vec::new();
+    let mut rest = line;
+    while rows.len() < cap_rows && !rest.is_empty() {
+        let take = (cap_rows - rows.len()).min(CHUNK_ROWS) as u16;
         let area = Rect::new(0, 0, width, take);
         let mut buf = Buffer::empty(area);
-        Paragraph::new(line.clone())
+        Paragraph::new(styled.clone())
             .wrap(Wrap { trim: false })
-            .scroll((done as u16, 0))
+            .scroll((0, 0))
             .render(area, &mut buf);
+        let mut consumed = 0usize;
         for y in 0..take {
-            // A row's content is exactly its sentinel-styled cells: hidden
-            // continuation cells of wide graphemes and the tail after the row
-            // are both `Reset`, so collecting the sentinel cells and skipping
-            // everything else reconstructs the row byte-exactly.
             let mut row = String::new();
             for x in 0..width {
                 let cell = &buf[(x, y)];
@@ -272,9 +263,23 @@ fn wrapped_rows_exact(line: &str, width: u16, count: usize) -> Vec<String> {
                     row.push_str(cell.symbol());
                 }
             }
+            consumed += row.len();
+            if row.is_empty() {
+                break; // the remaining text produced a blank row: nothing left
+            }
             rows.push(row);
         }
-        done += take as usize;
+        if consumed == 0 {
+            break;
+        }
+        // A viewport narrower than a grapheme truncates that grapheme's
+        // cells; advance to the next char boundary so the remaining text
+        // stays a valid `str`. The skipped bytes are exactly the tail of the
+        // truncated grapheme, which no viewport of this width can display.
+        while !rest.is_char_boundary(consumed) {
+            consumed += 1;
+        }
+        rest = &rest[consumed..];
     }
     rows
 }
@@ -302,6 +307,8 @@ pub(crate) fn row_index(text: &str, width: u16) -> RowIndex {
         starts.push(u32::try_from(line.as_ptr() as usize - base).unwrap_or(u32::MAX));
         let count = wrapped_rows(line, width);
         if count >= HUGE_LINE_ROWS {
+            // Pre-wrap every row the line can produce, so a viewport at the
+            // maximum offset still has rows below it to display.
             huge.insert(
                 u32::try_from(i).unwrap_or(u32::MAX),
                 wrapped_rows_exact(line, width, count),
@@ -654,9 +661,9 @@ pub(crate) fn window_lines(
             // output, so wrapping it here costs at most the viewport.
             let count = index.line_row_count(start + k);
             let take = count.saturating_sub(skip).min(budget);
-            let extracted = wrapped_rows_exact(line, index.index_width(), count);
-            for row in extracted.iter().skip(skip).take(take) {
-                rows.push(Line::from(Span::styled(row.clone(), style)));
+            let extracted = wrapped_rows_exact(line, index.index_width(), skip + take);
+            for row in extracted.into_iter().skip(skip) {
+                rows.push(Line::from(Span::styled(row, style)));
             }
             budget -= take;
         }
