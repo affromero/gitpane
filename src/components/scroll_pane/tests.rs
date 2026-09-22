@@ -158,6 +158,150 @@ mod pane_tests {
         assert_eq!(lines.len(), usize::from(layout.content.height));
     }
 
+    /// Rows `first_row .. first_row + rows` of `line` wrapped at `width`,
+    /// from ONE render of the whole line at a vertical offset — the oracle
+    /// the chunked cache extraction must reproduce row for row.
+    fn single_render_rows(line: &str, width: u16, first_row: usize, rows: usize) -> Vec<String> {
+        let area = Rect::new(0, 0, width, rows as u16);
+        let mut buf = Buffer::empty(area);
+        Paragraph::new(Line::from(Span::styled(
+            line,
+            Style::default().fg(SENTINEL),
+        )))
+        .wrap(Wrap { trim: false })
+        .scroll((first_row as u16, 0))
+        .render(area, &mut buf);
+        (0..rows as u16)
+            .map(|y| {
+                let mut row = String::new();
+                for x in 0..width {
+                    let cell = &buf[(x, y)];
+                    if cell.fg == SENTINEL {
+                        row.push_str(cell.symbol());
+                    }
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// Chunked extraction must be row-exact with a single render of the same
+    /// line at the same vertical offset. The fourth review round found the
+    /// chunk loop rendering the whole line from the top on every chunk (row
+    /// 1,024 repeated row 0) and, worse, any byte-offset advance mangling
+    /// word-wrapped rows past a boundary (the wrapper drops separator
+    /// whitespace without painting it). One differential test with all the
+    /// requested coverage: content that changes across the boundary, words
+    /// separated by spaces, repeated whitespace, wide and combining Unicode,
+    /// and the maximum `u16` offset with a multi-row viewport.
+    #[test]
+    fn chunked_extraction_matches_a_single_render_across_boundaries() {
+        let cases: Vec<(&str, String, u16)> = vec![
+            // Letters that change exactly at the boundary (the review's
+            // `a`-then-`b` reproduction).
+            (
+                "letters change across the boundary",
+                format!("{}{}", "a".repeat(1024), "b".repeat(2048)),
+                1,
+            ),
+            // Words separated by spaces: separator whitespace is dropped at
+            // break points, the trap for any byte-offset advance.
+            ("words with spaces", "alpha beta gamma ".repeat(500), 5),
+            // Repeated whitespace runs.
+            ("repeated whitespace", "a      b      ".repeat(700), 7),
+            // Wide glyphs, emoji, and combining marks in one line.
+            (
+                "wide and combining unicode",
+                "\u{4e2d}\u{301}\u{6587} \u{1f600}\u{1f600} e\u{301}clair ".repeat(700),
+                7,
+            ),
+        ];
+        for (name, line, width) in cases {
+            let count = wrapped_rows(&line, width);
+            assert!(
+                count > CHUNK_ROWS,
+                "{name}: the case must wrap past a chunk boundary (rows: {count})"
+            );
+            // The whole extraction, chunk by chunk, against one tall render.
+            let got = wrapped_rows_exact(&line, width, count);
+            let want = single_render_rows(&line, width, 0, count);
+            assert_eq!(got.len(), want.len(), "{name}: extracted row count");
+            assert_eq!(got, want, "{name}: rows drift from the single render");
+
+            // Viewports straddling the first boundary, through the production
+            // path: index, huge-line cache, and the window slice.
+            let inner = Rect::new(0, 0, width + 1, 24);
+            let rows = pane_rows(&line, inner.width, usize::from(inner.height));
+            for offset in [
+                CHUNK_ROWS as u16 - 4,
+                CHUNK_ROWS as u16,
+                CHUNK_ROWS as u16 + 4,
+            ] {
+                let layout = pane_scroll_layout(inner, &rows, offset);
+                let window = window_lines(
+                    &line,
+                    rows.index(),
+                    layout.gauge.offset(),
+                    usize::from(layout.content.height),
+                    |_| Style::default(),
+                );
+                let got: Vec<&str> = window.iter().map(|l| l.spans[0].content.as_ref()).collect();
+                let want = single_render_rows(
+                    &line,
+                    layout.content.width,
+                    usize::from(layout.gauge.offset()),
+                    usize::from(layout.content.height),
+                );
+                assert_eq!(
+                    got,
+                    want,
+                    "{name}: window drift at offset {}",
+                    layout.gauge.offset()
+                );
+            }
+        }
+
+        // The maximum u16 offset with a multi-row viewport: alternating
+        // letters make the final screenful prove it holds the *right* rows,
+        // not merely the right count.
+        let line = "ab".repeat(32_780); // 65,560 rows at width 1
+        let inner = Rect::new(0, 0, 2, 24);
+        let rows = pane_rows(&line, inner.width, usize::from(inner.height));
+        let layout = pane_scroll_layout(inner, &rows, u16::MAX);
+        assert_eq!(layout.gauge.offset(), u16::MAX);
+        let window = window_lines(
+            &line,
+            rows.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |_| Style::default(),
+        );
+        let got: Vec<&str> = window.iter().map(|l| l.spans[0].content.as_ref()).collect();
+        let want = single_render_rows(
+            &line,
+            layout.content.width,
+            usize::from(u16::MAX),
+            usize::from(layout.content.height),
+        );
+        assert_eq!(
+            got.len(),
+            usize::from(layout.content.height),
+            "the final screenful must be fully drawn"
+        );
+        assert_eq!(got, want, "the final screenful at u16::MAX");
+
+        // A line wrapping past every reachable row stops the cache at
+        // u16::MAX + CHUNK_ROWS: deeper rows can never be read through a
+        // u16 offset, and the count itself is not truncated.
+        let deep = "x".repeat(66_600);
+        let index = row_index(&deep, 1);
+        assert_eq!(index.total(), 66_600);
+        assert_eq!(
+            index.huge_rows(0).expect("huge line is pre-wrapped").len(),
+            usize::from(u16::MAX) + CHUNK_ROWS
+        );
+    }
+
     /// Windows are sliced by the byte ranges the index stores, so the slice
     /// must match what `str::lines()` yields, including CRLF line endings and
     /// a trailing newline on the last line.

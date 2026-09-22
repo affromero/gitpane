@@ -234,28 +234,56 @@ pub(crate) struct RowIndex {
 /// time (see [`RowIndex::huge`]).
 const HUGE_LINE_ROWS: usize = 256;
 
+/// Color the scratch extraction below paints with, so a row's own cells can
+/// be told from unwritten ones — including the hidden continuation cells of
+/// wide graphemes and the unpainted tail after a short row.
+const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
+
+/// Rows extracted per scratch render, so the extraction buffer stays
+/// `width x CHUNK_ROWS` cells no matter how many rows a line wraps to.
+const CHUNK_ROWS: usize = 1024;
+
+/// The wrapped rows of one source line, extracted exactly: each chunk
+/// renders the *whole* line through the same `Paragraph` the pane paints
+/// with, into a scratch buffer under [`SENTINEL`], at a vertical offset —
+/// so Ratatui's own word wrapping decides where every row starts, and the
+/// separator whitespace it drops at a break is dropped here exactly as it
+/// is dropped on screen. No source-byte offset is inferred from painted
+/// cells: bytes consumed and bytes painted diverge at word breaks, which is
+/// how chunked extraction used to repeat early rows and mangle wrapped
+/// words after every [`CHUNK_ROWS`] boundary.
+///
+/// `Paragraph` scrolls in `u16` rows, so the deepest chunk starts at
+/// `u16::MAX` and carries the extraction to `u16::MAX + CHUNK_ROWS`; `cap_rows`
+/// is clamped to that, because rows below it are unreachable through any
+/// offset the gauge can produce.
 fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
-    const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
-    /// Rows extracted per scratch render, so the buffer stays
-    /// `width x CHUNK_ROWS` cells no matter how many rows the line wraps to.
-    const CHUNK_ROWS: usize = 1024;
     if line.is_empty() {
         // The composer yields one empty row for an empty line.
         return vec![String::new()];
     }
+    let cap_rows = cap_rows.min(usize::from(u16::MAX) + CHUNK_ROWS);
     let styled = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
     let mut rows = Vec::new();
-    let mut rest = line;
-    while rows.len() < cap_rows && !rest.is_empty() {
-        let take = (cap_rows - rows.len()).min(CHUNK_ROWS) as u16;
+    while rows.len() < cap_rows {
+        // Paragraph scrolls in u16 rows: a chunk that would start past
+        // u16::MAX instead starts there and re-renders the rows a deeper
+        // start would have covered.
+        let start = rows.len().min(usize::from(u16::MAX));
+        rows.truncate(start);
+        let take = (cap_rows - start).min(CHUNK_ROWS) as u16;
         let area = Rect::new(0, 0, width, take);
         let mut buf = Buffer::empty(area);
         Paragraph::new(styled.clone())
             .wrap(Wrap { trim: false })
-            .scroll((0, 0))
+            .scroll((start as u16, 0))
             .render(area, &mut buf);
-        let mut consumed = 0usize;
+        let mut painted = false;
         for y in 0..take {
+            // A row is exactly its sentinel-styled cells: hidden continuation
+            // cells of wide graphemes and the tail after the row are both
+            // unwritten, so collecting the sentinel cells reconstructs the
+            // row byte-exactly.
             let mut row = String::new();
             for x in 0..width {
                 let cell = &buf[(x, y)];
@@ -263,23 +291,15 @@ fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
                     row.push_str(cell.symbol());
                 }
             }
-            consumed += row.len();
             if row.is_empty() {
-                break; // the remaining text produced a blank row: nothing left
+                break; // the line has no rows left below `start`
             }
+            painted = true;
             rows.push(row);
         }
-        if consumed == 0 {
-            break;
+        if !painted {
+            break; // the chunk fell off the end of the line
         }
-        // A viewport narrower than a grapheme truncates that grapheme's
-        // cells; advance to the next char boundary so the remaining text
-        // stays a valid `str`. The skipped bytes are exactly the tail of the
-        // truncated grapheme, which no viewport of this width can display.
-        while !rest.is_char_boundary(consumed) {
-            consumed += 1;
-        }
-        rest = &rest[consumed..];
     }
     rows
 }
@@ -307,8 +327,10 @@ pub(crate) fn row_index(text: &str, width: u16) -> RowIndex {
         starts.push(u32::try_from(line.as_ptr() as usize - base).unwrap_or(u32::MAX));
         let count = wrapped_rows(line, width);
         if count >= HUGE_LINE_ROWS {
-            // Pre-wrap every row the line can produce, so a viewport at the
-            // maximum offset still has rows below it to display.
+            // Pre-wrap every row a viewport can reach: offsets cap at
+            // u16::MAX, so rows past `u16::MAX + CHUNK_ROWS` can never be
+            // read, while a viewport at the maximum offset still finds rows
+            // below it to display.
             huge.insert(
                 u32::try_from(i).unwrap_or(u32::MAX),
                 wrapped_rows_exact(line, width, count),
