@@ -4,6 +4,12 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-09-23
+
+### Fixed
+- Large diffs stay responsive while scrolling and clicking because text panes render only visible rows. ([#92](https://github.com/affromero/gitpane/pull/92), closes [#91](https://github.com/affromero/gitpane/issues/91)) Thanks @expoli for the report and implementation.
+- Virtualized text panes keep wide characters visible at the content edge and fill tall viewports at the maximum scroll position, including after a height-only resize. ([#94](https://github.com/affromero/gitpane/pull/94), closes [#93](https://github.com/affromero/gitpane/issues/93))
+
 ## [0.17.0] - 2026-09-19
 
 ### Added
