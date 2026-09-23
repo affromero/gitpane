@@ -273,7 +273,14 @@ fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
         rows.truncate(start);
         let take = (cap_rows - start).min(CHUNK_ROWS) as u16;
         let area = Rect::new(0, 0, width, take);
-        let mut buf = Buffer::empty(area);
+        // Ratatui can write one cell past the render area's right edge: a
+        // row ending in a wide grapheme on the last column paints that
+        // grapheme there and its content continues just beyond it (an
+        // unbreakable word flushed past the limit), and the write panics
+        // when the buffer ends at the width. The scratch buffer carries a
+        // spare column for the overhang; the render area keeps the wrapping
+        // width, and the scan below never reads past it.
+        let mut buf = Buffer::empty(Rect::new(0, 0, width.saturating_add(1), take));
         Paragraph::new(styled.clone())
             .wrap(Wrap { trim: false })
             .scroll((start as u16, 0))

@@ -160,10 +160,13 @@ mod pane_tests {
 
     /// Rows `first_row .. first_row + rows` of `line` wrapped at `width`,
     /// from ONE render of the whole line at a vertical offset — the oracle
-    /// the chunked cache extraction must reproduce row for row.
+    /// the chunked cache extraction must reproduce row for row. The buffer
+    /// carries the same spare column as the production scratch: a row
+    /// ending in a wide grapheme on the last column writes one cell past
+    /// the area, and the scan never reads it.
     fn single_render_rows(line: &str, width: u16, first_row: usize, rows: usize) -> Vec<String> {
         let area = Rect::new(0, 0, width, rows as u16);
-        let mut buf = Buffer::empty(area);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width.saturating_add(1), rows as u16));
         Paragraph::new(Line::from(Span::styled(
             line,
             Style::default().fg(SENTINEL),
@@ -300,6 +303,24 @@ mod pane_tests {
             index.huge_rows(0).expect("huge line is pre-wrapped").len(),
             usize::from(u16::MAX) + CHUNK_ROWS
         );
+    }
+
+    /// A wide grapheme landing on a row's last column paints its content one
+    /// cell past the wrapping width (an unbreakable `CJK + ascii` word flushed
+    /// past the limit), and that write panicked while building the huge-line
+    /// cache when the scratch buffer ended at the render width. The buffer
+    /// carries a spare column for it; the rows themselves are unchanged.
+    #[test]
+    fn wide_grapheme_continuation_does_not_panic_the_cache() {
+        // The reviewer's reproduction: `CJK + a` repeated overflows a 10-row
+        // pane at inner width 3, the thumb takes a column, and the line wraps
+        // at width 2, where rows like `CJK a` overhang by exactly one cell.
+        let text = "\u{4e2d}a".repeat(300);
+        let rows = pane_rows(&text, 3, 10);
+        assert_eq!(rows.index().index_width(), 2);
+        let cached = rows.index().huge_rows(0).expect("the line is pre-wrapped");
+        let want = single_render_rows(&text, 2, 0, rows.index().line_row_count(0));
+        assert_eq!(cached, want, "the cache must match a single render");
     }
 
     /// Windows are sliced by the byte ranges the index stores, so the slice
