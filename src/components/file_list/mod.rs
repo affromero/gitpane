@@ -391,8 +391,7 @@ impl FileList {
             // count; the re-count runs only when the decision actually
             // flipped).
             let (_, _, rows) = self.diff_rows.as_mut().expect("hit");
-            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
-            rows.retarget(content, inner.width - u16::from(bar));
+            rows.retarget(content, inner.width, visible);
         } else {
             self.diff_rows = Some((
                 version,

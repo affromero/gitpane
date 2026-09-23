@@ -193,8 +193,7 @@ impl CommitDetail {
             // the cache key: re-aim the index at the width the current
             // decision implies.
             let (_, _, rows) = self.diff_rows.as_mut().expect("hit");
-            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
-            rows.retarget(content, inner.width - u16::from(bar));
+            rows.retarget(content, inner.width, visible);
         } else {
             self.diff_rows = Some((
                 version,
@@ -226,8 +225,7 @@ impl CommitDetail {
             // Height-only resize: re-aim the index at the width the current
             // thumb decision implies (see `ensure_diff_rows`).
             let (_, rows) = self.msg_rows.as_mut().expect("hit");
-            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
-            rows.retarget(&self.message, inner.width - u16::from(bar));
+            rows.retarget(&self.message, inner.width, visible);
         } else {
             self.msg_rows = Some((
                 inner.width,

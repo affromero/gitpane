@@ -421,14 +421,14 @@ impl RowIndex {
 }
 
 /// A pane's memoized layout facts: the row index at the content width, plus
-/// the exact wrapped-row count at the pane's full inner width. The caller
-/// caches it keyed by (text version, inner width). Keeping the full-width
-/// count means the thumb decision (`count > visible`) is O(1) per frame and
-/// re-evaluated against the current height — a huge single line is never
-/// re-wrapped to re-decide it.
+/// wrapped-row counts at the full width and, when needed, the scrollbar width.
+/// The caller caches it keyed by (text version, inner width). Both counts let
+/// a height-only resize decide whether the thumb fits without re-wrapping a
+/// huge line on every frame.
 pub(crate) struct PaneRows {
     index: RowIndex,
     total_at_full_width: usize,
+    total_at_narrow_width: Option<usize>,
 }
 
 /// The [`PaneRows`] for `text` in a pane whose inner area is `inner_width`
@@ -438,11 +438,25 @@ pub(crate) fn pane_rows(text: &str, inner_width: u16, visible: usize) -> PaneRow
     // that fits, the full width IS the content width and this index serves
     // both; the extra wrap only happens once per (content, width).
     let total_at_full_width = wrapped_rows(text, inner_width);
-    let bar = total_at_full_width > visible && inner_width >= 2;
-    let content_width = inner_width - u16::from(bar);
-    PaneRows {
-        index: row_index(text, content_width),
-        total_at_full_width,
+    if total_at_full_width > visible && inner_width >= 2 {
+        let narrow = row_index(text, inner_width - 1);
+        let total_at_narrow_width = narrow.total();
+        let index = if total_at_narrow_width > visible {
+            narrow
+        } else {
+            row_index(text, inner_width)
+        };
+        PaneRows {
+            index,
+            total_at_full_width,
+            total_at_narrow_width: Some(total_at_narrow_width),
+        }
+    } else {
+        PaneRows {
+            index: row_index(text, inner_width),
+            total_at_full_width,
+            total_at_narrow_width: None,
+        }
     }
 }
 
@@ -456,11 +470,28 @@ impl PaneRows {
         self.total_at_full_width
     }
 
-    /// Re-count the index at `content_width` when the pane's height flipped
-    /// the thumb decision since it was built: a height-only resize changes
-    /// which width the viewport renders at without changing the cache key
-    /// (text version, inner width). The full-width count stays valid.
-    pub(crate) fn retarget(&mut self, text: &str, content_width: u16) {
+    /// Re-count at the width selected by the current height. A narrow pane
+    /// can have fewer rows than a wide one when Ratatui drops wide glyphs, so
+    /// the scrollbar needs both counts before it takes a content column.
+    pub(crate) fn retarget(&mut self, text: &str, inner_width: u16, visible: usize) {
+        if self.total_at_full_width > visible
+            && inner_width >= 2
+            && self.total_at_narrow_width.is_none()
+        {
+            let narrow = row_index(text, inner_width - 1);
+            let count = narrow.total();
+            self.total_at_narrow_width = Some(count);
+            if count > visible {
+                self.index = narrow;
+                return;
+            }
+        }
+        let bar = self.total_at_full_width > visible
+            && self
+                .total_at_narrow_width
+                .is_some_and(|count| count > visible)
+            && inner_width >= 2;
+        let content_width = inner_width - u16::from(bar);
         if self.index.index_width() != content_width {
             self.index = row_index(text, content_width);
         }
@@ -473,7 +504,17 @@ impl PaneRows {
 /// the content width that decision implies.
 pub(crate) fn pane_scroll_layout(inner: Rect, rows: &PaneRows, offset: u16) -> ScrollLayout {
     let visible = usize::from(inner.height);
-    let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+    debug_assert!(
+        rows.total_at_full_width() <= visible
+            || inner.width < 2
+            || rows.total_at_narrow_width.is_some(),
+        "the index must be (re)built for the current pane size"
+    );
+    let bar = rows.total_at_full_width() > visible
+        && rows
+            .total_at_narrow_width
+            .is_some_and(|count| count > visible)
+        && inner.width >= 2;
     debug_assert_eq!(
         rows.index().index_width(),
         inner.width - u16::from(bar),
@@ -728,7 +769,13 @@ pub(crate) fn render_window_pane<'a>(
     // The rows arrive already wrapped to the layout's width, so no `Wrap`:
     // wrapping again would re-flow pre-wrapped rows.
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, layout.content);
+    // Ratatui can paint a wide glyph one cell past its wrapping width. The
+    // reference renderer keeps that cell, even when the thumb later covers it.
+    let row_area = Rect {
+        width: layout.content.width.saturating_add(1),
+        ..layout.content
+    };
+    frame.render_widget(paragraph, row_area);
 
     if let Some(bar) = layout.bar {
         render_bar(frame, bar, layout.gauge, colors);
