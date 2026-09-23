@@ -30,6 +30,16 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_scroll: u16,
+    /// Memoized row index for `diff_content` (see `scroll_pane::PaneRows`),
+    /// keyed by the content version and the content width — the only inputs
+    /// the index has. Building it re-wraps the whole document, which a large
+    /// diff cannot pay on every frame, scroll step, or click; the per-frame
+    /// overflow check that decides the width is viewport-bounded and stays
+    /// outside the cache.
+    diff_rows: Option<(u64, u16, scroll_pane::PaneRows)>,
+    /// Bumped whenever `diff_content` changes, so the index cache can tell a
+    /// stale entry from a current one.
+    diff_content_version: u64,
     /// The diff's scroll indicator grab, with the scroll layout as it was at
     /// the grab. Kept for the whole drag so the scrub survives the pointer
     /// leaving the indicator column, and so Drag events cost no re-count of
@@ -64,6 +74,8 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_scroll: 0,
+            diff_rows: None,
+            diff_content_version: 0,
             dragging_scrollbar: None,
             horizontal_layout: false,
             diff_generation: 0,
@@ -100,6 +112,7 @@ impl FileList {
 
         if files_changed {
             self.diff_generation += 1;
+            self.diff_content_version = self.diff_content_version.wrapping_add(1);
             self.diff_content = None;
             self.diff_scroll = 0;
         }
@@ -135,6 +148,7 @@ impl FileList {
 
     pub fn set_diff(&mut self, content: String) {
         self.diff_content = Some(content);
+        self.diff_content_version = self.diff_content_version.wrapping_add(1);
         self.diff_scroll = 0;
     }
 
@@ -355,20 +369,71 @@ impl FileList {
         }
     }
 
+    /// Populate the row-index cache when stale (content version or pane width
+    /// changed). The O(document) index build runs only on a cache miss — the
+    /// thumb decision is part of the cached facts, never re-derived per frame.
+    /// Returns false when there is no diff.
+    fn ensure_diff_rows(&mut self, pane: Rect) -> bool {
+        let Some(content) = self.diff_content.as_deref() else {
+            return false;
+        };
+        let inner = scroll_pane::bordered_inner(pane);
+        let visible = usize::from(inner.height);
+        let version = self.diff_content_version;
+        let hit = matches!(
+            &self.diff_rows,
+            Some((v, w, _)) if *v == version && *w == inner.width
+        );
+        if hit {
+            // A height-only resize flips the thumb decision without touching
+            // the cache key: re-aim the index at the width the current
+            // decision implies (O(1) to detect via the cached full-width
+            // count; the re-count runs only when the decision actually
+            // flipped).
+            let (_, _, rows) = self.diff_rows.as_mut().expect("hit");
+            let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+            rows.retarget(content, inner.width - u16::from(bar));
+        } else {
+            self.diff_rows = Some((
+                version,
+                inner.width,
+                scroll_pane::pane_rows(content, inner.width, usize::from(inner.height)),
+            ));
+        }
+        true
+    }
+
+    /// The diff pane's scroll layout at `offset`, from the cache that
+    /// [`Self::ensure_diff_rows`] refreshed. `pane` is the diff pane's bordered
+    /// rect — the same rect every consumer measures, so one entry serves them
+    /// all.
+    fn diff_scroll_layout_for(&self, pane: Rect, offset: u16) -> Option<ScrollLayout> {
+        let inner = scroll_pane::bordered_inner(pane);
+        let (_, cached_width, rows) = self.diff_rows.as_ref()?;
+        debug_assert_eq!(
+            *cached_width, inner.width,
+            "ensure_diff_rows must run before this for the current pane"
+        );
+        Some(scroll_pane::pane_scroll_layout(inner, rows, offset))
+    }
+
     /// `offset` clamped to the diff pane's last screenful, so a scroll past the
     /// end parks on the final row instead of scrolling into blank space.
-    fn clamp_diff_scroll(&self, offset: u16) -> u16 {
-        match self.diff_content.as_deref() {
-            Some(content) => scroll_pane::clamp_text_offset(content, self.diff_area, offset),
-            None => 0,
+    fn clamp_diff_scroll(&mut self, offset: u16) -> u16 {
+        let pane = self.diff_area;
+        if !self.ensure_diff_rows(pane) {
+            return 0;
         }
+        self.diff_scroll_layout_for(pane, offset)
+            .map(|layout| layout.gauge.offset())
+            .unwrap_or(0)
     }
 
     /// Whether `pos` points at the diff pane's scroll indicator. The app asks
     /// before arming a panel-border drag: the indicator runs alongside the panel
     /// seam, and losing the grab to the seam would resize panels instead of
     /// scrolling the diff.
-    pub(crate) fn is_on_scroll_indicator(&self, pos: ratatui::layout::Position) -> bool {
+    pub(crate) fn is_on_scroll_indicator(&mut self, pos: ratatui::layout::Position) -> bool {
         self.diff_scroll_layout()
             .and_then(|layout| scroll_pane::scrub_offset(layout, pos))
             .is_some()
@@ -376,17 +441,28 @@ impl FileList {
 
     /// The diff pane's scroll layout as the last frame drew it, or `None` while
     /// there is no diff. The offset does not enter what a scrub needs.
-    fn diff_scroll_layout(&self) -> Option<ScrollLayout> {
-        let content = self.diff_content.as_deref()?;
-        Some(ScrollLayout::for_text(
-            content,
-            scroll_pane::bordered_inner(self.diff_area),
-            0,
-        ))
+    fn diff_scroll_layout(&mut self) -> Option<ScrollLayout> {
+        let pane = self.diff_area;
+        if !self.ensure_diff_rows(pane) {
+            return None;
+        }
+        self.diff_scroll_layout_for(pane, 0)
     }
 
     fn draw_diff(&mut self, frame: &mut Frame, area: Rect) {
+        // `draw` stored this same rect in `self.diff_area`, so every consumer's
+        // cache key stays one width.
+        let pane = area;
+        if !self.ensure_diff_rows(pane) {
+            return;
+        }
         let Some(ref content) = self.diff_content else {
+            return;
+        };
+        let Some(layout) = self.diff_scroll_layout_for(pane, self.diff_scroll) else {
+            return;
+        };
+        let Some((_, _, rows)) = self.diff_rows.as_ref() else {
             return;
         };
 
@@ -397,37 +473,44 @@ impl FileList {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(t.diff_border));
 
-        let lines: Vec<Line> = content
-            .lines()
-            .map(|line| {
-                let style = if line.starts_with('+') && !line.starts_with("+++") {
-                    Style::default().fg(t.diff_added)
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    Style::default().fg(t.diff_removed)
-                } else if line.starts_with("@@") {
-                    Style::default().fg(t.diff_hunk)
-                } else if line.starts_with("diff ") || line.starts_with("index ") {
-                    Style::default().fg(t.diff_meta)
-                } else {
-                    Style::default().fg(t.diff_context)
-                };
-                Line::from(Span::styled(line, style))
-            })
-            .collect();
-
-        let gauge = scroll_pane::render_pane(
-            frame,
-            area,
-            block,
+        // Only the viewport's rows are built and wrapped (the index locates the
+        // window by byte range), so a long diff scrolls as fast at the bottom
+        // as at the top.
+        let lines = scroll_pane::window_lines(
             content,
+            rows.index(),
+            layout.gauge.offset(),
+            usize::from(layout.content.height),
+            |line| diff_line_style(line, t),
+        );
+        let gauge = scroll_pane::render_window_pane(
+            frame,
+            pane,
+            block,
             lines,
-            self.diff_scroll,
+            layout,
             BarColors {
                 thumb: t.diff_scrollbar_thumb,
                 track: t.diff_scrollbar_track,
             },
         );
         self.diff_scroll = gauge.offset();
+    }
+}
+
+/// The style of one diff line, from its prefix: added, removed, hunk header,
+/// file metadata, or context.
+fn diff_line_style(line: &str, t: &FileListTheme) -> Style {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        Style::default().fg(t.diff_added)
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Style::default().fg(t.diff_removed)
+    } else if line.starts_with("@@") {
+        Style::default().fg(t.diff_hunk)
+    } else if line.starts_with("diff ") || line.starts_with("index ") {
+        Style::default().fg(t.diff_meta)
+    } else {
+        Style::default().fg(t.diff_context)
     }
 }
 

@@ -727,4 +727,101 @@ mod diff_scroll_indicator_tests {
         );
         assert_eq!(fl.diff_scroll, 0, "a cancelled grab must not scrub");
     }
+
+    #[test]
+    fn diff_rows_cache_is_invalidated_when_the_content_changes() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        fl.diff_area = Rect::new(0, 0, 82, 24);
+        fl.set_diff("a\nb\nc\n".repeat(10)); // 30 rows: overflows the viewport
+        assert!(fl.ensure_diff_rows(fl.diff_area), "a diff exists");
+        let first = fl
+            .diff_rows
+            .as_ref()
+            .expect("cache filled")
+            .2
+            .index()
+            .total();
+        assert_eq!(first, 30);
+        assert_eq!(
+            fl.diff_rows.as_ref().map(|(v, w, _)| (*v, *w)),
+            Some((fl.diff_content_version, bordered_inner(fl.diff_area).width)),
+            "the index is memoized under (content version, pane width)"
+        );
+        assert!(fl.ensure_diff_rows(fl.diff_area), "a hit rebuilds nothing");
+
+        // Same width, different content: a stale entry would lie about the row
+        // count, so the version bump on set_diff must force a rebuild.
+        fl.set_diff("x\n".repeat(60));
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
+        assert_eq!(
+            (*v, *w),
+            (fl.diff_content_version, bordered_inner(fl.diff_area).width)
+        );
+        assert_ne!(rows.index().total(), first);
+        assert_eq!(rows.index().total(), 60);
+    }
+
+    #[test]
+    fn a_height_only_resize_re_aims_the_index_at_the_new_content_width() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // 30 rows: fits a 32-row viewport, overflows a 12-row one.
+        fl.set_diff("line\n".repeat(30));
+        fl.diff_area = Rect::new(0, 0, 82, 34);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let no_bar = scroll_pane::pane_scroll_layout(
+            bordered_inner(fl.diff_area),
+            &fl.diff_rows.as_ref().expect("cache").2,
+            0,
+        );
+        assert!(no_bar.bar.is_none());
+
+        // Shorter, same width: the thumb decision flips, and the cached index
+        // must be re-aimed at the width beside the thumb -- not served at the
+        // stale full width.
+        fl.diff_area = Rect::new(0, 0, 82, 14);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache reused");
+        assert_eq!(
+            (*v, *w),
+            (fl.diff_content_version, bordered_inner(fl.diff_area).width)
+        );
+        let layout = scroll_pane::pane_scroll_layout(bordered_inner(fl.diff_area), rows, 0);
+        assert!(layout.bar.is_some(), "the thumb appears after the shrink");
+        assert_eq!(
+            rows.index().index_width(),
+            bordered_inner(fl.diff_area).width - 1
+        );
+        assert_eq!(rows.index().total(), 30);
+        assert!(fl.ensure_diff_rows(fl.diff_area), "cache still hits");
+    }
+
+    #[test]
+    fn diff_rows_cache_tracks_the_content_width() {
+        let mut fl = FileList::new(Arc::new(Theme::default()));
+        // Long enough to overflow both pane widths, so the thumb column is
+        // taken and the index is counted at the width beside it.
+        fl.set_diff("word ".repeat(1000));
+        fl.diff_area = Rect::new(0, 0, 82, 24);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (wide_width, wide_rows) = {
+            let (_, w, rows) = fl.diff_rows.as_ref().expect("cache filled");
+            (*w, rows.index().total())
+        };
+        // The same content at another width (a panel resize) must re-key, not
+        // serve windows wrapped for the old width.
+        fl.diff_area = Rect::new(0, 0, 42, 24);
+        assert!(fl.ensure_diff_rows(fl.diff_area));
+        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
+        assert_eq!(*w, bordered_inner(fl.diff_area).width);
+        assert_ne!(*w, wide_width, "the pane width is the cache key");
+        assert_eq!(*v, fl.diff_content_version);
+        // The narrower pane wraps the same words into more rows, and the
+        // index counts at the width left beside the thumb column.
+        assert!(rows.index().total() > wide_rows);
+        assert_eq!(
+            rows.index().index_width(),
+            bordered_inner(fl.diff_area).width - 1
+        );
+    }
 }
