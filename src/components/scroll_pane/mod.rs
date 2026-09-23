@@ -205,8 +205,8 @@ pub(crate) fn clamp_text_offset(text: &str, pane: Rect, offset: u16) -> u16 {
 /// lines cover the viewport, plus the byte range of each source line so the
 /// window is sliced out in O(1) instead of scanning from the top of the
 /// document. Building it is O(document), so it is memoized by the caller
-/// (keyed by the text and the width, the only inputs it has); the per-frame
-/// work afterwards is O(viewport) no matter where the viewport sits.
+/// for its text, width, and maximum viewport height; the per-frame work
+/// afterwards is O(viewport) no matter where the viewport sits.
 ///
 /// Wrapping is measured per line with the same `Paragraph` the pane renders
 /// with, so the totals agree with a whole-document count by construction
@@ -239,8 +239,8 @@ const HUGE_LINE_ROWS: usize = 256;
 /// wide graphemes and the unpainted tail after a short row.
 const SENTINEL: Color = Color::Rgb(0x53, 0x1b, 0x6e);
 
-/// Rows extracted per scratch render, so the extraction buffer stays
-/// `width x CHUNK_ROWS` cells no matter how many rows a line wraps to.
+/// Rows extracted per scratch render. Only the final chunk can be taller,
+/// when the viewport extends past the maximum `u16` scroll offset.
 const CHUNK_ROWS: usize = 1024;
 
 /// The wrapped rows of one source line, extracted exactly: each chunk
@@ -254,15 +254,23 @@ const CHUNK_ROWS: usize = 1024;
 /// words after every [`CHUNK_ROWS`] boundary.
 ///
 /// `Paragraph` scrolls in `u16` rows, so the deepest chunk starts at
-/// `u16::MAX` and carries the extraction to `u16::MAX + CHUNK_ROWS`; `cap_rows`
-/// is clamped to that, because rows below it are unreachable through any
-/// offset the gauge can produce.
+/// `u16::MAX` and carries the extraction through one full viewport. Rows
+/// below that cannot be reached through any offset the gauge can produce.
 fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
+    wrapped_rows_exact_for_viewport(line, width, cap_rows, CHUNK_ROWS)
+}
+
+fn wrapped_rows_exact_for_viewport(
+    line: &str,
+    width: u16,
+    cap_rows: usize,
+    viewport: usize,
+) -> Vec<String> {
     if line.is_empty() {
         // The composer yields one empty row for an empty line.
         return vec![String::new()];
     }
-    let cap_rows = cap_rows.min(usize::from(u16::MAX) + CHUNK_ROWS);
+    let cap_rows = cap_rows.min(usize::from(u16::MAX) + viewport.max(CHUNK_ROWS));
     let styled = Line::from(Span::styled(line, Style::default().fg(SENTINEL)));
     let mut rows = Vec::new();
     while rows.len() < cap_rows {
@@ -271,7 +279,11 @@ fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
         // start would have covered.
         let start = rows.len().min(usize::from(u16::MAX));
         rows.truncate(start);
-        let take = (cap_rows - start).min(CHUNK_ROWS) as u16;
+        let take = if start == usize::from(u16::MAX) {
+            cap_rows - start
+        } else {
+            (cap_rows - start).min(CHUNK_ROWS)
+        } as u16;
         let area = Rect::new(0, 0, width, take);
         // Ratatui can write one cell past the render area's right edge: a
         // row ending in a wide grapheme on the last column paints that
@@ -312,7 +324,12 @@ fn wrapped_rows_exact(line: &str, width: u16, cap_rows: usize) -> Vec<String> {
 }
 
 /// The [`RowIndex`] for `text` at `width`.
+#[cfg(test)]
 pub(crate) fn row_index(text: &str, width: u16) -> RowIndex {
+    row_index_for_viewport(text, width, CHUNK_ROWS)
+}
+
+fn row_index_for_viewport(text: &str, width: u16, viewport: usize) -> RowIndex {
     let mut cum = Vec::with_capacity(text.lines().count().saturating_add(2));
     let mut starts = Vec::with_capacity(cum.capacity());
     cum.push(0);
@@ -334,13 +351,10 @@ pub(crate) fn row_index(text: &str, width: u16) -> RowIndex {
         starts.push(u32::try_from(line.as_ptr() as usize - base).unwrap_or(u32::MAX));
         let count = wrapped_rows(line, width);
         if count >= HUGE_LINE_ROWS {
-            // Pre-wrap every row a viewport can reach: offsets cap at
-            // u16::MAX, so rows past `u16::MAX + CHUNK_ROWS` can never be
-            // read, while a viewport at the maximum offset still finds rows
-            // below it to display.
+            // Keep enough rows past the maximum offset for one full viewport.
             huge.insert(
                 u32::try_from(i).unwrap_or(u32::MAX),
-                wrapped_rows_exact(line, width, count),
+                wrapped_rows_exact_for_viewport(line, width, count, viewport),
             );
         }
         total = total.saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
@@ -421,14 +435,15 @@ impl RowIndex {
 }
 
 /// A pane's memoized layout facts: the row index at the content width, plus
-/// the exact wrapped-row count at the pane's full inner width. The caller
-/// caches it keyed by (text version, inner width). Keeping the full-width
-/// count means the thumb decision (`count > visible`) is O(1) per frame and
-/// re-evaluated against the current height — a huge single line is never
-/// re-wrapped to re-decide it.
+/// wrapped-row counts at the full width and, when needed, the scrollbar width.
+/// The caller caches it keyed by (text version, inner width). Both counts let
+/// a height-only resize decide whether the thumb fits without re-wrapping a
+/// huge line on every frame.
 pub(crate) struct PaneRows {
     index: RowIndex,
     total_at_full_width: usize,
+    total_at_narrow_width: Option<usize>,
+    cached_visible: usize,
 }
 
 /// The [`PaneRows`] for `text` in a pane whose inner area is `inner_width`
@@ -438,11 +453,28 @@ pub(crate) fn pane_rows(text: &str, inner_width: u16, visible: usize) -> PaneRow
     // that fits, the full width IS the content width and this index serves
     // both; the extra wrap only happens once per (content, width).
     let total_at_full_width = wrapped_rows(text, inner_width);
-    let bar = total_at_full_width > visible && inner_width >= 2;
-    let content_width = inner_width - u16::from(bar);
-    PaneRows {
-        index: row_index(text, content_width),
-        total_at_full_width,
+    let cached_visible = visible.max(CHUNK_ROWS);
+    if total_at_full_width > visible && inner_width >= 2 {
+        let narrow = row_index_for_viewport(text, inner_width - 1, cached_visible);
+        let total_at_narrow_width = narrow.total();
+        let index = if total_at_narrow_width > visible {
+            narrow
+        } else {
+            row_index_for_viewport(text, inner_width, cached_visible)
+        };
+        PaneRows {
+            index,
+            total_at_full_width,
+            total_at_narrow_width: Some(total_at_narrow_width),
+            cached_visible,
+        }
+    } else {
+        PaneRows {
+            index: row_index_for_viewport(text, inner_width, cached_visible),
+            total_at_full_width,
+            total_at_narrow_width: None,
+            cached_visible,
+        }
     }
 }
 
@@ -456,13 +488,32 @@ impl PaneRows {
         self.total_at_full_width
     }
 
-    /// Re-count the index at `content_width` when the pane's height flipped
-    /// the thumb decision since it was built: a height-only resize changes
-    /// which width the viewport renders at without changing the cache key
-    /// (text version, inner width). The full-width count stays valid.
-    pub(crate) fn retarget(&mut self, text: &str, content_width: u16) {
-        if self.index.index_width() != content_width {
-            self.index = row_index(text, content_width);
+    /// Re-count at the width selected by the current height. A narrow pane
+    /// can have fewer rows than a wide one when Ratatui drops wide glyphs, so
+    /// the scrollbar needs both counts before it takes a content column.
+    pub(crate) fn retarget(&mut self, text: &str, inner_width: u16, visible: usize) {
+        let needs_larger_cache = visible > self.cached_visible;
+        self.cached_visible = self.cached_visible.max(visible);
+        if self.total_at_full_width > visible
+            && inner_width >= 2
+            && self.total_at_narrow_width.is_none()
+        {
+            let narrow = row_index_for_viewport(text, inner_width - 1, self.cached_visible);
+            let count = narrow.total();
+            self.total_at_narrow_width = Some(count);
+            if count > visible {
+                self.index = narrow;
+                return;
+            }
+        }
+        let bar = self.total_at_full_width > visible
+            && self
+                .total_at_narrow_width
+                .is_some_and(|count| count > visible)
+            && inner_width >= 2;
+        let content_width = inner_width - u16::from(bar);
+        if self.index.index_width() != content_width || needs_larger_cache {
+            self.index = row_index_for_viewport(text, content_width, self.cached_visible);
         }
     }
 }
@@ -473,7 +524,17 @@ impl PaneRows {
 /// the content width that decision implies.
 pub(crate) fn pane_scroll_layout(inner: Rect, rows: &PaneRows, offset: u16) -> ScrollLayout {
     let visible = usize::from(inner.height);
-    let bar = rows.total_at_full_width() > visible && inner.width >= 2;
+    debug_assert!(
+        rows.total_at_full_width() <= visible
+            || inner.width < 2
+            || rows.total_at_narrow_width.is_some(),
+        "the index must be (re)built for the current pane size"
+    );
+    let bar = rows.total_at_full_width() > visible
+        && rows
+            .total_at_narrow_width
+            .is_some_and(|count| count > visible)
+        && inner.width >= 2;
     debug_assert_eq!(
         rows.index().index_width(),
         inner.width - u16::from(bar),
@@ -728,7 +789,13 @@ pub(crate) fn render_window_pane<'a>(
     // The rows arrive already wrapped to the layout's width, so no `Wrap`:
     // wrapping again would re-flow pre-wrapped rows.
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, layout.content);
+    // Ratatui can paint a wide glyph one cell past its wrapping width. The
+    // reference renderer keeps that cell, even when the thumb later covers it.
+    let row_area = Rect {
+        width: layout.content.width.saturating_add(1),
+        ..layout.content
+    };
+    frame.render_widget(paragraph, row_area);
 
     if let Some(bar) = layout.bar {
         render_bar(frame, bar, layout.gauge, colors);

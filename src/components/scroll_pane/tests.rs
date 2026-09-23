@@ -13,6 +13,70 @@ use ratatui::{
 
 #[cfg(test)]
 mod pane_tests {
+    #[test]
+    fn narrowing_keeps_wide_text_visible_when_it_would_remove_the_scrollbar() {
+        let text = format!("a {}", "中".repeat(100));
+        let inner = Rect::new(0, 0, 2, 6);
+        let expected = ScrollLayout::for_text(&text, inner, 0);
+        let rows = pane_rows(&text, inner.width, usize::from(inner.height));
+        let actual = pane_scroll_layout(inner, &rows, 0);
+
+        assert_eq!(actual.content, expected.content);
+        assert_eq!(actual.bar, expected.bar);
+        assert_eq!(actual.gauge.total, expected.gauge.total);
+
+        let mut resized = pane_rows(&text, inner.width, 200);
+        resized.retarget(&text, inner.width, usize::from(inner.height));
+        let after_resize = pane_scroll_layout(inner, &resized, 0);
+        assert_eq!(after_resize.content, expected.content);
+        assert_eq!(after_resize.bar, expected.bar);
+        assert_eq!(after_resize.gauge.total, expected.gauge.total);
+    }
+
+    #[test]
+    fn virtual_renderer_keeps_a_wide_glyph_at_the_content_edge() {
+        let text = format!("a {}", "中".repeat(100));
+        let pane = Rect::new(0, 0, 80, 5);
+        let inner = bordered_inner(pane);
+        let rows = pane_rows(&text, inner.width, usize::from(inner.height));
+        let layout = pane_scroll_layout(inner, &rows, 0);
+        let style = Style::default().fg(Color::Cyan);
+        let colors = BarColors {
+            thumb: Color::Red,
+            track: Color::DarkGray,
+        };
+        let paint = |old: bool| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 5)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let block = Block::default().borders(Borders::ALL);
+                    if old {
+                        render_pane(
+                            frame,
+                            pane,
+                            block,
+                            &text,
+                            styled_lines(&text, style),
+                            0,
+                            colors,
+                        );
+                    } else {
+                        let lines = window_lines(
+                            &text,
+                            rows.index(),
+                            layout.gauge.offset(),
+                            usize::from(layout.content.height),
+                            |_| style,
+                        );
+                        render_window_pane(frame, pane, block, lines, layout, colors);
+                    }
+                })
+                .unwrap();
+            terminal.backend().buffer()[(77, 2)].clone()
+        };
+
+        assert_eq!(paint(false), paint(true));
+    }
 
     /// A genuinely large single line (minified JSON/JS shape) must not fall
     /// back to whole-line processing per interaction: the index pre-wraps it
@@ -94,11 +158,11 @@ mod pane_tests {
 
         // Shorter than the content: it overflows, the thumb column appears,
         // and the index must move to width 19.
-        rows.retarget(&text, 19);
+        rows.retarget(&text, 20, 14);
         assert_eq!(rows.index().index_width(), 19);
         assert!(rows.index().total() > rows.total_at_full_width());
         // And back: widening again restores the full-width index.
-        rows.retarget(&text, 20);
+        rows.retarget(&text, 20, 30);
         assert_eq!(rows.index().index_width(), 20);
         assert_eq!(rows.index().total(), rows.total_at_full_width());
     }
@@ -132,6 +196,27 @@ mod pane_tests {
         for line in &lines {
             assert_eq!(line.spans[0].content.as_ref(), "x");
         }
+    }
+
+    #[test]
+    fn tall_viewport_at_max_offset_keeps_its_full_screenful_after_resize() {
+        let text = format!("{}{}", "x".repeat(65_535), "y".repeat(2_048));
+        let visible = 2_048;
+        let check = |rows: &PaneRows| {
+            let inner = Rect::new(0, 0, 2, visible as u16);
+            let layout = pane_scroll_layout(inner, rows, u16::MAX);
+            assert_eq!(layout.gauge.offset(), u16::MAX);
+            let lines = window_lines(&text, rows.index(), layout.gauge.offset(), visible, |_| {
+                Style::default()
+            });
+            assert_eq!(lines.len(), visible);
+            assert!(lines.iter().all(|line| line.spans[0].content == "y"));
+        };
+
+        check(&pane_rows(&text, 2, visible));
+        let mut resized = pane_rows(&text, 2, 24);
+        resized.retarget(&text, 2, visible);
+        check(&resized);
     }
 
     /// Offset 1 into the same huge line must not underflow the cached row
