@@ -198,6 +198,27 @@ mod pane_tests {
         }
     }
 
+    #[test]
+    fn tall_viewport_at_max_offset_keeps_its_full_screenful_after_resize() {
+        let text = format!("{}{}", "x".repeat(65_535), "y".repeat(2_048));
+        let visible = 2_048;
+        let check = |rows: &PaneRows| {
+            let inner = Rect::new(0, 0, 2, visible as u16);
+            let layout = pane_scroll_layout(inner, rows, u16::MAX);
+            assert_eq!(layout.gauge.offset(), u16::MAX);
+            let lines = window_lines(&text, rows.index(), layout.gauge.offset(), visible, |_| {
+                Style::default()
+            });
+            assert_eq!(lines.len(), visible);
+            assert!(lines.iter().all(|line| line.spans[0].content == "y"));
+        };
+
+        check(&pane_rows(&text, 2, visible));
+        let mut resized = pane_rows(&text, 2, 24);
+        resized.retarget(&text, 2, visible);
+        check(&resized);
+    }
+
     /// Offset 1 into the same huge line must not underflow the cached row
     /// slice (the original subtraction panic).
     #[test]
