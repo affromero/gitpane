@@ -179,41 +179,36 @@ fn test_linear_history_single_lane() {
     }
 }
 
-#[test]
-fn test_merge_creates_two_lanes() {
+fn diamond_history() -> (TempDir, [Oid; 4]) {
     let tmp = TempDir::new().unwrap();
     let repo = Repository::init(tmp.path()).unwrap();
+    let root_oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(root_oid).unwrap();
+    let left_oid = create_commit_no_ref(&repo, "left", &[&root]);
+    let right_oid = create_commit_no_ref(&repo, "right", &[&root]);
+    let left = repo.find_commit(left_oid).unwrap();
+    let right = repo.find_commit(right_oid).unwrap();
+    let merge = create_commit_no_ref(&repo, "merge", &[&left, &right]);
+    repo.set_head_detached(merge).unwrap();
+    (tmp, [merge, left_oid, right_oid, root_oid])
+}
 
-    let oid1 = create_commit(&repo, "root", &[]);
-    let c1 = repo.find_commit(oid1).unwrap();
-
-    // Create two divergent commits
-    let sig = Signature::now("Test", "test@test.com").unwrap();
-    let tree_id = repo.index().unwrap().write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-
-    let oid2 = repo
-        .commit(None, &sig, &sig, "branch-a", &tree, &[&c1])
+#[test]
+fn test_merge_creates_two_lanes() {
+    let (tmp, expected) = diamond_history();
+    let rows = GraphBuilder::new()
+        .build(tmp.path(), &GraphOptions::default())
         .unwrap();
-    let c2 = repo.find_commit(oid2).unwrap();
-
-    let oid3 = repo
-        .commit(None, &sig, &sig, "branch-b", &tree, &[&c1])
-        .unwrap();
-    let c3 = repo.find_commit(oid3).unwrap();
-
-    // Merge: first parent is c2
-    let merge_oid = repo
-        .commit(None, &sig, &sig, "merge", &tree, &[&c2, &c3])
-        .unwrap();
-    repo.set_head_detached(merge_oid).unwrap();
-
-    let builder = GraphBuilder::new();
-    let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
-
-    assert!(rows.len() >= 3);
-    let merge_row = &rows[0];
-    assert!(!merge_row.lanes.is_empty());
+    assert_eq!(
+        rows.iter().map(|r| r.oid).collect::<HashSet<_>>(),
+        expected.into_iter().collect()
+    );
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].oid, expected[0]);
+    assert_eq!(
+        rows[0].lanes,
+        vec![LaneSegment::Commit, LaneSegment::ForkRight]
+    );
 }
 
 #[test]
@@ -233,41 +228,13 @@ fn test_root_commit_closes_lane() {
 
 #[test]
 fn test_multiple_branches_assign_different_columns() {
-    let tmp = TempDir::new().unwrap();
-    let repo = Repository::init(tmp.path()).unwrap();
-
-    let oid1 = create_commit(&repo, "root", &[]);
-    let c1 = repo.find_commit(oid1).unwrap();
-
-    let sig = Signature::now("Test", "test@test.com").unwrap();
-    let tree_id = repo.index().unwrap().write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-
-    let oid2 = repo
-        .commit(None, &sig, &sig, "left", &tree, &[&c1])
+    let (tmp, [_, left, right, _]) = diamond_history();
+    let rows = GraphBuilder::new()
+        .build(tmp.path(), &GraphOptions::default())
         .unwrap();
-    let c2 = repo.find_commit(oid2).unwrap();
-
-    let oid3 = repo
-        .commit(None, &sig, &sig, "right", &tree, &[&c1])
-        .unwrap();
-    let c3 = repo.find_commit(oid3).unwrap();
-
-    let merge_oid = repo
-        .commit(None, &sig, &sig, "merge", &tree, &[&c2, &c3])
-        .unwrap();
-    repo.set_head_detached(merge_oid).unwrap();
-
-    let builder = GraphBuilder::new();
-    let rows = builder.build(tmp.path(), &GraphOptions::default()).unwrap();
-
-    // After merge, we should see a fork to a second column
-    let merge_row = &rows[0];
-    assert!(
-        merge_row.lanes.len() >= 2,
-        "Expected >= 2 lanes at merge, got {}",
-        merge_row.lanes.len()
-    );
+    let left_row = rows.iter().find(|r| r.oid == left).unwrap();
+    let right_row = rows.iter().find(|r| r.oid == right).unwrap();
+    assert_ne!(left_row.commit_col, right_row.commit_col);
 }
 
 #[test]
@@ -421,47 +388,15 @@ fn test_merge_right_horizontal_fill() {
 
 #[test]
 fn test_first_parent_simplifies_graph() {
-    let tmp = TempDir::new().unwrap();
-    let repo = Repository::init(tmp.path()).unwrap();
-
-    let oid1 = create_commit(&repo, "root", &[]);
-    let c1 = repo.find_commit(oid1).unwrap();
-
-    let sig = Signature::now("Test", "test@test.com").unwrap();
-    let tree_id = repo.index().unwrap().write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-
-    let oid2 = repo
-        .commit(None, &sig, &sig, "branch-a", &tree, &[&c1])
-        .unwrap();
-    let c2 = repo.find_commit(oid2).unwrap();
-
-    let oid3 = repo
-        .commit(None, &sig, &sig, "branch-b", &tree, &[&c1])
-        .unwrap();
-    let c3 = repo.find_commit(oid3).unwrap();
-
-    let merge_oid = repo
-        .commit(None, &sig, &sig, "merge", &tree, &[&c2, &c3])
-        .unwrap();
-    repo.set_head_detached(merge_oid).unwrap();
-
-    let all_opts = GraphOptions::default();
-    let rows_all = GraphBuilder::new().build(tmp.path(), &all_opts).unwrap();
-
-    let fp_opts = GraphOptions {
+    let (tmp, [merge, first, second, root]) = diamond_history();
+    let options = GraphOptions {
         first_parent: true,
         ..Default::default()
     };
-    let rows_fp = GraphBuilder::new().build(tmp.path(), &fp_opts).unwrap();
-
-    // First-parent should have fewer rows (skips branch-b)
-    assert!(
-        rows_fp.len() < rows_all.len(),
-        "first-parent ({}) should have fewer rows than all ({})",
-        rows_fp.len(),
-        rows_all.len()
-    );
+    let rows = GraphBuilder::new().build(tmp.path(), &options).unwrap();
+    let oids = rows.iter().map(|r| r.oid).collect::<Vec<_>>();
+    assert_eq!(oids, vec![merge, first, root]);
+    assert!(!oids.contains(&second));
 }
 
 #[test]

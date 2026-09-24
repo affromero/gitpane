@@ -631,14 +631,11 @@ mod tests {
     }
 
     #[test]
-    fn test_h_scroll_zero_offset_same_as_truncate() {
+    fn test_h_scroll_zero_offset_preserves_start_and_truncates_overflow() {
         let mut a = vec![Span::raw("hello "), Span::raw("world this is long")];
-        let mut b = a.clone();
         h_scroll_line(&mut a, 0, 10);
-        truncate_line(&mut b, 10);
         let text_a: String = a.iter().map(|s| s.content.as_ref()).collect();
-        let text_b: String = b.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text_a, text_b);
+        assert_eq!(text_a, "hello wo..");
     }
 
     #[test]

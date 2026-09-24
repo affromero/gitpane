@@ -234,10 +234,15 @@ mod list_filter_tests {
         assert_eq!(f.count(), 1);
         f.pop();
         f.rebuild(&items);
-        assert_eq!(f.count(), 2);
-        f.clear();
+        assert_eq!(f.matches(), &[0, 1]);
+        f.push('d');
         f.rebuild(&items);
-        assert_eq!(f.count(), 2);
+        assert_eq!(f.matches(), &[1]);
+        f.clear();
+        assert_eq!(f.query(), "");
+        assert!(f.matches().is_empty());
+        f.rebuild(&items);
+        assert_eq!(f.matches(), &[0, 1]);
         assert!(!f.is_active());
     }
 }

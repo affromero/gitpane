@@ -135,48 +135,47 @@ fn test_dedupe_collapses_xdg_dot_config_and_native_on_linux() {
 
 #[test]
 fn test_xdg_config_home_relative_is_ignored() {
-    let env = MockEnv {
-        xdg_config_home: Some(path("relative/xdg")),
-        home_dir: Some(path("/home/alice")),
-        project_config_dir: Some(path("/native/gitpane")),
-        ..MockEnv::default()
-    };
-
-    assert_eq!(
-        candidate_search_paths(&env),
-        vec![
-            path("/home/alice/.config/gitpane/config.toml"),
-            path("/native/gitpane/config.toml"),
-        ]
-    );
+    if in_config_env(
+        "config::tests_paths::test_xdg_config_home_relative_is_ignored",
+        &[("XDG_CONFIG_HOME", std::ffi::OsStr::new("relative/xdg"))],
+    ) {
+        assert_eq!(RealEnv.xdg_config_home(), None);
+    }
 }
 
 #[test]
 fn test_empty_gitpane_config_is_ignored() {
-    let env = MockEnv {
-        gitpane_config: Some(PathBuf::new()),
-        home_dir: Some(path("/home/alice")),
-        ..MockEnv::default()
-    };
-
-    assert_eq!(
-        resolve_load(&env),
-        LoadResolution::SearchOrder(vec![path("/home/alice/.config/gitpane/config.toml")])
-    );
+    if in_config_env(
+        "config::tests_paths::test_empty_gitpane_config_is_ignored",
+        &[("GITPANE_CONFIG", std::ffi::OsStr::new(""))],
+    ) {
+        assert_eq!(RealEnv.gitpane_config(), None);
+    }
 }
 
 #[test]
 fn test_empty_xdg_config_home_is_ignored() {
-    let env = MockEnv {
-        xdg_config_home: Some(PathBuf::new()),
-        home_dir: Some(path("/home/alice")),
-        ..MockEnv::default()
-    };
+    if in_config_env(
+        "config::tests_paths::test_empty_xdg_config_home_is_ignored",
+        &[("XDG_CONFIG_HOME", std::ffi::OsStr::new(""))],
+    ) {
+        assert_eq!(RealEnv.xdg_config_home(), None);
+    }
+}
 
-    assert_eq!(
-        candidate_search_paths(&env),
-        vec![path("/home/alice/.config/gitpane/config.toml")]
-    );
+#[test]
+fn real_env_preserves_nonempty_config_and_absolute_xdg_paths() {
+    let directory = std::env::current_dir().unwrap();
+    if in_config_env(
+        "config::tests_paths::real_env_preserves_nonempty_config_and_absolute_xdg_paths",
+        &[
+            ("GITPANE_CONFIG", std::ffi::OsStr::new("custom.toml")),
+            ("XDG_CONFIG_HOME", directory.as_os_str()),
+        ],
+    ) {
+        assert_eq!(RealEnv.gitpane_config(), Some(PathBuf::from("custom.toml")));
+        assert_eq!(RealEnv.xdg_config_home(), Some(directory));
+    }
 }
 
 #[test]

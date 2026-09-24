@@ -223,7 +223,18 @@ fn refresh_decision_runs_after_cooldown() {
 #[test]
 fn graph_status_changed_ignores_file_only_changes() {
     let previous = test_status("main", Some("aaa"));
-    let next = test_status("main", Some("aaa"));
+    let mut next = test_status("main", Some("aaa"));
+    next.is_dirty = true;
+    next.files.push(crate::git::status::FileEntry {
+        path: "changed.rs".into(),
+        status: crate::git::status::FileStatus::Modified,
+        staged: false,
+        unstaged: true,
+        is_submodule: false,
+        submodule_state: None,
+        submodule_warn: crate::git::status::SubmoduleWarn::default(),
+        submodule_head: None,
+    });
 
     // Same HEAD and same rendered refs: a working-tree edit must not reload
     // the graph (the no-churn guarantee that keeps CPU down).
@@ -608,12 +619,9 @@ async fn quit_waits_for_mutating_git_ops_and_force_quits_on_second_request() {
     assert!(app.ready_to_exit());
 }
 
-/// The live-worktree refresh must drop the worktree's cached graph even
-/// when the reload is deferred (commit detail open): a cache hit there would
-/// resurrect stale rows for up to a poll interval. Guards the
-/// `invalidate_repo(&aw.path)` line in `refresh_active_worktree`.
-#[test]
-fn worktree_refresh_invalidates_the_cached_graph_for_the_worktree_path() {
+/// A refresh deferred by commit details must show new commits when details close.
+#[tokio::test]
+async fn worktree_refresh_shows_new_commits_after_closing_details() {
     let tmp = tempfile::tempdir().unwrap();
     let config = Config {
         write_target_override: Some(tmp.path().join("config.toml")),
@@ -621,49 +629,80 @@ fn worktree_refresh_invalidates_the_cached_graph_for_the_worktree_path() {
         ..Config::default()
     };
     let mut app = App::new(config);
-    // `spawn_blocking` in the miss path needs a runtime context.
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let _guard = runtime.enter();
-
     let wt = tmp.path().join("live-wt");
+    let repo = git2::Repository::init(&wt).unwrap();
+    let commit = |message: &str| {
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent.iter().collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    async fn finish_graph(app: &mut App) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let action = app.action_rx.recv().await.unwrap();
+                if let Action::GraphError { ref message, .. } = action {
+                    panic!("{message}");
+                }
+                let loaded = matches!(action, Action::GraphLoaded { .. });
+                app.handle_action_rest(action).unwrap();
+                if loaded {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("graph did not finish loading");
+    }
+    let initial = commit("INITIAL_COMMIT");
     app.active_worktree = Some(ActiveWorktree {
         path: wt.clone(),
         repo_id: RepoId(wt.clone()),
         display_name: "live-wt".to_string(),
     });
 
-    // Seed the cache the way a completed build would.
+    app.git_graph.graph_options.show_stats = false;
+    app.git_graph
+        .register_action_handler(app.action_tx.clone())
+        .unwrap();
     app.git_graph.load_repo(wt.clone(), "live-wt");
-    app.git_graph.set_rows(vec![mock_graph_row()]);
-    assert!(
-        app.git_graph.has_cached_graph_for(&wt),
-        "precondition: the worktree graph is cached",
-    );
-
+    finish_graph(&mut app).await;
+    let _ = app
+        .git_graph
+        .set_commit_files(initial.to_string(), "INITIAL_COMMIT".into(), vec![]);
+    commit("NEW_WORKTREE_COMMIT");
     app.refresh_active_worktree();
-
     assert!(
-        !app.git_graph.has_cached_graph_for(&wt),
-        "refresh_active_worktree must invalidate the worktree's cached graph",
+        app.git_graph.has_detail(),
+        "refresh must preserve open details"
     );
-}
-
-fn mock_graph_row() -> crate::git::graph::GraphRow {
-    crate::git::graph::GraphRow {
-        commit_col: 0,
-        lanes: vec![crate::git::graph::LaneSegment::Commit],
-        horizontal_spans: Vec::new(),
-        oid: git2::Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
-        short_id: "abc1234".to_string(),
-        message: "m".to_string(),
-        author: "a".to_string(),
-        time: 0,
-        labels: Vec::new(),
-        is_merge: false,
-        parent_oids: Vec::new(),
-        diff_stat: None,
-        collapsed: None,
-    }
+    app.git_graph.handle_key_event(KeyCode::Esc.into()).unwrap();
+    finish_graph(&mut app).await;
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| app.git_graph.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        text.contains("NEW_WORKTREE_COMMIT"),
+        "new commit missing: {text}"
+    );
+    assert!(text.contains("INITIAL_COMMIT"), "history missing: {text}");
 }
 
 /// Removing a pinned submodule must not pollute `excluded_repos`: the walk
@@ -794,23 +833,30 @@ async fn removing_the_active_context_repo_clears_active_worktree() {
 #[test]
 fn add_repo_focuses_the_repo_list_on_the_new_row() {
     let tmp = tempfile::TempDir::new().unwrap();
-    make_repo(tmp.path(), "existing");
+    let existing = make_repo(tmp.path(), "existing");
     let newcomer = make_repo(tmp.path(), "newcomer");
 
     let config = Config {
         write_target_override: Some(tmp.path().join("config.toml")),
-        root_dirs: vec![tmp.path().join("existing-only-root")],
+        root_dirs: vec![],
+        pinned_repos: vec![existing],
         ..Config::default()
     };
-    std::fs::create_dir_all(tmp.path().join("existing-only-root")).unwrap();
     let mut app = App::new(config);
     app.focus = FocusPanel::Changes;
+    drain_actions(&mut app);
 
     app.handle_repo_admin(Action::AddRepo(newcomer.clone()))
         .unwrap();
 
     assert_eq!(app.focus, FocusPanel::Repos);
     let canonical = newcomer.canonicalize().unwrap();
+    assert!(
+        drain_actions(&mut app)
+            .iter()
+            .any(|action| { matches!(action, Action::SelectRepo(id) if id.0 == canonical) }),
+        "adding a repository must request selection of the new row"
+    );
     let idx = app
         .repo_list
         .repos

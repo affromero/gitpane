@@ -23,11 +23,15 @@ pub(crate) fn check_latest() -> Option<String> {
         .read_to_string()
         .ok()?;
 
-    let body: serde_json::Value = serde_json::from_str(&body).ok()?;
+    release_update(&body, CURRENT_VERSION)
+}
+
+fn release_update(body: &str, current_version: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(body).ok()?;
     let tag = body.get("tag_name")?.as_str()?;
 
     let remote = parse_semver(tag)?;
-    let local = parse_semver(CURRENT_VERSION)?;
+    let local = parse_semver(current_version)?;
 
     if remote > local {
         Some(tag.trim_start_matches('v').to_string())
@@ -51,24 +55,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detects_newer_version() {
-        let remote = parse_semver("v1.0.0").unwrap();
-        let local = parse_semver("0.2.0").unwrap();
-        assert!(remote > local);
-    }
-
-    #[test]
-    fn test_same_version_returns_none() {
-        let remote = parse_semver("0.2.0").unwrap();
-        let local = parse_semver("0.2.0").unwrap();
-        assert!(remote <= local);
-    }
-
-    #[test]
-    fn test_older_remote_returns_none() {
-        let remote = parse_semver("0.1.0").unwrap();
-        let local = parse_semver("0.2.0").unwrap();
-        assert!(remote <= local);
+    fn release_response_only_offers_newer_versions() {
+        for (tag, current, expected) in [
+            ("v1.0.0", "0.2.0", Some("1.0.0")),
+            ("1.3.0", "1.2.9", Some("1.3.0")),
+            ("1.2.10", "1.2.9", Some("1.2.10")),
+            ("0.2.0", "0.2.0", None),
+            ("0.1.0", "0.2.0", None),
+            ("1.9.9", "2.0.0", None),
+            ("1.2.99", "1.3.0", None),
+            ("invalid", "0.2.0", None),
+            ("1.2.0", "invalid", None),
+        ] {
+            let body = serde_json::json!({ "tag_name": tag }).to_string();
+            assert_eq!(
+                release_update(&body, current).as_deref(),
+                expected,
+                "{tag} vs {current}"
+            );
+        }
+        for body in [
+            "not JSON",
+            "{}",
+            r#"{"tag_name":42}"#,
+            r#"{"tag_name":null}"#,
+        ] {
+            assert_eq!(release_update(body, "0.2.0"), None, "{body}");
+        }
     }
 
     #[test]

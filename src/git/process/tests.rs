@@ -12,7 +12,7 @@
 
 use super::{
     ResetsShuttingDown, capture_with_timeout, kill_in_flight_git_ops, kill_process_group,
-    register_killable_pid,
+    spawn_killable,
 };
 
 /// sh forks a `sleep` grandchild, prints its pid, then waits on it — the
@@ -72,7 +72,6 @@ fn process_group_kill_takes_grandchildren() {
 #[test]
 fn kill_in_flight_git_ops_takes_registered_groups_down() {
     use std::io::BufRead;
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
     let _lock = super::TEST_KILL_LOCK
@@ -81,13 +80,12 @@ fn kill_in_flight_git_ops_takes_registered_groups_down() {
     // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic);
     // declared after the lock so it is reset before the lock is released.
     let _reset = ResetsShuttingDown::new();
-    let mut child = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg("sleep 60 2>/dev/null & echo $!; wait")
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn sh");
+        .stdout(Stdio::piped());
+    let mut child = spawn_killable(&mut command).expect("spawn sh");
 
     let mut line = String::new();
     std::io::BufReader::new(child.stdout.take().expect("sh stdout"))
@@ -101,9 +99,6 @@ fn kill_in_flight_git_ops_takes_registered_groups_down() {
         "grandchild should be alive before the exit-kill"
     );
 
-    // Register the group leader the way `fetch_remote_silent` does, then run
-    // the quit-time kill.
-    register_killable_pid(child.id() as i32);
     kill_in_flight_git_ops();
     let _ = child.wait();
 

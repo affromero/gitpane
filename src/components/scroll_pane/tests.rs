@@ -588,14 +588,23 @@ mod pane_tests {
     }
 
     #[test]
-    fn text_layout_only_takes_the_column_if_the_content_still_overflows() {
+    fn exact_fit_keeps_full_width_when_a_scrollbar_would_cause_overflow() {
         // Exactly `inner.height` wrapped rows: with the thumb column taken the
         // content would need more rows, but widening is not needed either — the
         // first pass decides, so a fitting pane never loses a column.
         let inner = Rect::new(0, 0, 10, 3);
-        let exact = ScrollLayout::for_text("a\nb\nc", inner, 0);
-        assert!(exact.bar.is_none());
-        assert_eq!(exact.content.width, 10);
+        let text = "x".repeat(30);
+        assert_eq!(wrapped_rows(&text, 10), 3);
+        assert_eq!(wrapped_rows(&text, 9), 4);
+        let rows = pane_rows(&text, inner.width, usize::from(inner.height));
+        for exact in [
+            ScrollLayout::for_text(&text, inner, 0),
+            pane_scroll_layout(inner, &rows, 0),
+        ] {
+            assert!(exact.bar.is_none());
+            assert_eq!(exact.content, inner);
+            assert_eq!(exact.gauge.max_offset(), 0);
+        }
     }
 
     #[test]

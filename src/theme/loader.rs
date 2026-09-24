@@ -170,7 +170,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let candidates = vec![dir.path().to_path_buf()];
         let err = load_theme("nope", &candidates).unwrap_err();
+        let expected_path = dir.path().join("themes").join("nope.toml");
+        let LoadThemeError::Unknown { name, searched, .. } = &err else {
+            panic!("expected an unknown-theme error: {err}");
+        };
+        assert_eq!(name, "nope");
+        assert_eq!(searched, std::slice::from_ref(&expected_path));
         let msg = err.to_string();
+        assert!(
+            msg.contains(&expected_path.display().to_string()),
+            "got: {msg}"
+        );
         assert!(msg.contains("unknown theme 'nope'"), "got: {msg}");
         assert!(
             msg.contains("default"),
