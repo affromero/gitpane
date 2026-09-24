@@ -359,27 +359,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_theme_roundtrips_through_toml() {
-        let original = Theme::default();
+    fn custom_theme_colors_and_palettes_roundtrip_through_toml() {
+        let mut original = Theme::default();
+        original.repo_list.dirty_marker = Color::Blue;
+        original.repo_list.stash = Color::Indexed(42);
+        original.graph.collapsed_message = Color::Rgb(12, 34, 56);
+        original.graph.lane_palette = vec![Color::Cyan, Color::Indexed(99)];
+        original.graph.author_palette = vec![Color::Rgb(78, 90, 12)];
         let serialized = toml::to_string_pretty(&original).unwrap();
         let restored: Theme = toml::from_str(&serialized).unwrap();
         assert_eq!(
             restored.repo_list.dirty_marker,
-            Color::Yellow,
+            Color::Blue,
             "round-trip should preserve named colors"
         );
         assert_eq!(
             restored.repo_list.stash,
-            Color::Indexed(127),
+            Color::Indexed(42),
             "round-trip should preserve indexed colors"
         );
         assert_eq!(
             restored.graph.collapsed_message,
-            Color::Rgb(130, 130, 130),
+            Color::Rgb(12, 34, 56),
             "round-trip should preserve rgb colors"
         );
-        assert_eq!(restored.graph.lane_palette.len(), 6);
-        assert_eq!(restored.graph.author_palette.len(), 8);
+        assert_eq!(
+            restored.graph.lane_palette,
+            vec![Color::Cyan, Color::Indexed(99)]
+        );
+        assert_eq!(restored.graph.author_palette, vec![Color::Rgb(78, 90, 12)]);
     }
 
     #[test]
@@ -399,6 +407,9 @@ mod tests {
     fn empty_toml_yields_default_theme() {
         let theme: Theme = toml::from_str("").unwrap();
         assert_eq!(theme.repo_list.stash, Color::Indexed(127));
+        assert_eq!(theme.graph.collapsed_message, Color::Rgb(130, 130, 130));
         assert_eq!(theme.graph.lane_palette[0], Color::Red);
+        assert_eq!(theme.graph.lane_palette.len(), 6);
+        assert_eq!(theme.graph.author_palette.len(), 8);
     }
 }

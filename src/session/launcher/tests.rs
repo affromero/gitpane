@@ -332,17 +332,10 @@ fn command_mode_empty_opens_herdr_pane_in_herdr() {
 
 #[test]
 fn herdr_split_placement_honors_h_v_and_pane_target() {
-    // `-h` -> right, `-v` -> down, `-t <pane-id>` -> `--pane`.
-    assert_eq!(
-        plan(
-            Some("lazygit"),
+    let cases: &[(&str, &[&str])] = &[
+        (
             "split-window -h",
-            "/app",
-            None,
-            Multiplexer::Herdr
-        ),
-        LaunchPlan::Herdr {
-            create: vec![
+            &[
                 "herdr",
                 "pane",
                 "split",
@@ -354,41 +347,69 @@ fn herdr_split_placement_honors_h_v_and_pane_target() {
                 "--no-focus",
                 "--right-click",
                 "pane",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
-            command: Some("lazygit".to_string()),
-        }
-    );
-    let down = plan(
-        Some("x"),
-        "split-window -v",
-        "/app",
-        None,
-        Multiplexer::Herdr,
-    );
-    assert!(matches!(
-        down,
-        LaunchPlan::Herdr {
-            create: ref c,
-            ..
-        } if c.contains(&"down".to_string())
-    ));
-    let targeted = plan(
-        Some("x"),
-        "split-window -h -t w1:p3",
-        "/app",
-        None,
-        Multiplexer::Herdr,
-    );
-    assert!(matches!(
-        targeted,
-        LaunchPlan::Herdr {
-            create: ref c,
-            ..
-        } if c.contains(&"--pane".to_string()) && c.contains(&"w1:p3".to_string())
-    ));
+            ],
+        ),
+        (
+            "split-window -v",
+            &[
+                "herdr",
+                "pane",
+                "split",
+                "--current",
+                "--direction",
+                "down",
+                "--cwd",
+                "/app",
+                "--no-focus",
+                "--right-click",
+                "pane",
+            ],
+        ),
+        (
+            "split-window -h -t w1:p3",
+            &[
+                "herdr",
+                "pane",
+                "split",
+                "--pane",
+                "w1:p3",
+                "--direction",
+                "right",
+                "--cwd",
+                "/app",
+                "--no-focus",
+                "--right-click",
+                "pane",
+            ],
+        ),
+        (
+            "split-window -v -t w1:p3",
+            &[
+                "herdr",
+                "pane",
+                "split",
+                "--pane",
+                "w1:p3",
+                "--direction",
+                "down",
+                "--cwd",
+                "/app",
+                "--no-focus",
+                "--right-click",
+                "pane",
+            ],
+        ),
+    ];
+    for (placement, expected) in cases {
+        assert_eq!(
+            plan(Some("lazygit"), placement, "/app", None, Multiplexer::Herdr,),
+            LaunchPlan::Herdr {
+                create: expected.iter().map(|s| s.to_string()).collect(),
+                command: Some("lazygit".to_string()),
+            },
+            "placement: {placement}",
+        );
+    }
 }
 
 #[test]

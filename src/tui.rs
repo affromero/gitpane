@@ -495,6 +495,7 @@ mod tests {
         let (state_tx, mut state_rx) = mpsc::unbounded_channel();
         let token = CancellationToken::new();
 
+        let started = tokio::time::Instant::now();
         spawn_input_idle_probe(
             input_rx,
             Duration::from_millis(100),
@@ -504,14 +505,27 @@ mod tests {
 
         // Unconditional first report lands before any deadline elapses.
         assert_eq!(state_rx.recv().await, Some(PowerState::Awake));
-        // No input → the next report is DeepSleep at the doze deadline,
-        // with no intermediate Doze possible.
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        tokio::time::advance(Duration::from_millis(60)).await;
+        assert!(state_rx.try_recv().is_err());
+        input_tx.send(()).unwrap();
+        tokio::task::yield_now().await;
+        // Input while awake resets the deadline without a duplicate report.
+        tokio::time::advance(Duration::from_millis(40)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            state_rx.try_recv().is_err(),
+            "slept at the original deadline"
+        );
         assert_eq!(state_rx.recv().await, Some(PowerState::DeepSleep));
+        assert_eq!(started.elapsed(), Duration::from_millis(160));
 
         // A single input event wakes it back to Awake immediately.
         input_tx.send(()).unwrap();
         assert_eq!(state_rx.recv().await, Some(PowerState::Awake));
+        assert_eq!(started.elapsed(), Duration::from_millis(160));
 
         token.cancel();
+        assert_eq!(state_rx.recv().await, None);
     }
 }

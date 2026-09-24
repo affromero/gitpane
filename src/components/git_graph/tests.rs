@@ -909,21 +909,33 @@ fn cache_hit_restores_filter_values_not_present_in_rows() {
 }
 
 #[test]
-fn theme_change_drops_cached_row_bodies() {
-    let mut graph = GitGraph::new(std::sync::Arc::new(crate::theme::Theme::default()));
+fn theme_change_recolors_previously_rendered_commit_messages() {
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
+
+    let mut theme = Theme::default();
+    theme.graph.commit_message = Color::Red;
+    let mut graph = GitGraph::new(Arc::new(theme.clone()));
     graph.set_rows(vec![mock_row("abc1234", "msg", "A")]);
-    let key = RowRenderKey {
-        oid: graph.all_rows[0].oid,
-        theme_generation: graph.theme_generation,
-        label_max_len: 24,
-        dimmed: false,
-        collapsed: false,
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+    let mut message_colors = |graph: &mut GitGraph| {
+        terminal.draw(|f| graph.draw(f, f.area()).unwrap()).unwrap();
+        let buffer = terminal.backend().buffer();
+        let column = (0..78)
+            .find(|&x| {
+                (x..x + 3)
+                    .map(|col| buffer[(col, 1)].symbol())
+                    .collect::<String>()
+                    == "msg"
+            })
+            .expect("commit message is visible");
+        (column..column + 3)
+            .map(|x| buffer[(x, 1)].fg)
+            .collect::<Vec<_>>()
     };
-    graph.render_cache.insert(key, vec![Span::raw("x")]);
-    let generation_before = graph.theme_generation;
-    graph.set_theme(std::sync::Arc::new(crate::theme::Theme::default()));
-    assert!(graph.theme_generation > generation_before);
-    assert!(graph.render_cache.is_empty());
+    assert_eq!(message_colors(&mut graph), vec![Color::Red; 3]);
+    theme.graph.commit_message = Color::Blue;
+    graph.set_theme(Arc::new(theme));
+    assert_eq!(message_colors(&mut graph), vec![Color::Blue; 3]);
 }
 
 #[test]

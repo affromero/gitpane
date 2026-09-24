@@ -728,16 +728,10 @@ mod tests {
         symlink(root, root.join("dosdevices").join("z:")).unwrap();
 
         let ex: HashSet<String> = HashSet::new();
-        let mut visited: Vec<PathBuf> = WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                should_keep_walk_entry(e.path_is_symlink(), e.depth(), e.file_name().to_str(), &ex)
-            })
-            .filter_map(|e| e.ok())
-            .map(|e| e.path().to_path_buf())
-            .collect();
-        visited.sort();
+        let visited = watch_dirs(root, &ex);
+        assert!(visited.contains(&root.to_path_buf()));
+        assert!(visited.contains(&root.join("src")));
+        assert!(visited.contains(&root.join("dosdevices")));
 
         let symlink_path = root.join("dosdevices").join("z:");
         assert!(

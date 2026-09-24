@@ -201,11 +201,8 @@ mod tests {
         let stats = batch_diff_stats(tmp.path(), &[oid2]).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].0, oid2);
-        assert!(
-            stats[0].1.additions > 0,
-            "expected additions, got {}",
-            stats[0].1.additions
-        );
+        assert_eq!(stats[0].1.additions, 2);
+        assert_eq!(stats[0].1.deletions, 0);
     }
 
     #[test]
@@ -216,7 +213,7 @@ mod tests {
         let stats = batch_diff_stats(tmp.path(), &[oid]).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].0, oid);
-        assert!(stats[0].1.additions > 0);
+        assert_eq!(stats[0].1.additions, 1);
         assert_eq!(stats[0].1.deletions, 0);
     }
 }

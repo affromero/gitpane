@@ -101,6 +101,54 @@ map in [README.md#architecture](README.md#architecture). Key areas:
   subprocesses, including test fixtures. It clears inherited hook variables
   so commands cannot target the calling repository instead of `path`.
 
+## Testing policy
+
+Before adding or changing a test, identify the observable contract, a credible
+regression, and the gap in existing coverage. Use the smallest stable boundary
+that exercises the behavior. Extend an existing case table when the setup and
+contract are shared; another layer needs a distinct risk to justify its test.
+
+- Review and run affected coverage when source changes. Update tests when the
+  behavior changes or coverage is insufficient. A behavior-preserving refactor
+  does not require cosmetic test edits; keep mechanical moves separate from
+  test consolidation.
+- Test private Rust functions directly when they own meaningful pure logic.
+  Do not expand visibility or add production flags or wrappers just to reach
+  implementation details. Injected clocks or I/O boundaries are valid when
+  they preserve the production behavior being tested.
+- Keep expected values independent of the code under test. Use real temporary
+  repositories and files for Git and filesystem behavior. Mock external
+  boundaries when needed; do not mock the logic whose result is asserted.
+- Exact assertions are appropriate for argv, protocol payloads, serialized
+  data, and other precise contracts. Assert flag/value relationships and
+  required ordering, not just the presence of individual tokens. Match error
+  types or semantic content unless the exact wording is itself a contract.
+- For launcher changes, use plan tests for placement and external command
+  arguments, and execute generated shell commands for quoting and injection
+  safety. Keep shell implementation text out of expected values. Rendered TUI
+  tests should check visible behavior and interaction state.
+- Negative tests must reach the intended guard. Bug regressions should fail
+  before the fix for the intended reason and pass afterward. If the original
+  environment cannot be reproduced, report that limitation and use a targeted
+  fault to check test sensitivity where practical.
+
+For audits, record the scoped baseline and classify candidates as retain,
+repair, consolidate, or delete. Before deletion, read the test, production
+owner, callers, overlapping coverage, relevant history, and CI routing. Name
+the surviving proof or explain why the contract is obsolete. Move unique
+assertions before removing a test, then review coverage preservation. For risky
+consolidations, verify that a deliberate fault makes the surviving test fail
+in an isolated copy with its own Cargo target directory. A failing baseline
+may reveal a product bug; investigate
+before changing its assertions. Static checks and slow tests can protect
+independent contracts and are not deletion candidates on that basis alone.
+
+Start with `cargo test --bin gitpane <module-or-test-filter>`, then complete the
+required checks above. Do not edit a checkout while its tests are running.
+Report executed checks, failures, and skipped coverage separately, including
+platform-specific tests and missing-Git skips. Local macOS results do not prove
+Linux or Windows behavior.
+
 ## Pull requests
 
 - Open an issue first (bug report or feature request) and reference it with

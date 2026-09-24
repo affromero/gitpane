@@ -1,10 +1,6 @@
 use super::test_support::*;
 use super::*;
-use git2::SubmoduleStatus;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 use tempfile::TempDir;
 
 #[test]
@@ -192,25 +188,6 @@ fn test_worktree_info_reflects_submodule_signals() {
 }
 
 #[test]
-fn test_submodule_state_mapping() {
-    // Test the flag-to-state conversion logic
-    let flags = SubmoduleStatus::WD_UNINITIALIZED;
-    assert!(flags.is_wd_uninitialized());
-
-    let flags = SubmoduleStatus::WD_WD_MODIFIED;
-    assert!(flags.is_wd_wd_modified());
-
-    let flags = SubmoduleStatus::WD_UNTRACKED;
-    assert!(flags.contains(SubmoduleStatus::WD_UNTRACKED));
-
-    let flags = SubmoduleStatus::WD_MODIFIED;
-    assert!(flags.is_wd_modified());
-
-    let flags = SubmoduleStatus::WD_INDEX_MODIFIED;
-    assert!(flags.contains(SubmoduleStatus::WD_INDEX_MODIFIED));
-}
-
-#[test]
 fn test_clean_repo_no_dirty_submodules() {
     let (tmp, _repo) = init_temp_repo();
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
@@ -230,37 +207,36 @@ fn test_status_maps_correctly() {
 
 #[test]
 fn test_file_entry_submodule_fields() {
-    let entry = FileEntry {
-        path: PathBuf::from("my-submodule"),
-        status: FileStatus::Modified,
-        staged: false,
-        unstaged: true,
-        is_submodule: true,
-        submodule_state: Some(SubmoduleState::Modified),
-        submodule_warn: SubmoduleWarn::default(),
-        submodule_head: Some(SubmoduleHead::Branch("feature".to_string())),
-    };
+    let (tmp, _source, _repo) = init_repo_with_submodule();
+    let inner = Repository::open(tmp.path().join("my-sub")).unwrap();
+    let head = inner.head().unwrap().peel_to_commit().unwrap();
+    inner.branch("feature", &head, false).unwrap();
+    inner.set_head("refs/heads/feature").unwrap();
+    fs::write(tmp.path().join("my-sub/lib.rs"), "changed").unwrap();
+    fs::write(tmp.path().join("plain.txt"), "ordinary file").unwrap();
+    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let entry = status
+        .files
+        .iter()
+        .find(|f| f.path == Path::new("my-sub"))
+        .unwrap();
     assert!(entry.is_submodule);
-    assert_eq!(entry.submodule_state, Some(SubmoduleState::Modified));
+    assert_eq!(entry.submodule_state, Some(SubmoduleState::Dirty));
     assert!(entry.submodule_warn.is_clean());
     assert_eq!(
         entry.submodule_head,
         Some(SubmoduleHead::Branch("feature".to_string()))
     );
 
-    let plain = FileEntry {
-        path: PathBuf::from("src/main.rs"),
-        status: FileStatus::Modified,
-        staged: false,
-        unstaged: true,
-        is_submodule: false,
-        submodule_state: None,
-        submodule_warn: SubmoduleWarn::default(),
-        submodule_head: None,
-    };
+    let plain = status
+        .files
+        .iter()
+        .find(|f| f.path == Path::new("plain.txt"))
+        .unwrap();
     assert!(!plain.is_submodule);
     assert_eq!(plain.submodule_state, None);
     assert_eq!(plain.submodule_head, None);
+    assert!(plain.submodule_warn.is_clean());
 }
 
 #[test]
@@ -310,19 +286,6 @@ fn test_staged_and_unstaged_flags_distinguished() {
 }
 
 #[test]
-fn test_submodule_state_equality_and_clone() {
-    assert_eq!(SubmoduleState::Modified, SubmoduleState::Modified);
-    assert_eq!(SubmoduleState::Dirty, SubmoduleState::Dirty);
-    assert_eq!(SubmoduleState::Uninitialized, SubmoduleState::Uninitialized);
-    assert_ne!(SubmoduleState::Modified, SubmoduleState::Dirty);
-    assert_ne!(SubmoduleState::Dirty, SubmoduleState::Uninitialized);
-
-    let state = SubmoduleState::Modified;
-    let cloned = state.clone();
-    assert_eq!(state, cloned);
-}
-
-#[test]
 fn test_ignore_dirty_subs_on_clean_repo() {
     // ignore_dirty_subs = true should work fine on repos without submodules
     let (tmp, _repo) = init_temp_repo();
@@ -366,19 +329,46 @@ fn test_ignore_dirty_subs_still_detects_regular_changes() {
 }
 
 #[test]
-fn test_submodule_state_priority_uninitialized_first() {
-    // WD_UNINITIALIZED takes priority over other flags
-    let flags = SubmoduleStatus::WD_UNINITIALIZED | SubmoduleStatus::WD_MODIFIED;
+fn test_uninitialized_submodule_with_staged_pointer_has_no_head_or_push_warning() {
+    let (tmp, _source, _repo) = init_repo_with_submodule();
+    add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    stage_submodule_pointer(tmp.path(), "my-sub");
+    fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
+    // A deinitialized submodule leaves an empty directory. A missing directory
+    // instead represents deletion in libgit2's status model.
+    fs::create_dir(tmp.path().join("my-sub")).unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let flags = repo
+        .submodule_status("my-sub", git2::SubmoduleIgnore::None)
+        .unwrap();
     assert!(flags.is_wd_uninitialized());
+    assert!(flags.is_index_modified());
+    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let sub = status
+        .submodules
+        .iter()
+        .find(|s| s.path == Path::new("my-sub"))
+        .unwrap();
+    assert_eq!(sub.state, Some(SubmoduleState::Uninitialized));
+    assert!(sub.warn.is_clean());
+    assert_eq!(sub.head, None);
 }
 
 #[test]
 fn test_submodule_state_priority_dirty_over_modified() {
-    // WD_WD_MODIFIED (dirty) is checked before WD_MODIFIED (pointer change)
-    let flags = SubmoduleStatus::WD_WD_MODIFIED | SubmoduleStatus::WD_MODIFIED;
-    assert!(flags.is_wd_wd_modified());
-    assert!(flags.is_wd_modified());
-    // Our mapping logic checks dirty first, so this should map to Dirty
+    let (tmp, _source, _repo) = init_repo_with_submodule();
+    add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    fs::write(tmp.path().join("my-sub/lib.rs"), "dirty content").unwrap();
+    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let sub = status
+        .submodules
+        .iter()
+        .find(|s| s.path == Path::new("my-sub"))
+        .unwrap();
+    assert!(sub.head_oid.is_some());
+    assert!(sub.workdir_oid.is_some());
+    assert_ne!(sub.head_oid, sub.workdir_oid);
+    assert_eq!(sub.state, Some(SubmoduleState::Dirty));
 }
 
 #[test]

@@ -729,99 +729,91 @@ mod diff_scroll_indicator_tests {
     }
 
     #[test]
-    fn diff_rows_cache_is_invalidated_when_the_content_changes() {
-        let mut fl = FileList::new(Arc::new(Theme::default()));
-        fl.diff_area = Rect::new(0, 0, 82, 24);
-        fl.set_diff("a\nb\nc\n".repeat(10)); // 30 rows: overflows the viewport
-        assert!(fl.ensure_diff_rows(fl.diff_area), "a diff exists");
-        let first = fl
-            .diff_rows
-            .as_ref()
-            .expect("cache filled")
-            .2
-            .index()
-            .total();
-        assert_eq!(first, 30);
-        assert_eq!(
-            fl.diff_rows.as_ref().map(|(v, w, _)| (*v, *w)),
-            Some((fl.diff_content_version, bordered_inner(fl.diff_area).width)),
-            "the index is memoized under (content version, pane width)"
+    fn replacing_a_drawn_diff_updates_its_content_and_reachable_end() {
+        let (mut fl, mut terminal) = list_with_diff(30);
+        assert!(rows(&terminal).join("\n").contains("+line 0"));
+        fl.set_diff(
+            (0..60)
+                .map(|i| format!("+replacement {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         );
-        assert!(fl.ensure_diff_rows(fl.diff_area), "a hit rebuilds nothing");
-
-        // Same width, different content: a stale entry would lie about the row
-        // count, so the version bump on set_diff must force a rebuild.
-        fl.set_diff("x\n".repeat(60));
-        assert!(fl.ensure_diff_rows(fl.diff_area));
-        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
-        assert_eq!(
-            (*v, *w),
-            (fl.diff_content_version, bordered_inner(fl.diff_area).width)
-        );
-        assert_ne!(rows.index().total(), first);
-        assert_eq!(rows.index().total(), 60);
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        let rendered = rows(&terminal).join("\n");
+        assert!(rendered.contains("+replacement 0"));
+        assert!(!rendered.contains("+line "));
+        for _ in 0..200 {
+            fl.handle_key_event(KeyCode::Down.into()).unwrap();
+        }
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        assert!(rows(&terminal).join("\n").contains("+replacement 59"));
+        assert!(rows(&terminal)[usize::from(fl.diff_area.y)].contains("60/60"));
+        assert!(indicator_column(&terminal, fl.diff_area).ends_with(THUMB));
     }
 
     #[test]
-    fn a_height_only_resize_re_aims_the_index_at_the_new_content_width() {
+    fn shrinking_diff_height_rewraps_content_beside_the_new_scrollbar() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
-        // 30 rows: fits a 32-row viewport, overflows a 12-row one.
-        fl.set_diff("line\n".repeat(30));
-        fl.diff_area = Rect::new(0, 0, 82, 34);
-        assert!(fl.ensure_diff_rows(fl.diff_area));
-        let no_bar = scroll_pane::pane_scroll_layout(
-            bordered_inner(fl.diff_area),
-            &fl.diff_rows.as_ref().expect("cache").2,
-            0,
-        );
-        assert!(no_bar.bar.is_none());
+        fl.horizontal_layout = true;
+        // Each 78-cell line fits the full inner width, but wraps to two rows
+        // when shrinking the height introduces a scrollbar column.
+        fl.set_diff(format!(
+            "{}{}END",
+            ("x".repeat(78) + "\n").repeat(29),
+            "x".repeat(75)
+        ));
+        let tall = draw_size(&mut fl, 80, 60);
+        assert!(!indicator_column(&tall, fl.diff_area).contains(THUMB));
+        assert!(rows(&tall).join("\n").contains("END"));
 
-        // Shorter, same width: the thumb decision flips, and the cached index
-        // must be re-aimed at the width beside the thumb -- not served at the
-        // stale full width.
-        fl.diff_area = Rect::new(0, 0, 82, 14);
-        assert!(fl.ensure_diff_rows(fl.diff_area));
-        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache reused");
-        assert_eq!(
-            (*v, *w),
-            (fl.diff_content_version, bordered_inner(fl.diff_area).width)
+        let short = draw_size(&mut fl, 80, 20);
+        assert!(indicator_column(&short, fl.diff_area).contains(THUMB));
+        for _ in 0..200 {
+            fl.handle_key_event(KeyCode::Down.into()).unwrap();
+        }
+        let bottom = draw_size(&mut fl, 80, 20);
+        assert!(rows(&bottom)[usize::from(fl.diff_area.y)].contains("60/60"));
+        assert_eq!(fl.diff_scroll, 60 - (fl.diff_area.height - 2));
+        let last_row = &rows(&bottom)[usize::from(fl.diff_area.bottom() - 2)];
+        assert!(
+            last_row.contains('D'),
+            "last wrapped character must remain reachable"
         );
-        let layout = scroll_pane::pane_scroll_layout(bordered_inner(fl.diff_area), rows, 0);
-        assert!(layout.bar.is_some(), "the thumb appears after the shrink");
-        assert_eq!(
-            rows.index().index_width(),
-            bordered_inner(fl.diff_area).width - 1
-        );
-        assert_eq!(rows.index().total(), 30);
-        assert!(fl.ensure_diff_rows(fl.diff_area), "cache still hits");
+
+        let tall = draw_size(&mut fl, 80, 60);
+        assert!(!indicator_column(&tall, fl.diff_area).contains(THUMB));
+        assert_eq!(fl.diff_scroll, 0);
+        assert!(rows(&tall).join("\n").contains("END"));
     }
 
     #[test]
-    fn diff_rows_cache_tracks_the_content_width() {
+    fn narrowing_a_drawn_diff_rewraps_rows_and_keeps_the_end_reachable() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
-        // Long enough to overflow both pane widths, so the thumb column is
-        // taken and the index is counted at the width beside it.
-        fl.set_diff("word ".repeat(1000));
-        fl.diff_area = Rect::new(0, 0, 82, 24);
-        assert!(fl.ensure_diff_rows(fl.diff_area));
-        let (wide_width, wide_rows) = {
-            let (_, w, rows) = fl.diff_rows.as_ref().expect("cache filled");
-            (*w, rows.index().total())
-        };
-        // The same content at another width (a panel resize) must re-key, not
-        // serve windows wrapped for the old width.
-        fl.diff_area = Rect::new(0, 0, 42, 24);
-        assert!(fl.ensure_diff_rows(fl.diff_area));
-        let (v, w, rows) = fl.diff_rows.as_ref().expect("cache refilled");
-        assert_eq!(*w, bordered_inner(fl.diff_area).width);
-        assert_ne!(*w, wide_width, "the pane width is the cache key");
-        assert_eq!(*v, fl.diff_content_version);
-        // The narrower pane wraps the same words into more rows, and the
-        // index counts at the width left beside the thumb column.
-        assert!(rows.index().total() > wide_rows);
-        assert_eq!(
-            rows.index().index_width(),
-            bordered_inner(fl.diff_area).width - 1
-        );
+        fl.horizontal_layout = true;
+        // Thirty 70-cell lines and a final marker: 31 rows at width 80,
+        // 61 at width 40, including the scrollbar and borders in each case.
+        fl.set_diff(("x".repeat(70) + "\n").repeat(30) + "TAIL");
+        let wide = draw_size(&mut fl, 80, 20);
+        assert!(rows(&wide)[usize::from(fl.diff_area.y)].contains("/31"));
+        let narrow = draw_size(&mut fl, 40, 20);
+        assert!(rows(&narrow)[usize::from(fl.diff_area.y)].contains("/61"));
+        for _ in 0..200 {
+            fl.handle_key_event(KeyCode::Down.into()).unwrap();
+        }
+        let bottom = draw_size(&mut fl, 40, 20);
+        assert!(rows(&bottom)[usize::from(fl.diff_area.y)].contains("61/61"));
+        assert!(rows(&bottom).join("\n").contains("TAIL"));
+        assert!(indicator_column(&bottom, fl.diff_area).ends_with(THUMB));
+    }
+
+    fn draw_size(
+        fl: &mut FileList,
+        width: u16,
+        height: u16,
+    ) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
+        terminal
     }
 }

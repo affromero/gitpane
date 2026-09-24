@@ -74,28 +74,15 @@ fn test_missing_roots_ignores_existing_empty_dir() {
 }
 
 #[test]
-fn test_save_and_reload_roundtrip() {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    let path = tmp.path().to_path_buf();
-
-    let mut config = Config::default();
-    config.pinned_repos.push(PathBuf::from("/tmp/test-repo"));
-
-    // Write directly to temp path
-    let contents = toml::to_string_pretty(&config).unwrap();
-    std::fs::write(&path, &contents).unwrap();
-
-    let loaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(loaded.pinned_repos, vec![PathBuf::from("/tmp/test-repo")]);
-}
-
-#[test]
 fn test_add_pinned_repo_deduplication() {
     let mut config = Config::default();
     config.add_pinned_repo(PathBuf::from("/tmp/repo-a"));
     config.add_pinned_repo(PathBuf::from("/tmp/repo-a"));
     config.add_pinned_repo(PathBuf::from("/tmp/repo-b"));
-    assert_eq!(config.pinned_repos.len(), 2);
+    assert_eq!(
+        config.pinned_repos,
+        vec![PathBuf::from("/tmp/repo-a"), PathBuf::from("/tmp/repo-b")]
+    );
 }
 
 #[test]
@@ -530,9 +517,11 @@ fn test_override_root_expands_tilde() {
     let mut config = Config::default();
     config.override_root(PathBuf::from("~/Code"));
     let roots = config.effective_root_dirs();
-    assert!(
-        !roots.iter().any(|r| r.starts_with("~")),
-        "tilde must expand"
+    assert_eq!(
+        roots.as_ref(),
+        &[dirs::home_dir()
+            .expect("test environment has a home directory")
+            .join("Code")],
     );
 }
 
