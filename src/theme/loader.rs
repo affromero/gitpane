@@ -170,7 +170,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let candidates = vec![dir.path().to_path_buf()];
         let err = load_theme("nope", &candidates).unwrap_err();
-        let expected_path = dir.path().join("themes/nope.toml");
+        let expected_path = dir.path().join("themes").join("nope.toml");
         let LoadThemeError::Unknown { name, searched, .. } = &err else {
             panic!("expected an unknown-theme error: {err}");
         };
