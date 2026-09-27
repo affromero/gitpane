@@ -190,14 +190,6 @@ impl Component for RepoList {
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         match action {
-            Action::SelectNextRepo => {
-                self.select_next();
-                Ok(self.emit_selection_action())
-            }
-            Action::SelectPrevRepo => {
-                self.select_prev();
-                Ok(self.emit_selection_action())
-            }
             Action::RepoStatusUpdated { ref id, ref status } => {
                 if let Some(idx) = self.resolve_index(id) {
                     self.update_status(idx, status.clone());

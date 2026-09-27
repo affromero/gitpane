@@ -337,11 +337,6 @@ impl Config {
         Self::load_with_env(&RealEnv)
     }
 
-    #[allow(dead_code)]
-    pub fn config_path() -> PathBuf {
-        default_write_path(&RealEnv).unwrap_or_else(|| PathBuf::from("config.toml"))
-    }
-
     pub fn save(&mut self) -> Result<()> {
         // A test that saves without an explicit target would silently
         // overwrite the developer's real config (this happened: app tests

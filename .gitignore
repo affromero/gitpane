@@ -4,3 +4,6 @@
 package-lock.json
 .claude/
 lcov.info
+
+# Local dead-code scanner reports
+.maintenance-reports/

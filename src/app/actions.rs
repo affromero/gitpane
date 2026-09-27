@@ -321,9 +321,6 @@ impl App {
                 }
                 self.focus = FocusPanel::Graph;
             }
-            Action::ShowFileList => {
-                self.focus = FocusPanel::Changes;
-            }
             Action::OpenSelected => {
                 if let Some(path) = self.selected_launch_path() {
                     self.launch_open(path, tui)?;

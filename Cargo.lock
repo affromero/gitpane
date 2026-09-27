@@ -958,7 +958,6 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "strum",
  "tempfile",
  "tokio",
  "tokio-util",

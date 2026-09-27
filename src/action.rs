@@ -3,14 +3,11 @@ use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) enum Action {
     Tick,
     Render,
     Quit,
     Resize(u16, u16),
-    SelectNextRepo,
-    SelectPrevRepo,
     SelectRepo(RepoId),
     /// Update the file list and graph to a repo's data without moving the
     /// list-row selection. Used when a child row (stash entry) is highlighted.
@@ -46,7 +43,6 @@ pub(crate) enum Action {
     /// Remote fetch poll (no spinner)
     PollFetch,
     ShowGitGraph,
-    ShowFileList,
     /// Open the highlighted repo (or worktree) in a new tmux pane, or the
     /// configured `[open] command`. Resolves the selection in-app, like
     /// `ShowGitGraph`, so it carries no payload.
