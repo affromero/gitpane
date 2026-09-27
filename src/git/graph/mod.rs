@@ -112,8 +112,11 @@ pub(crate) struct DiffStat {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct GraphRow {
+    #[allow(
+        dead_code,
+        reason = "Graph layout tests verify the selected commit lane"
+    )]
     pub commit_col: usize,
     pub lanes: Vec<LaneSegment>,
     pub oid: Oid,

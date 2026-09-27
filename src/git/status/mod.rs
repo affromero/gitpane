@@ -188,8 +188,11 @@ pub(crate) struct SubmoduleWarn {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct WorktreeEntry {
+    #[allow(
+        dead_code,
+        reason = "Preserves the worktree identity returned by status queries"
+    )]
     pub name: String,
     pub path: PathBuf,
     pub branch: String,
@@ -202,14 +205,22 @@ pub(crate) struct WorktreeEntry {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct SubmoduleInfo {
+    #[allow(
+        dead_code,
+        reason = "Preserves the submodule identity returned by status queries"
+    )]
     pub name: String,
     pub path: PathBuf,
     pub state: Option<SubmoduleState>,
+    #[allow(
+        dead_code,
+        reason = "Status tests verify the classified submodule head"
+    )]
     pub head: Option<SubmoduleHead>,
     pub head_oid: Option<String>,
     pub workdir_oid: Option<String>,
+    #[allow(dead_code, reason = "Status tests verify warning aggregation")]
     pub warn: SubmoduleWarn,
 }
 

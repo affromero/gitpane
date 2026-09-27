@@ -738,3 +738,13 @@ src/
 ## License
 
 [MIT](LICENSE)
+
+## Dead-code checks
+
+The `Dead code` workflow runs on pull requests, main-branch pushes, and weekly.
+It uses the pinned [shared maintenance action](https://github.com/affromero/repo-maintenance)
+to reject new findings, stale reviewed exceptions, and scanner failures. Reports
+are attached to each workflow run. Dependabot updates the shared action.
+
+Cargo dependency checks complement the compiler, Clippy, and behavioral tests.
+Keep dead-code allowances scoped to individual retained contracts.

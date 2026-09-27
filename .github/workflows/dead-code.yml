@@ -1,0 +1,24 @@
+name: Dead code
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 9 * * 2'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dead-code-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dead-code:
+    name: Dead code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: affromero/repo-maintenance@bf4eb3bcd4bfbf54ddc8d4df2b67a7bcd6b2f65a # v1.0.2
+        with:
+          rust-paths: '.'

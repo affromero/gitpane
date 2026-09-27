@@ -24,7 +24,6 @@ color-eyre = "0.6"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
-strum = { version = "0.28", features = ["derive"] }
 directories = "6"
 futures = "0.3"
 tracing = "0.1"

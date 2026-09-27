@@ -21,7 +21,6 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
 
-#[allow(dead_code)]
 pub(crate) trait Component {
     fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> Result<()> {
         Ok(())
