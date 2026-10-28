@@ -1,0 +1,42 @@
+{
+  "name": "gitpane-explorer",
+  "displayName": "Gitpane Explorer",
+  "description": "See changes across Gitpane repositories in the Explorer.",
+  "version": "0.0.1",
+  "publisher": "gitpane",
+  "license": "MIT",
+  "engines": { "vscode": "^1.96.0" },
+  "main": "./src/extension.js",
+  "extensionKind": ["workspace"],
+  "extensionDependencies": ["vscode.git"],
+  "categories": ["SCM Providers"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": { "supported": false }
+  },
+  "activationEvents": ["onView:gitpane.repositories"],
+  "contributes": {
+    "views": {
+      "explorer": [{ "id": "gitpane.repositories", "name": "Gitpane" }]
+    },
+    "commands": [
+      { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
+      { "command": "gitpane.openChange", "title": "Gitpane: Open Change" }
+    ],
+    "menus": {
+      "view/title": [{ "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
+    },
+    "configuration": {
+      "title": "Gitpane",
+      "properties": {
+        "gitpane.executable": {
+          "type": "string",
+          "default": "gitpane",
+          "scope": "machine",
+          "description": "Path to the Gitpane executable on the workspace host."
+        }
+      }
+    }
+  },
+  "scripts": { "test": "node --test test/*.test.js" }
+}
