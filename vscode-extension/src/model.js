@@ -21,6 +21,14 @@ function groups(state) {
   ].filter(group => group.changes.length);
 }
 
+function changedFileCount(changeGroups) {
+  const files = new Set();
+  for (const group of changeGroups) {
+    for (const change of group.changes) files.add(change.uri.toString());
+  }
+  return files.size;
+}
+
 function statusLabel(status) {
   if ([Status.INDEX_ADDED, Status.INTENT_TO_ADD].includes(status)) return 'A';
   if ([Status.INDEX_DELETED, Status.DELETED].includes(status)) return 'D';
@@ -53,16 +61,6 @@ function comparison(group, change) {
   };
 }
 
-function parseDiscovery(text, isAbsolute) {
-  let result;
-  try { result = JSON.parse(text); } catch { throw new Error('Gitpane returned invalid discovery JSON.'); }
-  if (!result || result.version !== 1 || !Array.isArray(result.repositories) ||
-      result.repositories.some(value => typeof value !== 'string' || !isAbsolute(value))) {
-    throw new Error('Gitpane returned an unsupported discovery result.');
-  }
-  return [...new Set(result.repositories)];
-}
-
 function sameOrInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -75,12 +73,11 @@ function canonicalPath(value) {
   return process.platform === 'win32' ? result.toLowerCase() : result;
 }
 
-function visibleRepository(repoPath, discovered, worktrees, workspacePaths) {
-  const canonical = canonicalPath(repoPath);
-  if (discovered.has(canonical) || worktrees.has(canonical)) return true;
+function visibleRepository(repoPath, workspacePaths, identify = canonicalPath) {
+  const canonical = identify(repoPath);
   return workspacePaths.some(value => {
-    const workspace = canonicalPath(value);
-    return sameOrInside(workspace, canonical) || sameOrInside(canonical, workspace);
+    const workspace = identify(value);
+    return sameOrInside(workspace, canonical);
   });
 }
 
@@ -91,4 +88,4 @@ function isSubmodule(repoPath, filePath, submodules) {
   });
 }
 
-module.exports = { Status, canonicalPath, comparison, groups, isSubmodule, parseDiscovery, statusLabel, visibleRepository };
+module.exports = { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, statusLabel, visibleRepository };

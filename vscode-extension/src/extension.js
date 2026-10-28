@@ -2,11 +2,8 @@
 
 const vscode = require('vscode');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
-const { canonicalPath, comparison, groups, isSubmodule, parseDiscovery, statusLabel, visibleRepository } = require('./model');
-
-const execute = promisify(execFile);
+const { randomUUID } = require('node:crypto');
+const { canonicalPath, changedFileCount, comparison, groups, isSubmodule, statusLabel, visibleRepository } = require('./model');
 
 async function parallel(items, limit, action) {
   let next = 0;
@@ -25,123 +22,201 @@ class RepositoryTree {
     this.emitter = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.emitter.event;
     this.listeners = new Map();
-    this.errors = [];
+    this.identities = new Map();
+    this.groupCache = new Map();
+    this.workspacePaths = [];
+    this.changeTimer = undefined;
+    this.pollError = undefined;
     this.failedStatuses = new Set();
-    this.discovered = new Set();
-    this.worktrees = new Set();
+    this.statusErrors = new Map();
     this.busy = false;
     this.pending = false;
     this.disposed = false;
+    this.visible = false;
+    this.pollTimer = undefined;
+    this.pollPromise = undefined;
+    this.refreshTimer = undefined;
     this.subscriptions = [
-      git.onDidOpenRepository(repo => { this.observe(repo); this.changed(); }),
-      git.onDidCloseRepository(repo => { this.unobserve(repo); this.changed(); })
+      git.onDidOpenRepository(repo => {
+        this.identities.delete(repo.rootUri.fsPath);
+        this.observe(repo);
+        if (this.isVisible(repo)) this.scheduleRefresh();
+      }),
+      git.onDidCloseRepository(repo => {
+        const wasVisible = this.isVisible(repo);
+        this.unobserve(repo);
+        this.identities.delete(repo.rootUri.fsPath);
+        if (wasVisible) this.scheduleChanged();
+      }),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this.identities.clear();
+        this.updateWorkspacePaths();
+        this.changed();
+        this.refresh().catch(error => {
+          this.fail(`Could not refresh repository status: ${error.message}`);
+          this.changed();
+        });
+      })
     ];
+    this.updateWorkspacePaths();
     for (const repo of git.repositories) this.observe(repo);
   }
 
   observe(repo) {
     const key = repo.rootUri.toString();
     if (this.listeners.has(key)) return;
-    this.listeners.set(key, repo.state.onDidChange(() => this.changed()));
+    this.listeners.set(key, repo.state.onDidChange(() => {
+      this.groupCache.delete(key);
+      if (this.isVisible(repo)) this.scheduleChanged();
+    }));
   }
 
   unobserve(repo) {
     const key = repo.rootUri.toString();
     this.listeners.get(key)?.dispose();
     this.listeners.delete(key);
+    this.groupCache.delete(key);
+    this.failedStatuses.delete(key);
+    this.statusErrors.delete(key);
   }
 
   changed() {
     if (!this.disposed) this.emitter.fire();
   }
 
+  scheduleChanged() {
+    if (this.disposed || this.changeTimer !== undefined) return;
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = undefined;
+      this.changed();
+    }, 50);
+  }
+
+  scheduleRefresh() {
+    if (this.disposed || this.refreshTimer !== undefined) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      this.refresh().catch(error => {
+        this.fail(`Could not refresh repository status: ${error.message}`);
+        this.changed();
+      });
+    }, 100);
+  }
+
+  identify(value) {
+    if (!this.identities.has(value)) this.identities.set(value, canonicalPath(value));
+    return this.identities.get(value);
+  }
+
+  updateWorkspacePaths() {
+    this.workspacePaths = (vscode.workspace.workspaceFolders || [])
+      .filter(folder => folder.uri.scheme === 'file').map(folder => this.identify(folder.uri.fsPath));
+  }
+
+  groupsFor(repo) {
+    const key = repo.rootUri.toString();
+    if (!this.groupCache.has(key)) this.groupCache.set(key, groups(repo.state));
+    return this.groupCache.get(key);
+  }
+
   fail(message) {
-    this.errors.push(message);
-    this.output.appendLine(message);
+    if (this.pollError !== message) this.output.appendLine(message);
+    this.pollError = message;
+  }
+
+  statusFailed(repo, error) {
+    if (this.disposed) return;
+    const key = repo.rootUri.toString();
+    const message = `Could not refresh ${repo.rootUri.fsPath}: ${error.message}`;
+    if (this.statusErrors.get(key) !== message) this.output.appendLine(message);
+    this.statusErrors.set(key, message);
+    this.failedStatuses.add(key);
+  }
+
+  statusSucceeded(repo) {
+    if (this.disposed) return;
+    const key = repo.rootUri.toString();
+    this.statusErrors.delete(key);
+    this.failedStatuses.delete(key);
+    this.groupCache.delete(key);
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    if (!visible && this.pollTimer !== undefined) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    if (visible) this.schedulePoll();
+  }
+
+  schedulePoll() {
+    if (this.disposed || !this.visible || this.pollTimer !== undefined || this.pollPromise) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = undefined;
+      this.pollPromise = this.reconcile().catch(error => {
+        this.fail(`Could not refresh repository status: ${error.message}`);
+        this.changed();
+      });
+      this.pollPromise.finally(() => {
+        this.pollPromise = undefined;
+        this.schedulePoll();
+      });
+    }, 5000);
+  }
+
+  async reconcile() {
+    if (this.busy || this.disposed || !this.visible) return;
+    const repos = this.git.repositories.filter(repo => this.isVisible(repo));
+    await parallel(repos, 4, async repo => {
+      if (this.disposed || !this.visible || !this.isVisible(repo)) return;
+      try {
+        await repo.status();
+        this.statusSucceeded(repo);
+      } catch (error) {
+        this.statusFailed(repo, error);
+      }
+    });
+    this.pollError = undefined;
+    this.scheduleChanged();
   }
 
   isVisible(repo) {
-    const workspacePaths = (vscode.workspace.workspaceFolders || [])
-      .filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath);
-    return visibleRepository(repo.rootUri.fsPath, this.discovered, this.worktrees, workspacePaths);
+    return repo.rootUri.scheme === 'file' && visibleRepository(repo.rootUri.fsPath,
+      this.workspacePaths, value => this.identify(value));
   }
 
   async refresh() {
+    if (this.pollPromise) await this.pollPromise;
     if (this.disposed) return;
     if (this.busy) {
       this.pending = true;
       return;
     }
     this.busy = true;
-    this.errors = [];
+    this.pollError = undefined;
+    this.identities.clear();
+    this.updateWorkspacePaths();
     this.changed();
     try {
-      const executable = vscode.workspace.getConfiguration('gitpane').get('executable', 'gitpane');
-      let discoverySucceeded = false;
-      try {
-        const { stdout } = await execute(executable, ['discover'], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-        this.discovered = new Set(parseDiscovery(stdout, path.isAbsolute).map(canonicalPath));
-        discoverySucceeded = true;
-      } catch (error) {
-        this.fail(`Discovery failed; previous repository list may be stale: ${error.stderr?.trim() || error.message}`);
-      }
-
-      if (discoverySucceeded) this.worktrees = new Set();
-      const opened = new Map(this.git.repositories.filter(repo => this.isVisible(repo)).map(repo => [canonicalPath(repo.rootUri.fsPath), repo]));
-      await parallel([...this.discovered], 4, async repoPath => {
-        if (opened.has(repoPath)) return;
-        try {
-          const repo = await this.git.openRepository(vscode.Uri.file(repoPath));
-          if (!repo || canonicalPath(repo.rootUri.fsPath) !== repoPath) {
-            this.fail(`Could not open repository: ${repoPath}`);
-            return;
-          }
-          opened.set(repoPath, repo);
-          this.observe(repo);
-        } catch (error) {
-          this.fail(`Could not open ${repoPath}: ${error.message}`);
-        }
-      });
-
-      // Ask VS Code to refresh local status before reading its worktree list.
-      await parallel([...opened.values()], 4, async repo => {
+      const repos = this.git.repositories.filter(repo => this.isVisible(repo));
+      await parallel(repos, 4, async repo => {
+        if (this.disposed || !this.isVisible(repo)) return;
         try {
           await repo.status();
-          this.failedStatuses.delete(repo.rootUri.toString());
+          this.statusSucceeded(repo);
         }
         catch (error) {
-          this.failedStatuses.add(repo.rootUri.toString());
-          this.fail(`Could not refresh ${repo.rootUri.fsPath}: ${error.message}`);
+          this.statusFailed(repo, error);
         }
       });
-      const worktrees = discoverySucceeded ? new Set() : new Set(this.worktrees);
-      for (const repo of opened.values()) {
-        for (const worktree of repo.state.worktrees || []) {
-          if (path.isAbsolute(worktree.path)) worktrees.add(canonicalPath(worktree.path));
+      const active = new Set(repos.map(repo => repo.rootUri.toString()));
+      for (const key of this.statusErrors.keys()) {
+        if (!active.has(key)) {
+          this.statusErrors.delete(key);
+          this.failedStatuses.delete(key);
         }
       }
-      this.worktrees = worktrees;
-      await parallel([...worktrees].filter(worktreePath => !opened.has(worktreePath)), 4, async worktreePath => {
-        try {
-          const repo = await this.git.openRepository(vscode.Uri.file(worktreePath));
-          if (!repo || canonicalPath(repo.rootUri.fsPath) !== worktreePath) {
-            this.fail(`Could not open worktree: ${worktreePath}`);
-            return;
-          }
-          opened.set(worktreePath, repo);
-          this.observe(repo);
-          try {
-            await repo.status();
-            this.failedStatuses.delete(repo.rootUri.toString());
-          }
-          catch (error) {
-            this.failedStatuses.add(repo.rootUri.toString());
-            this.fail(`Could not refresh ${worktreePath}: ${error.message}`);
-          }
-        } catch (error) {
-          this.fail(`Could not open worktree ${worktreePath}: ${error.message}`);
-        }
-      });
     } finally {
       this.busy = false;
       this.changed();
@@ -154,63 +229,162 @@ class RepositoryTree {
 
   getChildren(node) {
     if (!node) {
-      const failures = this.errors.map(message => ({ type: 'error', message }));
-      const repos = this.git.repositories.filter(repo => this.isVisible(repo)).sort((a, b) => {
-        const aDirty = groups(a.state).length > 0;
-        const bDirty = groups(b.state).length > 0;
-        return Number(bDirty) - Number(aDirty) || a.rootUri.fsPath.localeCompare(b.rootUri.fsPath);
-      });
+      const failures = [this.pollError, ...this.statusErrors.values()].filter(Boolean).map(message => ({ type: 'error', message }));
+      const repos = this.git.repositories.filter(repo => this.isVisible(repo)).map(repo => ({
+        repo, dirty: this.groupsFor(repo).length > 0
+      })).sort((a, b) => Number(b.dirty) - Number(a.dirty) || a.repo.rootUri.fsPath.localeCompare(b.repo.rootUri.fsPath));
       if (this.busy && !repos.length && !failures.length) return [{ type: 'info', message: 'Loading repositories…' }];
-      if (!repos.length && !failures.length) return [{ type: 'info', message: 'No repositories found' }];
-      return [...failures, ...repos.map(repo => ({ type: 'repo', repo }))];
+      if (!repos.length && !failures.length) return [{ type: 'info', message: this.workspacePaths.length
+        ? 'No repositories found in the workspace' : 'Open a folder or workspace to see repositories' }];
+      const names = new Map();
+      for (const { repo } of repos) {
+        const name = path.basename(repo.rootUri.fsPath);
+        names.set(name, (names.get(name) || 0) + 1);
+      }
+      return [...failures, ...repos.map(({ repo }) => ({ type: 'repo', repo,
+        duplicate: names.get(path.basename(repo.rootUri.fsPath)) > 1 }))];
     }
-    if (node.type === 'repo') return groups(node.repo.state).map(group => ({ type: 'group', repo: node.repo, group }));
+    if (node.type === 'repo') return this.groupsFor(node.repo).map(group => ({ type: 'group', repo: node.repo, group }));
     if (node.type === 'group') return node.group.changes.map(change => ({ type: 'change', repo: node.repo, group: node.group.id, change }));
     return [];
   }
 
-  getTreeItem(node) {
-    if (node.type === 'error' || node.type === 'info') {
-      const item = new vscode.TreeItem(node.message);
-      item.iconPath = new vscode.ThemeIcon(node.type === 'error' ? 'warning' : 'info');
-      item.tooltip = node.message;
-      return item;
-    }
-    const root = node.repo.rootUri.fsPath;
-    if (node.type === 'repo') {
-      const changes = groups(node.repo.state).reduce((total, group) => total + group.changes.length, 0);
-      const item = new vscode.TreeItem(path.basename(root), changes ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-      item.id = `repo:${node.repo.rootUri.toString()}`;
-      const head = node.repo.state.HEAD;
-      const branch = head?.name || (head?.commit ? head.commit.slice(0, 8) : 'unborn');
-      const status = this.failedStatuses.has(node.repo.rootUri.toString()) ? 'status unavailable'
-        : this.busy ? 'refreshing…' : changes ? `${changes} changes` : 'clean';
-      item.description = `${branch} · ${status}`;
-      item.tooltip = root;
-      item.iconPath = new vscode.ThemeIcon('repo');
-      return item;
-    }
-    if (node.type === 'group') {
-      const item = new vscode.TreeItem(node.group.label, vscode.TreeItemCollapsibleState.Expanded);
-      item.id = `group:${node.repo.rootUri.toString()}:${node.group.id}`;
-      item.description = String(node.group.changes.length);
-      return item;
-    }
-    const item = new vscode.TreeItem(path.basename(node.change.uri.fsPath));
-    item.id = `file:${node.repo.rootUri.toString()}:${node.group}:${node.change.uri.toString()}`;
-    item.resourceUri = node.change.uri;
-    const relative = path.relative(root, node.change.uri.fsPath);
-    item.description = `${statusLabel(node.change.status)}  ${path.dirname(relative) === '.' ? '' : path.dirname(relative)}`.trim();
-    item.tooltip = relative;
-    item.command = { command: 'gitpane.openChange', title: 'Open Change', arguments: [node] };
-    return item;
-  }
-
   dispose() {
     this.disposed = true;
+    if (this.changeTimer !== undefined) clearTimeout(this.changeTimer);
+    if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
+    if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);
     for (const subscription of this.subscriptions) subscription.dispose();
     for (const subscription of this.listeners.values()) subscription.dispose();
     this.emitter.dispose();
+  }
+}
+
+class GitpaneViewProvider {
+  constructor(tree, extensionUri) {
+    this.tree = tree;
+    this.extensionUri = extensionUri;
+    this.view = undefined;
+    this.ready = false;
+    this.sessionId = randomUUID();
+    this.nextId = 0;
+    this.ids = new Map();
+    this.changes = new Map();
+    this.viewDisposables = [];
+    this.subscription = tree.onDidChangeTreeData(() => this.publish());
+  }
+
+  idFor(key, live) {
+    live.add(key);
+    if (!this.ids.has(key)) this.ids.set(key, `item-${this.sessionId}-${++this.nextId}`);
+    return this.ids.get(key);
+  }
+
+  snapshot() {
+    const live = new Set();
+    const changes = new Map();
+    const children = this.tree.getChildren();
+    const repositories = children.filter(node => node.type === 'repo').map(node => {
+      const repo = node.repo;
+      const root = repo.rootUri.fsPath;
+      const repoKey = repo.rootUri.toString();
+      const id = this.idFor(JSON.stringify(['repo', repoKey]), live);
+      const head = repo.state.HEAD;
+      const changeGroups = this.tree.getChildren(node);
+      const groupData = changeGroups.map(groupNode => ({
+        id: groupNode.group.id,
+        label: groupNode.group.label,
+        files: this.tree.getChildren(groupNode).map(fileNode => {
+          const change = fileNode.change;
+          const fileId = this.idFor(JSON.stringify(['file', repoKey, groupNode.group.id, change.uri.toString()]), live);
+          changes.set(fileId, fileNode);
+          return { id: fileId, name: path.basename(change.uri.fsPath),
+            path: path.relative(root, change.uri.fsPath), status: statusLabel(change.status) };
+        })
+      }));
+      return {
+        id,
+        name: node.duplicate ? `${path.basename(root)} (${path.dirname(root)})` : path.basename(root),
+        branch: head?.name || (head?.commit ? head.commit.slice(0, 8) : 'unborn'),
+        dirty: changedFileCount(this.tree.groupsFor(repo)) > 0,
+        ahead: head?.ahead || 0,
+        behind: head?.behind || 0,
+        worktree: repo.kind === 'worktree',
+        statusUnavailable: this.tree.failedStatuses.has(repoKey),
+        groups: groupData
+      };
+    });
+    for (const key of this.ids.keys()) if (!live.has(key)) this.ids.delete(key);
+    this.changes = changes;
+    return {
+      type: 'snapshot', repositories,
+      errors: children.filter(node => node.type === 'error').map(node => node.message),
+      emptyMessage: children.find(node => node.type === 'info')?.message,
+      loading: this.tree.busy
+    };
+  }
+
+  publish() {
+    if (!this.view || !this.ready) return;
+    this.view.webview.postMessage(this.snapshot());
+  }
+
+  currentChange(node) {
+    if (!node || !this.tree.isVisible(node.repo)) return undefined;
+    const repoKey = node.repo.rootUri.toString();
+    const repo = this.tree.git.repositories.find(item => item.rootUri.toString() === repoKey);
+    if (!repo) return undefined;
+    const group = this.tree.groupsFor(repo).find(item => item.id === node.group);
+    const change = group?.changes.find(item => item.uri.toString() === node.change.uri.toString());
+    return change ? { type: 'change', repo, group: node.group, change } : undefined;
+  }
+
+  resolveWebviewView(view) {
+    for (const disposable of this.viewDisposables) disposable.dispose();
+    this.viewDisposables = [];
+    this.view = view;
+    this.ready = false;
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src', 'webview')]
+    };
+    const { getHtml } = require('./webview/html');
+    view.webview.html = getHtml(view.webview, this.extensionUri);
+    this.tree.setVisible(view.visible);
+    this.viewDisposables.push(
+      view.webview.onDidReceiveMessage(async message => {
+        if (message?.type === 'ready') {
+          this.ready = true;
+          this.publish();
+        } else if (message?.type === 'refresh') {
+          try { await this.tree.refresh(); }
+          catch (error) {
+            this.tree.fail(`Could not refresh repository status: ${error.message}`);
+            this.tree.changed();
+          }
+        } else if (message?.type === 'openChange' && typeof message.id === 'string') {
+          const node = this.currentChange(this.changes.get(message.id));
+          if (node) await vscode.commands.executeCommand('gitpane.openChange', node);
+        }
+      }),
+      view.onDidChangeVisibility(() => this.tree.setVisible(view.visible)),
+      view.onDidDispose(() => {
+        if (this.view !== view) return;
+        this.tree.setVisible(false);
+        this.view = undefined;
+        this.ready = false;
+        this.changes.clear();
+      })
+    );
+  }
+
+  dispose() {
+    this.tree.setVisible(false);
+    this.subscription.dispose();
+    for (const disposable of this.viewDisposables) disposable.dispose();
+    this.viewDisposables = [];
+    this.view = undefined;
+    this.changes.clear();
   }
 }
 
@@ -229,8 +403,9 @@ async function activate(context) {
   }
   const api = git.getAPI(1);
   const tree = new RepositoryTree(api, output);
-  const view = vscode.window.createTreeView('gitpane.repositories', { treeDataProvider: tree });
-  context.subscriptions.push(tree, view,
+  const provider = new GitpaneViewProvider(tree, context.extensionUri);
+  context.subscriptions.push(tree, provider,
+    vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.commands.registerCommand('gitpane.refresh', () => tree.refresh()),
     vscode.commands.registerCommand('gitpane.openChange', async node => {
@@ -240,6 +415,8 @@ async function activate(context) {
         }
         const plan = comparison(node.group, node.change);
         if (plan.open) {
+          try { await vscode.workspace.fs.stat(plan.open); }
+          catch (error) { throw new Error(`Conflict file is unavailable: ${error.message}`); }
           await vscode.commands.executeCommand('vscode.open', plan.open);
           return;
         }
@@ -251,13 +428,9 @@ async function activate(context) {
         output.appendLine(`Could not open change: ${error.message}`);
         vscode.window.showErrorMessage(`Gitpane could not open the change: ${error.message}`);
       }
-    }),
-    vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('gitpane.executable')) tree.refresh();
-    }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh())
+    })
   );
   await tree.refresh();
 }
 
-module.exports = { activate, RepositoryTree };
+module.exports = { activate, GitpaneViewProvider, RepositoryTree };

@@ -5,7 +5,9 @@
   "version": "0.0.1",
   "publisher": "gitpane",
   "license": "MIT",
-  "engines": { "vscode": "^1.96.0" },
+  "repository": { "type": "git", "url": "https://github.com/affromero/gitpane.git" },
+  "files": ["src/**", "README.md", "LICENSE"],
+  "engines": { "vscode": "^1.111.0" },
   "main": "./src/extension.js",
   "extensionKind": ["workspace"],
   "extensionDependencies": ["vscode.git"],
@@ -17,7 +19,7 @@
   "activationEvents": ["onView:gitpane.repositories"],
   "contributes": {
     "views": {
-      "explorer": [{ "id": "gitpane.repositories", "name": "Gitpane" }]
+      "explorer": [{ "id": "gitpane.repositories", "name": "Gitpane", "type": "webview" }]
     },
     "commands": [
       { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
@@ -25,17 +27,6 @@
     ],
     "menus": {
       "view/title": [{ "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
-    },
-    "configuration": {
-      "title": "Gitpane",
-      "properties": {
-        "gitpane.executable": {
-          "type": "string",
-          "default": "gitpane",
-          "scope": "machine",
-          "description": "Path to the Gitpane executable on the workspace host."
-        }
-      }
     }
   },
   "scripts": { "test": "node --test test/*.test.js" }

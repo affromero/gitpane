@@ -53,8 +53,6 @@ enum Command {
     /// Print configuration and workspace diagnostics
     #[command(alias = "diagnostics")]
     Diagnostic,
-    /// List discovered repositories as a versioned JSON document
-    Discover,
 }
 
 /// Run the app on an explicitly-owned multi-thread runtime, then drop it
@@ -153,7 +151,6 @@ async fn run() -> Result<()> {
         Some(Command::Diagnostic) => {
             return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
         }
-        Some(Command::Discover) => return run_discovery(cli.root, cli.cwd),
         None => {}
     }
     install_tracing()?;
@@ -279,31 +276,6 @@ fn run_diagnostic(root: Option<PathBuf>, cwd: bool, theme_override: Option<&str>
     Ok(())
 }
 
-fn run_discovery(root: Option<PathBuf>, cwd: bool) -> Result<()> {
-    let mut config = config::Config::load()?;
-    if let Some(root) = root {
-        config.override_root(root);
-    }
-    if cwd {
-        config.override_root(std::env::current_dir()?);
-    }
-    println!("{}", discovery_json(&config)?);
-    Ok(())
-}
-
-fn discovery_json(config: &config::Config) -> Result<String> {
-    #[derive(serde::Serialize)]
-    struct Discovery {
-        version: u8,
-        repositories: Vec<PathBuf>,
-    }
-
-    Ok(serde_json::to_string(&Discovery {
-        version: 1,
-        repositories: git::scanner::discover_repos(config),
-    })?)
-}
-
 fn self_update() -> Result<()> {
     let base = env!("CARGO_PKG_VERSION");
     println!("gitpane v{} — checking for updates...", gitpane::VERSION);
@@ -389,64 +361,5 @@ mod tests {
         let cli = Cli::try_parse_from(["gitpane", "--root", "~/Code", "--cwd"]).unwrap();
         assert_eq!(cli.root, Some(PathBuf::from("~/Code")));
         assert!(cli.cwd);
-    }
-
-    #[test]
-    fn discover_reports_configured_repositories_as_versioned_json() {
-        let temporary = tempfile::tempdir().unwrap();
-        let scan_root = temporary.path().join("scan root");
-        let included = scan_root.join("project with spaces");
-        let excluded = scan_root.join("excluded-project");
-        let pinned = temporary.path().join("pinned-project");
-        for path in [&included, &excluded, &pinned] {
-            std::fs::create_dir_all(path).unwrap();
-            git2::Repository::init(path).unwrap();
-        }
-
-        let config = config::Config {
-            root_dirs: vec![scan_root],
-            pinned_repos: vec![pinned.clone()],
-            excluded_repos: vec!["excluded-project".into()],
-            ..config::Config::default()
-        };
-        let output: serde_json::Value =
-            serde_json::from_str(&discovery_json(&config).unwrap()).unwrap();
-        assert_eq!(output["version"], 1);
-        let mut repositories: Vec<PathBuf> =
-            serde_json::from_value(output["repositories"].clone()).unwrap();
-        repositories.sort();
-        let mut expected = vec![
-            included.canonicalize().unwrap(),
-            pinned.canonicalize().unwrap(),
-        ];
-        expected.sort();
-        assert_eq!(repositories, expected);
-    }
-
-    #[test]
-    fn discover_accepts_run_local_root_options() {
-        let cli = Cli::try_parse_from(["gitpane", "--root", "/tmp/example", "--cwd", "discover"])
-            .unwrap();
-        assert_eq!(cli.root, Some(PathBuf::from("/tmp/example")));
-        assert!(cli.cwd);
-        assert!(matches!(cli.command, Some(Command::Discover)));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn discover_rejects_paths_that_cannot_be_represented_in_json() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let temporary = tempfile::tempdir().unwrap();
-        let name = std::ffi::OsString::from_vec(vec![b'r', 0xff]);
-        let dot_git = temporary.path().join(name).join(".git");
-        std::fs::create_dir_all(&dot_git).unwrap();
-        std::fs::write(dot_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let config = config::Config {
-            root_dirs: vec![temporary.path().to_path_buf()],
-            ..config::Config::default()
-        };
-
-        assert!(discovery_json(&config).is_err());
     }
 }

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { Status, canonicalPath, comparison, groups, isSubmodule, parseDiscovery, visibleRepository } = require('../src/model');
+const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, visibleRepository } = require('../src/model');
 
 test('changed files retain their staged and unstaged groups', () => {
   const staged = { status: Status.INDEX_MODIFIED, uri: 'file' };
@@ -15,6 +15,7 @@ test('changed files retain their staged and unstaged groups', () => {
   assert.deepEqual(result.map(group => [group.label, group.changes.map(c => c.uri)]), [
     ['Staged', ['file']], ['Unstaged', ['file']], ['Untracked', ['new']]
   ]);
+  assert.equal(changedFileCount(result), 2);
 });
 
 test('comparisons preserve staged, working, rename, addition and deletion sides', () => {
@@ -33,25 +34,14 @@ test('comparisons preserve staged, working, rename, addition and deletion sides'
   assert.deepEqual(comparison('merge', { uri: 'conflict' }), { open: 'conflict' });
 });
 
-test('discovery accepts absolute paths and rejects malformed or incompatible output', () => {
-  const repo = path.resolve('repo with spaces');
-  assert.deepEqual(parseDiscovery(JSON.stringify({ version: 1, repositories: [repo, repo] }), path.isAbsolute), [repo]);
-  for (const output of ['not json', '{"version":2,"repositories":[]}', '{"version":1,"repositories":["relative"]}']) {
-    assert.throws(() => parseDiscovery(output, path.isAbsolute));
-  }
-});
-
-test('repository visibility follows discovery, linked worktrees and workspace boundaries', () => {
+test('repository visibility stays within workspace boundaries', () => {
   const base = path.resolve('workspace');
-  const discovered = new Set([path.join(base, 'discovered')]);
-  const worktrees = new Set([path.join(base, 'worktree')]);
   const workspace = [path.join(base, 'open')];
-  assert.equal(visibleRepository(path.join(base, 'discovered'), discovered, worktrees, workspace), true);
-  assert.equal(visibleRepository(path.join(base, 'worktree'), discovered, worktrees, workspace), true);
-  assert.equal(visibleRepository(path.join(base, 'open', 'nested'), discovered, worktrees, workspace), true);
-  assert.equal(visibleRepository(base, discovered, worktrees, workspace), true);
-  assert.equal(visibleRepository(path.join(base, 'discovered-other'), discovered, worktrees, workspace), false);
-  assert.equal(visibleRepository(path.join(base, 'removed'), discovered, worktrees, workspace), false);
+  assert.equal(visibleRepository(path.join(base, 'open'), workspace), true);
+  assert.equal(visibleRepository(path.join(base, 'open', 'nested'), workspace), true);
+  assert.equal(visibleRepository(base, workspace), false);
+  assert.equal(visibleRepository(path.join(base, 'open-other'), workspace), false);
+  assert.equal(visibleRepository(path.join(base, 'removed'), workspace), false);
 });
 
 test('submodule detection targets the submodule entry, not its neighboring files', () => {
@@ -62,7 +52,7 @@ test('submodule detection targets the submodule entry, not its neighboring files
   assert.equal(isSubmodule(root, path.join(root, 'vendor/module/file'), modules), false);
 });
 
-test('repository aliases resolve to the same discovered checkout', t => {
+test('repository aliases resolve to the same workspace checkout', t => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-alias-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const repo = path.join(temporary, 'repo');
@@ -74,5 +64,5 @@ test('repository aliases resolve to the same discovered checkout', t => {
     t.skip(`Could not create directory junction: ${error.message}`);
     return;
   }
-  assert.equal(visibleRepository(alias, new Set([canonicalPath(repo)]), new Set(), []), true);
+  assert.equal(visibleRepository(alias, [canonicalPath(repo)]), true);
 });
