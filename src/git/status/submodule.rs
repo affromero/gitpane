@@ -410,6 +410,23 @@ pub(super) struct ChildObservation {
     pub(super) head_oid: Option<git2::Oid>,
 }
 
+pub(super) fn diff_submodule_ignore(
+    repo: &Repository,
+) -> Result<git2::SubmoduleIgnore, git2::Error> {
+    let config = repo.config()?;
+    match config.get_entry("diff.ignoresubmodules") {
+        // libgit2 resets an invalid diff-level value to None and clears its
+        // parse error. Registration-level settings remain validated.
+        Ok(entry) if !entry.has_value() => Ok(git2::SubmoduleIgnore::All),
+        Ok(entry) => Ok(registration_setting(b"ignore", Some(entry.value_bytes()))
+            .unwrap_or(git2::SubmoduleIgnore::None)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            Ok(git2::SubmoduleIgnore::Unspecified)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Inspect an already opened checkout independently of the parent's
 /// submodule cache. Match Git's separate child index/workdir dirty signals.
 pub(super) fn observe_child(
@@ -417,7 +434,34 @@ pub(super) fn observe_child(
     recorded: Option<git2::Oid>,
     ignore: git2::SubmoduleIgnore,
 ) -> Result<ChildObservation, git2::Error> {
+    observe_child_inner(
+        child,
+        recorded,
+        ignore,
+        0,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+fn observe_child_inner(
+    child: &Repository,
+    recorded: Option<git2::Oid>,
+    ignore: git2::SubmoduleIgnore,
+    depth: usize,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) -> Result<ChildObservation, git2::Error> {
     use git2::{DiffOptions, SubmoduleIgnore, SubmoduleStatus};
+    let root = child
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("Submodule has no working tree"))?;
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| git2::Error::from_str(&error.to_string()))?;
+    if depth >= 32 || seen.len() >= 1024 || !seen.insert(canonical) {
+        return Err(git2::Error::from_str(
+            "Submodule nesting exceeds the inspection limit",
+        ));
+    }
     let head = match child.head().and_then(|head| head.peel_to_commit()) {
         Ok(head) => Some(head),
         Err(error)
@@ -458,6 +502,7 @@ pub(super) fn observe_child(
             status |= SubmoduleStatus::WD_INDEX_MODIFIED;
         }
     }
+    options.ignore_submodules(true);
     let working = child.diff_index_to_workdir(Some(&index), Some(&mut options))?;
     for delta in working.deltas() {
         if delta.status() == git2::Delta::Untracked {
@@ -466,7 +511,86 @@ pub(super) fn observe_child(
             status |= SubmoduleStatus::WD_WD_MODIFIED;
         }
     }
+    // A raw diff observes entries themselves. Inspect registered child
+    // checkouts explicitly rather than letting libgit2 populate its cache
+    // by following every registered working-tree path.
+    let diff_ignore = diff_submodule_ignore(child)?;
+    for nested in submodule_registrations(child)? {
+        let nested_ignore = if diff_ignore == SubmoduleIgnore::Unspecified {
+            nested.ignore
+        } else {
+            diff_ignore
+        };
+        if nested.index_oid.is_none() || nested_ignore == SubmoduleIgnore::All {
+            continue;
+        }
+        if nested.path.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) || !nested
+            .path
+            .components()
+            .any(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(git2::Error::from_str(
+                "Submodule path must remain inside its parent",
+            ));
+        }
+        let path = root.join(&nested.path);
+        if path
+            .symlink_metadata()
+            .is_ok_and(|entry| entry.file_type().is_symlink())
+            || regular_submodule_blocker(&path)
+                .map_err(|error| git2::Error::from_str(&error.to_string()))?
+                .is_some()
+        {
+            continue;
+        }
+        match path.join(".git").symlink_metadata() {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(git2::Error::from_str(&error.to_string())),
+        }
+        let repository = Repository::open(&path)?;
+        let actual = repository
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("Submodule has no working tree"))?
+            .canonicalize()
+            .map_err(|error| git2::Error::from_str(&error.to_string()))?;
+        let expected = path
+            .canonicalize()
+            .map_err(|error| git2::Error::from_str(&error.to_string()))?;
+        if actual != expected {
+            return Err(git2::Error::from_str(
+                "Submodule path does not identify its own repository",
+            ));
+        }
+        let observation = observe_child_inner(
+            &repository,
+            nested.index_oid,
+            nested_ignore,
+            depth + 1,
+            seen,
+        )?;
+        if working_submodule_modified(observation.status) {
+            status |= SubmoduleStatus::WD_WD_MODIFIED;
+        }
+    }
     Ok(ChildObservation { status, head_oid })
+}
+
+pub(super) fn working_submodule_modified(status: git2::SubmoduleStatus) -> bool {
+    use git2::SubmoduleStatus;
+    status.intersects(
+        SubmoduleStatus::WD_ADDED
+            | SubmoduleStatus::WD_DELETED
+            | SubmoduleStatus::WD_MODIFIED
+            | SubmoduleStatus::WD_INDEX_MODIFIED
+            | SubmoduleStatus::WD_WD_MODIFIED
+            | SubmoduleStatus::WD_UNTRACKED,
+    )
 }
 
 /// Observe a validated child using the parent's staged pointer. Keeping this

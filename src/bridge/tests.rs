@@ -97,14 +97,8 @@ fn status_validates_nested_submodule_scope_and_reports_corrupt_child_index() {
     }
     symlink(&nested_source, &nested).unwrap();
     let result = exchange(&requests);
-    assert_eq!(
-        result[1]["error"]["code"], "outside_workspace",
-        "{result:?}"
-    );
-    assert_eq!(
-        result[2]["error"]["code"], "outside_workspace",
-        "{result:?}"
-    );
+    assert!(result[1].get("result").is_some(), "{result:?}");
+    assert!(result[2].get("result").is_some(), "{result:?}");
     std::fs::remove_file(&nested).unwrap();
 
     let child = Repository::open(&child_path).unwrap();
@@ -903,7 +897,7 @@ fn symlinks_cannot_make_an_outside_repository_part_of_a_workspace() {
 
 #[cfg(unix)]
 #[test]
-fn status_rejects_submodules_outside_workspace_and_accepts_missing_inside() {
+fn status_accepts_missing_and_replaced_submodules_inside_workspace() {
     let temporary = TempDir::new().unwrap();
     let workspace = temporary.path().join("workspace");
     let repo_path = workspace.join("repo");
@@ -931,7 +925,7 @@ fn status_rejects_submodules_outside_workspace_and_accepts_missing_inside() {
     )
     .unwrap();
     let replies = exchange(&requests);
-    assert_eq!(replies[1]["error"]["code"], "outside_workspace");
+    assert!(replies[1].get("result").is_some(), "{replies:?}");
 }
 
 #[test]

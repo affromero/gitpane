@@ -6,7 +6,10 @@ use serde::Serialize;
 
 use crate::config::SubmoduleConfig;
 
-use super::change_summary::{collect_submodule_infos, status_options};
+use super::change_summary::{
+    collect_submodule_observations, status_options, working_diff, working_status,
+};
+use super::submodule::working_submodule_modified;
 use super::{SubmoduleHead, SubmoduleInfo, SubmoduleState, SubmoduleWarn};
 
 #[derive(Debug, Serialize)]
@@ -383,20 +386,15 @@ pub(crate) fn collect_changes(
     // Keep worktree renames as the deletion and untracked addition Git's
     // file actions operate on. Staged rename detection remains enabled.
     require_head(repo, baseline)?;
-    let show = if sub_cfg.ignore_dirty {
-        git2::StatusShow::IndexAndWorkdir
-    } else {
-        git2::StatusShow::Workdir
-    };
-    let statuses = captured_statuses(repo, sub_cfg, show)?;
-    for entry in statuses.iter() {
-        let status = entry.status();
-        if status.is_conflicted() {
-            continue;
-        }
-        // Ignore rules apply to the paired deltas. A non-gitlink type change
-        // can retain the staged side even when a pure gitlink is hidden.
-        if sub_cfg.ignore_dirty {
+    if sub_cfg.ignore_dirty {
+        let statuses = captured_statuses(repo, sub_cfg, git2::StatusShow::IndexAndWorkdir)?;
+        for entry in statuses.iter() {
+            let status = entry.status();
+            if status.is_conflicted() {
+                continue;
+            }
+            // Ignore rules apply to the paired deltas. A non-gitlink type change
+            // can retain the staged side even when a pure gitlink is hidden.
             add_index(
                 status,
                 entry.head_to_index(),
@@ -405,26 +403,66 @@ pub(crate) fn collect_changes(
                 max_records,
                 &submodules,
             )?;
+            add_working(
+                status,
+                entry.index_to_workdir(),
+                &index,
+                &mut records,
+                max_records,
+                &submodules,
+            )?;
         }
-        add_working(
-            status,
-            entry.index_to_workdir(),
-            &index,
-            &mut records,
-            max_records,
-            &submodules,
-        )?;
+    } else {
+        for delta in working_diff(repo, &index, true)?.deltas() {
+            let status = working_status(&delta);
+            if !status.is_conflicted() {
+                add_working(
+                    status,
+                    Some(delta),
+                    &index,
+                    &mut records,
+                    max_records,
+                    &submodules,
+                )?;
+            }
+        }
     }
     if !submodules.is_empty() {
         let workdir = repo.workdir().ok_or_else(|| {
             ChangeError::Repository("Repository has no working directory.".to_owned())
         })?;
-        let modules = collect_submodule_infos(repo, workdir, sub_cfg, true)
+        let modules = collect_submodule_observations(repo, workdir, sub_cfg, true)
             .map_err(|error| ChangeError::Repository(error.to_string()))?;
+        let mut working_paths: HashSet<_> = records
+            .iter()
+            .filter(|record| matches!(record.group, "working" | "untracked" | "merge"))
+            .map(|record| record.path.clone())
+            .collect();
         let mut details = HashMap::with_capacity(modules.len());
         for module in &modules {
             let path = path_string(&module.path)?;
-            details.insert(path, SubmoduleDetails::from(module));
+            if !sub_cfg.ignore_dirty
+                && module.in_index
+                && working_submodule_modified(module.status)
+                && working_paths.insert(path.clone())
+            {
+                add(
+                    &mut records,
+                    max_records,
+                    ChangeRecord {
+                        path: path.clone(),
+                        group: "working",
+                        kind: "working_modified",
+                        original_path: None,
+                        conflict_stages: None,
+                        is_submodule: true,
+                        submodule: None,
+                    },
+                )?;
+            }
+            if let Some(info) = &module.details {
+                details.insert(path, SubmoduleDetails::from(info));
+            }
         }
         let mut changed_paths = HashSet::new();
         for record in &mut records {

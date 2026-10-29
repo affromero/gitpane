@@ -36,7 +36,7 @@ impl Snapshots {
         }
         self.expire();
         let repo = scope.repository(&input.repo)?;
-        scope.validate_submodules(&repo)?;
+        scope.validate_status_submodules(&repo)?;
         let snapshot = self.current(&repo, &input.snapshot)?;
 
         let query = input.query.to_lowercase();

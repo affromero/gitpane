@@ -252,6 +252,45 @@ impl Scope {
         self.submodule_repositories(path).map(|_| ())
     }
 
+    pub(super) fn validate_status_submodules(&self, path: &Path) -> Result<(), BridgeError> {
+        self.status_submodule_repositories(path).map(|_| ())
+    }
+
+    /// Status reads replacement links as entries, without opening their target.
+    pub(super) fn status_submodule_repositories(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, BridgeError> {
+        self.submodule_repositories_inner(path, true)
+    }
+
+    fn replaced_submodule_link(&self, path: &Path) -> Result<bool, BridgeError> {
+        match path.symlink_metadata() {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let parent = path.parent().ok_or_else(|| {
+                    BridgeError::new("outside_workspace", "Submodule path has no parent.")
+                })?;
+                if !self.allows(parent) {
+                    return Err(BridgeError::new(
+                        "outside_workspace",
+                        "Submodule parent is outside the workspace.",
+                    ));
+                }
+                Ok(true)
+            }
+            Ok(_) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(BridgeError::new("repository_error", error.to_string())),
+        }
+    }
+
     pub(super) fn validate_modules_file(&self, parent: &Path) -> Result<(), BridgeError> {
         match parent.join(".gitmodules").symlink_metadata() {
             Ok(metadata) if metadata.file_type().is_symlink() => Err(BridgeError::new(
@@ -266,6 +305,14 @@ impl Scope {
 
     /// Validate all initialized descendants before any status query can traverse them.
     pub(super) fn submodule_repositories(&self, path: &Path) -> Result<Vec<PathBuf>, BridgeError> {
+        self.submodule_repositories_inner(path, false)
+    }
+
+    fn submodule_repositories_inner(
+        &self,
+        path: &Path,
+        status: bool,
+    ) -> Result<Vec<PathBuf>, BridgeError> {
         const MAX_REPOSITORIES: usize = 1024;
         const MAX_DEPTH: usize = 32;
         let root = self.repository(path)?;
@@ -292,6 +339,9 @@ impl Scope {
                     ));
                 }
                 let child = parent.join(relative);
+                if status && self.replaced_submodule_link(&child)? {
+                    continue;
+                }
                 let blocker = crate::git::status::regular_submodule_blocker(&child)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
                 let allowed = match blocker {
@@ -320,6 +370,9 @@ impl Scope {
                     ));
                 }
                 let child = parent.join(relative);
+                if status && self.replaced_submodule_link(&child)? {
+                    continue;
+                }
                 if let Some(blocker) = crate::git::status::regular_submodule_blocker(&child)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
                 {

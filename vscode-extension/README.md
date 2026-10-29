@@ -98,9 +98,11 @@ Branch review opens committed submodule pointer comparisons even when the child
 checkout is unavailable.
 If a deleted submodule leaves a corrupt checkout behind, Gitpane reports the
 repository status as unavailable until that checkout is repaired or removed.
-If a tracked submodule is replaced by a dangling symlink or a symlink outside
-the workspace, the parent repository's status is unavailable. The underlying
-Git library can probe the symlink target while enumerating submodules.
+If a tracked submodule is replaced by a symlink, the parent repository's status
+and change navigation remain available, including for dangling links or targets
+outside the workspace. Gitpane reads the replacement entry and refuses to open
+an unavailable or outside checkout. Repository mutations retain stricter
+validation and require repairing or removing such a link first.
 Blob and symlink sides in staged and conflicted pointer comparisons must be
 UTF-8 text under 1 MiB.
 On Unix, an unstaged submodule deletion or replacement of a submodule with a

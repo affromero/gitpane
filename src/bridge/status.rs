@@ -274,7 +274,7 @@ fn validate_submodules(
     repo: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> Result<(), BridgeError> {
-    for child in scope.submodule_repositories(repo)? {
+    for child in scope.status_submodule_repositories(repo)? {
         validate_initialized_submodule(&child, sub_cfg).map_err(|error| {
             BridgeError::new(
                 "repository_error",

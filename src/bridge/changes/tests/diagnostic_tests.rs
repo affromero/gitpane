@@ -68,8 +68,8 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
         fs::rename(&child_path, &outside).unwrap();
         symlink(&outside, &child_path).unwrap();
         assert_eq!(
-            store.find(&scope, find(token)).unwrap_err().code,
-            "outside_workspace"
+            store.find(&scope, find(token)).unwrap()["change"],
+            *attention
         );
         fs::remove_file(&child_path).unwrap();
         fs::rename(&outside, &child_path).unwrap();
@@ -168,4 +168,103 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
             .unwrap()
             .has_unpushed_submodules
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_submodules_keep_parent_status_and_change_navigation_available() {
+    for nested in [false, true] {
+        for removed_from_index in [false, true] {
+            for dangling in [false, true] {
+                let (_temporary, path, repo) = setup();
+                let (_source_temp, source, source_repo) = setup();
+                if nested {
+                    let (_nested_temp, nested_source, _nested_repo) = setup();
+                    let mut module = source_repo
+                        .submodule(nested_source.to_str().unwrap(), Path::new("nested"), true)
+                        .unwrap();
+                    module.clone(None).unwrap();
+                    module.add_finalize().unwrap();
+                    drop(module);
+                    commit_index(&source_repo, "Add nested child");
+                }
+                let mut module = repo
+                    .submodule(source.to_str().unwrap(), Path::new("child"), true)
+                    .unwrap();
+                module.clone(None).unwrap();
+                module.add_finalize().unwrap();
+                drop(module);
+                commit_index(&repo, "Add child");
+                let replacement = if nested {
+                    path.join("child/nested")
+                } else {
+                    path.join("child")
+                };
+                if removed_from_index {
+                    let owner = if nested {
+                        Repository::open(path.join("child")).unwrap()
+                    } else {
+                        Repository::open(&path).unwrap()
+                    };
+                    let mut index = owner.index().unwrap();
+                    index
+                        .remove_path(Path::new(if nested { "nested" } else { "child" }))
+                        .unwrap();
+                    index.write().unwrap();
+                }
+                if replacement.exists() {
+                    fs::remove_dir_all(&replacement).unwrap();
+                }
+                let outside = TempDir::new().unwrap();
+                let destination = outside.path().join(if dangling {
+                    "missing"
+                } else {
+                    "corrupt-repository"
+                });
+                if !dangling {
+                    let outside_repo = Repository::init(&destination).unwrap();
+                    fs::write(outside_repo.path().join("index"), "invalid index").unwrap();
+                }
+                std::os::unix::fs::symlink(&destination, &replacement).unwrap();
+                fs::write(path.join("mixed.txt"), "parent edit\n").unwrap();
+                let scope = Scope::new(vec![path.clone()]).unwrap();
+                let status = crate::bridge::status::query(
+                    &path,
+                    &scope,
+                    &SubmoduleConfig::default(),
+                    false,
+                    true,
+                    &[PathBuf::from("mixed.txt")],
+                )
+                .unwrap();
+                assert_eq!(status["is_dirty"], true);
+                assert_eq!(status["files"][0]["path"], "mixed.txt");
+                assert_eq!(status["files"][0]["unstaged"], true);
+                let mut store = Snapshots::default();
+                let result = begin(&mut store, &scope, &path);
+                let change = item(
+                    result["changes"].as_array().unwrap(),
+                    "mixed.txt",
+                    "working",
+                );
+                assert_eq!(change["kind"], "working_modified");
+                let found = store
+                    .find(
+                        &scope,
+                        FindRequest {
+                            repo: path.clone(),
+                            snapshot: result["snapshot"].as_str().unwrap().into(),
+                            path: "mixed.txt".into(),
+                            group: "working".into(),
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(found["change"], *change);
+                assert!(
+                    scope.validate_submodules(&path).is_err(),
+                    "mutation validation must remain strict"
+                );
+            }
+        }
+    }
 }

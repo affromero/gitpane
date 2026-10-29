@@ -426,12 +426,12 @@ impl Snapshots {
     ) -> Result<Value, BridgeError> {
         self.expire();
         let repo = scope.repository(&input.repo)?;
-        scope.validate_submodules(&repo)?;
+        scope.validate_status_submodules(&repo)?;
         let identity = RepositoryIdentity::read(&repo)?;
         let repository = git2::Repository::open(&repo).map_err(repository_error)?;
         let changes = collect_changes(&repository, sub_cfg, MAX_RECORDS).map_err(change_error)?;
         scope.repository(&repo)?;
-        scope.validate_submodules(&repo)?;
+        scope.validate_status_submodules(&repo)?;
         if RepositoryIdentity::read(&repo)? != identity {
             return Err(stale());
         }
@@ -548,7 +548,7 @@ impl Snapshots {
             ));
         }
         let repo = scope.repository(&input.repo)?;
-        scope.validate_submodules(&repo)?;
+        scope.validate_status_submodules(&repo)?;
         let snapshot = self.current(&repo, &input.snapshot)?;
 
         // The canonical collector sorts by path and group. Search the snapshot

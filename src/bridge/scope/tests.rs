@@ -49,7 +49,17 @@ fn submodule_preflight_checks_default_and_included_paths_against_workspace() {
             scope.validate_submodules(&parent).unwrap_err().code,
             "outside_workspace"
         );
+        scope.validate_status_submodules(&parent).unwrap();
     }
+    fs::write(
+        parent.join(".gitmodules"),
+        "[submodule \"ancestor\"]\npath = sub/nested\n",
+    )
+    .unwrap();
+    assert_eq!(
+        scope.validate_status_submodules(&parent).unwrap_err().code,
+        "outside_workspace"
+    );
 }
 
 #[test]
