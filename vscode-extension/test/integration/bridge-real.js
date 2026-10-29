@@ -110,6 +110,33 @@ async function waitForFile(file) {
     assert.ok(status.files.some(file => file.path === 'new file.txt' && file.status === 'untracked'));
     console.log('PASS handshake and real repository status');
 
+    const many = [];
+    for (let index = 0; index < 75; index++) {
+      const directory = path.join(workspace, `scale-${String(index).padStart(3, '0')}`);
+      fs.mkdirSync(directory);
+      git(directory, 'init', '-q');
+      fs.writeFileSync(path.join(directory, 'change.txt'), 'change\n');
+      many.push({ path: fs.realpathSync(directory) });
+    }
+    const openedAt = process.hrtime.bigint();
+    for (const entry of many) {
+      const response = await client.beginChanges(entry.path);
+      assert.equal(response.changes[0].path, 'change.txt');
+      entry.snapshot = response.snapshot;
+    }
+    const openMs = Number(process.hrtime.bigint() - openedAt) / 1e6;
+    for (const index of [0, 37, 74]) {
+      const entry = many[index];
+      assert.equal((await client.nextChanges(entry.path, entry.snapshot, 0)).changes[0].path, 'change.txt');
+    }
+    const old = many[0];
+    const replacement = await client.beginChanges(old.path);
+    assert.notEqual(replacement.snapshot, old.snapshot);
+    await assert.rejects(client.nextChanges(old.path, old.snapshot, 0), error => error.code === 'snapshot_stale');
+    await client.releaseChanges(old.path, replacement.snapshot);
+    assert.equal((await client.nextChanges(many[74].path, many[74].snapshot, 0)).changes[0].path, 'change.txt');
+    console.log(`PASS 75 simultaneously open real snapshots (one workspace root, ${openMs.toFixed(0)} ms)`);
+
     const graph = await client.graph(repoPath, false);
     const merge = graph.rows.find(row => row.oid === mergeOid);
     assert.ok(merge && merge.is_merge && merge.parent_oids.length === 2, 'merge commit and parents must appear');

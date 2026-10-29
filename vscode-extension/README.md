@@ -10,9 +10,10 @@ settings hide. Large change lists are shown one page at a time. When the list
 is not fully loaded, the repository's change count is a lower bound. Symlink
 diffs show the link target text stored by Git. A repository with more than
 200,000 change records shows an error instead of an incomplete list. Expanded
-repositories and worktrees share a cache limited to 64 snapshots and 64 MiB.
-If the cache is full, collapse another repository or worktree and retry. A
-single snapshot larger than 64 MiB cannot be loaded.
+repositories and worktrees share a 64 MiB cache for retained snapshots and
+their metadata. Git status scans also use temporary memory. If the cache is
+full, collapse another repository or worktree and retry. A single snapshot
+larger than 64 MiB cannot be loaded.
 
 The view includes detected repositories inside the open workspace folders,
 including multi-root workspaces. Linked worktrees inside the workspace appear

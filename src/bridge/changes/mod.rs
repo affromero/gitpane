@@ -12,16 +12,18 @@ use crate::git::status::{ChangeError, collect_changes};
 
 use super::{BridgeError, scope::Scope};
 
+#[cfg(test)]
+mod scale_tests;
 mod search;
 #[cfg(test)]
 mod tests;
 
 const MAX_RECORDS: usize = 200_000;
-const MAX_SNAPSHOTS: usize = 64;
 const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_BYTES: usize = 256 * 1024;
 const MAX_PAGE_ITEMS: usize = 128;
 const EXPIRY: Duration = Duration::from_secs(120);
+const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,7 +160,7 @@ impl RepositoryIdentity {
 }
 
 struct Snapshot {
-    repo: PathBuf,
+    id: String,
     identity: RepositoryIdentity,
     revision: String,
     records: Vec<Box<[u8]>>,
@@ -169,7 +171,9 @@ struct Snapshot {
 
 #[derive(Default)]
 pub(super) struct Snapshots {
-    entries: HashMap<String, Snapshot>,
+    entries: HashMap<PathBuf, Snapshot>,
+    bytes: usize,
+    last_expiry: Option<Instant>,
     sequence: u64,
 }
 
@@ -252,6 +256,43 @@ fn account_record(bytes: &mut usize, size: usize) -> Result<(), BridgeError> {
     Ok(())
 }
 
+fn snapshot_size(repo: &PathBuf, snapshot: &Snapshot) -> usize {
+    // Include allocation slack in addition to record charges. The table itself
+    // is charged separately, including buckets retained after removals.
+    let identity = &snapshot.identity;
+    [
+        512,
+        repo.capacity(),
+        snapshot.id.capacity(),
+        snapshot.revision.capacity(),
+        identity.worktree.path.capacity(),
+        identity.gitdir.path.capacity(),
+        identity.common.path.capacity(),
+        snapshot
+            .records
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Box<[u8]>>()),
+        snapshot
+            .page_starts
+            .capacity()
+            .saturating_mul(std::mem::size_of::<usize>()),
+        snapshot.bytes,
+    ]
+    .into_iter()
+    .fold(0usize, usize::saturating_add)
+}
+
+fn table_size(capacity: usize) -> usize {
+    // HashMap's public capacity is its usable entries, not its bucket count.
+    // Twice the tuple size plus control/allocator slack is conservative for
+    // its load factor, including when it retains buckets after removals.
+    capacity.saturating_mul(
+        std::mem::size_of::<(PathBuf, Snapshot)>()
+            .saturating_mul(2)
+            .saturating_add(128),
+    )
+}
+
 fn stale() -> BridgeError {
     BridgeError::new(
         "snapshot_stale",
@@ -283,13 +324,72 @@ fn page_boundaries(sizes: &[usize]) -> Result<Vec<usize>, BridgeError> {
 
 impl Snapshots {
     pub(super) fn clear(&mut self) {
-        self.entries.clear();
+        self.entries = HashMap::new();
+        self.bytes = 0;
+        self.last_expiry = None;
     }
 
     fn expire(&mut self) {
+        self.expire_if_due(false);
+    }
+
+    fn expire_if_due(&mut self, force: bool) {
         let now = Instant::now();
-        self.entries
-            .retain(|_, snapshot| now.duration_since(snapshot.touched) < EXPIRY);
+        if !force
+            && self
+                .last_expiry
+                .is_some_and(|last| now.saturating_duration_since(last) < EXPIRY_SWEEP_INTERVAL)
+        {
+            return;
+        }
+        self.last_expiry = Some(now);
+        let mut bytes = 0usize;
+        self.entries.retain(|_, snapshot| {
+            if now.saturating_duration_since(snapshot.touched) >= EXPIRY {
+                false
+            } else {
+                bytes = bytes.saturating_add(snapshot.bytes);
+                true
+            }
+        });
+        self.bytes = bytes;
+        self.compact_if_sparse();
+    }
+
+    fn compact_if_sparse(&mut self) {
+        if self.entries.capacity() > self.entries.len().saturating_mul(4).max(64) {
+            self.entries.shrink_to_fit();
+        }
+    }
+
+    fn remove(&mut self, repo: &Path) {
+        if let Some(snapshot) = self.entries.remove(repo) {
+            self.bytes = self.bytes.saturating_sub(snapshot.bytes);
+            self.compact_if_sparse();
+        }
+    }
+
+    fn current(&mut self, repo: &Path, id: &str) -> Result<&mut Snapshot, BridgeError> {
+        if self.entries.get(repo).is_some_and(|snapshot| {
+            Instant::now().saturating_duration_since(snapshot.touched) >= EXPIRY
+        }) {
+            self.remove(repo);
+            return Err(stale());
+        }
+        let snapshot = self.entries.get_mut(repo).ok_or_else(stale)?;
+        if snapshot.id != id || RepositoryIdentity::read(repo)? != snapshot.identity {
+            return Err(stale());
+        }
+        Ok(snapshot)
+    }
+
+    fn fits(&self, repo: &Path, bytes: usize) -> bool {
+        let replaced = self.entries.get(repo).map_or(0, |entry| entry.bytes);
+        self.bytes
+            .saturating_sub(replaced)
+            .saturating_add(bytes)
+            .saturating_add(table_size(self.entries.capacity()))
+            <= MAX_CACHE_BYTES
     }
 
     pub(super) fn begin(
@@ -326,42 +426,87 @@ impl Snapshots {
         }
         let starts = page_boundaries(&sizes)?;
         let revision = format!("{:x}", hash.finalize());
-        let existing = self
-            .entries
-            .values()
-            .filter(|entry| entry.repo != repo)
-            .fold(0usize, |total, entry| total.saturating_add(entry.bytes));
-        let count = self
-            .entries
-            .values()
-            .filter(|entry| entry.repo != repo)
-            .count();
-        if count >= MAX_SNAPSHOTS || existing.saturating_add(bytes) > MAX_CACHE_BYTES {
-            return Err(BridgeError::new(
-                "snapshot_capacity",
-                "Too many change snapshots are open; close one and retry.",
-            ));
-        }
-        self.sequence = self.sequence.checked_add(1).ok_or_else(|| {
+        let sequence = self.sequence.checked_add(1).ok_or_else(|| {
             BridgeError::new(
                 "snapshot_capacity",
                 "Change snapshot identifiers are exhausted.",
             )
         })?;
-        let id = format!("changes-{}", self.sequence);
-        self.entries.retain(|_, entry| entry.repo != repo);
-        self.entries.insert(
-            id.clone(),
-            Snapshot {
-                repo,
-                identity,
-                revision,
-                records,
-                page_starts: starts,
-                bytes,
-                touched: Instant::now(),
-            },
-        );
+        let id = format!("changes-{sequence}");
+        let mut snapshot = Snapshot {
+            id: id.clone(),
+            identity,
+            revision,
+            records,
+            page_starts: starts,
+            bytes,
+            touched: Instant::now(),
+        };
+        let key = self
+            .entries
+            .get_key_value(&repo)
+            .map_or(&repo, |(key, _)| key);
+        snapshot.bytes = snapshot_size(key, &snapshot);
+        if snapshot.bytes > MAX_CACHE_BYTES {
+            return Err(BridgeError::new(
+                "snapshot_too_large",
+                "The repository change snapshot exceeds the memory limit.",
+            ));
+        }
+        if !self.entries.contains_key(&repo) {
+            self.entries.try_reserve(1).map_err(|_| {
+                BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
+            })?;
+        }
+        if !self.fits(&repo, snapshot.bytes) {
+            self.expire_if_due(true);
+            snapshot.bytes = bytes;
+            let key = self
+                .entries
+                .get_key_value(&repo)
+                .map_or(&repo, |(key, _)| key);
+            snapshot.bytes = snapshot_size(key, &snapshot);
+            if snapshot.bytes > MAX_CACHE_BYTES {
+                return Err(BridgeError::new(
+                    "snapshot_too_large",
+                    "The repository change snapshot exceeds the memory limit.",
+                ));
+            }
+            if !self.entries.contains_key(&repo) {
+                self.entries.try_reserve(1).map_err(|_| {
+                    BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
+                })?;
+            }
+            if !self.fits(&repo, snapshot.bytes) {
+                self.entries.shrink_to_fit();
+                if !self.entries.contains_key(&repo) {
+                    self.entries.try_reserve(1).map_err(|_| {
+                        BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
+                    })?;
+                }
+                if !self.fits(&repo, snapshot.bytes) {
+                    self.entries.shrink_to_fit();
+                    if self.entries.is_empty()
+                        || (self.entries.len() == 1 && self.entries.contains_key(&repo))
+                    {
+                        return Err(BridgeError::new(
+                            "snapshot_too_large",
+                            "The repository change snapshot exceeds the memory limit.",
+                        ));
+                    }
+                    return Err(BridgeError::new(
+                        "snapshot_capacity",
+                        "Too many change snapshots are open; close one and retry.",
+                    ));
+                }
+            }
+        }
+        self.sequence = sequence;
+        let added = snapshot.bytes;
+        if let Some(previous) = self.entries.insert(repo, snapshot) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+        }
+        self.bytes = self.bytes.saturating_add(added);
         self.page_by_id(scope, &input.repo, &id, 0)
     }
 
@@ -390,10 +535,7 @@ impl Snapshots {
         }
         let repo = scope.repository(&input.repo)?;
         scope.validate_submodules(&repo)?;
-        let snapshot = self.entries.get_mut(&input.snapshot).ok_or_else(stale)?;
-        if repo != snapshot.repo || RepositoryIdentity::read(&repo)? != snapshot.identity {
-            return Err(stale());
-        }
+        let snapshot = self.current(&repo, &input.snapshot)?;
 
         // The canonical collector sorts by path and group. Search the snapshot
         // without materializing every page or retaining another index.
@@ -427,10 +569,7 @@ impl Snapshots {
         cursor: usize,
     ) -> Result<Value, BridgeError> {
         let repo = scope.repository(path)?;
-        let snapshot = self.entries.get_mut(id).ok_or_else(stale)?;
-        if repo != snapshot.repo || RepositoryIdentity::read(&repo)? != snapshot.identity {
-            return Err(stale());
-        }
+        let snapshot = self.current(&repo, id)?;
         let index = snapshot
             .page_starts
             .iter()
@@ -457,11 +596,8 @@ impl Snapshots {
     pub(super) fn release(&mut self, scope: &Scope, input: Release) -> Result<Value, BridgeError> {
         self.expire();
         let repo = scope.repository(&input.repo)?;
-        let snapshot = self.entries.get(&input.snapshot).ok_or_else(stale)?;
-        if snapshot.repo != repo || RepositoryIdentity::read(&repo)? != snapshot.identity {
-            return Err(stale());
-        }
-        self.entries.remove(&input.snapshot);
+        self.current(&repo, &input.snapshot)?;
+        self.remove(&repo);
         Ok(json!({}))
     }
 }

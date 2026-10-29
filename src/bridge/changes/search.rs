@@ -4,7 +4,7 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{RepositoryIdentity, Scope, Snapshots, repository_error, stale};
+use super::{Scope, Snapshots, repository_error, stale};
 use crate::bridge::BridgeError;
 
 #[derive(Deserialize)]
@@ -37,10 +37,7 @@ impl Snapshots {
         self.expire();
         let repo = scope.repository(&input.repo)?;
         scope.validate_submodules(&repo)?;
-        let snapshot = self.entries.get_mut(&input.snapshot).ok_or_else(stale)?;
-        if repo != snapshot.repo || RepositoryIdentity::read(&repo)? != snapshot.identity {
-            return Err(stale());
-        }
+        let snapshot = self.current(&repo, &input.snapshot)?;
 
         let query = input.query.to_lowercase();
         let mut matches = Vec::new();

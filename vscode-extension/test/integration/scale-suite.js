@@ -28,12 +28,13 @@ exports.run = async () => {
     assert.ok(repositories.every(repo => !repo.statusUnavailable && repo.dirty && repo.changeCountLowerBound >= 1),
       'each fixture repository must report its untracked change');
     const readyMs = Number(process.hrtime.bigint() - started) / 1e6;
-    const sample = repositories.slice(0, Math.min(8, repositories.length));
+    const sample = repositories.slice(0, Math.min(75, repositories.length));
     const expandedStart = process.hrtime.bigint();
     for (const repo of sample) await provider.loadChanges(repo.id);
     const expanded = provider.snapshot().repositories;
     for (const repo of sample) {
       const actual = expanded.find(item => item.id === repo.id);
+      assert.equal(actual?.changesPage.state, 'ready', `${repo.name} changes must remain loaded`);
       assert.ok(actual?.groups.some(group => group.files.some(file => file.path === 'new.txt')),
         `${repo.name} must show its untracked file`);
     }

@@ -617,59 +617,61 @@ fn pages_are_revisitable_revision_is_stable_and_snapshots_are_scoped() {
 }
 
 #[test]
-fn snapshot_capacity_recovers_after_closing_a_repository() {
+fn many_repositories_remain_pageable_until_their_snapshots_are_replaced_or_closed() {
     let temporary = TempDir::new().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let scope = Scope::new(vec![root.clone()]).unwrap();
     let mut store = Snapshots::default();
     let mut opened: Vec<(PathBuf, String)> = Vec::new();
 
-    for index in 0..65 {
-        let repo = root.join(format!("repo-{index:02}"));
+    for index in 0..130 {
+        let repo = root.join(format!("repo-{index:03}"));
         fs::create_dir(&repo).unwrap();
         Repository::init(&repo).unwrap();
         fs::write(repo.join("change.txt"), format!("change {index}")).unwrap();
-        if index == 64 {
-            let error = store
-                .begin(
-                    &scope,
-                    Begin { repo: repo.clone() },
-                    &SubmoduleConfig::default(),
-                )
-                .unwrap_err();
-            assert_eq!(error.code, "snapshot_capacity");
-
-            let (first_repo, first_snapshot) = &opened[0];
-            assert_eq!(
-                page(&mut store, &scope, first_repo, first_snapshot, 0)["changes"][0]["path"],
-                "change.txt"
-            );
-            let replacement = begin(&mut store, &scope, first_repo);
-            assert_ne!(replacement["snapshot"], first_snapshot.as_str());
-            let replacement_token = replacement["snapshot"].as_str().unwrap().to_owned();
-
-            store
-                .release(
-                    &scope,
-                    Release {
-                        repo: first_repo.clone(),
-                        snapshot: replacement_token,
-                    },
-                )
-                .unwrap();
-            let recovered = begin(&mut store, &scope, &repo);
-            assert_eq!(recovered["changes"][0]["path"], "change.txt");
-            let (second_repo, second_snapshot) = &opened[1];
-            assert_eq!(
-                page(&mut store, &scope, second_repo, second_snapshot, 0)["changes"][0]["path"],
-                "change.txt"
-            );
-        } else {
-            let result = begin(&mut store, &scope, &repo);
-            assert_eq!(result["changes"][0]["path"], "change.txt");
-            opened.push((repo, result["snapshot"].as_str().unwrap().to_owned()));
-        }
+        let result = begin(&mut store, &scope, &repo);
+        assert_eq!(result["changes"][0]["path"], "change.txt");
+        opened.push((repo, result["snapshot"].as_str().unwrap().to_owned()));
     }
+    for index in [0, 64, 129] {
+        let (repo, snapshot) = &opened[index];
+        assert_eq!(
+            page(&mut store, &scope, repo, snapshot, 0)["changes"][0]["path"],
+            "change.txt"
+        );
+    }
+    let (first_repo, first_snapshot) = &opened[0];
+    let replacement = begin(&mut store, &scope, first_repo);
+    let replacement_token = replacement["snapshot"].as_str().unwrap().to_owned();
+    assert_ne!(replacement_token, *first_snapshot);
+    assert_eq!(
+        store
+            .page(
+                &scope,
+                PageRequest {
+                    repo: first_repo.clone(),
+                    snapshot: first_snapshot.clone(),
+                    cursor: 0
+                }
+            )
+            .unwrap_err()
+            .code,
+        "snapshot_stale"
+    );
+    store
+        .release(
+            &scope,
+            Release {
+                repo: first_repo.clone(),
+                snapshot: replacement_token,
+            },
+        )
+        .unwrap();
+    let (last_repo, last_snapshot) = &opened[129];
+    assert_eq!(
+        page(&mut store, &scope, last_repo, last_snapshot, 0)["changes"][0]["path"],
+        "change.txt"
+    );
 }
 
 #[test]
@@ -845,13 +847,114 @@ fn page_boundaries_respect_encoded_size_and_reject_oversized_records() {
 }
 
 #[test]
+fn cache_accounting_charges_empty_snapshots_paths_and_retained_table_capacity() {
+    let (_temporary, path, _repo) = setup();
+    let identity = super::RepositoryIdentity::read(&path).unwrap();
+    let mut snapshot = super::Snapshot {
+        id: "changes-1".to_owned(),
+        identity,
+        revision: "a".repeat(64),
+        records: Vec::new(),
+        page_starts: vec![0],
+        bytes: 0,
+        touched: std::time::Instant::now(),
+    };
+    let empty = super::snapshot_size(&path, &snapshot);
+    assert!(empty > 0);
+    snapshot.identity.common.path = PathBuf::from("x".repeat(4096));
+    snapshot.page_starts = Vec::with_capacity(512);
+    assert!(super::snapshot_size(&path, &snapshot) >= empty + 4096);
+    assert_eq!(super::table_size(usize::MAX), usize::MAX);
+    let mut store = Snapshots::default();
+    store.entries.reserve(128);
+    let retained_table = super::table_size(store.entries.capacity());
+    assert!(retained_table > 0);
+    assert!(!store.fits(&path, super::MAX_CACHE_BYTES));
+    store.clear();
+    assert_eq!(super::table_size(store.entries.capacity()), 0);
+}
+
+#[test]
+fn replacement_charges_the_retained_repository_key_allocation() {
+    let (temporary, path, _repo) = setup();
+    let scope = Scope::new(vec![temporary.path().to_owned()]).unwrap();
+    let mut store = Snapshots::default();
+    begin(&mut store, &scope, &path);
+    let (key, mut snapshot) = store.entries.remove_entry(&path).unwrap();
+    let mut larger_key = PathBuf::with_capacity(key.capacity() + 16_384);
+    larger_key.push(&key);
+    snapshot.bytes += larger_key.capacity() - key.capacity();
+    let previous_charge = snapshot.bytes;
+    store.bytes = previous_charge;
+    store.entries.insert(larger_key, snapshot);
+
+    begin(&mut store, &scope, &path);
+    let (retained_key, replacement) = store.entries.get_key_value(&path).unwrap();
+    assert!(retained_key.capacity() >= key.capacity() + 16_384);
+    assert!(replacement.bytes >= previous_charge);
+}
+
+#[test]
+fn full_cache_preserves_the_previous_snapshot_until_capacity_is_released() {
+    let (temporary, first, _repo) = setup();
+    let second = temporary.path().join("second");
+    fs::create_dir(&second).unwrap();
+    Repository::init(&second).unwrap();
+    let second = second.canonicalize().unwrap();
+    let scope = Scope::new(vec![temporary.path().to_owned()]).unwrap();
+    let mut store = Snapshots::default();
+    let first_snapshot = begin(&mut store, &scope, &first)["snapshot"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second_snapshot = begin(&mut store, &scope, &second)["snapshot"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Model a second repository whose retained records fill the remaining
+    // cache; the repository and replacement requests still use real Git data.
+    let first_bytes = store.entries.get(&first).unwrap().bytes;
+    let available = super::MAX_CACHE_BYTES - super::table_size(store.entries.capacity());
+    store.entries.get_mut(&second).unwrap().bytes = available - first_bytes;
+    store.bytes = available;
+    fs::write(first.join("new.txt"), "new").unwrap();
+    let error = store
+        .begin(
+            &scope,
+            Begin {
+                repo: first.clone(),
+            },
+            &SubmoduleConfig::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "snapshot_capacity");
+    assert!(
+        page(&mut store, &scope, &first, &first_snapshot, 0)["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .release(
+            &scope,
+            Release {
+                repo: second,
+                snapshot: second_snapshot,
+            },
+        )
+        .unwrap();
+    let replacement = begin(&mut store, &scope, &first);
+    assert_eq!(replacement["changes"][0]["path"], "new.txt");
+}
+
+#[test]
 fn expired_snapshot_reports_stale() {
     let (temporary, path, _repo) = setup();
     let scope = Scope::new(vec![temporary.path().to_owned()]).unwrap();
     let mut store = Snapshots::default();
     let result = begin(&mut store, &scope, &path);
     let token = result["snapshot"].as_str().unwrap().to_owned();
-    store.entries.get_mut(&token).unwrap().touched = std::time::Instant::now() - super::EXPIRY;
+    store.entries.get_mut(&path).unwrap().touched = std::time::Instant::now() - super::EXPIRY;
     assert_eq!(
         store
             .page(
