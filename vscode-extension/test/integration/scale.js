@@ -44,13 +44,12 @@ try {
   ];
   const host = await runHost(code, args, env, 300000);
   if (!fs.existsSync(env.GITPANE_TEST_RESULT)) throw new Error('VS Code did not write scale test results.');
-  safeToRemove = true;
   const result = JSON.parse(fs.readFileSync(env.GITPANE_TEST_RESULT, 'utf8'));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.error) {
     process.stderr.write(host.output);
     process.exitCode = 1;
-  }
+  } else safeToRemove = true;
 } catch (error) {
   console.error(error.stack || String(error));
   process.exitCode = 1;

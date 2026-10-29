@@ -65,4 +65,26 @@ function codeExecutable() {
   return configured;
 }
 
-module.exports = { codeExecutable, publishResult, runHost };
+async function activatedProvider(vscode, extensionPath) {
+  const extension = vscode.extensions.getExtension('gitpane.gitpane-explorer');
+  if (!extension) throw new Error('Gitpane extension must be registered');
+  const { GitpaneViewProvider } = require(path.join(fs.realpathSync(extensionPath), 'src/extension.js'));
+  const prototype = GitpaneViewProvider.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'refresh');
+  if (!descriptor || typeof descriptor.value !== 'function') throw new Error('Gitpane refresh is unavailable');
+  let provider;
+  try {
+    Object.defineProperty(prototype, 'refresh', { ...descriptor, value: function (...args) {
+      provider = this;
+      return descriptor.value.apply(this, args);
+    } });
+    await extension.activate();
+    await vscode.commands.executeCommand('gitpane.refresh');
+  } finally {
+    Object.defineProperty(prototype, 'refresh', descriptor);
+  }
+  if (!provider) throw new Error('The registered Gitpane refresh did not reach its view provider');
+  return provider;
+}
+
+module.exports = { activatedProvider, codeExecutable, publishResult, runHost };

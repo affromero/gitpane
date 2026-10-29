@@ -80,7 +80,6 @@ try {
   ];
   const host = await runHost(codeExecutable(), args, env, 180000);
   const tests = JSON.parse(fs.readFileSync(env.GITPANE_TEST_RESULT, 'utf8'));
-  safeToRemove = true;
   for (const entry of tests) {
     process.stdout.write(`${entry.ok ? 'PASS' : 'FAIL'} ${entry.name}\n`);
     if (!entry.ok) process.stderr.write(`${entry.error}\n`);
@@ -88,7 +87,7 @@ try {
   if (tests.some(entry => !entry.ok)) {
     process.stderr.write(host.output);
     process.exitCode = 1;
-  }
+  } else safeToRemove = true;
 } catch (error) {
   console.error(error.stack || String(error));
   process.exitCode = 1;

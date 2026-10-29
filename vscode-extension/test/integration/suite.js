@@ -4,7 +4,7 @@ const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { publishResult } = require('./host');
+const { activatedProvider, publishResult } = require('./host');
 
 exports.run = async () => {
   const results = [];
@@ -27,7 +27,7 @@ exports.run = async () => {
     const right = fs.realpathSync(second);
     return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   }
-  let api, tree, backend, provider, nodes;
+  let api, tree, provider, nodes;
   const rootNode = target => tree.getChildren().find(item => item.type === 'repo' && samePath(item.repo.rootUri.fsPath, target));
   const snapshotRepo = target => provider.snapshot().repositories.find(item => item.name === path.basename(target));
 
@@ -36,20 +36,16 @@ exports.run = async () => {
       await vscode.workspace.getConfiguration('gitpane').update('backendPath', process.env.GITPANE_TEST_BINARY, vscode.ConfigurationTarget.Global);
     }
     api = (await vscode.extensions.getExtension('vscode.git').activate()).getAPI(1);
-    const extension = vscode.extensions.getExtension('gitpane.gitpane-explorer');
-    assert.ok(extension, 'Gitpane extension must be registered');
-    await extension.activate();
-    const { RepositoryTree, GitpaneViewProvider } = require(path.join(process.env.GITPANE_TEST_EXTENSION, 'src/extension.js'));
-    const { BackendManager } = require(path.join(process.env.GITPANE_TEST_EXTENSION, 'src/backend-manager.js'));
-    const output = vscode.window.createOutputChannel('Gitpane integration test');
-    backend = new BackendManager({ extensionPath: process.env.GITPANE_TEST_EXTENSION }, { output });
-    await backend.ready();
-    tree = new RepositoryTree(api, output, backend);
-    provider = new GitpaneViewProvider(tree, vscode.Uri.file(process.env.GITPANE_TEST_EXTENSION));
-    tree.setVisible(true);
+    provider = await activatedProvider(vscode, process.env.GITPANE_TEST_EXTENSION);
+    tree = provider.tree;
+    await vscode.commands.executeCommand('gitpane.repositories.focus');
+    await waitFor(() => provider.view?.visible, 'Gitpane view was not visible');
     await waitFor(() => [fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND]
       .every(target => rootNode(target)), () => `workspace repositories were not discovered; expected: ${JSON.stringify([fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND])}; VS Code repositories: ${JSON.stringify(api.repositories.map(item => item.rootUri.fsPath))}; tree: ${JSON.stringify(tree.getChildren().filter(item => item.type === 'repo').map(item => item.repo.rootUri.fsPath))}; workspace: ${JSON.stringify(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath))}; repositoryScanMaxDepth: ${vscode.workspace.getConfiguration('git').get('repositoryScanMaxDepth')}`, 30000);
     await waitFor(() => snapshotRepo(fixture)?.dirty, 'repository changes were not loaded');
+    await provider.loadChanges(snapshotRepo(fixture).id);
+    await waitFor(() => snapshotRepo(fixture)?.changesPage.state === 'ready', 'repository changes page was not loaded');
+    provider.snapshot();
     nodes = [...provider.changes.values()].filter(node => samePath(node.repo.rootUri.fsPath, fixture));
   });
 
@@ -76,6 +72,8 @@ exports.run = async () => {
       const node = nodes.find(item => item.group === group && path.basename(item.change.uri.fsPath) === filename);
       assert.ok(node, `missing ${group} ${filename}`);
       assert.ok(snapshotRepo(fixture).groups.some(item => item.id === group && item.files.some(file => file.name === filename)));
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab, undefined, 'previous editor must be closed');
       await vscode.commands.executeCommand('gitpane.openChange', node);
       const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
       assert.ok(tab && tab.input instanceof vscode.TabInputTextDiff, `expected text diff for ${name}`);
@@ -107,9 +105,6 @@ exports.run = async () => {
     await waitFor(() => !rootNode(process.env.GITPANE_TEST_ADDED), 'removed workspace repository remained visible');
   });
 
-  if (provider) provider.dispose();
-  if (tree) tree.dispose();
-  if (backend) backend.dispose();
   publishResult(process.env.GITPANE_TEST_RESULT, results);
   if (results.some(result => !result.ok)) throw new Error('Gitpane integration tests failed.');
 };
