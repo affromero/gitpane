@@ -273,7 +273,17 @@ class GitpaneViewProvider {
   }
 
   resolveRepository(id) {
-    return this.actionRepository(this.currentRepository(id));
+    const repo = this.currentRepository(id);
+    const actionRepo = this.actionRepository(repo);
+    if (!actionRepo) return undefined;
+    const found = this.tree.explicitWorktreeAnchor?.(repo);
+    if (!found || !this.tree.isPathInWorkspace(found.path)) return actionRepo;
+    const anchorToken = this.tree.repositoryToken(found.anchor);
+    const targetToken = this.tree.repositoryToken(repo);
+    const anchor = this.actionRepository(found.anchor);
+    if (!anchor || !this.tree.isCurrentRepository(found.anchor, anchorToken) || !this.tree.isCurrentRepository(repo, targetToken)) return actionRepo;
+    return { ...actionRepo, worktreeRemoval: { ...anchor, path: found.path, branch: found.branch,
+      anchorKey: found.anchor.rootUri.toString(), anchorToken, targetToken, commonIdentity: found.commonIdentity } };
   }
 
   resolveChange(id) {
@@ -452,6 +462,7 @@ async function activate(context) {
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.actions = new SidebarActions({ vscode, mutations,
     previewFileAction: (repo, target, operation) => backend.fileActionPreview(repo, target, operation),
+    previewWorktreeRemoval: (repo, target) => backend.previewWorktreeRemoval(repo, target),
     planWorktree: (repo, branch) => backend.planWorktree(repo, branch),
     revalidateChange: id => provider.revalidateChange(id),
     validateChangePath: item => scopedFile(item.repoPath, item.path),

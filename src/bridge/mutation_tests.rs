@@ -77,6 +77,44 @@ fn preview(workspace: &Path, params: Value) -> Value {
     replies[1].clone()
 }
 
+fn worktree_preview(workspace: &Path, repo: &Path, target: &Path) -> Value {
+    let input = format!(
+        "{}\n{}\n",
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
+        json!({"id": 2, "method": "worktree_remove_preview", "params": {"repo": repo, "path": target}})
+    );
+    let mut output = Vec::new();
+    serve(
+        &mut Cursor::new(input),
+        &mut output,
+        &SubmoduleConfig::default(),
+        &GraphConfig::default(),
+        &WorktreeConfig::default(),
+        None,
+        false,
+    )
+    .unwrap();
+    String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .nth(1)
+        .unwrap()
+}
+
+fn copy_directory(source: &Path, destination: &Path) {
+    std::fs::create_dir(destination).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = destination.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_directory(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 #[cfg(unix)]
 fn read_symlink(workspace: &Path, repo: &Path, path: &str) -> Value {
     let input = format!(
@@ -343,6 +381,179 @@ fn worktree_actions_create_inside_workspace_and_refuse_dirty_removal() {
     std::fs::remove_file(worktree.join("untracked")).unwrap();
     assert_eq!(remove(&worktree)["result"], json!({}));
     assert!(!worktree.exists());
+}
+
+#[test]
+fn worktree_removal_preview_revalidates_identity_and_respects_git_safety_checks() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let temporary = TempDir::new().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let repo_path = workspace.join("repo");
+    let _repo = repo_with_files(&repo_path);
+    let worktree = workspace.join("worktree");
+    assert_eq!(
+        mutation(
+            &workspace,
+            "worktree_create",
+            json!({
+                "repo": repo_path, "path": worktree, "branch": "feature"
+            })
+        )["result"],
+        json!({})
+    );
+    let preview = worktree_preview(&workspace, &repo_path, &worktree);
+    let repo_identity = preview["result"]["repo_identity"].as_str().unwrap();
+    let worktree_identity = preview["result"]["worktree_identity"].as_str().unwrap();
+    assert_eq!(repo_identity.len(), 64);
+    assert_eq!(worktree_identity.len(), 64);
+    let other = workspace.join("unrelated");
+    let _other = repo_with_files(&other);
+    assert_eq!(
+        worktree_preview(&workspace, &repo_path, &other)["error"]["code"],
+        "invalid_request"
+    );
+    let outside = temporary.path().join("outside");
+    let _outside = repo_with_files(&outside);
+    assert_eq!(
+        worktree_preview(&workspace, &repo_path, &outside)["error"]["code"],
+        "outside_workspace"
+    );
+    let params = || {
+        json!({"repo": repo_path, "path": worktree,
+        "expected_repo_identity": repo_identity, "expected_worktree_identity": worktree_identity})
+    };
+    assert_eq!(
+        mutation(
+            &workspace,
+            "worktree_remove",
+            json!({
+                "repo": repo_path, "path": worktree, "expected_repo_identity": repo_identity
+            })
+        )["error"]["code"],
+        "invalid_request"
+    );
+    assert_eq!(
+        mutation(
+            &workspace,
+            "worktree_remove",
+            json!({
+                "repo": repo_path, "path": worktree, "expected_repo_identity": "x".repeat(64),
+                "expected_worktree_identity": worktree_identity
+            })
+        )["error"]["code"],
+        "invalid_request"
+    );
+
+    let target_repo = Repository::open(&worktree).unwrap();
+    let old_head = target_repo.head().unwrap().target().unwrap();
+    let gitdir = target_repo.path().canonicalize().unwrap();
+    drop(target_repo);
+    let backup = temporary.path().join("old-worktree-gitdir");
+    std::fs::rename(&gitdir, &backup).unwrap();
+    copy_directory(&backup, &gitdir);
+    let replacement = Repository::open(&worktree).unwrap();
+    assert_eq!(replacement.head().unwrap().target().unwrap(), old_head);
+    drop(replacement);
+    assert_eq!(
+        mutation(&workspace, "worktree_remove", params())["error"]["code"],
+        "stale_target"
+    );
+    assert!(worktree.exists());
+
+    let fresh = worktree_preview(&workspace, &repo_path, &worktree);
+    assert_eq!(fresh["result"]["repo_identity"], repo_identity);
+    assert_ne!(fresh["result"]["worktree_identity"], worktree_identity);
+    let refreshed = || {
+        json!({"repo": repo_path, "path": worktree,
+        "expected_repo_identity": fresh["result"]["repo_identity"],
+        "expected_worktree_identity": fresh["result"]["worktree_identity"]})
+    };
+    std::fs::write(worktree.join("untracked"), "dirty").unwrap();
+    assert_eq!(
+        mutation(&workspace, "worktree_remove", refreshed())["error"]["code"],
+        "git_error"
+    );
+    assert!(worktree.exists());
+    std::fs::remove_file(worktree.join("untracked")).unwrap();
+    let lock = crate::git::process::git_command(&repo_path)
+        .args(["worktree", "lock", "--"])
+        .arg(&worktree)
+        .output()
+        .unwrap();
+    assert!(
+        lock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+    assert_eq!(
+        mutation(&workspace, "worktree_remove", refreshed())["error"]["code"],
+        "git_error"
+    );
+    assert!(worktree.exists());
+    let unlock = crate::git::process::git_command(&repo_path)
+        .args(["worktree", "unlock", "--"])
+        .arg(&worktree)
+        .output()
+        .unwrap();
+    assert!(
+        unlock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unlock.stderr)
+    );
+    assert_eq!(
+        mutation(&workspace, "worktree_remove", refreshed())["result"],
+        json!({})
+    );
+    assert!(!worktree.exists());
+}
+
+#[test]
+fn worktree_removal_rejects_replaced_anchor_git_metadata() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let temporary = TempDir::new().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let repo_path = workspace.join("repo");
+    let repo = repo_with_files(&repo_path);
+    let head = repo.head().unwrap().target().unwrap();
+    drop(repo);
+    let worktree = workspace.join("worktree");
+    assert_eq!(
+        mutation(
+            &workspace,
+            "worktree_create",
+            json!({
+                "repo": repo_path, "path": worktree, "branch": "feature"
+            })
+        )["result"],
+        json!({})
+    );
+    let preview = worktree_preview(&workspace, &repo_path, &worktree);
+    let gitdir = repo_path.join(".git");
+    let backup = temporary.path().join("old-anchor-gitdir");
+    std::fs::rename(&gitdir, &backup).unwrap();
+    copy_directory(&backup, &gitdir);
+    assert_eq!(
+        Repository::open(&repo_path)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap(),
+        head
+    );
+    let result = mutation(
+        &workspace,
+        "worktree_remove",
+        json!({"repo": repo_path, "path": worktree,
+        "expected_repo_identity": preview["result"]["repo_identity"],
+        "expected_worktree_identity": preview["result"]["worktree_identity"]}),
+    );
+    assert_eq!(result["error"]["code"], "stale_target");
+    assert!(worktree.exists());
 }
 
 #[cfg(unix)]

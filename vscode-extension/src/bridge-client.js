@@ -50,14 +50,29 @@ class BridgeClient {
     });
   }
 
-  initialize(workspaceRoots) {
+  initialize(workspaceRoots, identities, sources) {
     if (!Array.isArray(workspaceRoots) || workspaceRoots.some(root => typeof root !== 'string' || !path.isAbsolute(root))) {
       return Promise.reject(new BridgeError('invalid_workspace', 'Workspace roots must be absolute paths.'));
     }
     try { this.start(); }
     catch (error) { return Promise.reject(error); }
     const child = this.child;
-    const initialization = this.call('initialize', { version: 1, workspace_roots: [...workspaceRoots] }).then(result => {
+    if (identities !== undefined && (!Array.isArray(identities) || identities.length !== workspaceRoots.length ||
+      identities.some(token => typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)))) {
+      return Promise.reject(new BridgeError('invalid_workspace', 'Workspace identities are unavailable.'));
+    }
+    if (sources !== undefined && (!Array.isArray(sources) || sources.length !== workspaceRoots.length ||
+      sources.some(source => typeof source !== 'string' || !path.isAbsolute(source)))) {
+      return Promise.reject(new BridgeError('invalid_workspace', 'Workspace folder sources are unavailable.'));
+    }
+    const initialization = this.call('initialize', { version: 1, workspace_roots: [...workspaceRoots],
+      ...(identities ? { workspace_root_identities: [...identities] } : {}),
+      ...(sources ? { workspace_root_sources: [...sources] } : {}) }).catch(error => {
+      if ((identities || sources) && error?.code === 'invalid_request' && /unknown field.*workspace_root_(?:identities|sources)/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace identity checks. Update the backend and try again.');
+      }
+      throw error;
+    }).then(result => {
       if (!result || result.version !== 1) {
         const error = new BridgeError('unsupported_version', 'Gitpane service returned an unsupported protocol version.');
         this.abort(child, error);
@@ -67,6 +82,16 @@ class BridgeClient {
     });
     this.initialization = initialization;
     return initialization;
+  }
+
+  async workspaceRootIdentities() {
+    try { return await this.request('workspace_root_identities', {}); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace identity checks. Update the backend and try again.');
+      }
+      throw error;
+    }
   }
 
   async request(method, params) {
@@ -106,6 +131,16 @@ class BridgeClient {
 
   fileActionPreview(repo, path, operation) {
     return this.request('file_action_preview', { repo, path, operation });
+  }
+
+  async previewWorktreeRemoval(repo, path) {
+    try { return await this.request('worktree_remove_preview', { repo, path }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support safe worktree removal. Update the backend and try again.');
+      }
+      throw error;
+    }
   }
 
   readWorkingSymlink(repo, path) {

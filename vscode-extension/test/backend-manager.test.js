@@ -3,19 +3,31 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
-const { BackendManager } = require('../src/backend-manager');
+const { BackendManager, normalizeWorkspacePath } = require('../src/backend-manager');
 const { BridgeClient } = require('../src/bridge-client');
+
+test('Windows workspace identities compare ordinary and extended drive and UNC paths', () => {
+  assert.equal(normalizeWorkspacePath(String.raw`\\?\C:\Work\Repo`, 'win32'), normalizeWorkspacePath(String.raw`c:\work\repo`, 'win32'));
+  assert.equal(normalizeWorkspacePath(String.raw`\\?\UNC\Server\Share\Repo`, 'win32'), normalizeWorkspacePath(String.raw`\\server\share\repo`, 'win32'));
+  assert.notEqual(normalizeWorkspacePath(String.raw`\\?\UNC\Server\Share\Repo`, 'win32'), normalizeWorkspacePath(String.raw`\\server\other\repo`, 'win32'));
+});
 
 const server = String.raw`
 const readline = require('node:readline');
 let roots = [];
+let sources = [];
 function send(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   if (request.method === 'initialize') {
     roots = request.params.workspace_roots;
+    sources = request.params.workspace_root_sources || roots;
     send({id: request.id, result: {version: 1}});
+  } else if (request.method === 'workspace_root_identities') {
+    send({id: request.id, result: {roots: roots.map((path, index) => ({path, source: sources[index], identity: 'a'.repeat(64)}))}});
   } else if (request.method === 'status' && request.params.repo.endsWith('slow')) {
     const snapshot = [...roots];
     setTimeout(() => send({id: request.id, result: {roots: snapshot}}), 100);
@@ -75,6 +87,7 @@ function fixture() {
   const manager = new BackendManager({ extensionPath: path.resolve('extension') }, {
     vscode: { EventEmitter, workspace },
     realpath: async value => path.resolve(value),
+    stat: async () => ({ isDirectory: () => true, dev: 1, ino: 1 }),
     createClient: (executable, callbacks) => {
       executed.push(executable);
       return new BridgeClient(executable, {
@@ -127,6 +140,9 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(await manager.fileActionPreview(path.join(root, 'repo'), 'file', 'discard'), {
     roots: [root], method: 'file_action_preview', path: 'file', operation: 'discard'
   });
+  assert.deepEqual(await manager.previewWorktreeRemoval(path.join(root, 'repo'), path.join(root, 'linked')), {
+    roots: [root], method: 'worktree_remove_preview', path: path.join(root, 'linked')
+  });
   assert.deepEqual(await manager.planWorktree(path.join(root, 'repo'), 'feature/a'), {
     roots: [root], method: 'worktree_plan', branch: 'feature/a'
   });
@@ -138,6 +154,159 @@ test('theme configuration errors do not mark the repository backend unavailable'
   await manager.ready();
   manager.client.theme = async () => { throw Object.assign(new Error('theme missing'), { code: 'theme_error' }); };
   await assert.rejects(manager.theme(), /theme missing/);
+  assert.equal(manager.state.status, 'ready');
+});
+
+test('missing workspace folders do not block remaining roots and do not widen scope', async t => {
+  const { manager, root, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const removed = path.resolve('removed-workspace');
+  let missing = false;
+  let replaced = false;
+  const realpath = manager.realpath;
+  manager.realpath = async value => {
+    if (value === removed && missing) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    if (value === removed && replaced) return path.resolve('outside-workspace');
+    return realpath(value);
+  };
+  setFolders([root, removed]);
+  await manager.ready();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root, removed]);
+  missing = true;
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root]);
+  assert.deepEqual((await manager.status(path.join(root, 'repo'))).roots, [root]);
+  missing = false;
+  replaced = true;
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root]);
+  replaced = false;
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root, removed], 'original identity restores its scope');
+  missing = true;
+  setFolders([root, removed]);
+  await manager.ready();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root]);
+  assert.equal(manager.state.status, 'ready');
+});
+
+test('workspace identity survives temporary disappearance and rejects replacement until re-added', async t => {
+  const { manager, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gitpane-roots-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'root');
+  const missing = path.join(dir, 'missing');
+  const saved = path.join(dir, 'saved');
+  await fs.mkdir(root);
+  manager.realpath = fs.realpath;
+  manager.stat = fs.stat;
+  setFolders([root, missing]);
+  await manager.ready();
+  const canonical = await fs.realpath(root);
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [canonical]);
+  await fs.mkdir(missing);
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [canonical], 'folder missing at startup needs re-adding');
+  await fs.rename(root, saved);
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, []);
+  await fs.rename(saved, root);
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [canonical], 'renamed-back original is restored');
+  await fs.rename(root, saved);
+  await fs.mkdir(root);
+  await manager.syncWorkspaceRoots();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [], 'replacement directory remains unauthorized');
+  setFolders([missing]);
+  await manager.ready();
+  setFolders([root, missing]);
+  await manager.ready();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [canonical], 're-adding explicitly authorizes replacement');
+});
+
+test('duplicate workspace aliases remain bound to their sources after one is retargeted', { skip: process.platform === 'win32' }, async t => {
+  const { manager, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gitpane-aliases-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'target');
+  const outside = path.join(dir, 'outside');
+  const first = path.join(dir, 'first');
+  const second = path.join(dir, 'second');
+  await fs.mkdir(target);
+  await fs.mkdir(outside);
+  await fs.symlink(target, first);
+  await fs.symlink(target, second);
+  manager.realpath = fs.realpath;
+  manager.stat = fs.stat;
+  setFolders([first, second]);
+  await manager.ready();
+  const canonical = await fs.realpath(target);
+  const initial = await manager.mutationSnapshot();
+  assert.deepEqual(initial.roots, [canonical, canonical]);
+  assert.deepEqual(initial.rootSources, [first, second]);
+  await fs.unlink(first);
+  await fs.symlink(outside, first);
+  await manager.syncWorkspaceRoots();
+  const current = await manager.mutationSnapshot();
+  assert.deepEqual(current.roots, [canonical]);
+  assert.deepEqual(current.rootSources, [second]);
+  assert.equal(manager.isCurrentMutation(initial, path.join(canonical, 'repo')), false);
+  assert.equal(manager.isCurrentMutation(current, path.join(canonical, 'repo')), true);
+});
+
+test('overlapping mutation snapshots wait for workspace scope reinitialization', async t => {
+  const { manager, root, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const removed = path.resolve('removed-workspace');
+  setFolders([root, removed]);
+  await manager.ready();
+  const realpath = manager.realpath;
+  manager.realpath = async value => {
+    if (value === removed) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return realpath(value);
+  };
+  let release, entered;
+  const initialized = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const initialize = manager.client.initialize.bind(manager.client);
+  manager.client.initialize = async (...args) => { entered(); await gate; return initialize(...args); };
+  const first = manager.mutationSnapshot();
+  const second = manager.mutationSnapshot();
+  await initialized;
+  release();
+  const snapshots = await Promise.all([first, second]);
+  assert.deepEqual(snapshots.map(snapshot => snapshot.roots), [[root], [root]]);
+  assert.equal(snapshots[0].generation, snapshots[1].generation);
+});
+
+test('workspace removal during initialization is retried with the remaining scope', async t => {
+  const { manager, root, workspace } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const removed = path.resolve('removed-workspace');
+  let missing = false;
+  const realpath = manager.realpath;
+  manager.realpath = async value => {
+    if (value === removed && missing) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return realpath(value);
+  };
+  const initialize = manager.client.initialize.bind(manager.client);
+  manager.client.initialize = async (...args) => {
+    if (args[0].includes(removed)) {
+      missing = true;
+      throw Object.assign(new Error('invalid workspace root'), { code: 'invalid_request' });
+    }
+    return initialize(...args);
+  };
+  workspace.workspaceFolders = [root, removed].map(fsPath => ({ uri: { scheme: 'file', fsPath } }));
+  await manager.reconfigure();
+  assert.deepEqual((await manager.mutationSnapshot()).roots, [root]);
   assert.equal(manager.state.status, 'ready');
 });
 

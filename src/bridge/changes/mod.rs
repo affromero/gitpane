@@ -53,22 +53,27 @@ pub(super) struct Release {
 }
 
 #[derive(PartialEq, Eq, Serialize)]
-struct DirectoryIdentity {
+pub(super) struct DirectoryIdentity {
     path: PathBuf,
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    created: u64,
+    volume: u32,
     #[cfg(windows)]
-    attributes: u32,
+    file_index: u64,
     #[cfg(not(any(unix, windows)))]
     created: Option<std::time::SystemTime>,
 }
 
 impl DirectoryIdentity {
-    fn read(path: &Path) -> Result<Self, BridgeError> {
+    pub(super) fn fingerprint(&self) -> Result<String, BridgeError> {
+        let bytes = serde_json::to_vec(self).map_err(repository_error)?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    pub(super) fn read(path: &Path) -> Result<Self, BridgeError> {
         let path = path.canonicalize().map_err(repository_error)?;
         let metadata = fs::metadata(&path).map_err(repository_error)?;
         if !metadata.is_dir() {
@@ -80,7 +85,7 @@ impl DirectoryIdentity {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         #[cfg(windows)]
-        use std::os::windows::fs::MetadataExt;
+        let (volume, file_index) = windows_directory_identity(&path)?;
         Ok(Self {
             path,
             #[cfg(unix)]
@@ -88,13 +93,40 @@ impl DirectoryIdentity {
             #[cfg(unix)]
             inode: metadata.ino(),
             #[cfg(windows)]
-            created: metadata.creation_time(),
+            volume,
             #[cfg(windows)]
-            attributes: metadata.file_attributes(),
+            file_index,
             #[cfg(not(any(unix, windows)))]
             created: metadata.created().ok(),
         })
     }
+}
+
+#[cfg(windows)]
+fn windows_directory_identity(path: &Path) -> Result<(u32, u64), BridgeError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_READ_ATTRIBUTES, GetFileInformationByHandle,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(repository_error)?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut info) } == 0 {
+        return Err(repository_error(std::io::Error::last_os_error()));
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(repository_error("repository directory is unavailable"));
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
 }
 
 #[derive(PartialEq, Eq, Serialize)]
@@ -105,6 +137,10 @@ pub(super) struct RepositoryIdentity {
 }
 
 impl RepositoryIdentity {
+    pub(super) fn same_common(&self, other: &Self) -> bool {
+        self.common == other.common
+    }
+
     pub(super) fn fingerprint(&self) -> Result<String, BridgeError> {
         let bytes = serde_json::to_vec(self).map_err(repository_error)?;
         Ok(format!("{:x}", Sha256::digest(bytes)))

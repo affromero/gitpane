@@ -3,13 +3,13 @@
 const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard']);
-const REPO_ACTIONS = new Set(['createWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
+const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir];
-  if (kind === 'repo') fields.push(item.branch, item.head);
+  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval);
   if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId);
   return JSON.stringify(fields);
@@ -55,6 +55,7 @@ class SidebarActions {
     this.openWorktreeGraph = options.openWorktreeGraph;
     this.reviewWorktree = options.reviewWorktree;
     this.previewFileAction = options.previewFileAction;
+    this.previewWorktreeRemoval = options.previewWorktreeRemoval;
     this.planWorktree = options.planWorktree;
     this.revalidateChange = options.revalidateChange;
     this.validateChangePath = options.validateChangePath;
@@ -82,6 +83,7 @@ class SidebarActions {
       if (kind === 'file') choices = fileOptions(item);
       else if (kind === 'repo') choices = [
         { label: 'Create Worktree', action: 'createWorktree' },
+        ...(item.worktreeRemoval ? [{ label: 'Remove Worktree', action: 'removeWorkspaceWorktree' }] : []),
         { label: 'Review Branch', action: 'reviewBranch' },
         { label: 'GitHub Issues and Pull Requests', action: 'github' },
         { label: 'Sessions', action: 'session' },
@@ -195,6 +197,7 @@ class SidebarActions {
       }
       let method;
       let params;
+      let lockKey = item.commonDir;
       if (kind === 'file') {
         let operation = action;
         let token;
@@ -215,6 +218,23 @@ class SidebarActions {
         method = 'file_action';
         params = { repo: item.repoPath, path: item.path, operation,
           ...(token ? { expected_token: token } : {}) };
+      } else if (action === 'removeWorkspaceWorktree' || action === 'removeWorktree') {
+        const target = action === 'removeWorkspaceWorktree' ? item.worktreeRemoval : item;
+        if (!target || typeof target.path !== 'string' || !path.isAbsolute(target.path)) return;
+        if (typeof this.previewWorktreeRemoval !== 'function') throw new Error('Safe worktree removal is unavailable. Update the Gitpane backend and try again.');
+        let preview;
+        try { preview = await this.previewWorktreeRemoval(target.repoPath, target.path); }
+        catch (error) { if (!current()) return; throw error; }
+        if (!current()) return;
+        if (!preview || typeof preview.repo_identity !== 'string' || !/^[a-f0-9]{64}$/.test(preview.repo_identity) ||
+          typeof preview.worktree_identity !== 'string' || !/^[a-f0-9]{64}$/.test(preview.worktree_identity)) {
+          throw new Error('Gitpane returned an invalid worktree confirmation. Update the backend and try again.');
+        }
+        if (await this.vscode.window.showWarningMessage(`Remove worktree ${target.path}?`, { modal: true }, 'Remove') !== 'Remove') return;
+        method = 'worktree_remove';
+        params = { repo: target.repoPath, path: target.path, expected_repo_identity: preview.repo_identity,
+          expected_worktree_identity: preview.worktree_identity };
+        lockKey = target.commonDir;
       } else if (kind === 'repo' && action !== 'createWorktree') {
         const submodules = ['syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules'].includes(action);
         method = submodules ? 'submodule_action' : 'repo_sync';
@@ -259,17 +279,12 @@ class SidebarActions {
         if (targetProblem) throw new Error(targetProblem);
         method = 'worktree_create';
         params = { repo: item.repoPath, branch, path: target };
-      } else {
-        if (typeof item.path !== 'string' || !path.isAbsolute(item.path)) return;
-        if (await this.vscode.window.showWarningMessage(`Remove worktree ${item.path}?`, { modal: true }, 'Remove') !== 'Remove') return;
-        method = 'worktree_remove';
-        params = { repo: item.repoPath, path: item.path };
-      }
+      } else return;
       if (!current()) return;
       let actionError;
       try {
         const result = await this.mutations.execute(method, params, {
-          lockKey: item.commonDir,
+          lockKey,
           validateTarget: current
         });
         if (method === 'submodule_action') {

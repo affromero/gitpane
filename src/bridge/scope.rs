@@ -1,17 +1,62 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use super::BridgeError;
+use super::{BridgeError, changes::DirectoryIdentity};
+
+#[cfg(test)]
+mod tests;
+
+struct Root {
+    path: PathBuf,
+    source: PathBuf,
+    identity: DirectoryIdentity,
+}
+
+impl Root {
+    fn is_current(&self) -> bool {
+        self.source
+            .canonicalize()
+            .is_ok_and(|path| path == self.path)
+            && DirectoryIdentity::read(&self.path).is_ok_and(|identity| identity == self.identity)
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Scope {
-    roots: Vec<PathBuf>,
+    roots: Vec<Root>,
 }
 
 impl Scope {
     pub(super) fn new(roots: Vec<PathBuf>) -> Result<Self, BridgeError> {
+        Self::new_with_identities(roots, None, None)
+    }
+
+    pub(super) fn new_with_identities(
+        roots: Vec<PathBuf>,
+        expected: Option<Vec<String>>,
+        sources: Option<Vec<PathBuf>>,
+    ) -> Result<Self, BridgeError> {
+        if expected
+            .as_ref()
+            .is_some_and(|values| values.len() != roots.len())
+        {
+            return Err(BridgeError::new(
+                "invalid_request",
+                "workspace root identity count does not match roots",
+            ));
+        }
+        if sources
+            .as_ref()
+            .is_some_and(|values| values.len() != roots.len())
+        {
+            return Err(BridgeError::new(
+                "invalid_request",
+                "workspace root source count does not match roots",
+            ));
+        }
+        let sources = sources.unwrap_or_else(|| roots.clone());
         let mut validated = Vec::with_capacity(roots.len());
-        for root in roots {
+        for (index, (root, source)) in roots.into_iter().zip(sources).enumerate() {
             if !root.is_absolute() {
                 return Err(BridgeError::new(
                     "invalid_request",
@@ -20,29 +65,118 @@ impl Scope {
             }
             let canonical = root.canonicalize().map_err(|error| {
                 BridgeError::new(
-                    "invalid_request",
+                    if expected.is_some()
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                        )
+                    {
+                        "stale_target"
+                    } else {
+                        "invalid_request"
+                    },
                     format!("invalid workspace root: {error}"),
                 )
             })?;
             if !canonical.is_dir() {
                 return Err(BridgeError::new(
-                    "invalid_request",
+                    if expected.is_some() {
+                        "stale_target"
+                    } else {
+                        "invalid_request"
+                    },
                     "workspace roots must be directories",
                 ));
             }
-            if !validated.contains(&canonical) {
-                validated.push(canonical);
+            if !source.is_absolute() {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "workspace root sources must be absolute paths",
+                ));
             }
+            let current_source = source.canonicalize().map_err(|error| {
+                BridgeError::new(
+                    "stale_target",
+                    format!("Workspace folder is unavailable: {error}"),
+                )
+            })?;
+            if current_source != canonical {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Workspace folder changed; refresh before continuing.",
+                ));
+            }
+            let identity = DirectoryIdentity::read(&canonical).map_err(|error| {
+                BridgeError::new(
+                    "invalid_request",
+                    format!("invalid workspace root: {}", error.message),
+                )
+            })?;
+            if let Some(expected) = &expected {
+                let token = &expected[index];
+                if token.len() != 64
+                    || !token
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(BridgeError::new(
+                        "invalid_request",
+                        "invalid workspace root identity",
+                    ));
+                }
+                if identity.fingerprint()? != *token {
+                    return Err(BridgeError::new(
+                        "stale_target",
+                        "Workspace root changed; refresh before continuing.",
+                    ));
+                }
+            }
+            validated.push(Root {
+                path: canonical,
+                source,
+                identity,
+            });
         }
         Ok(Self { roots: validated })
     }
 
+    pub(super) fn identities(&self) -> Result<serde_json::Value, BridgeError> {
+        let mut roots = Vec::with_capacity(self.roots.len());
+        for root in &self.roots {
+            if !root.is_current() {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Workspace folder changed; refresh before continuing.",
+                ));
+            }
+            let current = DirectoryIdentity::read(&root.path).map_err(|error| {
+                BridgeError::new(
+                    "stale_target",
+                    format!("Workspace root is unavailable: {}", error.message),
+                )
+            })?;
+            if current != root.identity {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Workspace root changed; refresh before continuing.",
+                ));
+            }
+            let path = root.path.to_str().ok_or_else(|| {
+                BridgeError::new("repository_error", "workspace root is not valid UTF-8")
+            })?;
+            let source = root.source.to_str().ok_or_else(|| {
+                BridgeError::new("repository_error", "workspace folder is not valid UTF-8")
+            })?;
+            roots.push(serde_json::json!({"path": path, "source": source, "identity": root.identity.fingerprint()?}));
+        }
+        Ok(serde_json::json!({"roots": roots}))
+    }
+
     pub(super) fn allows(&self, path: &Path) -> bool {
         path.canonicalize().is_ok_and(|canonical| {
-            self.roots.iter().any(|root| {
-                root.canonicalize()
-                    .is_ok_and(|current| current == *root && canonical.starts_with(&current))
-            })
+            self.roots
+                .iter()
+                .any(|root| canonical.starts_with(&root.path) && root.is_current())
         })
     }
 

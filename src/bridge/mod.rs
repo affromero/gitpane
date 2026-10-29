@@ -60,6 +60,10 @@ struct Request {
 struct Initialize {
     version: u64,
     workspace_roots: Vec<PathBuf>,
+    #[serde(default)]
+    workspace_root_identities: Option<Vec<String>>,
+    #[serde(default)]
+    workspace_root_sources: Option<Vec<PathBuf>>,
 }
 
 #[derive(Deserialize)]
@@ -143,7 +147,16 @@ fn process(
                 "unsupported bridge protocol version",
             ));
         }
-        let updated = Scope::new(init.workspace_roots)?;
+        let updated =
+            if init.workspace_root_identities.is_none() && init.workspace_root_sources.is_none() {
+                Scope::new(init.workspace_roots)?
+            } else {
+                Scope::new_with_identities(
+                    init.workspace_roots,
+                    init.workspace_root_identities,
+                    init.workspace_root_sources,
+                )?
+            };
         snapshots.clear();
         *scope = Some(updated);
         return Ok(json!({ "version": PROTOCOL_VERSION }));
@@ -159,6 +172,10 @@ fn process(
     let worktree_cfg = options.worktree;
     let review_base = options.review_base;
     match request.method.as_str() {
+        "workspace_root_identities" => {
+            let _: EmptyRequest = params(request.params)?;
+            scope.identities()
+        }
         "theme" => {
             let _: EmptyRequest = params(request.params)?;
             theme::query(options.theme)
@@ -172,6 +189,9 @@ fn process(
             mutation::file_action_preview(scope, input)
         }
         "working_symlink" => mutation::working_symlink(scope, params(request.params)?),
+        "worktree_remove_preview" => {
+            mutation::worktree_remove_preview(scope, params(request.params)?)
+        }
         "status" => {
             let input: StatusRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;

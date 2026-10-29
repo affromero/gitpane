@@ -73,7 +73,8 @@ class RepositoryTree {
     this.repositoryTokens = new Map();
     this.repositoryRevisions = new Map();
     this.nextRepositoryToken = 0;
-    this.workspaceIdentities = new Map();
+    this.sharedWorkspaceIdentities = backend.workspaceIdentities instanceof Map;
+    this.workspaceIdentities = this.sharedWorkspaceIdentities ? backend.workspaceIdentities : new Map();
     this.worktreeOpenings = new Map();
     this.groupCache = new Map();
     this.backendStatuses = new Map();
@@ -353,6 +354,20 @@ class RepositoryTree {
     return view.worktrees.get(parent.rootUri.toString()) || [];
   }
 
+  explicitWorktreeAnchor(repo, view = this.workspaceView()) {
+    const target = view.records.find(record => record.repo === repo);
+    if (!target?.explicit || !target.common) return undefined;
+    const anchors = view.records.filter(record => record !== target && sameIdentity(record.common, target.common) &&
+      Array.isArray(record.status?.worktrees)).sort((a, b) => compareWorktreeAnchors(a.repo, b.repo));
+    for (const anchor of anchors) {
+      const item = anchor.status.worktrees.find(worktree => typeof worktree.path === 'string' &&
+        typeof worktree.branch === 'string' && sameIdentity(directoryIdentity(worktree.path), target.identity));
+      if (item) return { anchor: anchor.repo, path: item.path, branch: item.branch,
+        commonIdentity: identityKey(target.common) };
+    }
+    return undefined;
+  }
+
   changed() {
     if (this.disposed) return;
     if (this.sortOrder !== 'workspace') this.scheduleSort();
@@ -433,10 +448,12 @@ class RepositoryTree {
   updateWorkspacePaths() {
     const folders = (vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
     const active = new Set(folders.map(folder => folder.uri.fsPath));
-    for (const key of this.workspaceIdentities.keys()) if (!active.has(key)) this.workspaceIdentities.delete(key);
-    for (const folder of folders) {
-      const key = folder.uri.fsPath;
-      if (!this.workspaceIdentities.has(key)) this.workspaceIdentities.set(key, directoryIdentity(key));
+    if (!this.sharedWorkspaceIdentities) {
+      for (const key of this.workspaceIdentities.keys()) if (!active.has(key)) this.workspaceIdentities.delete(key);
+      for (const folder of folders) {
+        const key = folder.uri.fsPath;
+        if (!this.workspaceIdentities.has(key)) this.workspaceIdentities.set(key, directoryIdentity(key));
+      }
     }
     this.workspacePaths = folders.map(folder => folder.uri.fsPath);
   }
@@ -552,6 +569,7 @@ class RepositoryTree {
     this.updateWorkspacePaths();
     this.changed();
     try {
+      await this.backend.syncWorkspaceRoots?.();
       const repos = this.git.repositories.filter(repo => this.isVisible(repo));
       const cycle = { generation: this.backendGeneration,
         tokens: new Map(repos.map(repo => [repo.rootUri.toString(), this.repositoryToken(repo)])),
@@ -578,7 +596,15 @@ class RepositoryTree {
 
   getChildren(node, workspaceView) {
     if (!node) {
-      const failures = [this.pollError, this.backendError, this.sortError, ...this.statusErrors.values(), ...this.backendErrors.values()].filter(Boolean).map(message => ({ type: 'error', message }));
+      const missingFolders = this.workspacePaths.flatMap(folder => {
+        const current = directoryIdentity(folder);
+        if (!current) return [`Workspace folder unavailable: ${folder}`];
+        if (!sameIdentity(this.workspaceIdentities.get(folder), current)) {
+          return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
+        }
+        return [];
+      });
+      const failures = [this.pollError, this.backendError, this.sortError, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.workspaceView();
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
         repo, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty

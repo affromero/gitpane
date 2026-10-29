@@ -6,10 +6,22 @@ const { BridgeClient, BridgeError } = require('./bridge-client');
 const { MutationManager } = require('./mutation-manager');
 const { visibleRepository } = require('./model');
 
+function normalizeWorkspacePath(value, platform = process.platform) {
+  if (platform !== 'win32') return value;
+  const ordinary = value.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
+  return path.win32.normalize(ordinary).toLowerCase();
+}
+
+function sameWorkspaceScope(first, second) {
+  return !!first && !!second && first.roots.length === second.roots.length &&
+    first.roots.every((root, index) => root === second.roots[index] && first.sources[index] === second.sources[index]);
+}
+
 class BackendManager {
   constructor(context, options = {}) {
     this.vscode = options.vscode || require('vscode');
     this.realpath = options.realpath || fs.realpath;
+    this.stat = options.stat || fs.stat;
     this.createClient = options.createClient || ((executable, callbacks) => new BridgeClient(executable, callbacks));
     this.output = options.output;
     this.sessionMutations = options.sessionMutations || new MutationManager({
@@ -29,6 +41,9 @@ class BackendManager {
     this.verifyClients = new Set();
     this.executable = undefined;
     this.roots = undefined;
+    this.rootSources = undefined;
+    this.rootIdentities = undefined;
+    this.workspaceIdentities = new Map();
     this.generation = 0;
     this.disposed = false;
     this.emitter = new this.vscode.EventEmitter();
@@ -36,6 +51,8 @@ class BackendManager {
     this.state = { status: 'initializing' };
     this.subscriptions = [
       this.vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        const active = new Set((this.vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath));
+        for (const source of this.workspaceIdentities.keys()) if (!active.has(source)) this.workspaceIdentities.delete(source);
         this.client?.dispose({ immediate: true });
         this.client = undefined;
         this.executable = undefined;
@@ -62,6 +79,8 @@ class BackendManager {
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.roots = undefined;
+    this.rootSources = undefined;
+    this.rootIdentities = undefined;
     this.setState('initializing');
     const configured = this.configure(generation);
     this.configuration = configured;
@@ -71,6 +90,54 @@ class BackendManager {
     return configured;
   }
 
+  async workspaceRoots(generation) {
+    const folders = (this.vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
+    const identities = await Promise.all(folders.map(async folder => {
+      try {
+        const resolved = await this.realpath(folder.uri.fsPath);
+        const stat = await this.stat(resolved, { bigint: true });
+        return stat.isDirectory() ? { path: normalizeWorkspacePath(resolved), dev: stat.dev, ino: stat.ino } : undefined;
+      }
+      catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return undefined;
+        throw error;
+      }
+    }));
+    if (this.disposed || generation !== this.generation) return undefined;
+    const paths = [];
+    const sources = [];
+    folders.forEach((folder, index) => {
+      const source = folder.uri.fsPath;
+      const current = identities[index];
+      if (!this.workspaceIdentities.has(source)) this.workspaceIdentities.set(source, current);
+      const saved = this.workspaceIdentities.get(source);
+      if (saved && current && saved.path === current.path && saved.dev === current.dev && saved.ino === current.ino) {
+        paths.push(current.path);
+        sources.push(source);
+      }
+    });
+    return { roots: paths, sources };
+  }
+
+  async syncWorkspaceRoots() {
+    while (!this.disposed) {
+      await this.ready();
+      const generation = this.generation;
+      const previous = this.roots && this.rootSources ? { roots: this.roots, sources: this.rootSources } : undefined;
+      const current = await this.workspaceRoots(generation);
+      if (generation !== this.generation) continue;
+      if (!previous || !current) throw new BridgeError('invalid_workspace', 'Gitpane workspace scope is unavailable.');
+      if (sameWorkspaceScope(previous, current)) return;
+      const nextGeneration = generation + 1;
+      try { await this.reconfigure(); }
+      catch (error) {
+        if (nextGeneration !== this.generation) continue;
+        throw error;
+      }
+    }
+    throw new BridgeError('disposed', 'Gitpane backend has been disposed.');
+  }
+
   async configure(generation) {
     const configured = this.vscode.workspace.getConfiguration('gitpane').get('backendPath', '');
     if (typeof configured !== 'string' || (configured && !path.isAbsolute(configured))) {
@@ -78,9 +145,6 @@ class BackendManager {
     }
     const executable = configured || path.join(this.extensionPath, 'bin', process.platform === 'win32' ? 'gitpane.exe' : 'gitpane');
     if (!path.isAbsolute(executable)) throw new BridgeError('invalid_backend_path', 'Gitpane backend path must be absolute.');
-    const folders = (this.vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
-    const roots = [...new Set(await Promise.all(folders.map(folder => this.realpath(folder.uri.fsPath))))];
-    if (this.disposed || generation !== this.generation) return;
     if (!this.client || executable !== this.executable) {
       this.client?.dispose();
       const callbacks = {
@@ -94,18 +158,51 @@ class BackendManager {
       this.executable = executable;
     }
     const client = this.client;
-    await client.initialize(roots);
-    if (this.disposed || generation !== this.generation || client !== this.client) return;
-    this.roots = roots;
-    this.setState('ready');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const scope = await this.workspaceRoots(generation);
+      if (this.disposed || generation !== this.generation || !scope || client !== this.client) return;
+      const { roots, sources } = scope;
+      const known = sources.map(source => this.workspaceIdentities.get(source)?.token);
+      try {
+        await client.initialize(roots, known.every(token => token !== undefined) ? known : undefined, sources);
+        const result = await client.workspaceRootIdentities();
+        if (!result || !Array.isArray(result.roots) || result.roots.length !== roots.length || result.roots.some((item, index) =>
+          !item || typeof item.path !== 'string' || normalizeWorkspacePath(item.path) !== roots[index] || item.source !== sources[index] ||
+          typeof item.identity !== 'string' || !/^[a-f0-9]{64}$/.test(item.identity))) {
+          throw new BridgeError('protocol_error', 'Gitpane returned invalid workspace identities. Update the backend and try again.');
+        }
+        const current = await this.workspaceRoots(generation);
+        if (this.disposed || generation !== this.generation || client !== this.client) return;
+        if (!sameWorkspaceScope(current, scope)) continue;
+        for (let index = 0; index < roots.length; index++) {
+          const token = result.roots[index].identity;
+          if (known[index] !== undefined && known[index] !== token) {
+            throw new BridgeError('workspace_changed', 'Workspace folder identity changed. Remove and re-add it to the workspace.');
+          }
+          this.workspaceIdentities.get(sources[index]).token = token;
+        }
+        this.roots = roots;
+        this.rootSources = sources;
+        this.rootIdentities = result.roots.map(item => item.identity);
+        this.setState('ready');
+        return;
+      } catch (error) {
+        if (this.disposed || generation !== this.generation || client !== this.client) return;
+        const current = await this.workspaceRoots(generation);
+        if (generation !== this.generation || this.disposed) return;
+        if (!current || sameWorkspaceScope(current, scope)) throw error;
+        if (attempt === 2) throw new BridgeError('workspace_changed', 'Workspace folders kept changing during initialization. Refresh and try again.');
+      }
+    }
+    throw new BridgeError('workspace_changed', 'Workspace folders kept changing during initialization. Refresh and try again.');
   }
 
   async mutationSnapshot() {
-    await this.ready();
-    if (!this.client || !this.executable || !this.roots) {
+    await this.syncWorkspaceRoots();
+    if (!this.client || !this.executable || !this.roots || !this.rootSources || !this.rootIdentities) {
       throw new BridgeError('invalid_workspace', 'Gitpane workspace scope is unavailable.');
     }
-    return { executable: this.executable, roots: [...this.roots], generation: this.generation };
+    return { executable: this.executable, roots: [...this.roots], rootSources: [...this.rootSources], rootIdentities: [...this.rootIdentities], generation: this.generation };
   }
 
   isCurrentMutation(snapshot, repo) {
@@ -113,7 +210,11 @@ class BackendManager {
       snapshot.generation === this.generation &&
       snapshot.executable === this.executable && Array.isArray(snapshot.roots) &&
       snapshot.roots.length === this.roots.length &&
-      snapshot.roots.every((root, index) => root === this.roots[index]) &&
+      snapshot.roots.every((root, index) => root === this.roots[index]) && Array.isArray(snapshot.rootIdentities) &&
+      !!this.rootSources && Array.isArray(snapshot.rootSources) && snapshot.rootSources.length === this.rootSources.length &&
+      snapshot.rootSources.every((source, index) => source === this.rootSources[index]) &&
+      !!this.rootIdentities && snapshot.rootIdentities.length === this.rootIdentities.length &&
+      snapshot.rootIdentities.every((token, index) => token === this.rootIdentities[index]) &&
       visibleRepository(repo, this.roots);
   }
 
@@ -148,6 +249,7 @@ class BackendManager {
       else if (method === 'changes_release') result = await client.releaseChanges(repo, argument);
       else if (method === 'sort_repositories') result = await client.sortRepositories(argument.order, argument.repositories);
       else if (method === 'file_action_preview') result = await client.fileActionPreview(repo, argument.path, argument.operation);
+      else if (method === 'worktree_remove_preview') result = await client.previewWorktreeRemoval(repo, argument);
       else if (method === 'working_symlink') result = await client.readWorkingSymlink(repo, argument);
       else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
       else if (method === 'branch_review') result = await client.branchReview(repo);
@@ -170,12 +272,13 @@ class BackendManager {
         throw new BridgeError('workspace_changed', 'Workspace changed before the Gitpane response arrived.');
       }
       const invalidWorktreePlan = method === 'worktree_plan' && error?.code === 'invalid_request';
+      const invalidWorktreePreview = method === 'worktree_remove_preview' && ['invalid_request', 'unsupported_backend', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
       const invalidLink = method === 'working_symlink' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'file_changed', 'file_too_large'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidLink && !staleChanges && !obsoleteRelease && !invalidTheme) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
       throw error;
@@ -202,7 +305,7 @@ class BackendManager {
     this.changesClient = client;
     const pending = (async () => {
       try {
-        await client.initialize(snapshot.roots);
+        await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
         if (this.disposed || epoch !== this.changesEpoch || snapshot.generation !== this.generation || client !== this.changesClient) {
           throw new BridgeError('workspace_changed', 'Workspace changed before changes could load.');
         }
@@ -245,7 +348,7 @@ class BackendManager {
     this.validationClient = client;
     const pending = (async () => {
       try {
-        await client.initialize(snapshot.roots);
+        await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
         if (this.disposed || epoch !== this.validationEpoch || snapshot.generation !== this.generation || client !== this.validationClient) {
           throw new BridgeError('workspace_changed', 'Workspace changed before submodule validation.');
         }
@@ -315,7 +418,7 @@ class BackendManager {
       return result;
     };
     try {
-      await client.initialize(snapshot.roots);
+      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
       if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
       return {
         begin: () => run(() => client.beginChanges(repoPath)),
@@ -350,6 +453,8 @@ class BackendManager {
 
   fileActionPreview(repo, path, operation) { return this.request('file_action_preview', repo, { path, operation }); }
 
+  previewWorktreeRemoval(repo, path) { return this.request('worktree_remove_preview', repo, path); }
+
   readWorkingSymlink(repo, path) { return this.request('working_symlink', repo, path); }
 
   planWorktree(repo, branch) { return this.request('worktree_plan', repo, branch); }
@@ -365,7 +470,7 @@ class BackendManager {
     if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding sessions.');
     const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk) });
     try {
-      await client.initialize(snapshot.roots);
+      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
       if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding sessions.');
       const result = await client.call('sessions_list', { repo: repoPath, backend });
       if (!this.isCurrentMutation(snapshot, repoPath) || await this.realpath(repo) !== repoPath) {
@@ -418,4 +523,4 @@ class BackendManager {
   }
 }
 
-module.exports = { BackendManager };
+module.exports = { BackendManager, normalizeWorkspacePath };

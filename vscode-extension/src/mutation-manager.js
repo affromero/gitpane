@@ -43,8 +43,11 @@ function normalizeAction(method, params) {
   if (method === 'worktree_create' && path.isAbsolute(params.path) && typeof params.branch === 'string') {
     return { repo: params.repo, path: params.path, branch: params.branch };
   }
-  if (method === 'worktree_remove' && path.isAbsolute(params.path)) {
-    return { repo: params.repo, path: params.path };
+  if (method === 'worktree_remove' && path.isAbsolute(params.path) &&
+    /^[a-f0-9]{64}$/.test(params.expected_repo_identity || '') &&
+    /^[a-f0-9]{64}$/.test(params.expected_worktree_identity || '')) {
+    return { repo: params.repo, path: params.path, expected_repo_identity: params.expected_repo_identity,
+      expected_worktree_identity: params.expected_worktree_identity };
   }
   throw new BridgeError('invalid_request', 'Unsupported Gitpane mutation.');
 }
@@ -170,10 +173,14 @@ class MutationManager {
     }
     const context = await this.getSnapshot();
     if (!context || !path.isAbsolute(context.executable) || !Array.isArray(context.roots) ||
-      context.roots.some(root => typeof root !== 'string' || !path.isAbsolute(root))) {
+      context.roots.some(root => typeof root !== 'string' || !path.isAbsolute(root)) ||
+      !Array.isArray(context.rootSources) || context.rootSources.length !== context.roots.length ||
+      context.rootSources.some(source => typeof source !== 'string' || !path.isAbsolute(source)) ||
+      !Array.isArray(context.rootIdentities) || context.rootIdentities.length !== context.roots.length ||
+      context.rootIdentities.some(identity => typeof identity !== 'string' || !/^[a-f0-9]{64}$/.test(identity))) {
       throw new BridgeError('invalid_workspace', 'Gitpane workspace scope is unavailable.');
     }
-    const snapshot = { executable: context.executable, roots: [...context.roots], generation: context.generation };
+    const snapshot = { executable: context.executable, roots: [...context.roots], rootSources: [...context.rootSources], rootIdentities: [...context.rootIdentities], generation: context.generation };
     const repo = await this.realpath(action.repo);
     let lock;
     try {
@@ -198,7 +205,16 @@ class MutationManager {
         spawn: this.spawn, onStderr: this.onStderr
       });
       this.workers.add(worker);
-      const initialized = await worker.call(1, 'initialize', { version: 1, workspace_roots: roots }, this.handshakeTimeoutMs);
+      let initialized;
+      try {
+        initialized = await worker.call(1, 'initialize', { version: 1, workspace_roots: roots,
+          workspace_root_sources: snapshot.rootSources, workspace_root_identities: snapshot.rootIdentities }, this.handshakeTimeoutMs);
+      } catch (error) {
+        if (error?.code === 'invalid_request' && /unknown field.*workspace_root_(?:identities|sources)/i.test(error.message)) {
+          throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace identity checks. Update the backend and try again.');
+        }
+        throw error;
+      }
       if (!initialized || initialized.version !== 1) throw new BridgeError('unsupported_version', 'Gitpane service returned an unsupported protocol version.');
       const currentRepo = await this.realpath(action.repo);
       if (this.disposed || currentRepo !== repo || !await this.isCurrent(snapshot, repo) ||

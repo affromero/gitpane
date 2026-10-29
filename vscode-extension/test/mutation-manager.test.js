@@ -25,7 +25,7 @@ function reply(value) { process.stdout.write(JSON.stringify(value) + '\n', () =>
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   if (request.method === 'initialize') {
-    fs.writeFileSync(file('initialized'), '');
+    fs.writeFileSync(file('initialized'), JSON.stringify(request));
     const answer = () => reply({id: request.id, result: {version: mode === 'wrong-version' ? 2 : 1}});
     if (mode === 'hold-init') release('release-init', answer); else answer();
     return;
@@ -64,7 +64,7 @@ async function fixture(t, mode = 'success') {
   let generation = 1;
   const children = [];
   const manager = new MutationManager({
-    getSnapshot: () => ({ executable: path.join(dir, 'backend'), roots: [workspace], generation }),
+    getSnapshot: () => ({ executable: path.join(dir, 'backend'), roots: [workspace], rootSources: [workspace], rootIdentities: ['a'.repeat(64)], generation }),
     isCurrent: snapshot => snapshot.generation === generation,
     spawn: (_executable, _args, options) => {
       const child = spawn(process.execPath, ['-e', service], {
@@ -199,8 +199,26 @@ test('transport loss after dispatch reports unknown outcome without replaying', 
 
 test('a reported Git failure remains explicit and is never replayed', async t => {
   const f = await fixture(t, 'git-error');
-  await assert.rejects(f.manager.execute('worktree_remove', { repo: f.repo, path: f.linked }, f.opts), code('git_error'));
+  await assert.rejects(f.manager.execute('worktree_remove', { repo: f.repo, path: f.linked,
+    expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'b'.repeat(64) }, f.opts), code('git_error'));
   assert.equal((await f.actions()).length, 1);
+});
+
+test('worktree removal requires both identities and checks selection after worker startup', async t => {
+  const f = await fixture(t, 'hold-init');
+  const params = { repo: f.repo, path: f.linked, expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'b'.repeat(64) };
+  await assert.rejects(f.manager.execute('worktree_remove', { repo: f.repo, path: f.linked }, f.opts), code('invalid_request'));
+  await assert.rejects(f.manager.execute('worktree_remove', { ...params, expected_worktree_identity: 'BAD' }, f.opts), code('invalid_request'));
+  let selected = true;
+  const pending = f.manager.execute('worktree_remove', params, { ...f.opts, validateTarget: () => selected });
+  await f.wait('initialized');
+  const initialized = JSON.parse(await fs.readFile(path.join(f.dir, 'initialized'), 'utf8'));
+  assert.deepEqual(initialized.params.workspace_root_identities, ['a'.repeat(64)]);
+  assert.deepEqual(initialized.params.workspace_root_sources, [path.join(f.dir, 'workspace')]);
+  selected = false;
+  await f.mark('release-init');
+  await assert.rejects(pending, code('workspace_changed'));
+  assert.equal(await exists(path.join(f.dir, 'actions')), false);
 });
 
 test('unsupported service versions fail before dispatch', async t => {

@@ -24,6 +24,7 @@ function fixture() {
   const errors = [];
   let beforeValidation = () => {};
   let preview = async () => ({ token: 'a'.repeat(64) });
+  let worktreePreview = async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'b'.repeat(64) });
   let stat = async () => ({});
   let failure;
   let refreshFailure;
@@ -62,7 +63,8 @@ function fixture() {
     openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
-    previewFileAction: (...args) => preview(...args)
+    previewFileAction: (...args) => preview(...args),
+    previewWorktreeRemoval: (...args) => worktreePreview(...args)
   });
   return {
     actions, root, commonDir, uri, node, calls, errors, inputs, inputOptions, plans,
@@ -75,6 +77,7 @@ function fixture() {
     setInput(fn) { input = fn; },
     setPlan(fn) { plan = fn; },
     setPreview(fn) { preview = fn; },
+    setWorktreePreview(fn) { worktreePreview = fn; },
     setStat(fn) { stat = fn; }
   };
 }
@@ -225,7 +228,8 @@ test('worktree creation and removal use current opaque targets and confirm remov
   f.confirm(button => button);
   await f.actions.showMenu('worktree', 'worktree');
   assert.match(f.calls[0][1], /remove worktree/i);
-  assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.getWorktree().path }, f.commonDir]);
+  assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.getWorktree().path,
+    expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'b'.repeat(64) }, f.commonDir]);
 });
 
 test('an unavailable configured worktree location is shown and can be replaced', async () => {
@@ -348,6 +352,70 @@ test('available worktrees offer graph and review only while their repository rem
     return undefined;
   });
   await f.actions.showMenu('worktree', 'worktree');
+});
+
+test('explicit worktree repository removal uses its current anchor and confirmation', async () => {
+  const f = fixture();
+  const removal = { repoPath: f.root, commonDir: f.commonDir, path: path.resolve('workspace/linked'),
+    branch: 'topic', anchorKey: 'anchor', anchorToken: 1, targetToken: 2, commonIdentity: 'identity' };
+  f.setRepo({ ...f.getRepo(), worktreeRemoval: removal });
+  f.pick(choices => choices.find(choice => choice.action === 'removeWorkspaceWorktree'));
+  f.confirm(() => 'Remove');
+  await f.actions.showMenu('repo', 'repo');
+  assert.match(f.calls[0][1], /remove worktree/i);
+  assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: removal.path,
+    expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'b'.repeat(64) }, f.commonDir]);
+  assert.deepEqual(f.calls[2], ['refresh']);
+
+  f.calls.length = 0;
+  f.pick(choices => {
+    f.setRepo({ ...f.getRepo(), worktreeRemoval: { ...removal, anchorToken: 2 } });
+    return choices.find(choice => choice.action === 'removeWorkspaceWorktree');
+  });
+  await f.actions.showMenu('repo', 'repo');
+  assert.deepEqual(f.calls, [], 'a reopened anchor cannot authorize an old menu');
+
+  f.setRepo({ ...f.getRepo(), worktreeRemoval: removal });
+  f.pick(choices => choices.find(choice => choice.action === 'removeWorkspaceWorktree'));
+  f.confirm(() => { f.setRepo({ ...f.getRepo(), worktreeRemoval: undefined }); return 'Remove'; });
+  await f.actions.showMenu('repo', 'repo');
+  assert.equal(f.calls.filter(call => call[0] === 'mutation').length, 0, 'a removed registration cannot authorize confirmation');
+});
+
+test('worktree removal rejects stale selection and invalid identity confirmations', async () => {
+  for (const explicit of [false, true]) {
+    const f = fixture();
+    const removal = { ...f.getWorktree(), anchorToken: 1, targetToken: 2 };
+    if (explicit) f.setRepo({ ...f.getRepo(), worktreeRemoval: removal });
+    const selected = explicit ? action('removeWorkspaceWorktree', 'repo') : action('removeWorktree', 'worktree');
+    f.confirm(() => 'Remove');
+    f.setWorktreePreview(async () => {
+      if (explicit) f.setRepo(undefined); else f.setWorktree(undefined);
+      return { repo_identity: 'a'.repeat(64), worktree_identity: 'b'.repeat(64) };
+    });
+    await f.actions.handle(selected);
+    assert.deepEqual(f.calls, [], 'workspace removal during preview cancels before confirmation');
+
+    if (explicit) f.setRepo({ repoPath: f.root, commonDir: f.commonDir, worktreeRemoval: removal });
+    else f.setWorktree(removal);
+    f.setWorktreePreview(async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'invalid' }));
+    await f.actions.handle(selected);
+    assert.deepEqual(f.calls, []);
+    assert.match(f.errors.at(-1), /invalid worktree confirmation/i);
+
+    f.setWorktreePreview(async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'b'.repeat(64) }));
+    f.beforeValidation(() => { if (explicit) f.setRepo(undefined); else f.setWorktree(undefined); });
+    await f.actions.handle(selected);
+    assert.equal(f.calls.some(call => call[0] === 'mutation'), false, 'selection lost during worker startup');
+  }
+});
+
+test('ordinary repository menus do not offer worktree removal', async () => {
+  const f = fixture();
+  f.pick(choices => { assert.ok(!choices.some(choice => choice.action === 'removeWorkspaceWorktree')); return undefined; });
+  await f.actions.showMenu('repo', 'repo');
+  await f.actions.handle(action('removeWorkspaceWorktree', 'repo'));
+  assert.deepEqual(f.calls, []);
 });
 
 test('delegated worktree repository actions stop when the worktree link disappears during selection', async () => {

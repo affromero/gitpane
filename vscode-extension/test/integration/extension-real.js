@@ -69,6 +69,7 @@ async function main() {
   workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
   const openedRepositories = new EventEmitter();
   const closedRepositories = new EventEmitter();
+  const workspaceChanged = new EventEmitter();
   const api = { repositories: [repo, worktree], onDidOpenRepository: openedRepositories.event, onDidCloseRepository: closedRepositories.event,
     toGitUri: (value, ref) => ({ scheme: 'git', fsPath: value.fsPath, ref }) };
   const view = { visible: true, webview: {
@@ -79,7 +80,7 @@ async function main() {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
-      getConfiguration: () => ({ get: () => executable }), onDidChangeWorkspaceFolders: event,
+      getConfiguration: () => ({ get: () => executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
       onDidChangeConfiguration: event,
       registerTextDocumentContentProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },
@@ -87,6 +88,7 @@ async function main() {
       createTerminal: options => { terminals.push(options); return { show() {}, dispose() {} }; },
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
       showQuickPick: async choices => pickChanges?.(choices),
+      showWarningMessage: async (_message, _options, action) => action,
       showErrorMessage: async message => errors.push(message) },
     commands: { registerCommand: (name, handler) => { commands.set(name, handler); return { dispose() {} }; },
       async executeCommand(name, ...args) {
@@ -207,6 +209,48 @@ async function main() {
   assert.equal(diffs.at(-1)[0].scheme, 'gitpane-empty');
   assert.equal(diffs.at(-1)[1].fsPath, path.join(worktreePath, linkedFile.path));
   console.log('PASS real linked worktree paging and native file diff');
+
+  vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }, { uri: uri(worktreePath) }];
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  const explicit = snapshots.at(-1).repositories.find(item => item.name === 'linked');
+  assert.ok(explicit, 'an explicitly added worktree must remain a top-level repository');
+  let sawRemove = false;
+  pickChanges = choices => {
+    const selected = choices.find(choice => choice.action === 'removeWorkspaceWorktree');
+    if (selected) sawRemove = true;
+    return selected;
+  };
+  const previousErrors = errors.length;
+  await receive({ type: 'menu', kind: 'repo', id: explicit.id });
+  assert.equal(sawRemove, true, 'worktree repository menu must offer removal');
+  assert.equal(errors.length, previousErrors + 1);
+  assert.match(errors.at(-1), /modified|dirty|untracked/i, 'dirty worktree must be refused');
+  assert.ok(fs.existsSync(worktreePath));
+  for (let index = 0; index < 130; index++) {
+    fs.unlinkSync(path.join(worktreePath, `worktree-${String(index).padStart(3, '0')}.txt`));
+  }
+  await commands.get('gitpane.refresh')();
+  const cleanExplicit = snapshots.at(-1).repositories.find(item => item.name === 'linked');
+  await receive({ type: 'menu', kind: 'repo', id: cleanExplicit.id });
+  assert.equal(fs.existsSync(worktreePath), false, errors.at(-1));
+  assert.ok(!git('worktree', 'list', '--porcelain').includes(worktreePath));
+  assert.equal(vscode.workspace.workspaceFolders.length, 2, 'the missing workspace folder stays configured');
+  assert.ok(snapshots.at(-1).errors.some(message => message.includes(worktreePath) && /unavailable/i.test(message)));
+  fs.writeFileSync(path.join(repoPath, '000-after-worktree-removal.txt'), 'remaining repository works\n');
+  await commands.get('gitpane.refresh')();
+  const remaining = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  assert.ok(remaining && !remaining.statusUnavailable, 'remaining repository status must still load');
+  await receive({ type: 'loadChanges', id: remaining.id });
+  const postRemovalFile = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .flatMap(group => group.files).find(file => file.path === '000-after-worktree-removal.txt');
+  assert.ok(postRemovalFile);
+  pickChanges = choices => choices.find(choice => choice.action === 'stage');
+  const errorsBeforeStage = errors.length;
+  await receive({ type: 'menu', kind: 'file', id: postRemovalFile.id });
+  assert.equal(errors.length, errorsBeforeStage, errors.at(-1));
+  assert.match(git('status', '--porcelain', '--', postRemovalFile.path), /^A /);
+  console.log('PASS explicit worktree removal retains missing workspace folder and remaining repository actions');
 
   const source = path.join(temporary, 'submodule-source');
   fs.mkdirSync(source);

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::git::{file_ops, process, worktree_ops};
 
-use super::{BridgeError, file_identity, scope::Scope};
+use super::{BridgeError, changes::RepositoryIdentity, file_identity, scope::Scope};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +37,17 @@ pub(super) struct CreateWorktree {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RemoveWorktree {
+    repo: PathBuf,
+    path: PathBuf,
+    #[serde(default)]
+    expected_repo_identity: Option<String>,
+    #[serde(default)]
+    expected_worktree_identity: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PreviewWorktree {
     repo: PathBuf,
     path: PathBuf,
 }
@@ -417,15 +428,53 @@ pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Va
     run(&repo, &args)
 }
 
-pub(super) fn worktree_remove(scope: &Scope, input: RemoveWorktree) -> Result<Value, BridgeError> {
-    let repo_path = scope.repository(&input.repo)?;
-    absolute_path(&input.path)?;
-    let target = scope.repository(&input.path)?;
+#[derive(PartialEq, Eq)]
+struct WorktreeSelection {
+    repo: PathBuf,
+    target: PathBuf,
+    repo_identity: RepositoryIdentity,
+    worktree_identity: RepositoryIdentity,
+}
+
+fn stale_worktree() -> BridgeError {
+    BridgeError::new(
+        "stale_target",
+        "Worktree changed; refresh before removing it.",
+    )
+}
+
+fn worktree_selection(
+    scope: &Scope,
+    repo: &Path,
+    path: &Path,
+    expected: Option<(&str, &str)>,
+) -> Result<WorktreeSelection, BridgeError> {
+    let repo_path = scope.repository(repo)?;
+    absolute_path(path)?;
+    let target = scope.repository(path)?;
     if target == repo_path {
         return Err(BridgeError::new(
             "invalid_request",
             "cannot remove the selected repository",
         ));
+    }
+    let repo_identity = RepositoryIdentity::read(&repo_path)?;
+    let worktree_identity = RepositoryIdentity::read(&target)?;
+    if let Some((expected_repo, expected_worktree)) = expected
+        && (repo_identity.fingerprint()? != expected_repo
+            || worktree_identity.fingerprint()? != expected_worktree)
+    {
+        return Err(stale_worktree());
+    }
+    if !repo_identity.same_common(&worktree_identity) {
+        return Err(if expected.is_some() {
+            stale_worktree()
+        } else {
+            BridgeError::new(
+                "invalid_request",
+                "Worktree does not share this repository's Git directory.",
+            )
+        });
     }
     let repo = git2::Repository::open(&repo_path).map_err(repo_error)?;
     let names = repo.worktrees().map_err(repo_error)?;
@@ -446,12 +495,68 @@ pub(super) fn worktree_remove(scope: &Scope, input: RemoveWorktree) -> Result<Va
         }
     }
     if !registered {
-        return Err(BridgeError::new(
-            "invalid_request",
-            "worktree is not registered with this repository",
-        ));
+        return Err(if expected.is_some() {
+            stale_worktree()
+        } else {
+            BridgeError::new(
+                "invalid_request",
+                "worktree is not registered with this repository",
+            )
+        });
     }
-    scope.repository(&repo_path)?;
-    scope.repository(&target)?;
-    run(&repo_path, &worktree_ops::remove_arguments(&target))
+    Ok(WorktreeSelection {
+        repo: repo_path,
+        target,
+        repo_identity,
+        worktree_identity,
+    })
+}
+
+fn valid_identity(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(super) fn worktree_remove_preview(
+    scope: &Scope,
+    input: PreviewWorktree,
+) -> Result<Value, BridgeError> {
+    let initial = worktree_selection(scope, &input.repo, &input.path, None)?;
+    let current = worktree_selection(scope, &input.repo, &input.path, None)?;
+    if initial != current {
+        return Err(stale_worktree());
+    }
+    Ok(json!({
+        "repo_identity": initial.repo_identity.fingerprint()?,
+        "worktree_identity": initial.worktree_identity.fingerprint()?,
+    }))
+}
+
+pub(super) fn worktree_remove(scope: &Scope, input: RemoveWorktree) -> Result<Value, BridgeError> {
+    let expected = match (
+        &input.expected_repo_identity,
+        &input.expected_worktree_identity,
+    ) {
+        (None, None) => None,
+        (Some(repo), Some(worktree)) if valid_identity(repo) && valid_identity(worktree) => {
+            Some((repo.as_str(), worktree.as_str()))
+        }
+        _ => {
+            return Err(BridgeError::new(
+                "invalid_request",
+                "Both valid worktree identity tokens are required.",
+            ));
+        }
+    };
+    let initial = worktree_selection(scope, &input.repo, &input.path, expected)?;
+    let current = worktree_selection(scope, &input.repo, &input.path, expected)?;
+    if initial != current {
+        return Err(stale_worktree());
+    }
+    run(
+        &current.repo,
+        &worktree_ops::remove_arguments(&current.target),
+    )
 }

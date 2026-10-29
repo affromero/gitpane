@@ -76,6 +76,38 @@ test('status refresh retains the watched paths sent with each request', async t 
   assert.match(tree.backendErrors.get(root), /invalid compact repository status/i);
 });
 
+test('workspace authorization follows the backend identity captured during initialization', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-shared-roots-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, 'workspace');
+  const saved = path.join(root, 'original');
+  fs.mkdirSync(source);
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    workspace: { workspaceFolders: [{ uri: uri(source) }], onDidChangeWorkspaceFolders: event } };
+  const backend = { workspaceIdentities: new Map(), state: { status: 'initializing' }, onDidChange: event };
+  const api = { repositories: [], onDidOpenRepository: event, onDidCloseRepository: event };
+  const load = Module._load;
+  let RepositoryTree;
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    ({ RepositoryTree } = require('../src/repository-tree'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+  t.after(() => tree.dispose());
+  assert.equal(backend.workspaceIdentities.has(source), false, 'the tree must not capture an independent identity');
+  fs.renameSync(source, saved);
+  fs.mkdirSync(source);
+  const real = fs.realpathSync.native(source);
+  const stat = fs.statSync(real, { bigint: true });
+  backend.workspaceIdentities.set(source, { path: process.platform === 'win32' ? real.toLowerCase() : real,
+    dev: stat.dev, ino: stat.ino });
+  assert.equal(tree.isPathInWorkspace(source), true);
+  assert.ok(!tree.getChildren().some(node => node.type === 'error'));
+});
+
 test('slow detailed refresh finishes one sweep before scheduling another', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-page-sweep-'));
@@ -627,6 +659,61 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     assert.deepEqual(rows.map(row => row.name).sort(), ['main', 'one']);
     assert.deepEqual(rows.find(row => row.name === 'main').worktrees.map(row => row.name), ['two']);
     assert.deepEqual(rows.find(row => row.name === 'one').worktrees, []);
+    let explicitId = rows.find(row => row.name === 'one').id;
+    const removal = provider.resolveRepository(explicitId).worktreeRemoval;
+    assert.equal(removal.repoPath, root);
+    assert.equal(fs.realpathSync(removal.path), fs.realpathSync(first));
+    assert.equal(removal.anchorToken, tree.repositoryToken(main));
+    assert.equal(removal.targetToken, tree.repositoryToken(one));
+    const anchorStatus = tree.backendStatuses.get(root);
+    const registered = anchorStatus.worktrees;
+    anchorStatus.worktrees = registered.filter(item => fs.realpathSync(item.path) !== fs.realpathSync(first));
+    assert.equal(provider.resolveRepository(explicitId).worktreeRemoval, undefined, 'unregistered targets cannot be removed');
+    anchorStatus.worktrees = registered;
+    const childStatus = tree.backendStatuses.get(first);
+    const unrelatedCommon = path.join(temporary, 'unrelated-common');
+    fs.mkdirSync(unrelatedCommon);
+    childStatus.common_dir = unrelatedCommon;
+    assert.equal(provider.resolveRepository(explicitId).worktreeRemoval, undefined, 'unrelated repositories cannot be removed');
+    childStatus.common_dir = common;
+    const movedAnchor = path.join(workspace, 'moved-main');
+    fs.renameSync(root, movedAnchor);
+    assert.equal(provider.resolveRepository(explicitId).worktreeRemoval, undefined, 'a moved anchor cannot authorize removal');
+    fs.renameSync(movedAnchor, root);
+    const movedTarget = path.join(linkedRoot, 'moved-one');
+    fs.renameSync(first, movedTarget);
+    assert.equal(provider.resolveRepository(explicitId), undefined, 'a moved target cannot authorize removal');
+    assert.ok(provider.snapshot().errors.some(message => message.includes(first) && /unavailable/i.test(message)));
+    fs.renameSync(movedTarget, first);
+    assert.ok(!provider.snapshot().errors.some(message => message.includes(first)), 'restoring the original folder clears its warning');
+    fs.renameSync(first, movedTarget);
+    fs.mkdirSync(first);
+    assert.ok(provider.snapshot().errors.some(message => message.includes(first) && /remove and re-add/i.test(message)),
+      'replaced folder remains unauthorized with an explicit instruction');
+    fs.rmdirSync(first);
+    fs.renameSync(movedTarget, first);
+    assert.equal(provider.resolveRepository(explicitId), undefined, 'a removed row cannot reuse its old id');
+    rows = provider.snapshot().repositories;
+    explicitId = rows.find(row => row.name === 'one').id;
+    const movedCommon = path.join(root, '.git-original');
+    fs.renameSync(common, movedCommon);
+    fs.mkdirSync(common);
+    assert.notEqual(provider.resolveRepository(explicitId).worktreeRemoval.commonIdentity, removal.commonIdentity,
+      'replaced common directory changes the authorization fingerprint');
+    fs.rmdirSync(common);
+    fs.renameSync(movedCommon, common);
+    tree.unobserve(main);
+    tree.observe(main);
+    await tree.refresh();
+    assert.notEqual(provider.resolveRepository(explicitId).worktreeRemoval.anchorToken, removal.anchorToken,
+      'a reopened anchor changes the authorization fingerprint');
+    tree.unobserve(one);
+    tree.observe(one);
+    assert.equal(provider.resolveRepository(explicitId), undefined, 'a reopened target cannot reuse an old id');
+    await tree.refresh();
+    await changeFolders([first]);
+    rows = provider.snapshot().repositories;
+    assert.equal(provider.resolveRepository(rows[0].id).worktreeRemoval, undefined, 'an anchor outside the workspace cannot authorize removal');
     await changeFolders([linkedRoot]);
     rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['one']);
@@ -635,6 +722,15 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name).sort(), ['one', 'two']);
     assert.ok(rows.every(row => row.worktrees.length === 0));
+    assert.equal(provider.resolveRepository(rows.find(row => row.name === 'two').id).worktreeRemoval.repoPath, first);
+    const initiallyMissing = path.join(workspace, 'initially-missing');
+    await changeFolders([workspace, initiallyMissing]);
+    assert.ok(provider.snapshot().errors.some(message => message.includes(initiallyMissing) && /unavailable/i.test(message)));
+    fs.mkdirSync(initiallyMissing);
+    assert.ok(provider.snapshot().errors.some(message => message.includes(initiallyMissing) && /remove and re-add/i.test(message)));
+    await changeFolders([workspace]);
+    await changeFolders([workspace, initiallyMissing]);
+    assert.ok(!provider.snapshot().errors.some(message => message.includes(initiallyMissing)));
   } finally {
     provider.dispose();
     tree.dispose();

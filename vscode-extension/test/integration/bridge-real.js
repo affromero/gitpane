@@ -87,6 +87,20 @@ async function waitForFile(file) {
     const outsidePath = fs.realpathSync(outside);
     assert.deepEqual(await client.initialize([root]), { version: 1 });
 
+    if (process.platform !== 'win32') {
+      const alias = path.join(temporary, 'workspace-alias');
+      fs.symlinkSync(root, alias);
+      const probe = new BridgeClient(executable, { spawn: (program, args, options) => spawn(program, args, { ...options, env: gitEnv }) });
+      try {
+        await probe.initialize([root], undefined, [alias]);
+        const identity = (await probe.workspaceRootIdentities()).roots[0].identity;
+        fs.unlinkSync(alias);
+        fs.symlinkSync(outsidePath, alias);
+        await assert.rejects(probe.initialize([root], [identity], [alias]), error => error.code === 'stale_target');
+      } finally { probe.dispose({ immediate: true }); }
+      console.log('PASS workspace source retarget is rejected during worker initialization');
+    }
+
     const status = await client.status(repoPath);
     assert.equal(status.is_dirty, true);
     const tracked = status.files.find(file => file.path === 'tracked.txt');
@@ -190,8 +204,9 @@ async function waitForFile(file) {
       gitEnv.GITPANE_TEST_GIT_STARTED = gitStarted;
       gitEnv.GITPANE_TEST_GIT_RELEASE = release;
     }
+    const rootIdentities = (await client.workspaceRootIdentities()).roots.map(entry => entry.identity);
     mutations = new MutationManager({
-      getSnapshot: () => ({ executable, roots: [root], generation }),
+      getSnapshot: () => ({ executable, roots: [root], rootSources: [root], rootIdentities, generation }),
       isCurrent: snapshot => snapshot.generation === generation,
       spawn: (program, args, options) => {
         const env = { ...gitEnv };
@@ -242,7 +257,25 @@ async function waitForFile(file) {
     const worktree = plannedWorktree.path;
     await runMutation('worktree_create', { repo: repoPath, path: worktree, branch: 'feature/verify' });
     assert.equal(git(worktree, 'branch', '--show-current'), 'feature/verify');
-    await runMutation('worktree_remove', { repo: repoPath, path: worktree });
+    if (process.platform !== 'win32') {
+      const staleRemoval = await client.previewWorktreeRemoval(repoPath, worktree);
+      const gitDir = git(worktree, 'rev-parse', '--absolute-git-dir');
+      const savedGitDir = `${gitDir}-saved`;
+      fs.renameSync(gitDir, savedGitDir);
+      fs.cpSync(savedGitDir, gitDir, { recursive: true });
+      try {
+        await assert.rejects(runMutation('worktree_remove', { repo: repoPath, path: worktree,
+          expected_repo_identity: staleRemoval.repo_identity, expected_worktree_identity: staleRemoval.worktree_identity }),
+        error => error.code === 'stale_target');
+        assert.equal(fs.existsSync(worktree), true);
+      } finally {
+        fs.rmSync(gitDir, { recursive: true, force: true });
+        fs.renameSync(savedGitDir, gitDir);
+      }
+    }
+    const removal = await client.previewWorktreeRemoval(repoPath, worktree);
+    await runMutation('worktree_remove', { repo: repoPath, path: worktree,
+      expected_repo_identity: removal.repo_identity, expected_worktree_identity: removal.worktree_identity });
     assert.equal(fs.existsSync(worktree), false);
     await assert.rejects(runMutation('worktree_create', {
       repo: repoPath, path: path.join(temporary, 'external-worktree'), branch: 'external-branch'
