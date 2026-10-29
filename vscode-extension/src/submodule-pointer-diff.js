@@ -8,23 +8,31 @@ const identity = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(val
 
 function isPointerComparison(record) {
   return !!record?.is_submodule && (record.group === 'merge' ||
-    (record.group === 'index' && ['index_renamed', 'index_copied', 'index_type_changed', 'index_deleted'].includes(record.kind)));
+    (record.group === 'index' && ['index_renamed', 'index_copied', 'index_type_changed', 'index_deleted'].includes(record.kind)) ||
+    (record.group === 'working' && ['type_changed', 'working_deleted'].includes(record.kind)));
 }
 
 function validateSnapshot(value, record, expectedIdentity) {
-  const names = record.group === 'merge' ? ['base', 'ours', 'theirs'] : ['base', 'index'];
+  const names = record.group === 'merge' ? ['base', 'ours', 'theirs'] :
+    record.group === 'working' ? ['index', 'working'] : ['base', 'index'];
   if (!value || value.repo_identity !== expectedIdentity || !(value.head_oid === null || oid(value.head_oid)) ||
       !validRecord(value.record) || JSON.stringify(value.record) !== JSON.stringify(record) || !value.sides ||
       Object.keys(value.sides).sort().join(',') !== [...names].sort().join(',')) {
     throw new Error('Gitpane returned invalid submodule pointer details.');
   }
-  for (const side of Object.values(value.sides)) {
+  for (const [name, side] of Object.entries(value.sides)) {
     if (side === null) continue;
+    if (name === 'working' && record.group === 'working' && side?.kind === 'working_file' &&
+        relativeFile(side.path) && identity(side.token)) continue;
     if (!side || !relativeFile(side.path) || !oid(side.oid) || !Number.isInteger(side.mode) ||
         !((side.kind === 'gitlink' && side.mode === 57344) || (side.kind === 'blob' && (side.mode & 61440) === 32768) ||
           (side.kind === 'symlink' && side.mode === 40960))) {
       throw new Error('Submodule pointer comparisons with directories or unsupported file types are unavailable.');
     }
+  }
+  if (record.group === 'working' && (value.sides.index?.kind !== 'gitlink' ||
+      (record.kind === 'working_deleted' ? value.sides.working !== null : value.sides.working?.kind !== 'working_file'))) {
+    throw new Error('Gitpane returned invalid working submodule pointer details.');
   }
   if (!Object.values(value.sides).some(side => side?.kind === 'gitlink')) throw new Error('The selected change no longer contains a submodule pointer.');
   return value;
@@ -32,6 +40,7 @@ function validateSnapshot(value, record, expectedIdentity) {
 
 function selectedSides(record, sides) {
   if (record.group === 'index') return ['base', 'index'];
+  if (record.group === 'working') return ['index', 'working'];
   if (sides.ours && sides.theirs) return ['ours', 'theirs'];
   if (sides.base && sides.ours) return ['base', 'ours'];
   if (sides.base && sides.theirs) return ['base', 'theirs'];
@@ -79,14 +88,18 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
     pending.finally(() => { pending = undefined; }).catch(() => {});
     return pending;
   };
-  const uri = vscode.Uri.file(scopedFile(repoPath, record.path));
+  // Deleted submodules can have a regular file blocking an ancestor. Both
+  // comparison sides are virtual and never open that path in the filesystem.
+  const virtualPath = relative => record.kind === 'working_deleted' ?
+    path.join(repoPath, ...relative.split('/')) : scopedFile(repoPath, relative);
+  const uri = vscode.Uri.file(virtualPath(record.path));
   const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
   const group = JSON.stringify([repoPath, repoIdentity, token, record, snapshot.head_oid, snapshot.sides, options.ancestorKey]);
   const batch = { repo: repoPath, identity: repoIdentity, snapshot: { record, head_oid: snapshot.head_oid, sides: snapshot.sides },
     ...(options.verifyAncestors ? { ancestorKey: options.ancestorKey, verifyAncestors: options.verifyAncestors } : {}) };
   const makeSide = async name => {
     if (!name || !snapshot.sides[name]) return empty;
-    const target = vscode.Uri.file(scopedFile(repoPath, snapshot.sides[name].path));
+    const target = vscode.Uri.file(virtualPath(snapshot.sides[name].path));
     const read = async () => {
       const result = await backend.submodulePointerContent(repoPath, record, repoIdentity, snapshot.head_oid, snapshot.sides, name);
       if (!result || typeof result.content !== 'string') throw new Error('Gitpane returned invalid submodule pointer contents.');

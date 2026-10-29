@@ -1,7 +1,74 @@
 use git2::Repository;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use super::worktree::compute_ahead_behind;
 use super::{SubmoduleHead, SubmoduleWarn};
+
+/// Identify a regular file blocking a submodule checkout without following
+/// the blocking leaf. Workspace authorization remains the caller's job.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RegularSubmoduleBlocker {
+    pub(crate) path: PathBuf,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+pub(crate) fn regular_submodule_blocker(
+    path: &Path,
+) -> io::Result<Option<RegularSubmoduleBlocker>> {
+    let mut candidate = path;
+    let mut blocked = false;
+    loop {
+        match candidate.symlink_metadata() {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                #[cfg(not(unix))]
+                {
+                    let _ = metadata;
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "Submodule paths blocked by files are unavailable on this platform.",
+                    ));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let canonical = candidate.canonicalize()?;
+                    let current = candidate.symlink_metadata()?;
+                    if !current.file_type().is_file()
+                        || current.dev() != metadata.dev()
+                        || current.ino() != metadata.ino()
+                        || candidate.canonicalize()? != canonical
+                    {
+                        return Err(io::Error::other(
+                            "Submodule blocker changed while validating.",
+                        ));
+                    }
+                    return Ok(Some(RegularSubmoduleBlocker {
+                        path: canonical,
+                        device: metadata.dev(),
+                        inode: metadata.ino(),
+                    }));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotADirectory => {
+                blocked = true;
+                candidate = candidate
+                    .parent()
+                    .ok_or_else(|| io::Error::other("Submodule path has no ancestor."))?;
+            }
+            Ok(_) if blocked => {
+                return Err(io::Error::other(
+                    "Submodule blocker changed while validating.",
+                ));
+            }
+            Err(error) if blocked || error.kind() != io::ErrorKind::NotFound => return Err(error),
+            Ok(_) | Err(_) => return Ok(None),
+        }
+    }
+}
 
 impl SubmoduleWarn {
     pub fn is_clean(&self) -> bool {

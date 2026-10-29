@@ -292,6 +292,28 @@ impl Scope {
                     ));
                 }
                 let child = parent.join(relative);
+                if let Some(blocker) = crate::git::status::regular_submodule_blocker(&child)
+                    .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
+                {
+                    if !self.allows(&blocker.path) {
+                        return Err(BridgeError::new(
+                            "outside_workspace",
+                            "submodule working tree is outside the current workspace",
+                        ));
+                    }
+                    if crate::git::status::regular_submodule_blocker(&child)
+                        .map_err(|error| BridgeError::new("stale_target", error.to_string()))?
+                        .as_ref()
+                        != Some(&blocker)
+                        || !self.allows(&blocker.path)
+                    {
+                        return Err(BridgeError::new(
+                            "stale_target",
+                            "Submodule path changed while validating the workspace.",
+                        ));
+                    }
+                    continue;
+                }
                 if !self.allows_missing(&child)? {
                     return Err(BridgeError::new(
                         "outside_workspace",

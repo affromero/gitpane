@@ -2,6 +2,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { LinkDocuments } = require('../src/link-documents');
 const { openPointerDiff, isPointerComparison, selectedSides } = require('../src/submodule-pointer-diff');
@@ -15,8 +17,8 @@ function uri(value, scheme = 'file') {
   return { fsPath: value, toString: () => `${scheme}:${value}`,
     with: change => uri(change.path || value, change.scheme || scheme) };
 }
-function fixture(t, record, sides, head = 'a'.repeat(40)) {
-  const root = path.resolve('workspace/repo'), repo = { rootUri: uri(root) };
+function fixture(t, record, sides, head = 'a'.repeat(40), root = path.resolve('workspace/repo')) {
+  const repo = { rootUri: uri(root) };
   let alive = true, selected = true, revalidate = true, reads = 0, compareHook = () => {}, contentHook = () => {};
   const changes = new EventEmitter(), commands = [];
   const tree = { git: { get repositories() { return [{ ...repo }]; } }, backendStatuses: new Map([[repo.rootUri.toString(), { repo_identity: 'b'.repeat(64) }]]),
@@ -95,12 +97,36 @@ test('same-record pointer changes and stale repository or selection block the di
   assert.equal(f.commands.length, 1);
 });
 
-test('directory sides and working submodule types are not silently represented as pointers', async t => {
+test('directory sides are not silently represented as pointers', async t => {
   const change = record('index_type_changed');
   const f = fixture(t, change, { base: gitlink('child', '1'), index: { path: 'child', kind: 'tree', mode: 16384, oid: 'c'.repeat(40) } });
   await assert.rejects(openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode), /director|unsupported/i);
-  assert.equal(isPointerComparison({ ...change, group: 'working', kind: 'type_changed' }), false);
   assert.equal(f.commands.length, 0);
+});
+
+test('working gitlink to file opens a guarded snapshot diff and rejects changed content', async t => {
+  const change = record('type_changed', 'working');
+  const f = fixture(t, change, { index: gitlink('child', '1'),
+    working: { path: 'child', kind: 'working_file', token: 'e'.repeat(64) } });
+  assert.equal(isPointerComparison(change), true);
+  await openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode);
+  assert.equal(f.commands[0][0], 'vscode.diff');
+  assert.equal(await f.links.provideTextDocumentContent(f.commands[0][1]), `Subproject commit ${'1'.repeat(40)}\n`);
+  assert.equal(await f.links.provideTextDocumentContent(f.commands[0][2]), 'contents of child\n');
+  f.snapshot.sides.working.token = 'f'.repeat(64);
+  await assert.rejects(f.links.provideTextDocumentContent(f.commands[0][2]), /no longer/i);
+});
+
+test('deleted nested gitlink opens an empty side even when an ancestor is a file', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-pointer-blocked-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'blocked'), 'replacement');
+  const change = { ...record('working_deleted', 'working'), path: 'blocked/child' };
+  const f = fixture(t, change, { index: gitlink('blocked/child', '1'), working: null }, 'a'.repeat(40), root);
+  await openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode);
+  assert.equal(f.commands[0][0], 'vscode.diff');
+  assert.equal(await f.links.provideTextDocumentContent(f.commands[0][1]), `Subproject commit ${'1'.repeat(40)}\n`);
+  assert.equal(f.commands[0][2].toString().startsWith('gitpane-empty:'), true);
 });
 
 test('unreadable pointer sides report the backend error without opening a diff', async t => {

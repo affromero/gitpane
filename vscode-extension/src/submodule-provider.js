@@ -5,13 +5,9 @@ const { statusRevision } = require('./link-documents');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isSubmodule, richComparison } = require('./model');
-const { scopedFile, validRecord, validatePage } = require('./change-pager');
+const { relativeFile: safeRelative, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
-
-function safeRelative(value) {
-  return typeof value === 'string' && !!value && !path.isAbsolute(value) &&
-    !value.split(process.platform === 'win32' ? /[\\/]/ : /\//).some(part => !part || part === '.' || part === '..');
-}
+const { openGitlinkDiff } = require('./gitlink-diff');
 
 class SubmoduleProvider {
   constructor(tree, backend, git, options = {}) {
@@ -207,6 +203,9 @@ class SubmoduleProvider {
       const currentLink = () => ancestors.every(ancestor => ancestor.currentLink()) && ownCurrent(true);
       const frame = { link, current: () => ownCurrent(false), currentLink: () => ownCurrent(true) };
       const checkHead = (persistent = false) => checkFrames([...ancestors, frame], persistent);
+      const pointerOptions = { parent: node.repo.rootUri.fsPath, relative, group, originalPath,
+        childToken, currentChild, currentLink, checkHead,
+        ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)) };
       const pin = async () => {
         if (!this.pins) throw new Error('Submodule pins are unavailable.');
         const links = [...ancestors, frame].map(item => item.link);
@@ -221,7 +220,7 @@ class SubmoduleProvider {
       if (initial.kind === 'pin') return await pin();
       if (initial.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
       if (initial.kind === 'pointer') {
-        return await this.openPointer(child, result, initial.file);
+        return await this.openPointer(child, result, initial.file, pointerOptions);
       }
       const session = await this.backend.openChangesSession(child.rootUri.fsPath);
       let sessionClosed = false;
@@ -253,7 +252,7 @@ class SubmoduleProvider {
           return await pin();
         }
         if (chosen.kind === 'pointer') {
-          return await this.openPointer(child, result, chosen.file);
+          return await this.openPointer(child, result, chosen.file, pointerOptions);
         }
         const record = structuredClone(chosen.record);
         if (record.kind === 'untracked_directory') throw new Error('Open the nested repository to inspect its changes.');
@@ -281,8 +280,8 @@ class SubmoduleProvider {
               ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link))
             });
           }
-          if (record.group === 'working' && ['working_renamed', 'type_changed'].includes(record.kind)) {
-            throw new Error('Working submodule renames and type changes cannot be compared yet.');
+          if (record.group === 'working' && record.kind === 'working_renamed') {
+            throw new Error('Working submodule renames cannot be compared yet.');
           }
           const nested = { repo: child, group: record.group, record, change: { uri } };
           return await this.openLevel(nested, generation, [...ancestors, frame]);
@@ -320,8 +319,29 @@ class SubmoduleProvider {
       } finally { if (!sessionClosed) session.close(); }
   }
 
-  async openPointer(repo, result, file) {
-    if (file.is_submodule) throw new Error('Nested submodule changes cannot be opened here.');
+  async openPointer(repo, result, selected, options) {
+    const file = structuredClone(selected);
+    if (file.is_submodule) {
+      if (!file.gitlink || [file.gitlink.old, file.gitlink.new].some(side => side && side.kind !== 'gitlink')) {
+        throw new Error('Nested submodule file, symlink, or directory type changes cannot be compared yet.');
+      }
+      const verify = async () => {
+        if (!options.currentChild() || !await options.checkHead()) return false;
+        const latest = await this.backend.inspectSubmodule(options.parent, options.relative, options.group, options.originalPath);
+        if (!options.currentChild() || !await options.checkHead() || !latest || latest.repo !== result.repo ||
+            latest.parent_identity !== result.parent_identity || latest.child_identity !== result.child_identity ||
+            latest.base_oid !== result.base_oid || latest.head_oid !== result.head_oid ||
+            latest.child_head_oid !== result.child_head_oid || !Array.isArray(latest.pointer_files)) return false;
+        return latest.pointer_files.some(item => item.path === file.path && item.status === file.status &&
+          item.old_path === file.old_path && item.is_submodule === true &&
+          JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
+      };
+      return await openGitlinkDiff({ vscode: this.vscode, git: this.git, links: this.linkDocuments, repo,
+        repoIdentity: result.child_identity, repoToken: options.childToken, file: { ...file, oldPath: file.old_path },
+        oldRef: result.base_oid, newRef: result.head_oid, current: options.currentLink, verify,
+        verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey,
+        title: `${path.basename(file.path)} (submodule)` });
+    }
     const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const old = file.status === 'R' ? this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.old_path)) : uri;
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });

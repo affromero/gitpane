@@ -2,7 +2,7 @@ use crate::config::SubmoduleConfig;
 use git2::{Repository, Status, StatusOptions, SubmoduleStatus};
 use std::path::{Path, PathBuf};
 
-use super::submodule::compute_submodule_head_and_warn;
+use super::submodule::{compute_submodule_head_and_warn, regular_submodule_blocker};
 use super::{FileEntry, FileStatus, SubmoduleInfo, SubmoduleState, SubmoduleWarn};
 
 pub(super) struct ChangeSummary {
@@ -145,6 +145,13 @@ pub(super) fn collect_change_summary(
                 match path.join(&sub_path).join(".git").symlink_metadata() {
                     Ok(_) => false,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                        if regular_submodule_blocker(&path.join(&sub_path))?.is_some() {
+                            true
+                        } else {
+                            return Err(error.into());
+                        }
+                    }
                     Err(error) => return Err(error.into()),
                 }
             } else {

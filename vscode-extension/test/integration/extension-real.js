@@ -621,6 +621,34 @@ async function main() {
   assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
   assert.equal(terminals.length, beforeRemovedTerminals);
   assert.equal(api.repositories.length, beforeRemovedRepos, 'pointer comparison must not open a child checkout');
+  gitAt(pointerRepoPath, 'reset', '-q', 'HEAD', '--', 'child');
+  fs.writeFileSync(path.join(pointerRepoPath, 'child'), 'replacement text\n');
+  await commands.get('gitpane.refresh')();
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  await receive({ type: 'loadChanges', id: pointerOnly.id });
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  const changedPointer = pointerOnly.groups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(changedPointer, 'working gitlink to file must appear in the overview');
+  const beforeChangedDiff = diffs.length, beforeChangedTerminals = terminals.length;
+  await receive({ type: 'openChange', id: changedPointer.id });
+  assert.equal(diffs.length, beforeChangedDiff + 1, errors.at(-1));
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), 'replacement text\n');
+  fs.writeFileSync(path.join(pointerRepoPath, 'child'), 'replacement next\n');
+  await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), /no longer|changed/i);
+  fs.unlinkSync(path.join(pointerRepoPath, 'child'));
+  await commands.get('gitpane.refresh')();
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  await receive({ type: 'loadChanges', id: pointerOnly.id });
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  const workingDeleted = pointerOnly.groups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(workingDeleted, 'unstaged gitlink deletion must appear in the overview');
+  await receive({ type: 'openChange', id: workingDeleted.id });
+  assert.equal(diffs.length, beforeChangedDiff + 2, errors.at(-1));
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+  assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
+  assert.equal(terminals.length, beforeChangedTerminals);
+  console.log('PASS unstaged gitlink to file and deletion use guarded native diffs');
   api.repositories = api.repositories.filter(item => item !== pointerRepo); closedRepositories.fire(pointerRepo);
   await commands.get('gitpane.refresh')();
   console.log('PASS corrupt checkout is reported and removed checkout opens a staged pointer diff');
@@ -724,6 +752,62 @@ async function main() {
   availableSubmodules.set(grandPath, grandRepo);
   childRepo.state.submodules = [{ path: 'nested', url: grandSource }];
   if (!api.repositories.includes(childRepo)) { api.repositories.push(childRepo); openedRepositories.fire(childRepo); }
+  const historicalPointer = gitAt(childPath, 'rev-parse', 'HEAD:nested');
+  const historicalChildHead = gitAt(childPath, 'rev-parse', 'HEAD');
+  const historicalParked = `${grandPath}-historical-parked`;
+  const openBeforeHistorical = api.openRepository;
+  let historicalNestedOpens = 0;
+  api.openRepository = async target => {
+    if (target.fsPath === grandPath) historicalNestedOpens++;
+    return openBeforeHistorical(target);
+  };
+  fs.renameSync(grandPath, historicalParked);
+  try {
+    const openHistorical = async (oldOid, newOid) => {
+      await commands.get('gitpane.refresh')();
+      const owner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+      await receive({ type: 'loadChanges', id: owner.id });
+      const changedChild = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+        .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+      assert.ok(changedChild, 'parent must expose its changed child');
+      pickChanges = choices => choices.find(choice => choice.kind === 'pointer' && choice.file.path === 'nested');
+      const before = diffs.length, terminalsBefore = terminals.length;
+      await receive({ type: 'openChange', id: changedChild.id });
+      assert.equal(diffs.length, before + 1, errors.at(-1));
+      const [left, right] = diffs.at(-1);
+      for (const [uri, oid] of [[left, oldOid], [right, newOid]]) {
+        if (oid) assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(uri), `Subproject commit ${oid}\n`);
+        else assert.equal(uri.scheme, 'gitpane-empty');
+      }
+      assert.equal(historicalNestedOpens, 0, 'historical pointer comparison must not open the nested checkout');
+      assert.equal(terminals.length, terminalsBefore);
+      return oldOid ? left : right;
+    };
+    const document = await openHistorical(null, historicalPointer);
+    git('add', 'child');
+    await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(document), /no longer|changed/i);
+    fs.writeFileSync(path.join(grandSource, 'nested.txt'), 'later committed nested change\n');
+    gitAt(grandSource, 'add', 'nested.txt');
+    gitAt(grandSource, 'commit', '-qm', 'later nested commit');
+    const laterPointer = gitAt(grandSource, 'rev-parse', 'HEAD');
+    gitAt(childPath, 'update-index', '--cacheinfo', '160000', laterPointer, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'update nested pointer');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(historicalPointer, laterPointer);
+    git('add', 'child');
+    gitAt(childPath, 'update-index', '--force-remove', 'nested');
+    gitAt(childPath, 'commit', '-qm', 'remove nested pointer');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(laterPointer, null);
+    gitAt(childPath, 'update-ref', 'HEAD', historicalChildHead);
+    gitAt(childPath, 'read-tree', 'HEAD');
+    childRepo.state.HEAD.commit = historicalChildHead;
+    git('reset', '-q', 'HEAD', '--', 'child');
+  } finally {
+    api.openRepository = openBeforeHistorical;
+    fs.renameSync(historicalParked, grandPath);
+  }
+  console.log('PASS historical nested pointer additions, changes and deletions open without a nested checkout and reject changed ancestors');
   await commands.get('gitpane.refresh')();
   const browseRoot = snapshots.at(-1).repositories.find(item => item.name === 'child');
   assert.ok(browseRoot, 'the already-open parent must be visible');

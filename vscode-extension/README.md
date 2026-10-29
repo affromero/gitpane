@@ -84,11 +84,17 @@ Branch review opens committed submodule pointer comparisons even when the child
 checkout is unavailable.
 If a deleted submodule leaves a corrupt checkout behind, Gitpane reports the
 repository status as unavailable until that checkout is repaired or removed.
-Blob and symlink sides in these comparisons must be UTF-8 text under 1 MiB.
-Working submodule renames and type changes cannot be compared yet. Working changes
+Blob, symlink and regular-file sides in these comparisons must be UTF-8 text
+under 1 MiB.
+On Unix, an unstaged submodule deletion or replacement of a submodule with a
+regular text file opens an index-to-working comparison. The replacement side is
+a read-only snapshot; reopen the diff after changing the file. Other working
+submodule renames and type changes cannot be compared yet. Working changes
 in nested submodules can be inspected, and staged or conflicted nested gitlinks
-open pointer comparisons. Historical nested pointer diffs are not
-available yet. The parent repository's file actions cannot stage, unstage, discard or
+open pointer comparisons. Historical nested gitlink additions, deletions and
+pointer changes also open comparisons without requiring the nested checkout.
+Historical nested type changes involving files, symlinks or directories cannot
+be compared yet. The parent repository's file actions cannot stage, unstage, discard or
 delete a submodule entry. Gitpane's push and pull actions do not recurse into
 submodules. On Unix, the repository menu can sync direct submodules, update
 submodules recursively, or pull the latest changes in direct submodules. It

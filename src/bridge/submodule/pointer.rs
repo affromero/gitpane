@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::bridge::{
     BridgeError,
     changes::{self, RepositoryIdentity},
+    file_identity, mutation,
     scope::Scope,
 };
 use crate::config::SubmoduleConfig;
@@ -15,6 +16,8 @@ use super::valid_submodule_path;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod working_tests;
 
 const MAX_CONTENT: usize = 1024 * 1024;
 
@@ -117,11 +120,16 @@ fn record_key(record: &Value) -> Result<(&str, &str), BridgeError> {
         .get("group")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("Invalid change record."))?;
+    let working = group == "working"
+        && matches!(
+            record.get("kind").and_then(Value::as_str),
+            Some("type_changed" | "working_deleted")
+        );
     if !valid_submodule_path(Path::new(path))
-        || !matches!(group, "index" | "merge")
+        || !(matches!(group, "index" | "merge") || working)
         || record.get("is_submodule") != Some(&Value::Bool(true))
     {
-        return Err(invalid("Expected a staged or conflicted submodule change."));
+        return Err(invalid("Expected a supported submodule pointer change."));
     }
     Ok((path, group))
 }
@@ -163,6 +171,8 @@ fn snapshot(
     let head = read_head(&repo)?;
     let index = repo.index().map_err(repository_error)?;
     let result = snapshot_fields(
+        scope,
+        &repo_path,
         &index,
         &head,
         &request.record,
@@ -178,6 +188,8 @@ fn snapshot(
 }
 
 fn snapshot_fields(
+    scope: &Scope,
+    repo_path: &Path,
     index: &git2::Index,
     head: &Option<git2::Commit<'_>>,
     record: &Value,
@@ -210,6 +222,21 @@ fn snapshot_fields(
             None => Value::Null,
         };
         json!({"base":base,"index":current})
+    } else if group == "working" {
+        let current = index_entry(index, Some(path), 0)?;
+        if current["kind"] != "gitlink" {
+            return Err(invalid(
+                "Working comparison requires an indexed submodule pointer.",
+            ));
+        }
+        let working = if record["kind"] == "working_deleted" {
+            Value::Null
+        } else {
+            mutation::validate_file_path(scope, repo_path, Path::new(path))?;
+            let (_, token) = file_identity::working_text(&repo_path.join(path), MAX_CONTENT)?;
+            json!({"path":path,"kind":"working_file","token":token})
+        };
+        json!({"index":current,"working":working})
     } else {
         let stages = record
             .get("conflict_stages")
@@ -263,7 +290,14 @@ fn batch_pass(
             if records.get(&(path.to_owned(), group.to_owned())) != Some(&item.record) {
                 return Err(stale());
             }
-            snapshot_fields(&index, &head, &item.record, &request.expected_repo_identity)
+            snapshot_fields(
+                scope,
+                &repo_path,
+                &index,
+                &head,
+                &item.record,
+                &request.expected_repo_identity,
+            )
         })
         .collect();
     scope.validate_submodules(&repo_path)?;
@@ -338,37 +372,45 @@ pub(in crate::bridge) fn content(
         .ok_or_else(|| invalid("Invalid pointer side."))?;
     let content = if side.is_null() {
         String::new()
+    } else if side["kind"] == "working_file" {
+        let repo_path = scope.repository(&compare_request.repo)?;
+        let path = side["path"].as_str().ok_or_else(stale)?;
+        mutation::validate_file_path(scope, &repo_path, Path::new(path))?;
+        let (content, token) = file_identity::working_text(&repo_path.join(path), MAX_CONTENT)?;
+        if side["token"] != token {
+            return Err(stale());
+        }
+        content
+    } else if side["kind"] == "gitlink" {
+        let oid = side["oid"].as_str().ok_or_else(stale)?;
+        format!("Subproject commit {oid}\n")
     } else {
         let oid = side["oid"].as_str().ok_or_else(stale)?;
-        if side["kind"] == "gitlink" {
-            format!("Subproject commit {oid}\n")
-        } else {
-            let repo_path = scope.repository(&compare_request.repo)?;
-            let repo = git2::Repository::open(repo_path).map_err(repository_error)?;
-            let oid = git2::Oid::from_str(oid).map_err(repository_error)?;
-            let (size, kind) = repo
-                .odb()
-                .map_err(repository_error)?
-                .read_header(oid)
-                .map_err(repository_error)?;
-            if kind != git2::ObjectType::Blob {
-                return Err(repository_error("Pointer side is not a blob."));
-            }
-            if size > MAX_CONTENT {
-                return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
-            }
-            let blob = repo.find_blob(oid).map_err(repository_error)?;
-            if blob.size() > MAX_CONTENT {
-                return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
-            }
-            let bytes = blob.content();
-            if bytes.contains(&0) {
-                return Err(invalid("Binary pointer sides cannot be opened as text."));
-            }
-            std::str::from_utf8(bytes)
-                .map_err(|_| invalid("Pointer side is not UTF-8 text."))?
-                .to_owned()
+        let repo_path = scope.repository(&compare_request.repo)?;
+        let repo = git2::Repository::open(repo_path).map_err(repository_error)?;
+        let oid = git2::Oid::from_str(oid).map_err(repository_error)?;
+        let (size, kind) = repo
+            .odb()
+            .map_err(repository_error)?
+            .read_header(oid)
+            .map_err(repository_error)?;
+        if kind != git2::ObjectType::Blob {
+            return Err(repository_error("Pointer side is not a blob."));
         }
+        if size > MAX_CONTENT {
+            return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
+        }
+        let blob = repo.find_blob(oid).map_err(repository_error)?;
+        if blob.size() > MAX_CONTENT {
+            return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
+        }
+        let bytes = blob.content();
+        if bytes.contains(&0) {
+            return Err(invalid("Binary pointer sides cannot be opened as text."));
+        }
+        std::str::from_utf8(bytes)
+            .map_err(|_| invalid("Pointer side is not UTF-8 text."))?
+            .to_owned()
     };
     if snapshot(scope, &compare_request, cfg)? != initial {
         return Err(stale());

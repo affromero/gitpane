@@ -19,6 +19,7 @@ mod worktree;
 
 use change_summary::{ChangeSummary, collect_change_summary};
 pub(crate) use changes::{ChangeError, collect_changes};
+pub(crate) use submodule::regular_submodule_blocker;
 use worktree::{collect_worktree_info, compute_ahead_behind, fetch_remote_silent};
 
 #[derive(Clone, Debug)]

@@ -11,19 +11,28 @@ function validGitlink(value) {
 }
 
 async function openGitlinkDiff(options) {
-  const { vscode, git, links, repo, repoIdentity, repoToken, file, oldRef, newRef, current, verify, title } = options;
+  const { vscode, git, links, repo, repoIdentity, repoToken, file, oldRef, newRef, current, verify, title,
+    verifyAncestors, ancestorKey } = options;
   if (!links || !validGitlink(file.gitlink) || !/^[a-f0-9]{64}$/.test(repoIdentity || '')) {
     throw new Error('The configured Gitpane backend does not provide verified submodule pointer details. Update the backend and try again.');
   }
   if (file.gitlink.old?.kind === 'tree' || file.gitlink.new?.kind === 'tree') {
     throw new Error('Submodule changes to or from a directory cannot be opened as a file diff.');
   }
+  if (verifyAncestors && (typeof ancestorKey !== 'string' || !ancestorKey)) {
+    throw new Error('The submodule ancestor guard is unavailable.');
+  }
   if (!await verify()) throw new Error('The selected submodule change is no longer available.');
   const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
   const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
   const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-  const documentGuard = () => links.validateStaticIdentity(repo.rootUri.fsPath, repoIdentity, current);
-  const group = JSON.stringify([repo.rootUri.fsPath, repoIdentity, repoToken]);
+  const documentGuard = async () => {
+    if (verifyAncestors && !await verifyAncestors()) return false;
+    if (!await links.validateStaticIdentity(repo.rootUri.fsPath, repoIdentity, current)) return false;
+    if (verifyAncestors && !await verifyAncestors()) return false;
+    return current();
+  };
+  const group = JSON.stringify([repo.rootUri.fsPath, repoIdentity, repoToken, ...(verifyAncestors ? [ancestorKey] : [])]);
   const side = async (value, target, ref) => {
     if (!value) return empty;
     if (value.kind === 'gitlink') return links.createStatic(target, `Subproject commit ${value.oid}\n`, documentGuard, current, group);

@@ -168,6 +168,92 @@ test('submodule diffs use the selected pointer endpoints while guarding the live
   assert.match(f.errors.at(-1), /changed/i);
 });
 
+test('historical nested gitlinks open pointer diffs and keep ancestor guards', async t => {
+  class EventEmitter {
+    constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
+    fire(value) { for (const listener of this.listeners) listener(value); }
+    dispose() { this.listeners.clear(); }
+  }
+  const changes = new EventEmitter();
+  const links = new LinkDocuments({ EventEmitter, workspace: {} }, { onDidChangeTreeData: changes.event }, {
+    async validateRepositoryIdentity() { return { valid: true }; }
+  });
+  t.after(() => links.dispose());
+  const f = fixture(t, links);
+  const pointer = oid => ({ kind: 'gitlink', oid, mode: 57344 });
+  const before = '1'.repeat(40), after = '2'.repeat(40);
+  f.pick(choices => choices.find(choice => choice.kind === 'pointer'));
+  const cases = [
+    { status: 'M', old: pointer(before), new: pointer(after) },
+    { status: 'A', old: null, new: pointer(after) },
+    { status: 'D', old: pointer(before), new: null }
+  ];
+  for (const item of cases) {
+    f.setResponse({ ...f.getResponse(), pointer_files: [{ path: 'nested', status: item.status,
+      is_submodule: true, gitlink: { old: item.old, new: item.new } }] });
+    const previous = f.commands.length;
+    await f.provider.open(f.node);
+    assert.equal(f.commands.length, previous + 1, f.errors.at(-1));
+    const [command, left, right] = f.commands.at(-1);
+    assert.equal(command, 'vscode.diff');
+    for (const [uri, side] of [[left, item.old], [right, item.new]]) {
+      if (side) assert.equal(await links.provideTextDocumentContent(uri), `Subproject commit ${side.oid}\n`);
+      else assert.match(uri.toString(), /^gitpane-empty:/);
+    }
+  }
+  assert.equal(f.opened(), 3, 'only the inspected child repository is opened');
+  const oldDocument = f.commands[0][1];
+  f.reopenParent();
+  await assert.rejects(links.provideTextDocumentContent(oldDocument), /no longer/i);
+});
+
+test('historical nested gitlinks reject changed selections and unsupported sides', async t => {
+  class EventEmitter {
+    constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
+    fire(value) { for (const listener of this.listeners) listener(value); }
+    dispose() { this.listeners.clear(); }
+  }
+  const changes = new EventEmitter();
+  let f, reopenDuringIdentityCheck = false;
+  const links = new LinkDocuments({ EventEmitter, workspace: {} }, { onDidChangeTreeData: changes.event }, {
+    async validateRepositoryIdentity() {
+      if (reopenDuringIdentityCheck) { reopenDuringIdentityCheck = false; f.reopenChild(); }
+      return { valid: true };
+    }
+  });
+  t.after(() => links.dispose());
+  f = fixture(t, links);
+  const pointer = oid => ({ kind: 'gitlink', oid, mode: 57344 });
+  const selected = { path: 'nested', status: 'M', is_submodule: true,
+    gitlink: { old: pointer('1'.repeat(40)), new: pointer('2'.repeat(40)) } };
+  f.setResponse({ ...f.getResponse(), pointer_files: [selected] });
+  f.pick(choices => {
+    f.setResponse({ ...f.getResponse(), pointer_files: [{ ...selected,
+      gitlink: { ...selected.gitlink, new: pointer('3'.repeat(40)) } }] });
+    return choices.find(choice => choice.kind === 'pointer');
+  });
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /no longer|changed/i);
+
+  f.setResponse({ ...f.getResponse(), pointer_files: [selected] });
+  f.pick(choices => choices.find(choice => choice.kind === 'pointer'));
+  reopenDuringIdentityCheck = true;
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0, 'a reopened child cannot receive a pending comparison');
+  assert.match(f.errors.at(-1), /no longer|changed/i);
+
+  f.setResponse({ ...f.getResponse(), pointer_files: [{ ...selected,
+    gitlink: { old: { kind: 'file', oid: '4'.repeat(40), mode: 33188 }, new: pointer('2'.repeat(40)) } }] });
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /type changes cannot be compared/i);
+  f.setResponse({ ...f.getResponse(), pointer_files: [{ ...selected, path: 'bad\0path' }] });
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /invalid submodule change/i);
+});
+
 test('staged submodule renames report the backend limitation without opening a diff', async t => {
   const f = fixture(t);
   const record = { path: 'child', group: 'index', kind: 'index_renamed', original_path: 'old-child',

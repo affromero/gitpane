@@ -718,8 +718,8 @@ async function activate(context) {
           return;
         }
         if (node.record.is_submodule || isSubmodule(node.repo.rootUri.fsPath, node.change.uri.fsPath, node.repo.state.submodules)) {
-          if (node.group === 'working' && ['working_renamed', 'type_changed'].includes(node.record.kind)) {
-            throw new Error('Working submodule renames and type changes cannot be compared yet.');
+          if (node.group === 'working' && node.record.kind === 'working_renamed') {
+            throw new Error('Working submodule renames cannot be compared yet.');
           }
           await submodules.open(node);
           return;

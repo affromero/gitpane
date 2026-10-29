@@ -63,9 +63,21 @@ fn too_large() -> BridgeError {
     )
 }
 
-fn hash_file(hash: &mut Sha256, file: &mut impl Read) -> Result<(), BridgeError> {
+fn text_too_large() -> BridgeError {
+    BridgeError::new(
+        "invalid_request",
+        "Pointer side exceeds the 1 MiB text limit.",
+    )
+}
+
+fn hash_file(
+    hash: &mut Sha256,
+    file: &mut impl Read,
+    text_limit: Option<usize>,
+) -> Result<Option<Vec<u8>>, BridgeError> {
     let mut total = 0u64;
     let mut bytes = [0; 64 * 1024];
+    let mut text = text_limit.map(|_| Vec::new());
     loop {
         let count = file.read(&mut bytes).map_err(error)?;
         if count == 0 {
@@ -75,9 +87,15 @@ fn hash_file(hash: &mut Sha256, file: &mut impl Read) -> Result<(), BridgeError>
         if total > MAX_FILE_BYTES {
             return Err(too_large());
         }
+        if text_limit.is_some_and(|limit| total > limit as u64) {
+            return Err(text_too_large());
+        }
         hash.update(&bytes[..count]);
+        if let Some(text) = &mut text {
+            text.extend_from_slice(&bytes[..count]);
+        }
     }
-    Ok(())
+    Ok(text)
 }
 
 #[cfg(not(unix))]
@@ -85,6 +103,7 @@ fn working_entry(
     hash: &mut Sha256,
     path: &Path,
     link_only: bool,
+    text_limit: Option<usize>,
 ) -> Result<Option<Vec<u8>>, BridgeError> {
     // Windows opens the leaf as a reparse point, but ancestor components can
     // still change between validation and open. Revalidation cannot make the
@@ -92,7 +111,7 @@ fn working_entry(
     let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if link_only {
+            if link_only || text_limit.is_some() {
                 return Err(changed());
             }
             update(hash, b"missing");
@@ -102,8 +121,11 @@ fn working_entry(
     };
     let identity = metadata_identity(&before).map_err(error)?;
     update(hash, &identity);
-    let mut link = None;
+    let link;
     if before.file_type().is_symlink() {
+        if text_limit.is_some() {
+            return Err(changed());
+        }
         update(hash, b"symlink");
         let target = fs::read_link(path).map_err(error)?;
         let bytes = if link_only {
@@ -126,6 +148,9 @@ fn working_entry(
         if link_only {
             return Err(changed());
         }
+        if text_limit.is_some_and(|limit| before.len() > limit as u64) {
+            return Err(text_too_large());
+        }
         if before.len() > MAX_FILE_BYTES {
             return Err(too_large());
         }
@@ -135,7 +160,7 @@ fn working_entry(
         if !opened.is_file() || metadata_identity(&opened).map_err(error)? != identity {
             return Err(changed());
         }
-        hash_file(hash, &mut file)?;
+        link = hash_file(hash, &mut file, text_limit)?;
         if metadata_identity(&file.metadata().map_err(error)?).map_err(error)? != identity {
             return Err(changed());
         }
@@ -159,6 +184,7 @@ fn working_entry(
     hash: &mut Sha256,
     path: &Path,
     link_only: bool,
+    text_limit: Option<usize>,
 ) -> Result<Option<Vec<u8>>, BridgeError> {
     use std::ffi::{CString, OsStr};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -257,7 +283,7 @@ fn working_entry(
         directory = match open_dir(&directory, part) {
             Ok(fd) => fd,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                if link_only {
+                if link_only || text_limit.is_some() {
                     return Err(changed());
                 }
                 update(hash, b"missing");
@@ -271,7 +297,7 @@ fn working_entry(
     let before = match stat(&directory, &leaf) {
         Ok(value) => value,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if link_only {
+            if link_only || text_limit.is_some() {
                 return Err(changed());
             }
             update(hash, b"missing");
@@ -282,8 +308,11 @@ fn working_entry(
     let before_identity = identity(&before);
     update(hash, &before_identity);
     let kind = before.st_mode & libc::S_IFMT;
-    let mut link = None;
+    let link;
     if kind == libc::S_IFLNK {
+        if text_limit.is_some() {
+            return Err(changed());
+        }
         update(hash, b"symlink");
         let mut target = vec![0u8; 1024 * 1024];
         let count = unsafe {
@@ -306,6 +335,11 @@ fn working_entry(
     } else if kind == libc::S_IFREG {
         if link_only {
             return Err(changed());
+        }
+        if before.st_size >= 0
+            && text_limit.is_some_and(|limit| before.st_size as u64 > limit as u64)
+        {
+            return Err(text_too_large());
         }
         if before.st_size < 0 || before.st_size as u64 > MAX_FILE_BYTES {
             return Err(too_large());
@@ -330,7 +364,7 @@ fn working_entry(
         if identity(&opened) != before_identity {
             return Err(changed());
         }
-        hash_file(hash, &mut file)?;
+        link = hash_file(hash, &mut file, text_limit)?;
         let mut after_read = std::mem::MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(file.as_raw_fd(), after_read.as_mut_ptr()) } != 0 {
             return Err(error(io::Error::last_os_error()));
@@ -363,9 +397,33 @@ fn working_entry(
 
 /// Read a symlink entry without following it or any directory component.
 pub(super) fn link_target(path: &Path) -> Result<String, BridgeError> {
-    let bytes = working_entry(&mut Sha256::new(), path, true)?.ok_or_else(changed)?;
+    let bytes = working_entry(&mut Sha256::new(), path, true, None)?.ok_or_else(changed)?;
     String::from_utf8(bytes)
         .map_err(|_| BridgeError::new("repository_error", "symlink target is not valid UTF-8"))
+}
+
+/// Read an unchanged regular file without following symlinks in its path.
+#[cfg(unix)]
+pub(super) fn working_text(path: &Path, limit: usize) -> Result<(String, String), BridgeError> {
+    let mut hash = Sha256::new();
+    let bytes = working_entry(&mut hash, path, false, Some(limit))?.ok_or_else(changed)?;
+    if bytes.contains(&0) {
+        return Err(BridgeError::new(
+            "invalid_request",
+            "Binary pointer sides cannot be opened as text.",
+        ));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| BridgeError::new("invalid_request", "Pointer side is not UTF-8 text."))?;
+    Ok((text, format!("{:x}", hash.finalize())))
+}
+
+#[cfg(not(unix))]
+pub(super) fn working_text(_path: &Path, _limit: usize) -> Result<(String, String), BridgeError> {
+    Err(BridgeError::new(
+        "unsupported",
+        "Working submodule type comparisons are unavailable on this platform.",
+    ))
 }
 
 /// Build a token for the exact canonical file-operation plan and its inputs.
@@ -452,7 +510,7 @@ pub(super) fn plan(
                 None => update(&mut hash, b"no-index-entry"),
             }
         }
-        working_entry(&mut hash, &repo_path.join(path), false)?;
+        working_entry(&mut hash, &repo_path.join(path), false, None)?;
     }
     Ok((format!("{:x}", hash.finalize()), args))
 }
@@ -476,6 +534,28 @@ mod tests {
             .unwrap();
         drop(tree);
         (dir, repo)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn working_text_reads_regular_files_and_refuses_symlink_paths() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("inside")).unwrap();
+        fs::write(root.join("inside/file"), b"first\n").unwrap();
+        let (first, identity) = working_text(&root.join("inside/file"), 1024).unwrap();
+        assert_eq!(first, "first\n");
+        fs::write(root.join("inside/file"), b"other\n").unwrap();
+        assert_ne!(
+            working_text(&root.join("inside/file"), 1024).unwrap().1,
+            identity
+        );
+        symlink(root.join("inside/file"), root.join("leaf")).unwrap();
+        assert!(working_text(&root.join("leaf"), 1024).is_err());
+        symlink(root.join("inside"), root.join("ancestor")).unwrap();
+        assert!(working_text(&root.join("ancestor/file"), 1024).is_err());
     }
 
     fn identity(repo: &Path, path: &str, operation: FileOperation) -> String {
@@ -576,7 +656,7 @@ mod tests {
         symlink(outside.path(), dir.path().join("linkdir")).unwrap();
         let mut hash = Sha256::new();
         let path = dir.path().canonicalize().unwrap().join("linkdir/secret");
-        assert!(working_entry(&mut hash, &path, false).is_err());
+        assert!(working_entry(&mut hash, &path, false, None).is_err());
     }
 
     #[cfg(unix)]
