@@ -357,10 +357,9 @@ pub(crate) fn collect_changes(
     let mut index = repo.index()?;
     index.read(false)?;
     let baseline = current_head(repo)?;
-    let submodules: HashSet<_> = repo
-        .submodules()?
+    let submodules: HashSet<_> = super::submodule::submodule_registrations(repo)?
         .into_iter()
-        .map(|module| module.path().to_owned())
+        .map(|module| module.path)
         .collect();
     let mut records = Vec::new();
     collect_conflicts(&index, &mut records, max_records, &submodules)?;

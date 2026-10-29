@@ -2,7 +2,9 @@ use crate::config::SubmoduleConfig;
 use git2::{Repository, Status, StatusOptions, SubmoduleStatus};
 use std::path::{Path, PathBuf};
 
-use super::submodule::{observe_child, regular_submodule_blocker, submodule_head_and_warn};
+use super::submodule::{
+    observe_child, regular_submodule_blocker, submodule_head_and_warn, submodule_registrations,
+};
 use super::{FileEntry, FileStatus, SubmoduleInfo, SubmoduleState, SubmoduleWarn};
 
 pub(super) struct ChangeSummary {
@@ -80,21 +82,41 @@ pub(super) fn collect_submodule_infos(
 ) -> color_eyre::Result<Vec<SubmoduleInfo>> {
     let mut submodules = Vec::new();
     if path.join(".gitmodules").is_file() && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed) {
-        let subs = match repo.submodules() {
+        let subs = match submodule_registrations(repo) {
             Ok(subs) => subs,
             Err(error) if strict => return Err(error.into()),
             Err(_) => Vec::new(),
         };
         for sub in &subs {
-            let name = match sub.name() {
+            let name = match std::str::from_utf8(&sub.name) {
                 Ok(name) => name.to_string(),
                 Err(error) if strict => return Err(error.into()),
                 Err(_) => String::new(),
             };
-            let sub_path = PathBuf::from(sub.path());
+            let sub_path = sub.path.clone();
+            if !sub_path
+                .components()
+                .any(|part| matches!(part, std::path::Component::Normal(_)))
+                || sub_path.components().any(|part| {
+                    !matches!(
+                        part,
+                        std::path::Component::Normal(_) | std::path::Component::CurDir
+                    )
+                })
+            {
+                return Err(color_eyre::eyre::eyre!(
+                    "Submodule path must remain inside its parent"
+                ));
+            }
+            let child_path = path.join(&sub_path);
+            let replaced_link = child_path
+                .symlink_metadata()
+                .is_ok_and(|entry| entry.file_type().is_symlink());
 
             // Dirty-state mapping (gated on !ignore_dirty).
-            let uninitialized = if strict {
+            let uninitialized = if replaced_link {
+                true
+            } else if strict {
                 match path.join(&sub_path).join(".git").symlink_metadata() {
                     Ok(_) => false,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
@@ -110,15 +132,28 @@ pub(super) fn collect_submodule_infos(
             } else {
                 false
             };
-            let ignore = sub.ignore_rule();
+            let ignore = sub.ignore;
             let inner = if uninitialized
                 || (ignore == git2::SubmoduleIgnore::All && !sub_cfg.warn_unpushed)
             {
                 None
             } else {
-                match sub.open() {
+                let open = || -> color_eyre::Result<Repository> {
+                    child_path.join(".git").symlink_metadata()?;
+                    let inner = Repository::open(&child_path)?;
+                    let workdir = inner
+                        .workdir()
+                        .ok_or_else(|| color_eyre::eyre::eyre!("Submodule has no working tree"))?;
+                    if workdir.canonicalize()? != child_path.canonicalize()? {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Submodule path does not identify its own repository"
+                        ));
+                    }
+                    Ok(inner)
+                };
+                match open() {
                     Ok(inner) => Some(inner),
-                    Err(error) if strict => return Err(error.into()),
+                    Err(error) if strict => return Err(error),
                     Err(_) => None,
                 }
             };
@@ -129,10 +164,12 @@ pub(super) fn collect_submodule_infos(
             };
             let observation = inner
                 .as_ref()
-                .map(|inner| observe_child(inner, sub.index_id(), inspect))
+                .map(|inner| observe_child(inner, sub.index_oid, inspect))
                 .transpose()?;
             let status = if !sub_cfg.ignore_dirty || (strict && sub_cfg.warn_unpushed) {
-                if uninitialized {
+                if replaced_link && ignore == git2::SubmoduleIgnore::All {
+                    Some(SubmoduleStatus::empty())
+                } else if uninitialized {
                     Some(SubmoduleStatus::WD_UNINITIALIZED)
                 } else if let Some(observation) = &observation {
                     Some(observation.status)
@@ -175,7 +212,7 @@ pub(super) fn collect_submodule_infos(
                 && (state.is_some() || sub_cfg.warn_unpushed)
                 && let Some(inner) = &inner
             {
-                submodule_head_and_warn(inner, sub.index_id(), sub_cfg.warn_unpushed)
+                submodule_head_and_warn(inner, sub.index_oid, sub_cfg.warn_unpushed)
             } else {
                 (None, SubmoduleWarn::default())
             };
@@ -187,7 +224,7 @@ pub(super) fn collect_submodule_infos(
                 continue;
             }
 
-            let head_oid = sub.head_id().map(|id| id.to_string());
+            let head_oid = sub.head_oid.map(|id| id.to_string());
             let workdir_oid = observation
                 .as_ref()
                 .and_then(|observation| observation.head_oid)

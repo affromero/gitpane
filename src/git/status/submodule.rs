@@ -19,9 +19,269 @@ fn candidate_path(bytes: &[u8]) -> Result<PathBuf, git2::Error> {
     }
 }
 
+fn git_path_key(path: &Path) -> Vec<u8> {
+    let bytes = path.as_os_str().as_encoded_bytes().to_vec();
+    #[cfg(windows)]
+    let bytes = bytes
+        .into_iter()
+        .map(|byte| if byte == b'\\' { b'/' } else { byte })
+        .collect();
+    bytes
+}
+
+pub(crate) struct SubmoduleRegistration {
+    pub(crate) name: Vec<u8>,
+    pub(crate) path: PathBuf,
+    pub(crate) ignore: git2::SubmoduleIgnore,
+    pub(crate) head_oid: Option<git2::Oid>,
+    pub(crate) index_oid: Option<git2::Oid>,
+}
+
+fn recorded_gitlink_paths(
+    repo: &Repository,
+    include_conflicts: bool,
+) -> Result<std::collections::BTreeSet<PathBuf>, git2::Error> {
+    let mut paths = std::collections::BTreeSet::new();
+    for entry in repo.index()?.iter() {
+        if entry.mode == 0o160000 && (include_conflicts || entry.flags & 0x3000 == 0) {
+            paths.insert(candidate_path(&entry.path)?);
+        }
+    }
+    match repo.head().and_then(|head| head.peel_to_tree()) {
+        Ok(tree) => {
+            let mut pending = vec![(PathBuf::new(), tree)];
+            while let Some((root, tree)) = pending.pop() {
+                for entry in &tree {
+                    let path = root.join(candidate_path(entry.name_bytes())?);
+                    if entry.filemode() == 0o160000 {
+                        paths.insert(path);
+                    } else if entry.kind() == Some(git2::ObjectType::Tree) {
+                        pending.push((path, repo.find_tree(entry.id())?));
+                    }
+                }
+            }
+        }
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+            ) => {}
+        Err(error) => return Err(error),
+    }
+    Ok(paths)
+}
+
+fn valid_registration_name(name: &[u8]) -> bool {
+    !name.is_empty()
+        && !name.contains(&0)
+        && !name.starts_with(b"/")
+        && name
+            .split(|byte| matches!(byte, b'/' | b'\\'))
+            .all(|part| !matches!(part, b"" | b"." | b".." | b".git"))
+}
+
+fn registration_setting(
+    property: &[u8],
+    value: Option<&[u8]>,
+) -> Result<git2::SubmoduleIgnore, git2::Error> {
+    use git2::SubmoduleIgnore;
+    let original = value;
+    let value = value.map(|value| value.to_ascii_lowercase());
+    let value = value.as_deref();
+    let boolean = match value {
+        None => Some(false),
+        Some(value) => std::str::from_utf8(value)
+            .ok()
+            .and_then(|value| git2::Config::parse_bool(value).ok()),
+    };
+    match (property, value) {
+        (b"ignore", Some(b"none")) => Ok(SubmoduleIgnore::None),
+        (b"ignore", Some(b"untracked")) => Ok(SubmoduleIgnore::Untracked),
+        (b"ignore", Some(b"dirty")) => Ok(SubmoduleIgnore::Dirty),
+        (b"ignore", Some(b"all")) => Ok(SubmoduleIgnore::All),
+        (b"update", Some(b"checkout" | b"merge" | b"rebase" | b"none"))
+        | (b"fetchrecursesubmodules", Some(b"on-demand")) => Ok(SubmoduleIgnore::None),
+        (b"ignore", _) if boolean.is_some() => Ok(if boolean == Some(true) {
+            SubmoduleIgnore::All
+        } else {
+            SubmoduleIgnore::None
+        }),
+        (b"update" | b"fetchrecursesubmodules", _) if boolean.is_some() => {
+            Ok(SubmoduleIgnore::None)
+        }
+        _ => {
+            let decoded_property = String::from_utf8_lossy(property);
+            let property = if property == b"fetchrecursesubmodules" {
+                "fetchRecurseSubmodules"
+            } else {
+                decoded_property.as_ref()
+            };
+            Err(git2::Error::from_str(&format!(
+                "invalid value for submodule '{property}' property: '{}'",
+                String::from_utf8_lossy(original.unwrap_or_default())
+            )))
+        }
+    }
+}
+
+/// Read registration and recorded pointer metadata without inspecting checkouts.
+pub(crate) fn submodule_registrations(
+    repo: &Repository,
+) -> Result<Vec<SubmoduleRegistration>, git2::Error> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let Some(workdir) = repo.workdir() else {
+        return Ok(Vec::new());
+    };
+    let modules = workdir.join(".gitmodules");
+    match modules.symlink_metadata() {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(git2::Error::from_str(&error.to_string())),
+    }
+    let config = git2::Config::open(&modules)?;
+    let mut registrations = BTreeMap::<Vec<u8>, SubmoduleRegistration>::new();
+    let mut aliases = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    let mut configured = BTreeSet::new();
+    type Settings = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
+    let mut settings = BTreeMap::<Vec<u8>, Settings>::new();
+    let mut entries = config.entries(None)?;
+    while let Some(entry) = entries.next() {
+        let entry = entry?;
+        let Some(key) = entry.name_bytes().strip_prefix(b"submodule.") else {
+            continue;
+        };
+        let Some(dot) = key.iter().rposition(|byte| *byte == b'.') else {
+            continue;
+        };
+        let (name, property) = key.split_at(dot);
+        if !valid_registration_name(name) {
+            continue;
+        }
+        let module = registrations
+            .entry(name.to_vec())
+            .or_insert(SubmoduleRegistration {
+                name: name.to_vec(),
+                path: candidate_path(name)?,
+                ignore: git2::SubmoduleIgnore::None,
+                head_oid: None,
+                index_oid: None,
+            });
+        match property {
+            b".path" => {
+                if !entry.has_value() {
+                    return Err(git2::Error::from_str("Submodule path has no value"));
+                }
+                let value = entry.value_bytes();
+                let path = candidate_path(value)?;
+                if aliases.insert(value.to_vec(), name.to_vec()).is_some() {
+                    return Err(git2::Error::from_str("Duplicated submodule path"));
+                }
+                module.path = if value.starts_with(b"-") {
+                    candidate_path(name)?
+                } else {
+                    path
+                };
+                configured.insert(name.to_vec());
+            }
+            b".ignore" | b".update" | b".fetchrecursesubmodules" | b".url" | b".branch" => {
+                let value = entry.has_value().then(|| entry.value_bytes().to_vec());
+                settings
+                    .entry(name.to_vec())
+                    .or_default()
+                    .insert(property[1..].to_vec(), value);
+            }
+            _ => {}
+        }
+    }
+    for module in registrations.values_mut() {
+        if let Some(settings) = settings.get(&module.name) {
+            for (property, value) in settings {
+                if property == b"url" {
+                    if !value
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with(b"-"))
+                    {
+                        configured.insert(module.name.clone());
+                    }
+                } else if property == b"branch" {
+                    configured.insert(module.name.clone());
+                } else {
+                    let setting = registration_setting(property, value.as_deref())?;
+                    if property == b"ignore" {
+                        module.ignore = setting;
+                    }
+                    configured.insert(module.name.clone());
+                }
+            }
+        }
+    }
+    let paths = recorded_gitlink_paths(repo, false)?;
+    for path in &paths {
+        let path_name = git_path_key(path);
+        let name = if registrations.contains_key(&path_name) {
+            path_name
+        } else {
+            aliases.get(&path_name).cloned().unwrap_or(path_name)
+        };
+        registrations
+            .entry(name.clone())
+            .or_insert(SubmoduleRegistration {
+                name,
+                path: path.clone(),
+                ignore: git2::SubmoduleIgnore::None,
+                head_oid: None,
+                index_oid: None,
+            });
+    }
+    let index = repo.index()?;
+    let head = match repo.head().and_then(|head| head.peel_to_tree()) {
+        Ok(head) => Some(head),
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+            ) =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    for module in registrations.values_mut() {
+        // git2's index wrapper panics for paths it cannot convert. Preserve
+        // libgit2's case-aware lookup for accepted paths, and leave rejected
+        // spellings unmatched instead of normalizing them into another path.
+        let index_path_valid = matches!(
+            module.path.components().next(),
+            Some(std::path::Component::Normal(_))
+        ) && !module.path.as_os_str().as_encoded_bytes().contains(&0);
+        module.index_oid = if index_path_valid {
+            index
+                .get_path(&module.path, 0)
+                .filter(|entry| entry.mode & 0o170000 == 0o160000)
+                .map(|entry| entry.id)
+        } else {
+            None
+        };
+        module.head_oid = head
+            .as_ref()
+            .and_then(|head| head.get_path(&module.path).ok())
+            .filter(|entry| entry.filemode() == 0o160000)
+            .map(|entry| entry.id());
+        if !configured.contains(&module.name)
+            && module.head_oid.is_none()
+            && module.index_oid.is_none()
+        {
+            return Err(git2::Error::from_str(
+                "Submodule is not registered in config, HEAD or index",
+            ));
+        }
+    }
+    Ok(registrations.into_values().collect())
+}
+
 /// Enumerate possible submodule locations without probing their working trees.
-/// The caller must still use libgit2's submodule enumeration after authorizing
-/// these paths; this preflight deliberately retains a superset of locations.
+/// This conservative preflight includes conflict-stage locations. Use actual
+/// registrations, rather than this superset, when collecting child status.
 pub(crate) fn submodule_candidate_paths(repo: &Repository) -> Result<Vec<PathBuf>, git2::Error> {
     use std::collections::{BTreeMap, BTreeSet};
     let Some(workdir) = repo.workdir() else {
@@ -30,7 +290,7 @@ pub(crate) fn submodule_candidate_paths(repo: &Repository) -> Result<Vec<PathBuf
     let modules_path = workdir.join(".gitmodules");
     match modules_path.symlink_metadata() {
         Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(git2::Error::from_str(&error.to_string())),
     }
     let config = match git2::Config::open(&modules_path) {
@@ -70,32 +330,7 @@ pub(crate) fn submodule_candidate_paths(repo: &Repository) -> Result<Vec<PathBuf
     for path in names.values() {
         paths.insert(candidate_path(path)?);
     }
-    for entry in repo.index()?.iter() {
-        if entry.mode == 0o160000 {
-            paths.insert(candidate_path(&entry.path)?);
-        }
-    }
-    match repo.head().and_then(|head| head.peel_to_tree()) {
-        Ok(tree) => {
-            let mut pending = vec![(PathBuf::new(), tree)];
-            while let Some((root, tree)) = pending.pop() {
-                for entry in &tree {
-                    let path = root.join(candidate_path(entry.name_bytes())?);
-                    if entry.filemode() == 0o160000 {
-                        paths.insert(path);
-                    } else if entry.kind() == Some(git2::ObjectType::Tree) {
-                        pending.push((path, repo.find_tree(entry.id())?));
-                    }
-                }
-            }
-        }
-        Err(error)
-            if matches!(
-                error.code(),
-                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
-            ) => {}
-        Err(error) => return Err(error),
-    }
+    paths.extend(recorded_gitlink_paths(repo, true)?);
     Ok(paths.into_iter().collect())
 }
 

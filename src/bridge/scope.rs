@@ -276,8 +276,8 @@ impl Scope {
             self.validate_modules_file(&parent)?;
             let repo = git2::Repository::open(&parent)
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
-            // libgit2 probes checkout paths while constructing its submodule
-            // cache. Authorize candidate locations before that eager scan.
+            // Authorize conservative candidate locations, including conflict
+            // stages, before a status caller can inspect any checkouts.
             for relative in crate::git::status::submodule_candidate_paths(&repo)
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
             {
@@ -305,11 +305,10 @@ impl Scope {
                     ));
                 }
             }
-            let submodules = repo
-                .submodules()
+            let submodules = crate::git::status::submodule_registrations(&repo)
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
             for submodule in submodules {
-                let relative = submodule.path();
+                let relative = &submodule.path;
                 if relative.as_os_str().is_empty()
                     || relative.components().any(|component| {
                         !matches!(component, Component::Normal(_) | Component::CurDir)
