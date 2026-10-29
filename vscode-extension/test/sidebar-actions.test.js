@@ -405,12 +405,13 @@ test('available worktrees offer graph and review only while their repository rem
 test('explicit worktree repository removal uses its current anchor and confirmation', async () => {
   const f = fixture();
   const removal = { repoPath: f.root, commonDir: f.commonDir, path: path.resolve('workspace/linked'),
-    branch: 'topic', anchorKey: 'anchor', anchorToken: 1, targetToken: 2, commonIdentity: 'identity' };
+    branch: 'topic', anchorKey: 'anchor', anchorToken: 1, targetToken: 2, commonIdentity: 'identity', workspaceFolder: true };
   f.setRepo({ ...f.getRepo(), worktreeRemoval: removal });
   f.pick(choices => choices.find(choice => choice.action === 'removeWorkspaceWorktree'));
   f.confirm(() => 'Remove');
   await f.actions.showMenu('repo', 'repo');
   assert.match(f.calls[0][1], /remove worktree/i);
+  assert.match(f.calls[0][1], /removes the workspace folder on disk.*remains listed/i);
   assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: removal.path,
     expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'b'.repeat(64) }, f.commonDir]);
   assert.deepEqual(f.calls[2], ['refresh']);
@@ -428,6 +429,35 @@ test('explicit worktree repository removal uses its current anchor and confirmat
   f.confirm(() => { f.setRepo({ ...f.getRepo(), worktreeRemoval: undefined }); return 'Remove'; });
   await f.actions.showMenu('repo', 'repo');
   assert.equal(f.calls.filter(call => call[0] === 'mutation').length, 0, 'a removed registration cannot authorize confirmation');
+});
+
+test('a lone linked worktree requires matching self-removal preview and warns about the workspace folder', async () => {
+  const f = fixture();
+  const removal = { ...f.getRepo(), path: f.root, repoIdentity: 'a'.repeat(64), targetToken: 1,
+    selfRemoval: true, workspaceFolder: true };
+  f.setRepo({ ...f.getRepo(), repoIdentity: 'a'.repeat(64), worktreeRemoval: removal });
+  f.pick(choices => choices.find(choice => choice.action === 'removeWorkspaceWorktree'));
+  f.setWorktreePreview(async (repo, target) => {
+    assert.equal(repo, f.root); assert.equal(target, f.root);
+    return { repo_identity: 'a'.repeat(64), worktree_identity: 'a'.repeat(64), self_removal: true };
+  });
+  f.confirm(() => undefined);
+  await f.actions.showMenu('repo', 'repo');
+  assert.match(f.calls[0][1], /removes the workspace folder on disk.*remains listed/i);
+  assert.equal(f.calls.some(call => call[0] === 'mutation'), false);
+  f.calls.length = 0;
+  f.confirm(() => 'Remove');
+  await f.actions.showMenu('repo', 'repo');
+  assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.root,
+    expected_repo_identity: 'a'.repeat(64), expected_worktree_identity: 'a'.repeat(64) }, f.commonDir]);
+  f.calls.length = 0;
+  f.setWorktreePreview(async () => ({ repo_identity: 'b'.repeat(64), worktree_identity: 'b'.repeat(64), self_removal: true }));
+  await f.actions.showMenu('repo', 'repo');
+  assert.equal(f.calls.some(call => call[0] === 'mutation'), false);
+  assert.match(f.errors.at(-1), /changed/i);
+  f.setWorktreePreview(async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'a'.repeat(64), self_removal: false }));
+  await f.actions.showMenu('repo', 'repo');
+  assert.equal(f.calls.some(call => call[0] === 'mutation'), false);
 });
 
 test('worktree removal rejects stale selection and invalid identity confirmations', async () => {
@@ -455,6 +485,19 @@ test('worktree removal rejects stale selection and invalid identity confirmation
     f.beforeValidation(() => { if (explicit) f.setRepo(undefined); else f.setWorktree(undefined); });
     await f.actions.handle(selected);
     assert.equal(f.calls.some(call => call[0] === 'mutation'), false, 'selection lost during worker startup');
+  }
+});
+
+test('worktree removal reports nested workspace folders before confirmation or mutation', async () => {
+  for (const selfRemoval of [false, true]) {
+    const f = fixture();
+    const removal = { ...f.getRepo(), path: selfRemoval ? f.root : path.resolve('workspace/linked'),
+      repoIdentity: 'a'.repeat(64), selfRemoval };
+    f.setRepo({ ...f.getRepo(), worktreeRemoval: removal });
+    f.setWorktreePreview(async () => { throw Object.assign(new Error('Cannot remove a worktree containing another workspace folder.'), { code: 'invalid_request' }); });
+    await f.actions.handle(action('removeWorkspaceWorktree', 'repo'));
+    assert.match(f.errors.at(-1), /worktree containing another workspace folder/i);
+    assert.equal(f.calls.some(call => call[0] === 'confirm' || call[0] === 'mutation'), false);
   }
 });
 

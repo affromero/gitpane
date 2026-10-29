@@ -41,6 +41,9 @@ let receive;
 let pickChanges;
 let submoduleInput;
 let selectedWorkspaceRepository;
+let confirmAction = true;
+let onConfirm = () => {};
+const confirmations = [];
 const workspaceState = new Map();
 
 async function main() {
@@ -97,7 +100,9 @@ async function main() {
       showInputBox: async () => submoduleInput,
       showWarningMessage: async (message, options, action) => {
         if (typeof options === 'string') { warnings.push(message); return undefined; }
-        return action;
+        confirmations.push(message);
+        await onConfirm();
+        return confirmAction ? action : undefined;
       },
       showInformationMessage: async () => {},
       showErrorMessage: async message => errors.push(message) },
@@ -385,6 +390,81 @@ async function main() {
   assert.match(git('status', '--porcelain', '--', postRemovalFile.path), /^A /);
   console.log('PASS explicit worktree removal retains missing workspace folder and remaining repository actions');
 
+  pickChanges = choices => {
+    assert.ok(!choices.some(choice => choice.action === 'removeWorkspaceWorktree'), 'the main repository must not offer self-removal');
+    return undefined;
+  };
+  await receive({ type: 'menu', kind: 'repo', id: remaining.id });
+
+  const lonePath = path.join(temporary, 'lone-worktree');
+  git('worktree', 'add', '-qb', 'feature/lone', lonePath);
+  const loneRepo = { rootUri: uri(lonePath), kind: 'worktree', state: { HEAD: { name: 'feature/lone',
+    commit: gitAt(lonePath, 'rev-parse', 'HEAD') }, onDidChange: event,
+  workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  api.repositories.push(loneRepo);
+  openedRepositories.fire(loneRepo);
+  vscode.workspace.workspaceFolders = [{ uri: uri(lonePath) }];
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  let lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  assert.ok(lone && !snapshots.at(-1).repositories.some(item => item.name === 'repo'), 'only the linked worktree is in scope');
+  pickChanges = choices => choices.find(choice => choice.action === 'removeWorkspaceWorktree');
+  confirmAction = false;
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  assert.match(confirmations.at(-1), /removes the workspace folder on disk.*remains listed/i);
+  assert.ok(fs.existsSync(lonePath), 'cancelling keeps the worktree');
+  confirmAction = true;
+  const nestedWorkspace = path.join(lonePath, 'nested-workspace');
+  fs.mkdirSync(nestedWorkspace);
+  vscode.workspace.workspaceFolders = [{ uri: uri(lonePath) }, { uri: uri(nestedWorkspace) }];
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  const beforeNestedWorkspace = errors.length, beforeNestedConfirmation = confirmations.length;
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  assert.equal(errors.length, beforeNestedWorkspace + 1);
+  assert.match(errors.at(-1), /worktree containing another workspace folder/i);
+  assert.equal(confirmations.length, beforeNestedConfirmation, 'nested workspace is refused before confirmation');
+  assert.ok(fs.existsSync(nestedWorkspace));
+  vscode.workspace.workspaceFolders = [{ uri: uri(lonePath) }];
+  workspaceChanged.fire({});
+  fs.rmdirSync(nestedWorkspace);
+  fs.writeFileSync(path.join(lonePath, 'dirty.txt'), 'dirty\n');
+  await commands.get('gitpane.refresh')();
+  lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  const beforeDirty = errors.length;
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  assert.equal(errors.length, beforeDirty + 1);
+  assert.match(errors.at(-1), /modified|dirty|untracked/i);
+  fs.unlinkSync(path.join(lonePath, 'dirty.txt'));
+  git('worktree', 'lock', lonePath);
+  await commands.get('gitpane.refresh')();
+  lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  const beforeLocked = errors.length;
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  assert.equal(errors.length, beforeLocked + 1);
+  assert.match(errors.at(-1), /locked/i);
+  git('worktree', 'unlock', lonePath);
+  await commands.get('gitpane.refresh')();
+  lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  onConfirm = () => { vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }]; workspaceChanged.fire({}); };
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  onConfirm = () => {};
+  assert.ok(fs.existsSync(lonePath), 'a workspace change during confirmation prevents removal');
+  vscode.workspace.workspaceFolders = [{ uri: uri(lonePath) }]; workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  lone = snapshots.at(-1).repositories.find(item => item.name === 'lone-worktree');
+  await receive({ type: 'menu', kind: 'repo', id: lone.id });
+  assert.equal(fs.existsSync(lonePath), false, errors.at(-1));
+  assert.equal(vscode.workspace.workspaceFolders[0].uri.fsPath, lonePath, 'Gitpane does not edit workspace folders');
+  assert.ok(fs.existsSync(repoPath), 'the main repository stays intact');
+  vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }, { uri: uri(lonePath) }];
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'repo' && !item.statusUnavailable));
+  assert.ok(snapshots.at(-1).errors.some(message => message.includes(lonePath) && /unavailable/i.test(message)));
+  console.log('PASS lone worktree removal, cancellation, dirty and locked refusal, stale scope, and workspace recovery');
+
   const source = path.join(temporary, 'submodule-source');
   fs.mkdirSync(source);
   gitAt(source, 'init', '-q');
@@ -406,7 +486,9 @@ async function main() {
     return submodule;
   };
   await commands.get('gitpane.refresh')();
-  const parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  let parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: parentAfterSubmodule.id });
+  parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const submodule = parentAfterSubmodule.groups.flatMap(group => group.files).find(item => item.path === 'child');
   assert.ok(submodule, 'dirty in-workspace submodule must appear in the parent changes');
   assert.equal(childRepo.state.workingTreeChanges.length, 0, 'VS Code child changes are intentionally empty');

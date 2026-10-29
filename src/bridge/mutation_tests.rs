@@ -8,6 +8,8 @@ use tempfile::TempDir;
 use super::serve;
 use crate::config::{GraphConfig, SubmoduleConfig, WorktreeConfig};
 
+mod self_removal;
+
 fn repo_with_files(path: &Path) -> Repository {
     std::fs::create_dir_all(path).unwrap();
     let repo = Repository::init(path).unwrap();

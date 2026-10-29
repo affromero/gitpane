@@ -27,6 +27,41 @@ pub(super) struct Scope {
 }
 
 impl Scope {
+    pub(super) fn validate_worktree_removal(&self, target: &Path) -> Result<(), BridgeError> {
+        for root in &self.roots {
+            if !root.is_current() {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Workspace folder changed; refresh before continuing.",
+                ));
+            }
+            let source_path = if let (Some(parent), Some(name)) =
+                (root.source.parent(), root.source.file_name())
+            {
+                parent
+                    .canonicalize()
+                    .map_err(|error| {
+                        BridgeError::new(
+                            "stale_target",
+                            format!("Workspace folder changed: {error}"),
+                        )
+                    })?
+                    .join(name)
+            } else {
+                root.path.clone()
+            };
+            if (root.path != target && root.path.starts_with(target))
+                || (source_path != target && source_path.starts_with(target))
+            {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "Cannot remove a worktree containing another workspace folder.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn new(roots: Vec<PathBuf>) -> Result<Self, BridgeError> {
         Self::new_with_identities(roots, None, None)
     }

@@ -44,9 +44,11 @@ The `⋯` menus provide file actions to stage, unstage, discard or delete an
 untracked file. Repository actions include branch review, push, pull, pull with
 rebase and worktree creation. Linked worktrees inside the workspace can be
 removed from their menu.
-An explicitly added worktree can be removed from its repository menu when a
-registered repository from the same Git directory is also in the workspace.
-A lone worktree cannot be removed from Gitpane until an anchor is added.
+An explicitly added linked worktree can also be removed from its repository
+menu when it is the only repository in the workspace. If its folder is a
+workspace root, the folder is removed from disk and remains listed in the
+workspace until you remove it from the workspace configuration.
+Gitpane refuses to remove a worktree containing another workspace folder.
 Worktree creation suggests Gitpane's configured `[worktree] dir`, or a sibling
 of the repository when unset. If that location is outside the workspace or
 unavailable, choose an existing parent directory inside the workspace instead.

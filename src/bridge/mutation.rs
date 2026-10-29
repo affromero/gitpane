@@ -432,8 +432,41 @@ pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Va
 struct WorktreeSelection {
     repo: PathBuf,
     target: PathBuf,
+    common_dir: PathBuf,
     repo_identity: RepositoryIdentity,
     worktree_identity: RepositoryIdentity,
+}
+
+fn registered_worktree(repo: &git2::Repository, target: &Path) -> Result<bool, BridgeError> {
+    let names = repo.worktrees().map_err(repo_error)?;
+    for i in 0..names.len() {
+        let name = names
+            .get(i)
+            .map_err(repo_error)?
+            .ok_or_else(|| repo_error("worktree name is not valid UTF-8"))?;
+        let worktree = repo.find_worktree(name).map_err(repo_error)?;
+        if worktree
+            .path()
+            .canonicalize()
+            .is_ok_and(|path| path == target)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(super) fn is_registered_linked_worktree(
+    repo: &git2::Repository,
+    path: &Path,
+) -> Result<bool, BridgeError> {
+    if !repo.is_worktree() {
+        return Ok(false);
+    }
+    if !registered_worktree(repo, path)? {
+        return Err(stale_worktree());
+    }
+    Ok(true)
 }
 
 fn stale_worktree() -> BridgeError {
@@ -452,12 +485,7 @@ fn worktree_selection(
     let repo_path = scope.repository(repo)?;
     absolute_path(path)?;
     let target = scope.repository(path)?;
-    if target == repo_path {
-        return Err(BridgeError::new(
-            "invalid_request",
-            "cannot remove the selected repository",
-        ));
-    }
+    scope.validate_worktree_removal(&target)?;
     let repo_identity = RepositoryIdentity::read(&repo_path)?;
     let worktree_identity = RepositoryIdentity::read(&target)?;
     if let Some((expected_repo, expected_worktree)) = expected
@@ -477,24 +505,14 @@ fn worktree_selection(
         });
     }
     let repo = git2::Repository::open(&repo_path).map_err(repo_error)?;
-    let names = repo.worktrees().map_err(repo_error)?;
-    let mut registered = false;
-    for i in 0..names.len() {
-        let name = names
-            .get(i)
-            .map_err(repo_error)?
-            .ok_or_else(|| repo_error("worktree name is not valid UTF-8"))?;
-        let worktree = repo.find_worktree(name).map_err(repo_error)?;
-        if worktree
-            .path()
-            .canonicalize()
-            .is_ok_and(|path| path == target)
-        {
-            registered = true;
-            break;
-        }
+    let common_dir = repo.commondir().canonicalize().map_err(repo_error)?;
+    if target == repo_path && (!repo.is_worktree() || common_dir.starts_with(&target)) {
+        return Err(BridgeError::new(
+            "invalid_request",
+            "cannot remove this repository as a linked worktree",
+        ));
     }
-    if !registered {
+    if !registered_worktree(&repo, &target)? {
         return Err(if expected.is_some() {
             stale_worktree()
         } else {
@@ -507,6 +525,7 @@ fn worktree_selection(
     Ok(WorktreeSelection {
         repo: repo_path,
         target,
+        common_dir,
         repo_identity,
         worktree_identity,
     })
@@ -531,6 +550,7 @@ pub(super) fn worktree_remove_preview(
     Ok(json!({
         "repo_identity": initial.repo_identity.fingerprint()?,
         "worktree_identity": initial.worktree_identity.fingerprint()?,
+        "self_removal": initial.repo == initial.target,
     }))
 }
 
@@ -551,12 +571,28 @@ pub(super) fn worktree_remove(scope: &Scope, input: RemoveWorktree) -> Result<Va
         }
     };
     let initial = worktree_selection(scope, &input.repo, &input.path, expected)?;
+    if initial.repo == initial.target && expected.is_none() {
+        return Err(BridgeError::new(
+            "invalid_request",
+            "Worktree identity tokens are required for self-removal.",
+        ));
+    }
     let current = worktree_selection(scope, &input.repo, &input.path, expected)?;
     if initial != current {
         return Err(stale_worktree());
     }
-    run(
-        &current.repo,
-        &worktree_ops::remove_arguments(&current.target),
-    )
+    if current.repo == current.target {
+        let common = current
+            .common_dir
+            .to_str()
+            .ok_or_else(|| repo_error("Git common directory path is not valid UTF-8"))?;
+        let mut args = vec![format!("--git-dir={common}")];
+        args.extend(worktree_ops::remove_arguments(&current.target));
+        run(&current.common_dir, &args)
+    } else {
+        run(
+            &current.repo,
+            &worktree_ops::remove_arguments(&current.target),
+        )
+    }
 }

@@ -791,6 +791,16 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     await changeFolders([first]);
     rows = provider.snapshot().repositories;
     assert.equal(provider.resolveRepository(rows[0].id).worktreeRemoval, undefined, 'an anchor outside the workspace cannot authorize removal');
+    const loneStatus = tree.backendStatuses.get(first);
+    loneStatus.repo_identity = 'a'.repeat(64);
+    loneStatus.is_linked_worktree = true;
+    const loneRemoval = provider.resolveRepository(rows[0].id).worktreeRemoval;
+    assert.equal(loneRemoval.selfRemoval, true);
+    assert.equal(loneRemoval.workspaceFolder, true);
+    assert.equal(fs.realpathSync(loneRemoval.repoPath), fs.realpathSync(first));
+    assert.equal(fs.realpathSync(loneRemoval.path), fs.realpathSync(first));
+    loneStatus.is_linked_worktree = false;
+    assert.equal(provider.resolveRepository(rows[0].id).worktreeRemoval, undefined, 'removing the authoritative flag invalidates the action');
     await changeFolders([linkedRoot]);
     rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['one']);

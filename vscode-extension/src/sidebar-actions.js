@@ -261,7 +261,14 @@ class SidebarActions {
           typeof preview.worktree_identity !== 'string' || !/^[a-f0-9]{64}$/.test(preview.worktree_identity)) {
           throw new Error('Gitpane returned an invalid worktree confirmation. Update the backend and try again.');
         }
-        if (await this.vscode.window.showWarningMessage(`Remove worktree ${target.path}?`, { modal: true }, 'Remove') !== 'Remove') return;
+        if (target.selfRemoval && (preview.self_removal !== true || preview.repo_identity !== target.repoIdentity ||
+            preview.worktree_identity !== target.repoIdentity)) {
+          throw new Error('The linked worktree changed. Refresh and try again.');
+        }
+        const detail = target.workspaceFolder
+          ? `Remove worktree ${target.path}? This removes the workspace folder on disk. It remains listed in the workspace.`
+          : `Remove worktree ${target.path}?`;
+        if (await this.vscode.window.showWarningMessage(detail, { modal: true }, 'Remove') !== 'Remove') return;
         method = 'worktree_remove';
         params = { repo: target.repoPath, path: target.path, expected_repo_identity: preview.repo_identity,
           expected_worktree_identity: preview.worktree_identity };

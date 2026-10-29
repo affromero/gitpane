@@ -10,7 +10,12 @@ use crate::git::status::{
     watched_symlinks,
 };
 
-use super::{BridgeError, changes::RepositoryIdentity, mutation::validate_file_path, scope::Scope};
+use super::{
+    BridgeError,
+    changes::RepositoryIdentity,
+    mutation::{is_registered_linked_worktree, validate_file_path},
+    scope::Scope,
+};
 
 fn utf8_path(path: &Path) -> Result<&str, BridgeError> {
     path.to_str()
@@ -77,6 +82,7 @@ pub(super) fn query(
     validate_submodules(scope, repo, sub_cfg)?;
     let common_repo = git2::Repository::open(repo)
         .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+    let is_linked_worktree = is_registered_linked_worktree(&common_repo, repo)?;
     let common_dir = common_repo
         .commondir()
         .canonicalize()
@@ -232,6 +238,7 @@ pub(super) fn query(
     let files_truncated = summary_only && included_compact < result.files.len();
     let mut response = json!({
         "repo_identity": repo_identity.fingerprint()?,
+        "is_linked_worktree": is_linked_worktree,
         "common_dir": utf8_path(&common_dir)?,
         "branch": result.branch,
         "head_oid": result.head_oid,
@@ -250,7 +257,10 @@ pub(super) fn query(
         response["files_truncated"] = json!(files_truncated);
         response["watched_errors"] = json!(watched_errors);
     }
-    if scope.repository(repo)? != repo || RepositoryIdentity::read(repo)? != repo_identity {
+    if scope.repository(repo)? != repo
+        || RepositoryIdentity::read(repo)? != repo_identity
+        || is_registered_linked_worktree(&common_repo, repo)? != is_linked_worktree
+    {
         return Err(BridgeError::new(
             "stale_target",
             "Repository changed while collecting status",

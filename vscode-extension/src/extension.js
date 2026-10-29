@@ -285,13 +285,22 @@ class GitpaneViewProvider {
     actionRepo.pinned = this.pins?.isPinned(repo) || false;
     actionRepo.added = this.workspaceRepositories?.isAdded(repo) || false;
     const found = this.tree.explicitWorktreeAnchor?.(repo);
-    if (!found || !this.tree.isPathInWorkspace(found.path)) return actionRepo;
+    if (!found || !this.tree.isPathInWorkspace(found.path)) {
+      const status = this.tree.backendStatuses.get(repo.rootUri.toString());
+      const token = this.tree.repositoryToken(repo);
+      if (status?.is_linked_worktree !== true || !/^[a-f0-9]{64}$/.test(status.repo_identity || '') ||
+          !this.tree.isCurrentRepository(repo, token)) return actionRepo;
+      const record = this.tree.workspaceView().records.find(item => item.repo === repo);
+      return { ...actionRepo, worktreeRemoval: { ...actionRepo, path: repo.rootUri.fsPath,
+        targetToken: token, selfRemoval: true, workspaceFolder: !!record?.explicit } };
+    }
     const anchorToken = this.tree.repositoryToken(found.anchor);
     const targetToken = this.tree.repositoryToken(repo);
     const anchor = this.actionRepository(found.anchor);
     if (!anchor || !this.tree.isCurrentRepository(found.anchor, anchorToken) || !this.tree.isCurrentRepository(repo, targetToken)) return actionRepo;
     return { ...actionRepo, worktreeRemoval: { ...anchor, path: found.path, branch: found.branch,
-      anchorKey: found.anchor.rootUri.toString(), anchorToken, targetToken, commonIdentity: found.commonIdentity } };
+      anchorKey: found.anchor.rootUri.toString(), anchorToken, targetToken, commonIdentity: found.commonIdentity,
+      workspaceFolder: true } };
   }
 
   resolveChange(id) {
