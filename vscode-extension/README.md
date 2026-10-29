@@ -177,14 +177,13 @@ herdr placements can open a split or window on the workspace host. Set
 `gitpane.sessionBackend` to select a multiplexer, or choose one when it is set
 to `auto`. Install and start the selected multiplexer on that host.
 
-For `ask`, tmux offers available panes and sessions; herdr offers splits in the
-inherited pane. A configured tmux placement needs a separate `-t <target>` or
-the `TMUX` and `TMUX_PANE` environment inherited by VS Code. Herdr requires
-`HERDR_SOCKET_PATH` and either a configured `-t <target>` or `HERDR_PANE_ID`.
-Herdr new-tab placement is unavailable because its workspace target cannot yet
-be verified. Herdr launchers have not been tested against a running herdr
-server. Multiplexer launchers are unavailable on Windows. Unsupported
-placements and interpreter executables report an error.
+For `ask`, tmux offers available panes and sessions; herdr offers splits and a
+new tab in the inherited pane's workspace. A configured tmux placement needs a
+separate `-t <target>` or the `TMUX` and `TMUX_PANE` environment inherited by
+VS Code. Herdr requires `HERDR_SOCKET_PATH` and either a configured
+`-t <target>` or `HERDR_PANE_ID`.
+Multiplexer launchers are unavailable on Windows. Unsupported placements and
+direct command placements using interpreter executables report an error.
 
 Discard and delete require confirmation and check the selected file for changes
 before running Git. Files larger than 64 MiB, directories and special files

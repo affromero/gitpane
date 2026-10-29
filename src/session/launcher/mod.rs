@@ -160,6 +160,45 @@ pub(crate) fn plan_with_target(
     base: Option<&str>,
     mux: Multiplexer,
 ) -> LaunchPlan {
+    plan_with_target_inner(command, placement, dir, target, base, mux, None)
+}
+
+/// Plan a Herdr launch with a verified workspace for new-tab placement.
+pub(crate) fn plan_with_herdr_workspace(
+    command: Option<&str>,
+    placement: &str,
+    dir: &str,
+    workspace: &str,
+) -> LaunchPlan {
+    if workspace.is_empty()
+        || workspace.len() > 128
+        || workspace.starts_with('-')
+        || workspace
+            .chars()
+            .any(|value| value.is_control() || value.is_whitespace())
+    {
+        return LaunchPlan::Error("invalid Herdr workspace target".into());
+    }
+    plan_with_target_inner(
+        command,
+        placement,
+        dir,
+        dir,
+        None,
+        Multiplexer::Herdr,
+        Some(workspace),
+    )
+}
+
+fn plan_with_target_inner(
+    command: Option<&str>,
+    placement: &str,
+    dir: &str,
+    target: &str,
+    base: Option<&str>,
+    mux: Multiplexer,
+    herdr_workspace: Option<&str>,
+) -> LaunchPlan {
     let dir = crate::repo_id::boundary_path(std::path::Path::new(dir));
     let target = crate::repo_id::boundary_path(std::path::Path::new(target));
     let dir = dir.to_string_lossy();
@@ -199,7 +238,7 @@ pub(crate) fn plan_with_target(
         },
         Placement::Tmux(flags) => match mux {
             Multiplexer::Tmux => LaunchPlan::Spawn(build_tmux_argv(&flags, dir, shell.as_deref())),
-            Multiplexer::Herdr => match herdr_create_argv(&flags, dir) {
+            Multiplexer::Herdr => match herdr_create_argv(&flags, dir, herdr_workspace) {
                 Ok(create) => LaunchPlan::Herdr {
                     create,
                     command: shell,
@@ -349,22 +388,24 @@ fn herdr_split_argv(direction: &str, dir: &str, target: Option<&str>) -> Vec<Str
 }
 
 /// `herdr tab create --cwd <dir> --no-focus` (a new tab, like tmux new-window).
-fn herdr_tab_argv(dir: &str) -> Vec<String> {
-    vec![
-        "herdr".to_string(),
-        "tab".to_string(),
-        "create".to_string(),
-        "--cwd".to_string(),
-        dir.to_string(),
-        "--no-focus".to_string(),
-    ]
+fn herdr_tab_argv(dir: &str, workspace: Option<&str>) -> Vec<String> {
+    let mut argv = vec!["herdr".to_string(), "tab".to_string(), "create".to_string()];
+    if let Some(workspace) = workspace {
+        argv.extend(["--workspace".into(), workspace.into()]);
+    }
+    argv.extend(["--cwd".into(), dir.into(), "--no-focus".into()]);
+    argv
 }
 
 /// Translate tmux-style `split-window`/`new-window` flags into a herdr create
 /// argv. `split-window` honors `-h`/`-v` (direction) and `-t <pane-id>`;
 /// `new-window` takes no flags. Any other flag is an error so a tmux-specific
 /// placement can't silently mis-launch under herdr.
-fn herdr_create_argv(flags: &[String], dir: &str) -> Result<Vec<String>, String> {
+fn herdr_create_argv(
+    flags: &[String],
+    dir: &str,
+    workspace: Option<&str>,
+) -> Result<Vec<String>, String> {
     let mut rest = flags.iter();
     let Some(head) = rest.next() else {
         return Err("empty herdr placement".to_string());
@@ -394,7 +435,7 @@ fn herdr_create_argv(flags: &[String], dir: &str) -> Result<Vec<String>, String>
             }
             Ok(herdr_split_argv(direction, dir, target.as_deref()))
         }
-        "new-window" if flags.len() == 1 => Ok(herdr_tab_argv(dir)),
+        "new-window" if flags.len() == 1 => Ok(herdr_tab_argv(dir, workspace)),
         "new-window" => Err("placement 'new-window' takes no flags under herdr".to_string()),
         other => Err(format!("invalid placement '{other}' under herdr")),
     }

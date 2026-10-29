@@ -140,7 +140,7 @@ fn tmux_alias_launch_is_pinned_and_rejects_changed_target_or_config() {
 }
 
 #[test]
-fn herdr_partial_failure_reports_created_pane_and_unsupported_new_tab() {
+fn herdr_partial_failure_reports_created_pane() {
     if let Some((directory, _listener)) = child() {
         let root = directory.path();
         fs::write(
@@ -157,7 +157,7 @@ fn herdr_partial_failure_reports_created_pane_and_unsupported_new_tab() {
             ),
         );
         run_child(
-            "bridge::launcher::mux::tests::herdr_partial_failure_reports_created_pane_and_unsupported_new_tab",
+            "bridge::launcher::mux::tests::herdr_partial_failure_reports_created_pane",
             root,
             "herdr",
         );
@@ -197,21 +197,110 @@ fn herdr_partial_failure_reports_created_pane_and_unsupported_new_tab() {
             .unwrap()
             .contains("\n--pane\nw1:p1\n")
     );
-    fs::write(
-        root.join("config.toml"),
-        "[open]\ncommand = 'printf test'\nplacement = 'new-window'\n",
-    )
-    .unwrap();
+}
+
+#[test]
+fn herdr_new_tab_is_pinned_to_verified_workspace_and_rejects_stale_context() {
+    if let Some((directory, _listener)) = child() {
+        let root = directory.path();
+        fs::write(
+            root.join("config.toml"),
+            "[open]\ncommand = 'printf %s {path}'\nplacement = 'ask'\n",
+        )
+        .unwrap();
+        fs::write(root.join("workspace"), "w1\n").unwrap();
+        fs::write(root.join("terminal"), "term1\n").unwrap();
+        fs::write(root.join("returned-workspace"), "w1\n").unwrap();
+        write_script(
+            root,
+            "herdr",
+            &format!(
+                "#!/bin/sh\ncase \"$1 $2\" in\n'pane list') read -r workspace < '{0}/workspace'; read -r terminal < '{0}/terminal'; printf '{{\"result\":{{\"panes\":[{{\"pane_id\":\"w1:p1\",\"terminal_id\":\"%s\",\"workspace_id\":\"%s\",\"tab_id\":\"w1:t1\"}}' \"$terminal\" \"$workspace\"; if [ -f '{0}/created' ]; then printf ',{{\"pane_id\":\"w1:p2\",\"terminal_id\":\"term2\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t2\"}}'; fi; printf ']}}}}';;\n'tab create') printf '%s\\n' \"$@\" > '{0}/created'; if [ -f '{0}/malformed' ]; then printf invalid; elif [ -f '{0}/existing' ]; then printf '{{\"result\":{{\"type\":\"tab_created\",\"tab\":{{\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}},\"root_pane\":{{\"pane_id\":\"w1:p1\",\"terminal_id\":\"term1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}}}}}'; else read -r workspace < '{0}/returned-workspace'; printf '{{\"result\":{{\"type\":\"tab_created\",\"tab\":{{\"workspace_id\":\"%s\",\"tab_id\":\"w1:t2\"}},\"root_pane\":{{\"pane_id\":\"w1:p2\",\"terminal_id\":\"term2\",\"workspace_id\":\"%s\",\"tab_id\":\"w1:t2\"}}}}}}' \"$workspace\" \"$workspace\"; fi;;\n'pane run') printf '%s\\n' \"$@\" > '{0}/ran';;\n*) exit 1;;\nesac\n",
+                root.display()
+            ),
+        );
+        run_child(
+            "bridge::launcher::mux::tests::herdr_new_tab_is_pinned_to_verified_workspace_and_rejects_stale_context",
+            root,
+            "herdr",
+        );
+        return;
+    }
+    let (repo, scope) = fixture();
+    let root = repo.parent().unwrap();
     let action = actions(&load().unwrap()).remove(0);
-    let error = choices(
-        &scope,
-        ChoicesRequest {
-            repo,
-            id: "open".into(),
-            fingerprint: action.fingerprint(),
-            backend: "herdr".into(),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(error.code, "unsupported_placement");
+    let fingerprint = action.fingerprint();
+    let choose = || {
+        choices(
+            &scope,
+            ChoicesRequest {
+                repo: repo.clone(),
+                id: "open".into(),
+                fingerprint: fingerprint.clone(),
+                backend: "herdr".into(),
+            },
+        )
+        .unwrap()
+    };
+    let first = choose();
+    let choice = first["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["id"] == "new-tab")
+        .unwrap();
+    let request = || ExecuteRequest {
+        repo: repo.clone(),
+        id: "open".into(),
+        fingerprint: fingerprint.clone(),
+        expected_repo_identity: first["repo_identity"].as_str().unwrap().into(),
+        backend: "herdr".into(),
+        choice: "new-tab".into(),
+        context_token: choice["context_token"].as_str().unwrap().into(),
+    };
+    fs::write(root.join("workspace"), "w2\n").unwrap();
+    assert_eq!(execute(&scope, request()).unwrap_err().code, "stale_target");
+    assert!(!root.join("created").exists());
+    fs::write(root.join("workspace"), "w1\n").unwrap();
+    fs::write(root.join("terminal"), "other\n").unwrap();
+    assert_eq!(execute(&scope, request()).unwrap_err().code, "stale_target");
+    assert!(!root.join("created").exists());
+    fs::write(root.join("terminal"), "term1\n").unwrap();
+    assert_eq!(execute(&scope, request()).unwrap()["launched"], true);
+    let argv = fs::read_to_string(root.join("created")).unwrap();
+    assert!(argv.contains("\n--workspace\nw1\n"), "{argv}");
+    assert!(argv.contains(repo.to_str().unwrap()), "{argv}");
+    assert!(root.join("ran").exists());
+    assert!(!root.join("unsafe").exists());
+    fs::remove_file(root.join("created")).unwrap();
+    fs::remove_file(root.join("ran")).unwrap();
+    fs::write(root.join("returned-workspace"), "w2\n").unwrap();
+    assert_eq!(
+        execute(&scope, request()).unwrap_err().code,
+        "partial_completion"
+    );
+    assert!(root.join("created").exists());
+    assert!(!root.join("ran").exists());
+    fs::remove_file(root.join("created")).unwrap();
+    fs::write(root.join("malformed"), "yes").unwrap();
+    assert_eq!(
+        execute(&scope, request()).unwrap_err().code,
+        "partial_completion"
+    );
+    assert!(!root.join("ran").exists());
+    fs::remove_file(root.join("created")).unwrap();
+    fs::remove_file(root.join("malformed")).unwrap();
+    fs::write(root.join("returned-workspace"), "w1\n").unwrap();
+    fs::write(root.join("existing"), "yes").unwrap();
+    assert_eq!(
+        execute(&scope, request()).unwrap_err().code,
+        "partial_completion"
+    );
+    assert!(!root.join("ran").exists());
+    fs::remove_file(root.join("created")).unwrap();
+    fs::remove_file(root.join("existing")).unwrap();
+    fs::remove_file(root.join("mux.sock")).unwrap();
+    let _replacement = UnixListener::bind(root.join("mux.sock")).unwrap();
+    assert_eq!(execute(&scope, request()).unwrap_err().code, "stale_target");
+    assert!(!root.join("created").exists());
 }

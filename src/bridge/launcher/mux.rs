@@ -37,6 +37,8 @@ struct Choice {
     label: String,
     placement: String,
     token: String,
+    workspace: Option<String>,
+    existing_terminals: Vec<String>,
 }
 
 fn error(code: &'static str, message: impl Into<String>) -> BridgeError {
@@ -121,6 +123,8 @@ fn add_choice(
         label,
         token: token(identity, action, backend, context, &placement),
         placement,
+        workspace: None,
+        existing_terminals: Vec::new(),
     });
 }
 
@@ -340,12 +344,6 @@ fn tmux_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeEr
 }
 
 fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
-    if action.placement.trim_start().starts_with("new-window") {
-        return Err(error(
-            "unsupported_placement",
-            "Herdr new tabs require an explicit workspace target, which is unavailable.",
-        ));
-    }
     let socket_path = std::env::var("HERDR_SOCKET_PATH").map_err(|_| {
         error(
             "unsupported_placement",
@@ -405,9 +403,60 @@ fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeE
                 "Herdr did not provide a workspace identity.",
             )
         })?;
+    if workspace.len() > 128
+        || workspace.starts_with('-')
+        || workspace
+            .chars()
+            .any(|value| value.is_control() || value.is_whitespace())
+    {
+        return Err(error(
+            "session_error",
+            "Herdr returned an invalid workspace identity.",
+        ));
+    }
     let context = format!("{socket}\0{target}\0{terminal}\0{workspace}");
+    let existing_terminals =
+        if action.placement.trim() == "ask" || action.placement.trim() == "new-window" {
+            panes
+                .iter()
+                .map(|pane| {
+                    pane.get("terminal_id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            error(
+                                "unsupported_placement",
+                                "Herdr did not provide stable terminal identities.",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
     let mut result = Vec::new();
     if action.placement.trim() == "ask" {
+        add_choice(
+            &mut result,
+            identity,
+            action,
+            "herdr",
+            &context,
+            (
+                "new-tab".into(),
+                "New tab in current workspace".into(),
+                "new-window".into(),
+            ),
+        );
+        result
+            .last_mut()
+            .expect("new-tab choice was added")
+            .workspace = Some(workspace.into());
+        result
+            .last_mut()
+            .expect("new-tab choice was added")
+            .existing_terminals = existing_terminals.clone();
         for (direction, label) in [
             ("-h", "Right of current pane"),
             ("-v", "Below current pane"),
@@ -423,7 +472,8 @@ fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeE
             );
         }
     } else {
-        let placement = if configured.is_some() {
+        let is_new_tab = action.placement.trim() == "new-window";
+        let placement = if configured.is_some() || is_new_tab {
             action.placement.clone()
         } else {
             format!("{} -t {target}", action.placement)
@@ -440,6 +490,16 @@ fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeE
                 placement,
             ),
         );
+        if is_new_tab {
+            result
+                .last_mut()
+                .expect("configured choice was added")
+                .workspace = Some(workspace.into());
+            result
+                .last_mut()
+                .expect("configured choice was added")
+                .existing_terminals = existing_terminals;
+        }
     }
     Ok(result)
 }
@@ -486,8 +546,7 @@ pub(in crate::bridge) fn choices(
         return Err(stale());
     }
     Ok(
-        json!({"repo_identity":fingerprint,"choices":choices.into_iter().map(|choice| json!({"id":choice.id,"label":choice.label,"context_token":choice.token})).collect::<Vec<_>>(),
-        "notice": if input.backend == "herdr" && action.placement.trim() == "ask" { Some("Herdr new tabs are unavailable because the workspace target cannot be verified.") } else { None } }),
+        json!({"repo_identity":fingerprint,"choices":choices.into_iter().map(|choice| json!({"id":choice.id,"label":choice.label,"context_token":choice.token})).collect::<Vec<_>>(), "notice": null }),
     )
 }
 
@@ -545,6 +604,77 @@ fn launch(
     Ok(output)
 }
 
+fn verified_created_tab(
+    output: &[u8],
+    workspace: &str,
+    existing_terminals: &[String],
+) -> Result<String, BridgeError> {
+    let partial = || {
+        error(
+            "partial_completion",
+            "Herdr created a tab, but its workspace or pane identity could not be verified.",
+        )
+    };
+    let response: Value = serde_json::from_slice(output).map_err(|_| partial())?;
+    let result = response.get("result").ok_or_else(partial)?;
+    if result.get("type").and_then(Value::as_str) != Some("tab_created")
+        || result.pointer("/tab/workspace_id").and_then(Value::as_str) != Some(workspace)
+        || result
+            .pointer("/root_pane/workspace_id")
+            .and_then(Value::as_str)
+            != Some(workspace)
+    {
+        return Err(partial());
+    }
+    let pane = result
+        .pointer("/root_pane/pane_id")
+        .and_then(Value::as_str)
+        .ok_or_else(partial)?;
+    let tab = result
+        .pointer("/tab/tab_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(partial)?;
+    if result.pointer("/root_pane/tab_id").and_then(Value::as_str) != Some(tab) {
+        return Err(partial());
+    }
+    let terminal = result
+        .pointer("/root_pane/terminal_id")
+        .and_then(Value::as_str)
+        .ok_or_else(partial)?;
+    if pane.is_empty()
+        || pane.len() > 128
+        || pane.starts_with('-')
+        || pane
+            .chars()
+            .any(|value| value.is_control() || value.is_whitespace())
+        || terminal.is_empty()
+        || existing_terminals
+            .iter()
+            .any(|existing| existing == terminal)
+    {
+        return Err(partial());
+    }
+    let current = command("herdr", &["pane", "list"]).map_err(|_| partial())?;
+    let current: Value = serde_json::from_slice(&current.stdout).map_err(|_| partial())?;
+    let panes = current
+        .pointer("/result/panes")
+        .and_then(Value::as_array)
+        .ok_or_else(partial)?;
+    let mut matching = panes
+        .iter()
+        .filter(|value| value.get("pane_id").and_then(Value::as_str) == Some(pane));
+    let actual = matching.next().ok_or_else(partial)?;
+    if matching.next().is_some()
+        || actual.get("workspace_id").and_then(Value::as_str) != Some(workspace)
+        || actual.get("terminal_id").and_then(Value::as_str) != Some(terminal)
+        || actual.get("tab_id").and_then(Value::as_str) != Some(tab)
+    {
+        return Err(partial());
+    }
+    Ok(pane.to_owned())
+}
+
 pub(in crate::bridge) fn execute(
     scope: &Scope,
     input: ExecuteRequest,
@@ -569,13 +699,22 @@ pub(in crate::bridge) fn execute(
     let path = repo
         .to_str()
         .ok_or_else(|| error("invalid_request", "Repository path is not valid UTF-8."))?;
-    let plan = launcher::plan(
-        action.command.as_deref(),
-        &choice.placement,
-        path,
-        None,
-        mux,
-    );
+    let plan = if let Some(workspace) = &choice.workspace {
+        launcher::plan_with_herdr_workspace(
+            action.command.as_deref(),
+            &choice.placement,
+            path,
+            workspace,
+        )
+    } else {
+        launcher::plan(
+            action.command.as_deref(),
+            &choice.placement,
+            path,
+            None,
+            mux,
+        )
+    };
     if scope.repository(&input.repo)? != repo || RepositoryIdentity::read(&repo)? != identity {
         return Err(stale());
     }
@@ -586,6 +725,43 @@ pub(in crate::bridge) fn execute(
         }
         LaunchPlan::Herdr { create, command } => {
             let output = launch(&create, &repo, false)?;
+            let tab_pane = if let Some(workspace) = &choice.workspace {
+                if !scope
+                    .repository(&input.repo)
+                    .is_ok_and(|current| current == repo)
+                    || !RepositoryIdentity::read(&repo).is_ok_and(|current| current == identity)
+                {
+                    return Err(error(
+                        "partial_completion",
+                        "Herdr created a tab but the repository changed.",
+                    ));
+                }
+                if !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.id == input.choice && value.token == input.context_token)
+                }) {
+                    return Err(error(
+                        "partial_completion",
+                        "Herdr created a tab but the launcher context changed.",
+                    ));
+                }
+                let pane =
+                    verified_created_tab(&output.stdout, workspace, &choice.existing_terminals)?;
+                if !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.id == input.choice && value.token == input.context_token)
+                }) {
+                    return Err(error(
+                        "partial_completion",
+                        "Herdr created a tab but the launcher context changed.",
+                    ));
+                }
+                Some(pane)
+            } else {
+                None
+            };
             if let Some(command) = command {
                 let output = std::str::from_utf8(&output.stdout).map_err(|_| {
                     error(
@@ -593,12 +769,14 @@ pub(in crate::bridge) fn execute(
                         "Herdr pane was created but its response was invalid.",
                     )
                 })?;
-                let pane = launcher::parse_herdr_pane_id(output).ok_or_else(|| {
-                    error(
-                        "partial_completion",
-                        "Herdr pane was created but its identity was unavailable.",
-                    )
-                })?;
+                let pane = tab_pane
+                    .or_else(|| launcher::parse_herdr_pane_id(output))
+                    .ok_or_else(|| {
+                        error(
+                            "partial_completion",
+                            "Herdr pane was created but its identity was unavailable.",
+                        )
+                    })?;
                 if pane.is_empty() || pane.starts_with('-') || pane.chars().any(char::is_whitespace)
                 {
                     return Err(error(
