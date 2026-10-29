@@ -19,7 +19,9 @@ function fixture(t, linkDocuments) {
     with: changes => uri(changes.path || value, changes.scheme || scheme) });
   const base = 'a'.repeat(40), head = 'b'.repeat(40);
   const parent = { rootUri: uri(parentPath), state: { submodules: [{ path: 'child' }] } };
-  const node = { repo: parent, group: 'working', change: { uri: uri(childPath), status: 5 } };
+  const node = { repo: parent, group: 'working', change: { uri: uri(childPath), status: 5 },
+    record: { path: 'child', group: 'working', kind: 'working_modified', original_path: null,
+      conflict_stages: null, is_submodule: true } };
   const child = { rootUri: uri(childPath), state: { HEAD: { commit: head }, submodules: [],
     workingTreeChanges: [{ uri: uri(path.join(childPath, 'dirty.txt')), status: 5 }] }, async status() {} };
   let visible = true;
@@ -30,7 +32,8 @@ function fixture(t, linkDocuments) {
   const tokens = new Map([[parentPath, 1], [childPath, 1]]);
   const revisions = new Map([[parentPath, 1], [childPath, 1]]);
   let pick = choices => choices[0];
-  let response = { repo: childPath, base_oid: base, head_oid: head, child_head_oid: head, pointer_files: [
+  let response = { repo: childPath, base_oid: base, head_oid: head, child_head_oid: head,
+    parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64), pointer_files: [
     { status: 'R', path: 'new.txt', old_path: 'old.txt', is_submodule: false }
   ] };
   let opens = 0;
@@ -73,6 +76,16 @@ function fixture(t, linkDocuments) {
   async verifyChanges(repo, record) {
     if (repo === parentPath && parentFailure) throw parentFailure;
     return { change: repo === childPath ? records().find(item => item.path === record.path && item.group === record.group) || null : hasParentRecord ? parentRecord : record };
+  }, async validateSubmoduleChain(chain) {
+    for (const link of chain) {
+      const current = await this.verifyChanges(link.repo, link.record);
+      const detail = await this.inspectSubmodule(link.repo, link.path, link.group, link.original_path ?? undefined);
+      if (JSON.stringify(current.change) !== JSON.stringify(link.record) || detail.repo !== link.child_repo ||
+          detail.base_oid !== link.base_oid || detail.head_oid !== link.head_oid || detail.child_head_oid !== link.child_head_oid ||
+          detail.parent_identity !== link.parent_identity || detail.child_identity !== link.child_identity ||
+          child.state.HEAD.commit !== link.child_head_oid) return { valid: false };
+    }
+    return { valid: true };
   } };
   const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments, resolveChange: () => visible && rowVisible ? node : undefined,
     openGraph: async (repo, guard, validate) => { graphs.push(repo); graphGuard = guard; graphValidate = validate; } });
@@ -126,6 +139,7 @@ test('submodule diffs use the selected pointer endpoints while guarding the live
   const live = 'c'.repeat(40);
   f.child.state.HEAD.commit = live;
   f.node.group = 'index';
+  f.node.record = { ...f.node.record, group: 'index', kind: 'index_modified' };
   f.setResponse({ ...f.getResponse(), child_head_oid: live });
   f.pick(choices => choices.find(choice => choice.kind === 'pointer'));
   await f.provider.open(f.node);
@@ -206,11 +220,12 @@ test('nested working changes traverse beyond four levels and reject stale ancest
     repositoryRevision: value => tokens.has(value.fsPath) ? 1 : 0,
     isCurrentRepository: (repo, token) => token === tokens.get(repo?.rootUri.fsPath), onDidChangeTreeData: () => ({ dispose() {} }) };
   let activeSessions = 0, maxSessions = 0, stale = false, scopeEscape = false;
-  let fault, nestedInspected = false, removedNested = false, leafSelected = false, leafChecks = 0, removedLeaf = false;
+  let fault, nestedInspected = false, removedNested = false, leafSelected = false, leafChecks = 0, removedLeaf = false, identityChanged = false;
   const backend = {
     async inspectSubmodule(repo, target) {
       if (fault === 'nested' && repo === repos[1].rootUri.fsPath) nestedInspected = true;
-      return { repo: path.join(repo, target), base_oid: head, head_oid: head, child_head_oid: head, pointer_files: [] };
+      return { repo: path.join(repo, target), base_oid: head, head_oid: head, child_head_oid: head,
+        parent_identity: '1'.repeat(64), child_identity: (identityChanged && repo === root ? '3' : '2').repeat(64), pointer_files: [] };
     },
     async status() { return { head_oid: head }; },
     async verifyChanges(repo, record) {
@@ -219,6 +234,18 @@ test('nested working changes traverse beyond four levels and reject stale ancest
       if (fault === 'leaf' && leafSelected && repo === repos.at(-1).rootUri.fsPath) leafChecks++;
       return { change: (removedNested && repo === repos[1].rootUri.fsPath) ||
         (removedLeaf && repo === repos.at(-1).rootUri.fsPath) ? null : record };
+    },
+    async validateSubmoduleChain(chain) {
+      for (const link of chain) {
+        const current = await this.verifyChanges(link.repo, link.record);
+        const detail = await this.inspectSubmodule(link.repo, link.path);
+        if (JSON.stringify(current.change) !== JSON.stringify(link.record) || detail.repo !== link.child_repo ||
+            detail.base_oid !== link.base_oid || detail.head_oid !== link.head_oid || detail.child_head_oid !== link.child_head_oid ||
+            detail.parent_identity !== link.parent_identity || detail.child_identity !== link.child_identity) {
+          return { valid: false };
+        }
+      }
+      return { valid: true };
     },
     async openChangesSession(repo) {
       activeSessions++;
@@ -235,6 +262,7 @@ test('nested working changes traverse beyond four levels and reject stale ancest
       if (stale && selected?.record?.path === 'file.txt') tokens.set(repos[1].rootUri.fsPath, 2);
       if (scopeEscape && selected?.record?.is_submodule) withinWorkspace = false;
       if (fault === 'leaf' && selected?.record?.path === 'file.txt') leafSelected = true;
+      if (fault === 'identity' && selected?.record?.path === 'file.txt') identityChanged = true;
       return selected;
     }, async showErrorMessage(message) { errors.push(message); }
   }, commands: { async executeCommand(...args) { commands.push(args); } } };
@@ -275,11 +303,19 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   assert.ok(removedLeaf, 'the leaf must disappear during final ancestor validation');
   assert.equal(commands.length, 1, 'a disappeared leaf cannot open a diff');
   assert.match(errors.at(-1), /changed|no longer/i);
+  fault = 'identity';
+  removedLeaf = false;
+  await provider.open(node);
+  assert.ok(identityChanged, 'repository identity must change while the leaf is selected');
+  assert.equal(commands.length, 1, 'replaced repository metadata cannot open a diff');
+  assert.match(errors.at(-1), /changed|no longer/i);
 });
 
 test('submodule conflicts report the backend error without opening a diff', async t => {
   const f = fixture(t);
   f.node.group = 'merge';
+  f.node.record = { ...f.node.record, group: 'merge', kind: 'conflicted',
+    conflict_stages: { base: 'child', ours: 'child', theirs: 'child' } };
   f.setResponse(new Error('Cannot compare conflicted submodule pointers.'));
   await f.provider.open(f.node);
   assert.equal(f.commands.length, 0);
@@ -379,16 +415,31 @@ test('reports uninitialized submodules and refuses outside paths before opening 
   f.setResponse(new Error('Submodule is not initialized'));
   await f.provider.open(f.node);
   assert.match(f.errors[0], /not initialized/i);
-  f.setResponse({ repo: path.join(f.temporary, 'outside'), base_oid: null, head_oid: f.head, child_head_oid: f.head, pointer_files: [] });
+  f.setResponse({ repo: path.join(f.temporary, 'outside'), base_oid: null, head_oid: f.head, child_head_oid: f.head,
+    parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64), pointer_files: [] });
   await f.provider.open(f.node);
   assert.match(f.errors[1], /no longer in the workspace/i);
+  assert.equal(f.opened(), 0);
+});
+
+test('submodule identity fingerprints are required and validated before opening a repository', async t => {
+  const f = fixture(t);
+  const valid = f.getResponse();
+  const olderBackend = { ...valid };
+  delete olderBackend.parent_identity;
+  f.setResponse(olderBackend);
+  await f.provider.open(f.node);
+  assert.match(f.errors.at(-1), /update.*backend/i);
+  f.setResponse({ ...valid, parent_identity: 'forged' });
+  await f.provider.open(f.node);
+  assert.match(f.errors.at(-1), /invalid submodule details/i);
   assert.equal(f.opened(), 0);
 });
 
 test('a canonical submodule remains inspectable when VS Code omits it and backend still validates it', async t => {
   const f = fixture(t);
   f.node.repo.state.submodules = [];
-  f.node.record = { is_submodule: true };
+  f.node.record = { ...f.node.record, is_submodule: true };
   f.pick(choices => choices.find(choice => choice.kind === 'graph'));
   await f.provider.open(f.node);
   assert.deepEqual(f.graphs, [f.child]);
@@ -490,9 +541,14 @@ test('submodule graph validation detects pointer changes without a tree event', 
   f.pick(choices => choices.find(choice => choice.kind === 'graph'));
   await f.provider.open(f.node);
   assert.equal(await f.graphValidate(), true);
-  f.setResponse({ ...f.getResponse(), base_oid: 'c'.repeat(40) });
+  const response = f.getResponse();
+  f.setResponse({ ...response, base_oid: 'c'.repeat(40) });
   assert.equal(await f.graphValidate(), false);
   assert.equal(f.graphCurrent(), false);
+  f.setResponse(response);
+  await f.provider.open(f.node);
+  f.setResponse({ ...response, child_identity: '3'.repeat(64) });
+  assert.equal(await f.graphValidate(), false, 'repository metadata replacement invalidates the graph');
 });
 
 test('temporary ancestor validation errors leave graph guards recoverable', async t => {

@@ -32,11 +32,14 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown field summary_only'}});
     return;
   }
+  if (process.env.MODE === 'old' && request.method === 'submodule_chain_validate') {
+    send({id: request.id, error: {code: 'invalid_request', message: 'unknown bridge method'}}); return;
+  }
   if (request.params.repo === '/denied') {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch};
+  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -84,6 +87,10 @@ test('status and graph responses are matched to their requests', async t => {
     { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true, group: 'index' });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child', true, 'index', 'old-child'),
     { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true, group: 'index', original_path: 'old-child' });
+  const chain = [{ repo, path: 'child', group: 'working', original_path: null,
+    record: { path: 'child', group: 'working' }, child_repo: path.join(repo, 'child'), base_oid: null,
+    head_oid: 'a'.repeat(40), child_head_oid: 'a'.repeat(40), parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) }];
+  assert.deepEqual(await client.validateSubmoduleChain(chain), { method: 'submodule_chain_validate', roots: [root], chain });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
   assert.deepEqual(await client.planWorktree(repo, 'feature/a'), { method: 'worktree_plan', repo, roots: [root], branch: 'feature/a' });
 });
@@ -98,6 +105,7 @@ test('an older backend requires an update for compact status', async t => {
     await assert.rejects(request(), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   }
   assert.equal((await client.status(repo)).method, 'status');
+  await assert.rejects(client.validateSubmoduleChain([]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
 });
 
 test('compact status fits the response limit when a full status does not', async t => {

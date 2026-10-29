@@ -187,6 +187,9 @@ fn process(
             Ok(result)
         }
         "submodule_inspect" => submodule::inspect(scope, params(request.params)?, sub_cfg),
+        "submodule_chain_validate" => {
+            submodule::chain::validate(scope, params(request.params)?, sub_cfg)
+        }
         "sessions_list" => session::list(scope, params(request.params)?),
         "launchers_list" => launcher::list(scope, params(request.params)?),
         "launcher_plan" => launcher::plan(scope, params(request.params)?),

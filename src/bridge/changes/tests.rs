@@ -774,6 +774,18 @@ fn page_boundaries_respect_encoded_size_and_reject_oversized_records() {
             .code,
         "snapshot_too_large"
     );
+    let mut total = 0;
+    assert_eq!(
+        super::account_record(&mut total, super::MAX_PAGE_BYTES)
+            .unwrap_err()
+            .code,
+        "snapshot_too_large"
+    );
+    let mut total = super::MAX_CACHE_BYTES - 129;
+    assert_eq!(
+        super::account_record(&mut total, 2).unwrap_err().code,
+        "snapshot_too_large"
+    );
 }
 
 #[test]

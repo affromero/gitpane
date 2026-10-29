@@ -9,6 +9,7 @@ use crate::git::commit_files::list_revision_files;
 use super::{BridgeError, changes::RepositoryIdentity, commit_file_json, scope::Scope, status};
 
 pub(super) mod actions;
+pub(super) mod chain;
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,11 +116,21 @@ fn ensure_supported_type(
     }
 }
 
-pub(super) fn inspect(
-    scope: &Scope,
-    input: Request,
-    sub_cfg: &SubmoduleConfig,
-) -> Result<Value, BridgeError> {
+#[derive(PartialEq, Eq)]
+struct LinkSnapshot {
+    parent_path: PathBuf,
+    child_path: PathBuf,
+    child: PathBuf,
+    parent_identity: RepositoryIdentity,
+    child_identity: RepositoryIdentity,
+    parent_head: Option<git2::Oid>,
+    index: Option<git2::Oid>,
+    child_head: git2::Oid,
+    base: Option<git2::Oid>,
+    head: Option<git2::Oid>,
+}
+
+fn read_link(scope: &Scope, input: &Request) -> Result<LinkSnapshot, BridgeError> {
     if input.path.as_os_str().is_empty()
         || input.path.as_os_str().as_encoded_bytes().contains(&0)
         || input
@@ -133,7 +144,6 @@ pub(super) fn inspect(
         ));
     }
     let parent_path = scope.repository(&input.repo)?;
-    scope.validate_submodules(&parent_path)?;
     if input.group == Some(Group::Merge) {
         return Err(BridgeError::new(
             "invalid_request",
@@ -194,7 +204,6 @@ pub(super) fn inspect(
             failure
         }
     })?;
-    scope.validate_submodules(&child)?;
     let child_identity = RepositoryIdentity::read(&child)?;
     let child_repo = git2::Repository::open(&child).map_err(error)?;
     let child_head = child_repo
@@ -210,30 +219,49 @@ pub(super) fn inspect(
         None => (parent_head, Some(child_head)),
         Some(Group::Merge) => unreachable!(),
     };
-    let files = if base == head {
+    Ok(LinkSnapshot {
+        parent_path,
+        child_path,
+        child,
+        parent_identity,
+        child_identity,
+        parent_head,
+        index,
+        child_head,
+        base,
+        head,
+    })
+}
+
+pub(super) fn inspect(
+    scope: &Scope,
+    input: Request,
+    sub_cfg: &SubmoduleConfig,
+) -> Result<Value, BridgeError> {
+    let parent = scope.repository(&input.repo)?;
+    scope.validate_submodules(&parent)?;
+    let initial = read_link(scope, &input)?;
+    if initial.parent_path != parent {
+        return Err(BridgeError::new(
+            "stale_target",
+            "Submodule changed; refresh before inspecting",
+        ));
+    }
+    let files = if initial.base == initial.head {
         Vec::new()
     } else {
-        list_revision_files(&child, base, head).map_err(error)?
+        list_revision_files(&initial.child, initial.base, initial.head).map_err(error)?
     };
-    let child_status = status::query(&child, scope, sub_cfg, true, input.summary_only, &[])?;
-    if scope.repository(&input.repo)? != parent_path || scope.repository(&child_path)? != child {
-        return Err(BridgeError::new(
-            "stale_target",
-            "Submodule changed; refresh before inspecting",
-        ));
-    }
-    scope.validate_submodules(&parent_path)?;
-    scope.validate_submodules(&child)?;
-    if RepositoryIdentity::read(&parent_path)? != parent_identity
-        || RepositoryIdentity::read(&child)? != child_identity
-    {
-        return Err(BridgeError::new(
-            "stale_target",
-            "Submodule changed; refresh before inspecting",
-        ));
-    }
-    let parent_again = git2::Repository::open(&parent_path).map_err(error)?;
-    ensure_no_conflict(&parent_again, &input.path).map_err(|failure| {
+    let child_status = status::query(
+        &initial.child,
+        scope,
+        sub_cfg,
+        true,
+        input.summary_only,
+        &[],
+    )?;
+    scope.validate_submodules(&parent)?;
+    let current = read_link(scope, &input).map_err(|failure| {
         if failure.code == "invalid_request" {
             BridgeError::new(
                 "stale_target",
@@ -243,40 +271,23 @@ pub(super) fn inspect(
             failure
         }
     })?;
-    ensure_supported_type(&parent_again, &input.path, input.group).map_err(|failure| {
-        if failure.code == "invalid_request" {
-            BridgeError::new(
-                "stale_target",
-                "Submodule changed; refresh before inspecting",
-            )
-        } else {
-            failure
-        }
-    })?;
-    let modules_again = parent_again.submodules().map_err(error)?;
-    let current = modules_again.iter().find(|sub| sub.path() == input.path);
-    let head_again = git2::Repository::open(&child)
-        .map_err(error)?
-        .head()
-        .and_then(|head| head.peel_to_commit())
-        .map_err(error)?
-        .id();
-    if current.is_none_or(|sub| sub.head_id() != parent_head || sub.index_id() != index)
-        || head_again != child_head
-    {
+    if current != initial {
         return Err(BridgeError::new(
             "stale_target",
             "Submodule changed; refresh before inspecting",
         ));
     }
-    let child_text = child
+    let child_text = initial
+        .child
         .to_str()
         .ok_or_else(|| error("submodule path is not valid UTF-8"))?;
     Ok(json!({
         "repo": child_text,
-        "base_oid": base.map(|id| id.to_string()),
-        "head_oid": head.map(|id| id.to_string()),
-        "child_head_oid": child_head.to_string(),
+        "base_oid": initial.base.map(|id| id.to_string()),
+        "head_oid": initial.head.map(|id| id.to_string()),
+        "child_head_oid": initial.child_head.to_string(),
+        "parent_identity": initial.parent_identity.fingerprint()?,
+        "child_identity": initial.child_identity.fingerprint()?,
         "status": child_status,
         "pointer_files": files.into_iter().map(commit_file_json).collect::<Vec<_>>()
     }))
@@ -288,7 +299,7 @@ mod tests {
     use git2::{Repository, Signature};
     use std::path::Path;
 
-    fn commit_file(repo: &Repository, name: &str, text: &str) -> git2::Oid {
+    pub(super) fn commit_file(repo: &Repository, name: &str, text: &str) -> git2::Oid {
         std::fs::write(repo.workdir().unwrap().join(name), text).unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(Path::new(name)).unwrap();
@@ -301,7 +312,7 @@ mod tests {
             .unwrap()
     }
 
-    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Scope) {
+    pub(super) fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Scope) {
         let temporary = tempfile::tempdir().unwrap();
         let workspace = temporary.path().join("workspace");
         let parent_path = workspace.join("parent");

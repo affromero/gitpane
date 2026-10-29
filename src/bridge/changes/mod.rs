@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -52,7 +52,7 @@ pub(super) struct Release {
     snapshot: String,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Serialize)]
 struct DirectoryIdentity {
     path: PathBuf,
     #[cfg(unix)]
@@ -97,7 +97,7 @@ impl DirectoryIdentity {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Serialize)]
 pub(super) struct RepositoryIdentity {
     worktree: DirectoryIdentity,
     gitdir: DirectoryIdentity,
@@ -105,6 +105,11 @@ pub(super) struct RepositoryIdentity {
 }
 
 impl RepositoryIdentity {
+    pub(super) fn fingerprint(&self) -> Result<String, BridgeError> {
+        let bytes = serde_json::to_vec(self).map_err(repository_error)?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
     pub(super) fn read(repo: &Path) -> Result<Self, BridgeError> {
         let repository = git2::Repository::open(repo).map_err(repository_error)?;
         Ok(Self {
@@ -133,6 +138,56 @@ pub(super) struct Snapshots {
 
 fn repository_error(error: impl std::fmt::Display) -> BridgeError {
     BridgeError::new("repository_error", error.to_string())
+}
+
+fn change_error(error: ChangeError) -> BridgeError {
+    match error {
+        ChangeError::Git(error) => repository_error(error),
+        ChangeError::Repository(error) => repository_error(error),
+        ChangeError::InvalidPath => BridgeError::new(
+            "repository_error",
+            "A changed path is invalid or is not UTF-8.",
+        ),
+        ChangeError::Limit => BridgeError::new(
+            "snapshot_too_large",
+            "The repository has too many changes to list.",
+        ),
+    }
+}
+
+pub(super) fn current_record(
+    repo: &git2::Repository,
+    sub_cfg: &SubmoduleConfig,
+    path: &str,
+    group: &str,
+) -> Result<Option<Value>, BridgeError> {
+    let mut bytes = 0usize;
+    let mut found = None;
+    for record in collect_changes(repo, sub_cfg, MAX_RECORDS).map_err(change_error)? {
+        let encoded = serde_json::to_vec(&record).map_err(repository_error)?;
+        account_record(&mut bytes, encoded.len())?;
+        if record.matches(path, group) {
+            found = Some(serde_json::from_slice(&encoded).map_err(repository_error)?);
+        }
+    }
+    Ok(found)
+}
+
+fn account_record(bytes: &mut usize, size: usize) -> Result<(), BridgeError> {
+    if size.saturating_add(1) > MAX_PAGE_BYTES {
+        return Err(BridgeError::new(
+            "snapshot_too_large",
+            "A change is too large to include in a page.",
+        ));
+    }
+    *bytes = bytes.saturating_add(size.saturating_add(128));
+    if *bytes > MAX_CACHE_BYTES {
+        return Err(BridgeError::new(
+            "snapshot_too_large",
+            "The repository change snapshot exceeds the memory limit.",
+        ));
+    }
+    Ok(())
 }
 
 fn stale() -> BridgeError {
@@ -186,19 +241,7 @@ impl Snapshots {
         scope.validate_submodules(&repo)?;
         let identity = RepositoryIdentity::read(&repo)?;
         let repository = git2::Repository::open(&repo).map_err(repository_error)?;
-        let changes =
-            collect_changes(&repository, sub_cfg, MAX_RECORDS).map_err(|error| match error {
-                ChangeError::Git(error) => repository_error(error),
-                ChangeError::Repository(error) => repository_error(error),
-                ChangeError::InvalidPath => BridgeError::new(
-                    "repository_error",
-                    "A changed path is invalid or is not UTF-8.",
-                ),
-                ChangeError::Limit => BridgeError::new(
-                    "snapshot_too_large",
-                    "The repository has too many changes to list.",
-                ),
-            })?;
+        let changes = collect_changes(&repository, sub_cfg, MAX_RECORDS).map_err(change_error)?;
         scope.repository(&repo)?;
         scope.validate_submodules(&repo)?;
         if RepositoryIdentity::read(&repo)? != identity {
@@ -215,13 +258,7 @@ impl Snapshots {
             hash.update(&encoded);
             // Keep serialized records rather than JSON trees so the cache has
             // a predictable per-record bound, including allocation overhead.
-            bytes = bytes.saturating_add(encoded.len().saturating_add(128));
-            if bytes > MAX_CACHE_BYTES {
-                return Err(BridgeError::new(
-                    "snapshot_too_large",
-                    "The repository change snapshot exceeds the memory limit.",
-                ));
-            }
+            account_record(&mut bytes, encoded.len())?;
             sizes.push(encoded.len());
             records.push(encoded.into_boxed_slice());
         }

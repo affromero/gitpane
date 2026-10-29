@@ -25,6 +25,12 @@ pub(crate) struct ChangeRecord {
     is_submodule: bool,
 }
 
+impl ChangeRecord {
+    pub(crate) fn matches(&self, path: &str, group: &str) -> bool {
+        self.path == path && self.group == group
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ChangeError {
     Git(git2::Error),

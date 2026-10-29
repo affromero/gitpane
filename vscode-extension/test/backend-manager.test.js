@@ -35,6 +35,10 @@ readline.createInterface({input: process.stdin}).on('line', line => {
       cursor: request.params.cursor, previous_cursor: 0, next_cursor: null, changes: []}});
   } else if (request.method === 'changes_find') {
     send({id: request.id, result: {change: {path: request.params.path, group: request.params.group}}});
+  } else if (request.method === 'submodule_chain_validate') {
+    const result = {valid: true};
+    if (request.params.chain.some(link => link.path === 'slow')) setTimeout(() => send({id: request.id, result}), 300);
+    else send({id: request.id, result});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else {
@@ -135,6 +139,43 @@ test('theme configuration errors do not mark the repository backend unavailable'
   manager.client.theme = async () => { throw Object.assign(new Error('theme missing'), { code: 'theme_error' }); };
   await assert.rejects(manager.theme(), /theme missing/);
   assert.equal(manager.state.status, 'ready');
+});
+
+test('submodule validation uses a bounded reusable worker isolated from paging and workspace changes', async t => {
+  const { manager, root, executed, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const link = { repo: path.join(root, 'repo'), child_repo: path.join(root, 'repo', 'child'), path: 'child' };
+  await manager.beginChanges(link.repo);
+  assert.equal(executed.length, 2, 'paging gets a separate worker');
+  assert.deepEqual(await manager.validateSubmoduleChain([link]), { valid: true });
+  assert.deepEqual(await manager.validateSubmoduleChain([link]), { valid: true });
+  assert.equal(executed.length, 3, 'repeated validation reuses its own worker');
+  assert.equal((await manager.nextChanges(link.repo, 'sample', 1)).snapshot, 'sample');
+  await assert.rejects(manager.validateSubmoduleChain(Array(33).fill(link)), error => error.code === 'invalid_request');
+  const realpath = manager.realpath;
+  manager.realpath = async value => {
+    if (value.endsWith(`${path.sep}missing`)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return realpath(value);
+  };
+  assert.deepEqual(await manager.validateSubmoduleChain([{ ...link, child_repo: path.join(root, 'missing') }]), { valid: false });
+  const slow = { ...link, path: 'slow' };
+  const pending = Array.from({ length: 4 }, () => manager.validateSubmoduleChain([slow]));
+  await assert.rejects(manager.validateSubmoduleChain([slow]), error => error.code === 'busy');
+  const results = Promise.all(pending.map(promise => assert.rejects(promise, error => error.code === 'workspace_changed')));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const nextRoot = path.resolve('next-workspace');
+  setFolders([nextRoot]);
+  await results;
+  const next = { ...link, repo: path.join(nextRoot, 'repo'), child_repo: path.join(nextRoot, 'repo', 'child') };
+  assert.deepEqual(await manager.validateSubmoduleChain([next]), { valid: true });
+  assert.equal(executed.length, 5, 'reconfiguration starts fresh main and scoped validation workers');
+  const interrupted = manager.validateSubmoduleChain([{ ...next, path: 'slow' }]);
+  const rejected = assert.rejects(interrupted, error => error.code === 'workspace_changed');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  manager.dispose();
+  await rejected;
+  assert.equal(manager.validationClient, undefined);
 });
 
 test('session discovery is limited to current workspace repositories', async t => {

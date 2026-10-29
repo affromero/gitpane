@@ -132,6 +132,16 @@ class BridgeClient {
     }
   }
 
+  async validateSubmoduleChain(chain) {
+    try { return await this.request('submodule_chain_validate', { chain }); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support nested submodule validation. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   graph(repo, firstParent = false, filters, collapsedSegments) {
     return this.request('graph', { repo, first_parent: firstParent, ...(filters === undefined ? {} : { filters }),
       ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) });

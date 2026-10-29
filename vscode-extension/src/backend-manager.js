@@ -22,6 +22,10 @@ class BackendManager {
     this.changesClient = undefined;
     this.changesConfiguration = undefined;
     this.changesEpoch = 0;
+    this.validationClient = undefined;
+    this.validationConfiguration = undefined;
+    this.validationEpoch = 0;
+    this.activeValidations = 0;
     this.verifyClients = new Set();
     this.executable = undefined;
     this.roots = undefined;
@@ -54,6 +58,7 @@ class BackendManager {
     if (this.disposed) return Promise.reject(new BridgeError('disposed', 'Gitpane backend has been disposed.'));
     const generation = ++this.generation;
     this.cancelChanges();
+    this.cancelValidation();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.roots = undefined;
@@ -219,6 +224,71 @@ class BackendManager {
     this.changesConfiguration = undefined;
   }
 
+  cancelValidation() {
+    this.validationEpoch++;
+    this.validationClient?.dispose({ immediate: true });
+    this.validationClient = undefined;
+    this.validationConfiguration = undefined;
+  }
+
+  async getValidationClient(epoch) {
+    await this.ready();
+    if (this.disposed || epoch !== this.validationEpoch) throw new BridgeError('workspace_changed', 'Submodule validation was cancelled.');
+    if (this.validationConfiguration) return this.validationConfiguration;
+    const snapshot = await this.mutationSnapshot();
+    if (this.disposed || epoch !== this.validationEpoch) throw new BridgeError('workspace_changed', 'Submodule validation was cancelled.');
+    if (this.validationConfiguration) return this.validationConfiguration;
+    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk),
+      onFailure: () => {
+        if (client === this.validationClient) { this.validationClient = undefined; this.validationConfiguration = undefined; }
+      } });
+    this.validationClient = client;
+    const pending = (async () => {
+      try {
+        await client.initialize(snapshot.roots);
+        if (this.disposed || epoch !== this.validationEpoch || snapshot.generation !== this.generation || client !== this.validationClient) {
+          throw new BridgeError('workspace_changed', 'Workspace changed before submodule validation.');
+        }
+        return client;
+      } catch (error) {
+        client.dispose({ immediate: true });
+        if (client === this.validationClient) { this.validationClient = undefined; this.validationConfiguration = undefined; }
+        throw error;
+      }
+    })();
+    this.validationConfiguration = pending;
+    return pending;
+  }
+
+  async validateSubmoduleChain(chain) {
+    if (!Array.isArray(chain) || chain.length > 32 || chain.some(link => !link ||
+        typeof link.repo !== 'string' || !path.isAbsolute(link.repo) ||
+        typeof link.child_repo !== 'string' || !path.isAbsolute(link.child_repo))) {
+      throw new BridgeError('invalid_request', 'Invalid submodule validation chain.');
+    }
+    if (this.activeValidations >= 4) throw new BridgeError('busy', 'Too many submodule checks are running. Try again.');
+    this.activeValidations++;
+    const epoch = this.validationEpoch;
+    try {
+      const snapshot = await this.mutationSnapshot();
+      const paths = await Promise.all(chain.flatMap(link => [link.repo, link.child_repo]).map(value => this.realpath(value)));
+      const current = () => epoch === this.validationEpoch && paths.every(value => this.isCurrentMutation(snapshot, value));
+      if (!current()) throw new BridgeError('workspace_changed', 'Workspace changed before submodule validation.');
+      const client = await this.getValidationClient(epoch);
+      const result = await client.validateSubmoduleChain(chain);
+      const resolved = await Promise.all(chain.flatMap(link => [link.repo, link.child_repo]).map(value => this.realpath(value)));
+      if (!current() || client !== this.validationClient || paths.some((value, index) => value !== resolved[index])) {
+        throw new BridgeError('workspace_changed', 'Workspace changed while validating submodules.');
+      }
+      if (!result || typeof result.valid !== 'boolean') throw new BridgeError('protocol_error', 'Gitpane returned an invalid submodule validation result.');
+      return result;
+    } catch (error) {
+      if (this.disposed || epoch !== this.validationEpoch) throw new BridgeError('workspace_changed', 'Submodule validation was cancelled.');
+      if (error?.code === 'ENOENT') return { valid: false };
+      throw error;
+    } finally { this.activeValidations--; }
+  }
+
   async openChangesSession(repo) {
     const snapshot = await this.mutationSnapshot();
     const repoPath = await this.realpath(repo);
@@ -338,6 +408,7 @@ class BackendManager {
     for (const subscription of this.subscriptions) subscription.dispose();
     this.client?.dispose();
     this.cancelChanges();
+    this.cancelValidation();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.sessionMutations.dispose();

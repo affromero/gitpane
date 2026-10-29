@@ -138,13 +138,18 @@ class SubmoduleProvider {
       if (!currentNode) throw new Error('The submodule is no longer in the workspace.');
       const node = currentNode.record ? { ...currentNode, record: structuredClone(currentNode.record) } : currentNode;
       if (ancestors.length >= 32) throw new Error('The submodule nesting limit was reached.');
-      const checkAncestors = async () => {
-        for (const ancestor of ancestors) if (!await ancestor.checkOwn(false)) return false;
-        return true;
+      if (!validRecord(node.record)) throw new Error('The selected submodule change is invalid.');
+      const checkFrames = async (frames, persistent = false) => {
+        const current = () => frames.every(frame => persistent ? frame.currentLink() : frame.current());
+        if (!current()) return false;
+        if (!frames.length) return true;
+        const result = await this.backend.validateSubmoduleChain(frames.map(frame => frame.link));
+        if (!result || typeof result.valid !== 'boolean') throw new Error('Gitpane returned an invalid submodule validation result.');
+        return result.valid && current();
       };
-      if (!await checkAncestors()) throw new Error('The parent submodule changed; refresh and try again.');
-      const relative = path.relative(node.repo.rootUri.fsPath, node.change.uri.fsPath);
-      if (!safeRelative(relative) || !(node.record?.is_submodule ||
+      const relative = node.record.path;
+      const selectedPath = path.join(node.repo.rootUri.fsPath, ...relative.split('/'));
+      if (!safeRelative(relative) || path.relative(selectedPath, node.change.uri.fsPath) || !(node.record?.is_submodule ||
         isSubmodule(node.repo.rootUri.fsPath, node.change.uri.fsPath, node.repo.state.submodules))) {
         throw new Error('The selected change is not a current submodule.');
       }
@@ -153,29 +158,29 @@ class SubmoduleProvider {
       if (originalPath !== undefined && !safeRelative(originalPath)) throw new Error('The submodule has an invalid original path.');
       const result = await this.backend.inspectSubmodule(node.repo.rootUri.fsPath, relative, group, originalPath);
       const validOid = value => value === null || (typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value));
+      if (result && (!Object.hasOwn(result, 'parent_identity') || !Object.hasOwn(result, 'child_identity'))) {
+        throw new Error('The configured Gitpane backend does not support submodule identity checks. Update the backend and try again.');
+      }
       if (!result || typeof result.repo !== 'string' || !path.isAbsolute(result.repo) ||
         !validOid(result.base_oid) || !validOid(result.head_oid) ||
         typeof result.child_head_oid !== 'string' || !/^[a-f0-9]{40,64}$/.test(result.child_head_oid) ||
+        typeof result.parent_identity !== 'string' || !/^[a-f0-9]{64}$/.test(result.parent_identity) ||
+        typeof result.child_identity !== 'string' || !/^[a-f0-9]{64}$/.test(result.child_identity) ||
         !Array.isArray(result.pointer_files)) {
         throw new Error('Gitpane returned invalid submodule details.');
       }
-      if (!await checkAncestors()) throw new Error('The parent submodule changed; refresh and try again.');
       if (!this.childCurrent(node, generation, result.repo, parentToken)) throw new Error('The submodule is no longer in the workspace.');
       const childUri = this.vscode.Uri.file(result.repo);
       const childKey = childUri.toString();
       const revision = this.tree.repositoryRevision(childUri);
       const existingChild = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
       const existingToken = existingChild && this.tree.repositoryToken(existingChild);
-      if (!await checkAncestors() || !this.childCurrent(node, generation, result.repo, parentToken)) {
-        throw new Error('The parent submodule changed; refresh and try again.');
-      }
-      if (ancestors.length) {
-        const current = await this.backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
-        if (!validRecord(current?.change) || JSON.stringify(current.change) !== JSON.stringify(node.record) ||
-            !ancestors.every(ancestor => ancestor.current()) || !this.childCurrent(node, generation, result.repo, parentToken)) {
-          throw new Error('The submodule changed; refresh and try again.');
-        }
-      }
+      const link = { repo: node.repo.rootUri.fsPath, path: relative, group, original_path: node.record.original_path,
+        record: node.record, child_repo: result.repo, base_oid: result.base_oid, head_oid: result.head_oid,
+        child_head_oid: result.child_head_oid, parent_identity: result.parent_identity, child_identity: result.child_identity };
+      const preFrame = { link, current: () => this.childCurrent(node, generation, result.repo, parentToken),
+        currentLink: () => this.childCurrent(node, generation, result.repo, parentToken, undefined, undefined, true) };
+      if (!await checkFrames([...ancestors, preFrame])) throw new Error('The submodule changed; refresh and try again.');
       const opened = await this.git.openRepository(childUri);
       const expectedRevision = revision + (existingToken === undefined ? 1 : 0);
       const child = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
@@ -183,7 +188,7 @@ class SubmoduleProvider {
       if (!opened || opened.rootUri.toString() !== childKey || !child ||
           this.tree.repositoryRevision(childUri) !== expectedRevision ||
           (existingToken !== undefined && existingToken !== childToken) ||
-          !this.childCurrent(node, generation, result.repo, parentToken, child, childToken) || !await checkAncestors()) {
+          !this.childCurrent(node, generation, result.repo, parentToken, child, childToken)) {
         throw new Error('The submodule is unavailable or no longer in the workspace.');
       }
       const fixedChoices = [{ label: 'Open Commit Graph', kind: 'graph' }];
@@ -197,26 +202,8 @@ class SubmoduleProvider {
       const ownCurrent = persistent => this.childCurrent(node, generation, result.repo, parentToken, child, childToken, persistent);
       const currentChild = () => ancestors.every(ancestor => ancestor.current()) && ownCurrent(false);
       const currentLink = () => ancestors.every(ancestor => ancestor.currentLink()) && ownCurrent(true);
-      const inspectCurrent = async () => {
-        const latest = await this.backend.inspectSubmodule(node.repo.rootUri.fsPath, relative, group, originalPath);
-        return latest?.repo === result.repo && latest?.base_oid === result.base_oid &&
-          latest?.head_oid === result.head_oid && latest?.child_head_oid === result.child_head_oid;
-      };
-      const checkOwn = async persistent => {
-        const current = persistent ? currentLink : currentChild;
-        if (!current()) return false;
-        if (typeof node.record?.path === 'string' && typeof node.record?.group === 'string') {
-          const parent = await this.backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
-          if (!current() || !validRecord(parent?.change) || JSON.stringify(parent.change) !== JSON.stringify(node.record)) return false;
-        }
-        const status = await this.backend.status(child.rootUri.fsPath, false, { summaryOnly: true, watchedPaths: [] });
-        if (!current() || status?.head_oid !== result.child_head_oid) return false;
-        return await inspectCurrent() && current();
-      };
-      const checkHead = async (persistent = false) => {
-        for (const ancestor of ancestors) if (!await ancestor.checkOwn(persistent)) return false;
-        return checkOwn(persistent);
-      };
+      const frame = { link, current: () => ownCurrent(false), currentLink: () => ownCurrent(true) };
+      const checkHead = (persistent = false) => checkFrames([...ancestors, frame], persistent);
       if (!await checkHead()) throw new Error('The submodule HEAD changed; refresh and try again.');
       const initialChoices = [...fixedChoices, { label: 'Browse working changes', kind: 'browse' }];
       const initial = await this.vscode.window.showQuickPick(initialChoices, { placeHolder: `Inspect ${relative}`, matchOnDescription: true });
@@ -224,7 +211,6 @@ class SubmoduleProvider {
       if (!await checkHead()) throw new Error('The submodule changed; refresh and try again.');
       if (initial.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
       if (initial.kind === 'pointer') {
-        if (!await checkHead()) throw new Error('The submodule changed; refresh and try again.');
         return await this.openPointer(child, result, initial.file);
       }
       const session = await this.backend.openChangesSession(child.rootUri.fsPath);
@@ -252,7 +238,6 @@ class SubmoduleProvider {
         }
         if (chosen.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
         if (chosen.kind === 'pointer') {
-          if (!await checkHead()) throw new Error('The submodule changed; refresh and try again.');
           return await this.openPointer(child, result, chosen.file);
         }
         const record = structuredClone(chosen.record);
@@ -266,8 +251,7 @@ class SubmoduleProvider {
           session.close();
           sessionClosed = true;
           const nested = { repo: child, group: record.group, record, change: { uri } };
-          return await this.openLevel(nested, generation, [...ancestors,
-            { current: () => ownCurrent(false), currentLink: () => ownCurrent(true), checkOwn }]);
+          return await this.openLevel(nested, generation, [...ancestors, frame]);
         }
         const plan = richComparison(record);
         const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
