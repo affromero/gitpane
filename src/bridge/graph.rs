@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::config::GraphConfig;
 use crate::git::commit_files::batch_diff_stats;
 use crate::git::graph::{
     GraphBuilder, GraphFilters, GraphOptions, GraphRefFilters, LaneSegment, MAX_COMMITS,
@@ -60,11 +61,15 @@ impl Default for RefFilterRequest {
 pub(super) fn query(
     repo: &Path,
     scope: &Scope,
+    config: &GraphConfig,
     first_parent: bool,
     filters: FilterRequest,
     collapsed_segments: BTreeSet<String>,
 ) -> Result<Value, BridgeError> {
     let options = GraphOptions {
+        branch_filter: config.branches,
+        label_max_len: config.label_max_len,
+        show_stats: config.show_stats,
         first_parent,
         filters: GraphFilters {
             branches: filters.branches,
@@ -76,7 +81,6 @@ pub(super) fn query(
                 stashes: filters.refs.stashes,
             },
         },
-        ..GraphOptions::default()
     };
     let failure = RefCell::new(None);
     let allow_worktree = |path: &Path| match scope.allows_missing(path) {
@@ -102,10 +106,14 @@ pub(super) fn query(
         branches.map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let rows = rows.map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let oids: Vec<_> = rows.iter().map(|row| row.oid).collect();
-    let stats: HashMap<_, _> = batch_diff_stats(repo, &oids)
-        .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
-        .into_iter()
-        .collect();
+    let stats: HashMap<_, _> = if options.show_stats {
+        batch_diff_stats(repo, &oids)
+            .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
+            .into_iter()
+            .collect()
+    } else {
+        HashMap::new()
+    };
     let segments = compute_branch_segments(&rows);
     let mut segment_by_oid = HashMap::new();
     for segment in &segments {
@@ -162,5 +170,11 @@ pub(super) fn query(
             })
         })
         .collect();
-    Ok(json!({ "rows": rows, "limit": MAX_COMMITS, "branches": branches }))
+    // Larger values cannot truncate a JavaScript string and are not exactly
+    // representable by the extension host's number type.
+    let max_safe = usize::try_from(9_007_199_254_740_991_u64).unwrap_or(usize::MAX);
+    Ok(
+        json!({ "rows": rows, "limit": MAX_COMMITS, "branches": branches,
+        "label_max_len": config.label_max_len.min(max_safe) }),
+    )
 }

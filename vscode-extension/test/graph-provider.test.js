@@ -52,8 +52,9 @@ test('commit files open native diffs against the first parent and reject stale a
   const rootOid = 'a'.repeat(40);
   const mergeOid = 'b'.repeat(40);
   const firstParent = 'c'.repeat(40);
+  let labelMaxLen;
   const backend = {
-    async graph() { return { branches: [], rows: [
+    async graph() { return { branches: [], label_max_len: labelMaxLen, rows: [
       { oid: rootOid, parent_oids: [] },
       { oid: mergeOid, parent_oids: [firstParent, 'd'.repeat(40)] }
     ] }; },
@@ -78,6 +79,18 @@ test('commit files open native diffs against the first parent and reject stale a
   try {
     await receive({ type: 'ready' });
     assert.equal(messages.at(-1).rows.length, 2);
+    assert.equal(messages.at(-1).labelMaxLen, 24);
+    labelMaxLen = 0;
+    await receive({ type: 'refresh' });
+    assert.equal(messages.at(-1).labelMaxLen, 0);
+    labelMaxLen = 7;
+    await receive({ type: 'refresh' });
+    assert.equal(messages.at(-1).labelMaxLen, 7);
+    labelMaxLen = -1;
+    await receive({ type: 'refresh' });
+    assert.match(messages.at(-1).error, /invalid graph label length/i);
+    labelMaxLen = undefined;
+    await receive({ type: 'refresh' });
     await receive({ type: 'selectCommit', oid: rootOid });
     const rootFile = messages.at(-1).files[0];
     await receive({ type: 'openCommitFile', id: rootFile.id });

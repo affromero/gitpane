@@ -28,6 +28,8 @@ matches among the loaded commits, with next and previous navigation. The graph
 shows up to 200 commits and offers first-parent, branch, author and ref filters,
 and branch collapse. Author choices come from commits loaded so far. Select a
 commit and then a file to open its diff; the file list is searchable too.
+The graph uses Gitpane's `[graph]` settings for branch visibility, label length
+and diff statistics. Restart the VS Code extension host after changing them.
 
 The `⋯` menus provide file actions to stage, unstage, discard or delete an
 untracked file. Repository actions include branch review, push, pull, pull with

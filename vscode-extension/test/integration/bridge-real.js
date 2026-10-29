@@ -40,6 +40,7 @@ async function waitForFile(file) {
 
 (async () => {
   let client, child, closed;
+  let configuredClient, configuredChild, configuredClosed;
   let sessionClient, sessionChild, sessionClosed;
   let mutations;
   const workers = [];
@@ -49,6 +50,7 @@ async function waitForFile(file) {
       throw new Error('Set GITPANE_TEST_BINARY to the absolute path of the built Gitpane service.');
     }
     for (const directory of [repo, outside, hooks]) fs.mkdirSync(directory, { recursive: true });
+    gitEnv.GITPANE_CONFIG = path.join(temporary, 'default-config.toml');
     git(repo, 'init', '-q');
     git(outside, 'init', '-q');
     write('tracked.txt', 'initial\n');
@@ -100,6 +102,25 @@ async function waitForFile(file) {
     const firstParent = await client.graph(repoPath, true);
     assert.ok(firstParent.rows.some(row => row.oid === mergeOid), 'first-parent graph must include the merge');
     console.log('PASS graph and first-parent request');
+
+    git(repo, 'update-ref', 'refs/remotes/origin/config-check', rootOid);
+    const configPath = path.join(temporary, 'graph-config.toml');
+    fs.writeFileSync(configPath, '[graph]\nbranches = "remote"\nlabel_max_len = 5\nshow_stats = false\n');
+    configuredClient = new BridgeClient(executable, {
+      spawn: (program, args, options) => {
+        configuredChild = spawn(program, args, { ...options, env: { ...gitEnv, GITPANE_CONFIG: configPath } });
+        configuredClosed = new Promise(resolve => configuredChild.once('close', (code, signal) => resolve({ code, signal })));
+        return configuredChild;
+      }
+    });
+    await configuredClient.initialize([root]);
+    const configuredGraph = await configuredClient.graph(repoPath);
+    assert.equal(configuredGraph.label_max_len, 5);
+    assert.ok(configuredGraph.branches.includes('origin/config-check'));
+    assert.ok(!configuredGraph.branches.includes('topic'));
+    assert.ok(configuredGraph.rows.length > 0);
+    assert.ok(configuredGraph.rows.every(row => row.diff_stat === null));
+    console.log('PASS graph configuration from the workspace-host config file');
 
     const rootFiles = await client.commitFiles(repoPath, rootOid);
     assert.equal(rootFiles.message, 'root commit');
@@ -238,6 +259,24 @@ async function waitForFile(file) {
     console.error(error.stack || String(error));
     process.exitCode = 1;
   } finally {
+    if (configuredClient) configuredClient.dispose();
+    if (configuredClosed) {
+      let timer;
+      try {
+        const termination = await Promise.race([
+          configuredClosed,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Configured Gitpane service did not exit.')), 5000); })
+        ]);
+        if (termination.code !== 0 || termination.signal) {
+          console.error(`Configured Gitpane service exited with code ${termination.code} and signal ${termination.signal}.`);
+          process.exitCode = 1;
+        }
+      } catch (error) {
+        configuredChild.kill('SIGKILL');
+        console.error(error.message);
+        process.exitCode = 1;
+      } finally { clearTimeout(timer); }
+    }
     if (sessionClient) sessionClient.dispose();
     if (sessionClosed) {
       let timer;

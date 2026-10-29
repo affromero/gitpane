@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::serve;
-use crate::config::SubmoduleConfig;
+use crate::config::{GraphConfig, SubmoduleConfig};
 
 fn repo_with_files(path: &Path) -> Repository {
     std::fs::create_dir_all(path).unwrap();
@@ -36,6 +36,7 @@ fn mutation(workspace: &Path, method: &str, params: Value) -> Value {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        &GraphConfig::default(),
         None,
         true,
     )
@@ -60,6 +61,7 @@ fn preview(workspace: &Path, params: Value) -> Value {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        &GraphConfig::default(),
         None,
         false,
     )
@@ -106,6 +108,7 @@ fn mutation_worker_rejects_read_requests_and_exits_before_later_mutations() {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        &GraphConfig::default(),
         None,
         true,
     )
@@ -136,6 +139,7 @@ fn malformed_mutation_request_terminates_worker_before_later_actions() {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        &GraphConfig::default(),
         None,
         true,
     )

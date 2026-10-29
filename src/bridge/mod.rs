@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::SubmoduleConfig;
+use crate::config::{GraphConfig, SubmoduleConfig};
 
 mod file_identity;
 mod github;
@@ -112,6 +112,7 @@ fn process(
     scope: &mut Option<Scope>,
     request: Request,
     sub_cfg: &SubmoduleConfig,
+    graph_cfg: &GraphConfig,
     review_base: Option<&str>,
 ) -> Result<Value, BridgeError> {
     if request.method == "initialize" {
@@ -178,6 +179,7 @@ fn process(
             let result = graph::query(
                 &repo,
                 scope,
+                graph_cfg,
                 input.first_parent,
                 input.filters,
                 input.collapsed_segments,
@@ -227,6 +229,7 @@ fn serve(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
     sub_cfg: &SubmoduleConfig,
+    graph_cfg: &GraphConfig,
     review_base: Option<&str>,
     mutation_once: bool,
 ) -> io::Result<()> {
@@ -269,7 +272,7 @@ fn serve(
                     )?;
                     return Ok(());
                 }
-                let result = process(&mut scope, request, sub_cfg, review_base);
+                let result = process(&mut scope, request, sub_cfg, graph_cfg, review_base);
                 let failed = result.is_err();
                 write_reply(writer, Some(id), result)?;
                 if mutation_once && failed {
@@ -292,6 +295,7 @@ fn serve(
 
 pub(crate) fn run(
     sub_cfg: &SubmoduleConfig,
+    graph_cfg: &GraphConfig,
     review_base: Option<&str>,
     mutation_once: bool,
 ) -> color_eyre::Result<()> {
@@ -301,6 +305,7 @@ pub(crate) fn run(
         &mut stdin.lock(),
         &mut stdout.lock(),
         sub_cfg,
+        graph_cfg,
         review_base,
         mutation_once,
     )?;

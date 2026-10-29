@@ -5,7 +5,7 @@ use git2::{Repository, Signature};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::config::SubmoduleConfig;
+use crate::config::{BranchFilter, GraphConfig, SubmoduleConfig};
 
 use super::{MAX_REQUEST_BYTES, serve};
 
@@ -137,6 +137,14 @@ fn exchange(requests: &[Value]) -> Vec<Value> {
 }
 
 fn exchange_with_base(requests: &[Value], base: Option<&str>) -> Vec<Value> {
+    exchange_with_graph_config(requests, base, &GraphConfig::default())
+}
+
+fn exchange_with_graph_config(
+    requests: &[Value],
+    base: Option<&str>,
+    graph_config: &GraphConfig,
+) -> Vec<Value> {
     let input = requests
         .iter()
         .map(|request| format!("{request}\n"))
@@ -146,6 +154,7 @@ fn exchange_with_base(requests: &[Value], base: Option<&str>) -> Vec<Value> {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        graph_config,
         base,
         false,
     )
@@ -376,6 +385,141 @@ fn graph_filters_branches_authors_and_refs_without_losing_branch_choices() {
             .any(|label| label["is_tag"] == true)
     );
     assert_eq!(replies[6]["error"]["code"], "invalid_request");
+}
+
+#[test]
+fn graph_respects_configured_branches_labels_and_statistics() {
+    let temporary = TempDir::new().unwrap();
+    let repo_path = temporary.path().join("repo");
+    let repo = create_repo(&repo_path);
+    let root = repo.head().unwrap().peel_to_commit().unwrap();
+    let tree = root.tree().unwrap();
+    let signature = Signature::now("Test", "test@example.invalid").unwrap();
+    let remote = repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "remote topic",
+            &tree,
+            &[&root],
+        )
+        .unwrap();
+    repo.reference("refs/remotes/origin/topic", remote, true, "fixture")
+        .unwrap();
+    repo.reference("refs/heads/local-topic", root.id(), true, "fixture")
+        .unwrap();
+    let requests = [
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [temporary.path()]}}),
+        json!({"id": 2, "method": "graph", "params": {"repo": repo_path}}),
+        json!({"id": 3, "method": "graph", "params": {"repo": repo_path, "filters": {"branches": ["origin/topic"]}}}),
+        json!({"id": 4, "method": "graph", "params": {"repo": repo_path, "filters": {"branches": ["origin/topic"], "refs": {"remote": false}}}}),
+    ];
+    for (branch_filter, local, remote_visible) in [
+        (BranchFilter::All, true, true),
+        (BranchFilter::Local, true, false),
+        (BranchFilter::Remote, false, true),
+        (BranchFilter::None, false, false),
+    ] {
+        let config = GraphConfig {
+            branches: branch_filter,
+            label_max_len: 5,
+            show_stats: false,
+        };
+        let replies = exchange_with_graph_config(&requests, None, &config);
+        let graph = &replies[1]["result"];
+        assert_eq!(graph["label_max_len"], 5);
+        let catalog = graph["branches"].as_array().unwrap();
+        assert_eq!(catalog.iter().any(|name| name == "local-topic"), local);
+        assert_eq!(
+            catalog.iter().any(|name| name == "origin/topic"),
+            remote_visible
+        );
+        let rows = graph["rows"].as_array().unwrap();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row["diff_stat"].is_null()));
+        let labels: Vec<_> = rows
+            .iter()
+            .flat_map(|row| row["labels"].as_array().unwrap())
+            .filter_map(|label| label["name"].as_str())
+            .collect();
+        assert_eq!(labels.contains(&"local-topic"), local);
+        assert_eq!(labels.contains(&"origin/topic"), remote_visible);
+        let filtered = replies[2]["result"]["rows"].as_array().unwrap();
+        assert_eq!(
+            filtered.iter().any(|row| row["message"] == "remote topic"),
+            remote_visible
+        );
+        assert!(replies[3]["result"]["rows"].as_array().unwrap().is_empty());
+    }
+
+    let defaults = exchange(&requests);
+    let graph = &defaults[1]["result"];
+    assert_eq!(graph["label_max_len"], 24);
+    assert!(
+        graph["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["diff_stat"].is_object())
+    );
+
+    let unlimited = GraphConfig {
+        label_max_len: usize::MAX,
+        ..GraphConfig::default()
+    };
+    let replies = exchange_with_graph_config(&requests, None, &unlimited);
+    let max_safe = usize::try_from(9_007_199_254_740_991_u64).unwrap_or(usize::MAX);
+    assert_eq!(replies[1]["result"]["label_max_len"], max_safe);
+}
+
+#[test]
+fn graph_without_statistics_does_not_read_parent_trees() {
+    let temporary = TempDir::new().unwrap();
+    let repo_path = temporary.path().join("repo");
+    let repo = create_repo(&repo_path);
+    let tree = repo
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .tree()
+        .unwrap();
+    let missing_tree = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    assert!(repo.find_tree(missing_tree).is_err());
+    let commit = format!(
+        "tree {missing_tree}\nauthor Test <test@example.invalid> 1700000000 +0000\n\
+         committer Test <test@example.invalid> 1700000000 +0000\n\nmissing tree root\n"
+    );
+    let parent_oid = repo
+        .odb()
+        .unwrap()
+        .write(git2::ObjectType::Commit, commit.as_bytes())
+        .unwrap();
+    let parent = repo.find_commit(parent_oid).unwrap();
+    let signature = Signature::now("Test", "test@example.invalid").unwrap();
+    let head = repo.head().unwrap().name().unwrap().to_owned();
+    let child = repo
+        .commit(None, &signature, &signature, "child", &tree, &[&parent])
+        .unwrap();
+    repo.reference(&head, child, true, "fixture").unwrap();
+
+    let requests = [
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [temporary.path()]}}),
+        json!({"id": 2, "method": "graph", "params": {"repo": repo_path}}),
+    ];
+    let config = GraphConfig {
+        show_stats: false,
+        ..GraphConfig::default()
+    };
+    let without_stats = exchange_with_graph_config(&requests, None, &config);
+    let rows = without_stats[1]["result"]["rows"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["message"] == "child"));
+    assert!(rows.iter().any(|row| row["message"] == "missing tree root"));
+    assert!(rows.iter().all(|row| row["diff_stat"].is_null()));
+
+    let with_stats = exchange(&requests);
+    assert_eq!(with_stats[1]["error"]["code"], "repository_error");
 }
 
 #[test]
@@ -710,6 +854,7 @@ fn malformed_and_oversized_requests_return_errors() {
         &mut Cursor::new(input),
         &mut output,
         &SubmoduleConfig::default(),
+        &GraphConfig::default(),
         None,
         false,
     )

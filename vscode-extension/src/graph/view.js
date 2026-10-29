@@ -22,6 +22,7 @@ let active = 0;
 let selected;
 let detail;
 let pendingSegment;
+let labelMaxLen = 24;
 
 if (typeof state.search === 'string') search.value = state.search;
 
@@ -78,7 +79,10 @@ function addLabels(container, row) {
     const kind = label.is_stash ? 'stash' : label.is_head ? 'head' : label.is_worktree ? 'worktree' :
       label.is_tag ? 'tag' : label.is_remote ? 'remote' : 'local';
     const prefix = label.is_stash ? '$ ' : label.is_head ? '* ' : label.is_worktree ? '⌂ ' : '';
-    add(labels, kind, `${prefix}${label.name}`);
+    const name = Array.from(label.name);
+    const displayed = name.length > labelMaxLen ? `${name.slice(0, labelMaxLen).join('')}…` : label.name;
+    const node = add(labels, kind, `${prefix}${displayed}`);
+    node.title = label.name;
   });
   add(labels, 'parenthesis', ')');
   container.appendChild(labels);
@@ -268,6 +272,7 @@ window.addEventListener('message', event => {
   const message = event.data;
   if (message?.type === 'graph') {
     rows = Array.isArray(message.rows) ? message.rows : [];
+    labelMaxLen = Number.isSafeInteger(message.labelMaxLen) && message.labelMaxLen >= 0 ? message.labelMaxLen : 24;
     expandAll.disabled = !message.collapsedCount || message.loading;
     firstParent.checked = Boolean(message.firstParent);
     const activeFilters = (Array.isArray(message.filters?.branches) ? 1 : 0) +

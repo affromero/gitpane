@@ -163,6 +163,7 @@ async fn run() -> Result<()> {
             apply_libgit2_limits(&config.git2);
             return bridge::run(
                 &config.submodules,
+                &config.graph,
                 config.review.base.as_deref(),
                 mutation_once,
             );

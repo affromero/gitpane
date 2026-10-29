@@ -144,6 +144,10 @@ class GraphProvider {
       if (generation !== this.graphGeneration || !this.currentRepo() || !this.panel) return;
       if (!Array.isArray(result?.rows) || !Array.isArray(result?.branches) ||
         result.branches.some(branch => typeof branch !== 'string')) throw new Error('Gitpane returned an invalid graph.');
+      const labelMaxLen = result.label_max_len === undefined ? 24 : result.label_max_len;
+      if (!Number.isSafeInteger(labelMaxLen) || labelMaxLen < 0) {
+        throw new Error('Gitpane returned an invalid graph label length.');
+      }
       this.rows = new Map(result.rows.filter(row => typeof row?.oid === 'string' && /^[a-f0-9]{40,64}$/.test(row.oid)).map(row => [row.oid, row]));
       if (this.rows.size !== result.rows.length) throw new Error('Gitpane returned an invalid graph commit.');
       const segments = new Set();
@@ -166,7 +170,7 @@ class GraphProvider {
       this.branches = [...new Set(result.branches)].sort();
       for (const row of result.rows) if (typeof row.author === 'string' && row.author) this.authors.add(row.author);
       this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
-        firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
+        labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
     } catch (error) {
       if (generation !== this.graphGeneration || !this.panel) return;
       this.rows.clear();
