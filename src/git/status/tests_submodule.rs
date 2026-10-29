@@ -3,6 +3,114 @@ use super::*;
 use git2::Repository;
 use std::{fs, path::Path};
 
+#[test]
+fn submodule_candidates_preserve_config_paths_includes_and_recorded_links() {
+    for (config, extra) in [
+        ("[submodule \"my-sub\"]\nurl = source\n", None),
+        (
+            "[submodule \"alias.with.dots\"]\npath = my-sub\nurl = source\n",
+            None,
+        ),
+        (
+            "[submodule \"my-sub\"]\npath = -invalid\nurl = source\n",
+            None,
+        ),
+        ("[submodule \"other\"]\nurl = source\n", Some("other")),
+        ("[include]\npath = modules.config\n", None),
+    ] {
+        let (tmp, _source, _child) = init_repo_with_submodule();
+        fs::write(tmp.path().join(".gitmodules"), config).unwrap();
+        fs::write(
+            tmp.path().join("modules.config"),
+            "[submodule \"included\"]\npath = my-sub\nurl = source\n",
+        )
+        .unwrap();
+        let repo = Repository::open(tmp.path()).unwrap();
+        let candidates = submodule_candidate_paths(&repo).unwrap();
+        assert!(candidates.contains(&Path::new("my-sub").to_path_buf()));
+        if let Some(extra) = extra {
+            assert!(candidates.contains(&Path::new(extra).to_path_buf()));
+        }
+        for module in repo.submodules().unwrap() {
+            assert!(
+                candidates.contains(&module.path().to_path_buf()),
+                "{config}"
+            );
+        }
+        fs::remove_file(tmp.path().join(".gitmodules")).unwrap();
+        assert!(submodule_candidate_paths(&repo).unwrap().is_empty());
+    }
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    fs::write(
+        tmp.path().join(".gitmodules"),
+        "[submodule \"my-sub\"]\npath\n",
+    )
+    .unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let error = submodule_candidate_paths(&repo).unwrap_err();
+    assert!(error.message().contains("no value"));
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_candidates_preserve_native_paths_and_unrelated_tree_names() {
+    use std::os::unix::ffi::OsStrExt;
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let original = parent.tree().unwrap();
+    let mut directory = repo.treebuilder(None).unwrap();
+    directory
+        .insert("file", repo.blob(b"ordinary file").unwrap(), 0o100644)
+        .unwrap();
+    let mut root = repo.treebuilder(Some(&original)).unwrap();
+    root.insert(
+        b"directory-\xff".as_slice(),
+        directory.write().unwrap(),
+        0o040000,
+    )
+    .unwrap();
+    root.insert(
+        b"module-\xfe".as_slice(),
+        original.get_name("my-sub").unwrap().id(),
+        0o160000,
+    )
+    .unwrap();
+    let tree = repo.find_tree(root.write().unwrap()).unwrap();
+    let signature = git2::Signature::now("Test", "test@test.com").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Native paths",
+        &tree,
+        &[&parent],
+    )
+    .unwrap();
+    let mut config = fs::read(tmp.path().join(".gitmodules")).unwrap();
+    config.extend_from_slice(b"\n[submodule \"native\"]\npath = configured-\xfd\n");
+    fs::write(tmp.path().join(".gitmodules"), config).unwrap();
+    let paths = submodule_candidate_paths(&repo).unwrap();
+    for expected in [b"my-sub".as_slice(), b"module-\xfe", b"configured-\xfd"] {
+        assert!(paths.contains(&Path::new(std::ffi::OsStr::from_bytes(expected)).to_path_buf()));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_candidate_paths_remain_available_when_checkout_is_a_symlink() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let outside = tempfile::TempDir::new().unwrap();
+    fs::write(outside.path().join(".git"), "invalid Git directory file\n").unwrap();
+    fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), tmp.path().join("my-sub")).unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    assert_eq!(
+        submodule_candidate_paths(&repo).unwrap(),
+        vec![Path::new("my-sub").to_path_buf()]
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn replaced_submodule_symlinks_leave_unrelated_changes_visible() {

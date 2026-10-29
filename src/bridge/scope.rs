@@ -276,6 +276,35 @@ impl Scope {
             self.validate_modules_file(&parent)?;
             let repo = git2::Repository::open(&parent)
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+            // libgit2 probes checkout paths while constructing its submodule
+            // cache. Authorize candidate locations before that eager scan.
+            for relative in crate::git::status::submodule_candidate_paths(&repo)
+                .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
+            {
+                if relative.as_os_str().is_empty()
+                    || relative
+                        .components()
+                        .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+                {
+                    return Err(BridgeError::new(
+                        "outside_workspace",
+                        "Invalid submodule path.",
+                    ));
+                }
+                let child = parent.join(relative);
+                let blocker = crate::git::status::regular_submodule_blocker(&child)
+                    .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+                let allowed = match blocker {
+                    Some(blocker) => self.allows(&blocker.path),
+                    None => self.allows_missing(&child)?,
+                };
+                if !allowed {
+                    return Err(BridgeError::new(
+                        "outside_workspace",
+                        "Submodule is outside the workspace.",
+                    ));
+                }
+            }
             let submodules = repo
                 .submodules()
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;

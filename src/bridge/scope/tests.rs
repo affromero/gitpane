@@ -22,6 +22,36 @@ fn request(method: &str, params: Value) -> Request {
     serde_json::from_value(json!({"id": 1, "method": method, "params": params})).unwrap()
 }
 
+#[cfg(unix)]
+#[test]
+fn submodule_preflight_checks_default_and_included_paths_against_workspace() {
+    let temporary = TempDir::new().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let parent = workspace.join("parent");
+    let outside = temporary.path().join("outside");
+    fs::create_dir_all(&parent).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    Repository::init(&parent).unwrap();
+    std::os::unix::fs::symlink(&outside, parent.join("sub")).unwrap();
+    let scope = super::Scope::new(vec![workspace]).unwrap();
+    for modules in [
+        "[submodule \"sub\"]\nurl = source\n",
+        "[submodule \"alias\"]\npath = sub\nurl = source\n",
+        "[include]\npath = modules.config\n",
+    ] {
+        fs::write(parent.join(".gitmodules"), modules).unwrap();
+        fs::write(
+            parent.join("modules.config"),
+            "[submodule \"included\"]\npath = sub\n",
+        )
+        .unwrap();
+        assert_eq!(
+            scope.validate_submodules(&parent).unwrap_err().code,
+            "outside_workspace"
+        );
+    }
+}
+
 #[test]
 fn scoped_repository_identity_validation_detects_gitdir_replacement() {
     let temporary = TempDir::new().unwrap();

@@ -5,6 +5,100 @@ use std::path::{Path, PathBuf};
 use super::worktree::compute_ahead_behind;
 use super::{SubmoduleHead, SubmoduleWarn};
 
+fn candidate_path(bytes: &[u8]) -> Result<PathBuf, git2::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(Path::new(std::ffi::OsStr::from_bytes(bytes)).to_path_buf())
+    }
+    #[cfg(not(unix))]
+    {
+        std::str::from_utf8(bytes)
+            .map(PathBuf::from)
+            .map_err(|_| git2::Error::from_str("Invalid submodule path encoding"))
+    }
+}
+
+/// Enumerate possible submodule locations without probing their working trees.
+/// The caller must still use libgit2's submodule enumeration after authorizing
+/// these paths; this preflight deliberately retains a superset of locations.
+pub(crate) fn submodule_candidate_paths(repo: &Repository) -> Result<Vec<PathBuf>, git2::Error> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let Some(workdir) = repo.workdir() else {
+        return Ok(Vec::new());
+    };
+    let modules_path = workdir.join(".gitmodules");
+    match modules_path.symlink_metadata() {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(git2::Error::from_str(&error.to_string())),
+    }
+    let config = match git2::Config::open(&modules_path) {
+        Ok(config) => config,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut names = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    let mut entries = config.entries(None)?;
+    while let Some(entry) = entries.next() {
+        let entry = entry?;
+        let key = entry.name_bytes();
+        if let Some(key) = key.strip_prefix(b"submodule.")
+            && let Some(dot) = key.iter().rposition(|byte| *byte == b'.')
+        {
+            let (name, property) = key.split_at(dot);
+            if !name.is_empty()
+                && candidate_path(name)?
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                let path = names.entry(name.to_vec()).or_insert_with(|| name.to_vec());
+                if property == b".path" {
+                    if !entry.has_value() {
+                        return Err(git2::Error::from_str("Submodule path has no value"));
+                    }
+                    *path = if entry.value_bytes().starts_with(b"-") {
+                        name.to_vec()
+                    } else {
+                        entry.value_bytes().to_vec()
+                    };
+                }
+            }
+        }
+    }
+    let mut paths = BTreeSet::new();
+    for path in names.values() {
+        paths.insert(candidate_path(path)?);
+    }
+    for entry in repo.index()?.iter() {
+        if entry.mode == 0o160000 {
+            paths.insert(candidate_path(&entry.path)?);
+        }
+    }
+    match repo.head().and_then(|head| head.peel_to_tree()) {
+        Ok(tree) => {
+            let mut pending = vec![(PathBuf::new(), tree)];
+            while let Some((root, tree)) = pending.pop() {
+                for entry in &tree {
+                    let path = root.join(candidate_path(entry.name_bytes())?);
+                    if entry.filemode() == 0o160000 {
+                        paths.insert(path);
+                    } else if entry.kind() == Some(git2::ObjectType::Tree) {
+                        pending.push((path, repo.find_tree(entry.id())?));
+                    }
+                }
+            }
+        }
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+            ) => {}
+        Err(error) => return Err(error),
+    }
+    Ok(paths.into_iter().collect())
+}
+
 /// Identify a regular file blocking a submodule checkout without following
 /// the blocking leaf. Workspace authorization remains the caller's job.
 #[derive(Debug, PartialEq, Eq)]
