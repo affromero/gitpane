@@ -263,6 +263,7 @@ class BackendManager {
       else if (method === 'repository_preview') result = await client.status(repo, false, { summaryOnly: true, watchedPaths: [] });
       else if (method === 'changes_begin') result = await client.beginChanges(repo);
       else if (method === 'changes_next') result = await client.nextChanges(repo, argument.snapshot, argument.cursor);
+      else if (method === 'changes_search') result = await client.searchChanges(repo, argument.snapshot, argument.query, argument.direction, argument.position);
       else if (method === 'changes_release') result = await client.releaseChanges(repo, argument);
       else if (method === 'sort_repositories') result = await client.sortRepositories(argument.order, argument.repositories);
       else if (method === 'file_action_preview') result = await client.fileActionPreview(repo, argument.path, argument.operation);
@@ -599,6 +600,10 @@ class BackendManager {
   beginChanges(repo) { return this.request('changes_begin', repo); }
 
   nextChanges(repo, snapshot, cursor) { return this.request('changes_next', repo, { snapshot, cursor }); }
+
+  searchChanges(repo, snapshot, query, direction, position) {
+    return this.request('changes_search', repo, { snapshot, query, direction, position });
+  }
 
   releaseChanges(repo, snapshot) { return this.request('changes_release', repo, snapshot); }
 

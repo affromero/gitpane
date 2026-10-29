@@ -51,6 +51,25 @@ const scenario = String.raw`
     check('selected stash button uses selection foreground', getComputedStyle(row.querySelector('.stash-action')).color === getComputedStyle(row).color);
     if (!forced) check('VS Code high contrast uses inherited semantic color with nonempty palettes',
       window.GitpaneTheme.lane(0) === 'currentColor' && window.GitpaneTheme.author('Andres') === 'currentColor');
+    const searchable = { type: 'snapshot', errors: [], repositories: [{ id: 'repo', name: 'repo', branch: 'feature', dirty: true,
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'file', path: 'match.txt', status: 'M' }] }],
+      changesPage: { state: 'ready', page: 0, previous: false, next: false }, worktrees: [] }] };
+    window.postMessage(searchable, '*');
+    await tick();
+    document.querySelector('[role="treeitem"] .repo-row').click();
+    const expanded = document.querySelector('[role="treeitem"]');
+    expanded.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+    const input = document.getElementById('file-search');
+    input.value = 'match';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    searchable.repositories[0].changesPage.search = { query: 'match', phase: 'ready', count: 1,
+      position: 0, path: 'match.txt', group: 'working' };
+    window.postMessage(searchable, '*');
+    await tick();
+    const file = document.querySelector('.file-row.search-match');
+    check('search selects the matching file', !!file && file.parentElement.getAttribute('aria-selected') === 'true');
+    check('selected search match is readable', contrast(getComputedStyle(file.querySelector('.file-path')).color,
+      getComputedStyle(file).backgroundColor) >= 4.5);
     document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks, forced }));
   } catch (error) {
     document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: error.stack || String(error) }));
@@ -109,7 +128,7 @@ function run(mode) {
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-test'; script-src 'nonce-test'">
 <style nonce="test">:root {${colors}}\n${css}</style></head><body class="${bodyClass}">
-<div id="messages" aria-live="polite"></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
+<div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="test">window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>
 <script nonce="test">${theme}</script><script nonce="test">${view}</script>
 <script nonce="test">${scenario.replace('EXPECT_FORCED', String(forced))}</script></body></html>`;

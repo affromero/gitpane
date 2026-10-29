@@ -205,6 +205,28 @@ async function main() {
   assert.equal(snapshots.at(-1).repositories[0].changesPage.page, 0, 'manual refresh must immediately refresh detailed changes');
   console.log('PASS hidden Git API changes, paged native diff, unrelated edits, stale selection, and manual refresh');
 
+  await receive({ type: 'searchChanges', id: owner.id, query: 'file-12', direction: 'first' });
+  let searched = snapshots.at(-1).repositories.find(item => item.id === owner.id);
+  assert.equal(searched.changesPage.search.phase, 'ready', searched.changesPage.search.error);
+  assert.equal(searched.changesPage.search.path, 'file-120.txt');
+  assert.equal(searched.changesPage.page, 0);
+  assert.ok(searched.changesPage.search.count > 1);
+  await receive({ type: 'searchChanges', id: owner.id, query: 'file-12', direction: 'previous' });
+  searched = snapshots.at(-1).repositories.find(item => item.id === owner.id);
+  assert.equal(searched.changesPage.search.path, 'file-129.txt');
+  assert.equal(searched.changesPage.page, 1);
+  const match = searched.groups.flatMap(group => group.files).find(item => item.path === 'file-129.txt');
+  assert.ok(match, 'search match must appear on the returned page');
+  const beforeSearchDiff = diffs.length;
+  await receive({ type: 'openChange', id: match.id });
+  assert.equal(diffs.length, beforeSearchDiff + 1, errors.at(-1));
+  assert.equal(diffs.at(-1)[0].scheme, 'gitpane-empty');
+  assert.equal(diffs.at(-1)[1].fsPath, path.join(repoPath, 'file-129.txt'));
+  await receive({ type: 'searchChanges', id: owner.id, query: '', direction: 'first' });
+  await receive({ type: 'changesPage', id: owner.id, direction: 'previous' });
+  assert.equal(snapshots.at(-1).repositories.find(item => item.id === owner.id).changesPage.page, 0);
+  console.log('PASS real snapshot search wraps across pages and opens a native file diff');
+
   if (process.platform !== 'win32') {
     const outside = path.join(temporary, 'outside-target');
     const link = path.join(repoPath, '000-link');

@@ -3,6 +3,12 @@
 const vscode = acquireVsCodeApi();
 const tree = document.getElementById('repositories');
 const messages = document.getElementById('messages');
+const startSearchButton = document.getElementById('start-search');
+const searchBox = document.getElementById('search-box');
+const searchInput = document.getElementById('file-search');
+const searchStatus = document.getElementById('search-status');
+const searchPrev = document.getElementById('search-prev');
+const searchNext = document.getElementById('search-next');
 const saved = vscode.getState() || {};
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
@@ -12,6 +18,8 @@ let snapshot = { repositories: [], errors: [], loading: true };
 let visible = [];
 const pendingLoads = new Map();
 const pendingPages = new Map();
+let searchOwner;
+let searchTimer;
 
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes], selected });
@@ -239,6 +247,11 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
   for (const group of groups) {
     const groupKey = `group:${JSON.stringify([ownerId, group.id])}`;
     const files = Array.isArray(group.files) ? group.files : [];
+    const owner = visible.find(item => item.owner?.id === ownerId)?.owner;
+    const match = owner?.changesPage?.search;
+    if (searchOwner === ownerId && match?.phase === 'ready' && match.query === searchInput.value && match.group === group.id) {
+      collapsedGroups.delete(groupKey);
+    }
     const groupExpanded = !collapsedGroups.has(groupKey);
     const row = element('div', 'row group-row');
     add(row, 'subtree', groupExpanded ? '▾' : '▸');
@@ -252,8 +265,15 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
     groupItem.item.appendChild(filesGroup);
     for (const file of files) {
       const fileKey = `file:${file.id}`;
+      const row = fileRow(file);
+      if (searchOwner === ownerId && searchInput.value && (file.path || '').toLowerCase().includes(searchInput.value.toLowerCase())) {
+        row.classList.add('search-match');
+      }
       const fileItem = createItem(fileKey, `${group.id === 'attention' ? 'Submodule needs attention:' : file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}`,
-        fileRow(file), false, false, groupKey);
+        row, false, false, groupKey);
+      fileItem.searchOwner = ownerId;
+      fileItem.searchPath = file.directory ? file.path.slice(0, -1) : file.path;
+      fileItem.searchGroup = group.id;
       if (!file.directory) fileItem.fileId = file.id;
       filesGroup.appendChild(fileItem.item);
     }
@@ -384,7 +404,7 @@ function render() {
         const files = element('div', 'children worktree-files');
         files.setAttribute('role', 'group');
         worktreeItem.item.appendChild(files);
-        renderGroups(files, worktreeGroups, worktreeKey, worktreeKey, worktreeInfo.partial);
+        renderGroups(files, worktreeGroups, worktreeKey, worktree.id, worktreeInfo.partial);
         renderPage(files, worktree, worktreeKey);
       }
     }
@@ -414,6 +434,7 @@ function render() {
   }
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);
   for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
+  syncSearch();
   if (!visible.some(item => item.key === selected)) {
     const alternate = previousSelection?.pageOwner && visible.find(item =>
       item.pageOwner === previousSelection.pageOwner && !item.pageDisabled);
@@ -446,8 +467,97 @@ function select(item, focus = true) {
   save();
 }
 
+function searchOwnerItem(item) {
+  while (item && !item.owner) item = visible.find(candidate => candidate.key === item.parent);
+  return item;
+}
+
+function sendSearch(direction = 'first') {
+  if (!searchOwner) return;
+  if (new TextEncoder().encode(searchInput.value).length > 512) {
+    searchStatus.textContent = 'Search is too long.';
+    searchPrev.disabled = searchNext.disabled = true;
+    return;
+  }
+  vscode.postMessage({ type: 'searchChanges', id: searchOwner, query: searchInput.value, direction });
+}
+
+function closeSearch() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchInput.value = '';
+  sendSearch();
+  searchOwner = undefined;
+  searchBox.hidden = true;
+  searchStatus.textContent = '';
+  render();
+}
+
+function beginSearch() {
+  const item = searchOwnerItem(visible.find(value => value.key === selected));
+  if (!item?.owner?.changesPage || !item.expandable) return;
+  if (searchOwner && searchOwner !== item.owner.id) closeSearch();
+  searchOwner = item.owner.id;
+  if (!item.isExpanded) toggle(item);
+  searchBox.hidden = false;
+  searchInput.placeholder = `Search ${item.owner.name || item.owner.branch}`;
+  searchInput.focus();
+}
+
+function syncSearch() {
+  if (!searchOwner) return;
+  const item = visible.find(value => value.owner?.id === searchOwner);
+  if (!item) {
+    searchOwner = undefined;
+    searchBox.hidden = true;
+    searchInput.value = '';
+    searchStatus.textContent = '';
+    return;
+  }
+  const result = item.owner.changesPage?.search;
+  if (new TextEncoder().encode(searchInput.value).length > 512) {
+    searchStatus.textContent = 'Search is too long.';
+    searchPrev.disabled = searchNext.disabled = true;
+    return;
+  }
+  const current = result?.query === searchInput.value;
+  const ready = current && result.phase === 'ready';
+  searchPrev.disabled = searchNext.disabled = !ready || !result.count;
+  searchStatus.textContent = !searchInput.value ? '' : !current || result.phase === 'loading' ? 'Searching…' :
+    result.phase === 'error' ? result.error : result.count ? `${result.position + 1} of ${result.count}` : 'No matches';
+  if (!ready || !result.count) return;
+  const match = visible.find(value => value.searchOwner === searchOwner && value.searchPath === result.path && value.searchGroup === result.group);
+  if (match) selected = match.key;
+}
+
+startSearchButton.addEventListener('click', beginSearch);
+searchInput.addEventListener('input', () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchStatus.textContent = searchInput.value ? 'Searching…' : '';
+  searchPrev.disabled = searchNext.disabled = true;
+  if (!searchInput.value) sendSearch();
+  else searchTimer = setTimeout(() => { searchTimer = undefined; sendSearch(); }, 100);
+  render();
+});
+searchInput.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { closeSearch(); event.preventDefault(); }
+  else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (!searchNext.disabled) sendSearch(event.key === 'ArrowDown' ? 'next' : 'previous');
+    event.preventDefault();
+  } else if (event.key === 'Enter') {
+    const result = visible.find(item => item.owner?.id === searchOwner)?.owner.changesPage?.search;
+    if (!searchNext.disabled && result?.query === searchInput.value) {
+      activate(visible.find(item => item.key === selected && item.searchOwner === searchOwner &&
+        item.searchPath === result.path && item.searchGroup === result.group));
+    }
+    event.preventDefault();
+  }
+});
+searchPrev.addEventListener('click', () => sendSearch('previous'));
+searchNext.addEventListener('click', () => sendSearch('next'));
+
 function releaseChanges(item) {
   if (!item.owner?.changesPage) return;
+  if (searchOwner === item.owner.id) closeSearch();
   pendingLoads.delete(item.owner.id);
   pendingPages.delete(item.owner.id);
   vscode.postMessage({ type: 'releaseChanges', id: item.owner.id });
@@ -526,6 +636,7 @@ tree.addEventListener('keydown', event => {
   const index = visible.indexOf(current);
   let handled = true;
   switch (event.key) {
+    case '/': beginSearch(); break;
     case 'ArrowDown': select(visible[Math.min(index + 1, visible.length - 1)]); break;
     case 'ArrowUp': select(visible[Math.max(index - 1, 0)]); break;
     case 'Home': select(visible[0]); break;

@@ -510,6 +510,62 @@ const scenario = String.raw`
       check('fallback contrast ' + selector, !!node && contrast(getComputedStyle(node).color, background) >= 4.5);
     }
     check('visible tree has keyboard tab stop', items().filter(item => item.getAttribute('tabindex') === '0').length === 1);
+    const searchable = { type: 'snapshot', errors: [], loading: false, repositories: [{ id: 'search-repo', name: 'search-repo',
+      branch: 'main', dirty: true, groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'first-file', path: 'first.txt', status: 'M' }] }],
+      changesPage: { state: 'ready', page: 0, previous: false, next: true }, worktrees: [] }] };
+    window.postMessage(searchable, '*');
+    await tick();
+    let searchRepo = items().find(item => item.getAttribute('aria-label').includes('search-repo'));
+    searchRepo.querySelector('.row').click();
+    searchRepo = items().find(item => item.getAttribute('aria-label').includes('search-repo'));
+    searchRepo.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+    const searchInput = document.getElementById('file-search');
+    check('slash focuses file search', document.activeElement === searchInput);
+    searchInput.value = 'later';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 130));
+    check('search targets the selected repository', window.posted.some(message => message.type === 'searchChanges' &&
+      message.id === 'search-repo' && message.query === 'later' && message.direction === 'first'));
+    searchable.repositories[0].groups[0].files = [{ id: 'later-file', path: 'src/LATER.txt', status: 'M' }];
+    searchable.repositories[0].changesPage = { state: 'ready', page: 1, previous: true, next: false,
+      search: { query: 'later', phase: 'ready', count: 2, position: 0, path: 'src/LATER.txt', group: 'working' } };
+    window.postMessage(searchable, '*');
+    await tick();
+    check('search selects and highlights a match on another page', items().some(item => item.getAttribute('aria-selected') === 'true' &&
+      item.getAttribute('aria-label').includes('src/LATER.txt') && item.querySelector('.search-match')));
+    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('enter opens the matching file diff', window.posted.some(message => message.type === 'openChange' && message.id === 'later-file'));
+    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    check('arrow requests the next match', window.posted.some(message => message.type === 'searchChanges' && message.direction === 'next'));
+    searchable.repositories[0].changesPage.search = { query: 'later', phase: 'ready', count: 0, position: null, path: null, group: null };
+    window.postMessage(searchable, '*');
+    await tick();
+    const opens = window.posted.filter(message => message.type === 'openChange').length;
+    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('no match cannot open a stale file', window.posted.filter(message => message.type === 'openChange').length === opens &&
+      document.getElementById('search-status').textContent === 'No matches');
+    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape clears search', document.getElementById('search-box').hidden && window.posted.some(message =>
+      message.type === 'searchChanges' && message.id === 'search-repo' && message.query === ''));
+    searchable.repositories[0].worktrees = [{ id: 'search-child', name: 'linked', branch: 'topic', dirty: true, available: true,
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'child-file', path: 'child.txt', status: 'M' }] }],
+      changesPage: { state: 'ready', page: 0, previous: false, next: false } }];
+    window.postMessage(searchable, '*');
+    await tick();
+    let searchChild = items().find(item => item.getAttribute('aria-label').includes('linked, worktree'));
+    searchChild.querySelector('.row').click();
+    searchChild = items().find(item => item.getAttribute('aria-label').includes('linked, worktree'));
+    searchChild.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+    searchInput.value = 'child';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 130));
+    check('search targets the selected worktree', window.posted.some(message => message.type === 'searchChanges' &&
+      message.id === 'search-child' && message.query === 'child'));
+    searchInput.value = 'x'.repeat(513);
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    window.postMessage(searchable, '*');
+    await tick();
+    check('long queries remain an error after refresh', document.getElementById('search-status').textContent === 'Search is too long.');
     document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks, background: getComputedStyle(document.body).backgroundColor }));
   } catch (error) {
     document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: error.stack || String(error) }));
@@ -559,7 +615,7 @@ function documentFor(theme, restored = false) {
     ? '--vscode-sideBar-background:#fff;--vscode-sideBar-foreground:#333;--vscode-list-inactiveSelectionBackground:#ddd;--vscode-focusBorder:#007acc;'
     : '--vscode-sideBar-background:#1e1e1e;--vscode-sideBar-foreground:#ddd;--vscode-list-inactiveSelectionBackground:#383838;--vscode-focusBorder:#007acc;';
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
-<body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
+<body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="gitpane-test">window.posted=[];window.savedState=${restored ? '{expanded:["repo:restored","worktree:restored-child"]}' : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
 <script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }

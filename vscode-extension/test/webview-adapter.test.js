@@ -44,6 +44,14 @@ test('webview shows workspace state and opens only currently visible changes', a
       if (value === worktreePath) return page(childCurrent ? [record('working', 'child.txt', 'working_modified')] : []);
       return page(current ? [record('index', 'file.txt', current.status === 2 ? 'index_deleted' : 'index_modified')] : []);
     },
+    async searchChanges(value, snapshot, query) {
+      const child = value === worktreePath;
+      const name = child ? 'child.txt' : 'file.txt';
+      const records = child ? [record('working', name, 'working_modified')] : [record('index', name, 'index_modified')];
+      const found = name.includes(query);
+      return { snapshot, revision: page(records).revision, count: found ? 1 : 0, position: found ? 0 : null,
+        cursor: found ? 0 : null, page: found ? 0 : null, path: found ? name : null, group: found ? (child ? 'working' : 'index') : null };
+    },
     async releaseChanges() {}
   };
   const tree = {
@@ -127,6 +135,8 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(worktree.available, true);
     const childFile = worktree.groups[0].files[0];
     assert.equal(childFile.path, 'child.txt');
+    await onMessage({ type: 'searchChanges', id: worktree.id, query: 'child', direction: 'first' });
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].changesPage.search.path, 'child.txt');
     assert.equal(provider.resolveChange(childFile.id).repoPath, worktreePath);
     await onMessage({ type: 'openChange', id: childFile.id });
     assert.equal(calls[0][0], 'gitpane.openChange');

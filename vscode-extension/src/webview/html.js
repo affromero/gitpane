@@ -20,6 +20,16 @@ function getHtml(webview, extensionUri) {
 </head>
 <body>
   <div id="messages" aria-live="polite"></div>
+  <div class="search-toolbar">
+    <button id="start-search" type="button" aria-label="Search changed files" title="Search changed files">⌕</button>
+    <div id="search-box" hidden>
+      <label class="search-label" for="file-search">Search changed files</label>
+      <input id="file-search" type="search" placeholder="Search changed files" autocomplete="off" spellcheck="false">
+      <button id="search-prev" type="button" aria-label="Previous file match" disabled>↑</button>
+      <button id="search-next" type="button" aria-label="Next file match" disabled>↓</button>
+      <div id="search-status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
   <div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
   <script src="${theme}"></script>
   <script src="${script}"></script>

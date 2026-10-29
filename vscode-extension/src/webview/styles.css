@@ -52,6 +52,16 @@ body {
 
 .retry:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 
+.search-toolbar { padding: 0 9px 3px; }
+.search-toolbar button { color: var(--text); background: transparent; border: 0; font: inherit; cursor: pointer; }
+.search-toolbar button:focus-visible, #file-search:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+#search-box:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.search-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#file-search { flex: 1 1 8em; min-width: 0; color: var(--vscode-input-foreground, var(--text));
+  background: var(--vscode-input-background, transparent); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+#search-status { flex-basis: 100%; color: var(--muted); }
+.file-row.search-match .file-path { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }
+
 #repositories {
   display: grid;
   grid-template-columns: 2.5ch minmax(4ch, 1.35fr) minmax(3ch, 1fr) minmax(0, max-content);

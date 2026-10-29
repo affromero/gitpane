@@ -135,6 +135,10 @@ class BridgeClient {
 
   nextChanges(repo, snapshot, cursor) { return this.request('changes_next', { repo, snapshot, cursor }); }
 
+  searchChanges(repo, snapshot, query, direction, position) {
+    return this.request('changes_search', { repo, snapshot, query, direction, position });
+  }
+
   findChange(repo, snapshot, target, group) { return this.request('changes_find', { repo, snapshot, path: target, group }); }
 
   releaseChanges(repo, snapshot) { return this.request('changes_release', { repo, snapshot }); }

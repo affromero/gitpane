@@ -21,6 +21,9 @@ workspace are not included.
 The view updates as workspace folders and detected repositories change. While
 visible, it also refreshes local Git status periodically. The `$` indicator
 opens a repository's stash list. Stash entries are view-only.
+Select a repository or worktree and press `/` or the search button to search
+all of its changed paths. Use the arrow keys to move between matches, Enter to
+open a file diff, and Escape to clear the search.
 The Explorer title menu offers repository sorting; the default keeps the
 existing dirty-first, full-path order.
 

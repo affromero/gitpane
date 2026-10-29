@@ -88,6 +88,7 @@ class ChangePager {
       this.entries.set(id, state);
     }
     state.guard = guard;
+    const activeSearch = state.search;
     const previous = { revision: state.revision, cursor: state.cursor, page: state.page };
     state.phase = 'loading';
     state.error = undefined;
@@ -120,7 +121,11 @@ class ChangePager {
       }
     });
     state.pending = pending;
-    return pending;
+    await pending;
+    if (activeSearch?.query && state.search === activeSearch && state.phase === 'ready' && state.guard() &&
+        (activeSearch.phase !== 'ready' || state.revision !== previous.revision)) {
+      await this.search(id, activeSearch.query);
+    }
   }
 
   async move(id, direction) {
@@ -149,6 +154,69 @@ class ChangePager {
         if (this.entries.get(id) === state) { state.pending = undefined; this.changed(); }
       }
     });
+    state.pending = pending;
+    return pending;
+  }
+
+  async search(id, query, direction = 'first') {
+    const state = this.entries.get(id);
+    if (!state || !state.guard() || typeof query !== 'string' || Buffer.byteLength(query, 'utf8') > 512 ||
+        query.includes('\0') || !['first', 'next', 'previous'].includes(direction)) return;
+    const generation = state.searchGeneration = (state.searchGeneration || 0) + 1;
+    const previous = state.search;
+    if (!query) {
+      state.search = undefined;
+      this.changed();
+      return;
+    }
+    const position = direction !== 'first' && previous?.query === query && previous.phase === 'ready' ? previous.position : null;
+    state.search = { query, phase: 'loading' };
+    this.changed();
+    if (state.pending) await state.pending;
+    const current = () => !this.disposed && this.entries.get(id) === state && state.guard() &&
+      state.searchGeneration === generation && state.search?.query === query;
+    if (!current()) return;
+    if (state.phase !== 'ready' || !state.snapshot) {
+      state.search = { query, phase: 'error', error: state.error || 'Changes are unavailable. Refresh and try again.' };
+      this.changed();
+      return;
+    }
+    const snapshot = state.snapshot, revision = state.revision;
+    const pending = (async () => {
+      try {
+        const result = await this.backend.searchChanges(state.repo, snapshot, query, direction, position);
+        if (!current() || state.snapshot !== snapshot) return;
+        const found = Number.isSafeInteger(result?.count) && result.count > 0;
+        if (!result || result.snapshot !== snapshot || result.revision !== revision ||
+            !Number.isSafeInteger(result.count) || result.count < 0 ||
+            (found ? !(Number.isSafeInteger(result.position) && result.position >= 0 && result.position < result.count &&
+              Number.isSafeInteger(result.cursor) && result.cursor >= 0 && Number.isSafeInteger(result.page) && result.page >= 0 &&
+              relativeFile(result.path) && Object.hasOwn(KINDS, result.group)) :
+              [result.position, result.cursor, result.page, result.path, result.group].some(value => value !== null))) {
+          throw new Error('Gitpane returned an invalid search result.');
+        }
+        let page;
+        if (found && result.cursor !== state.cursor) {
+          page = validatePage(await this.backend.nextChanges(state.repo, snapshot, result.cursor), snapshot, result.cursor);
+          if (!current() || state.snapshot !== snapshot) return;
+          if (page.revision !== revision) throw new Error('Gitpane returned inconsistent changes pages.');
+        }
+        const changes = page?.changes || state.changes;
+        if (found && !changes.some(record => record.path === result.path && record.group === result.group)) {
+          throw new Error('Gitpane returned a search match outside its changes page.');
+        }
+        if (page) Object.assign(state, page, { page: result.page });
+        state.search = { query, phase: 'ready', count: result.count, position: result.position,
+          path: result.path, group: result.group };
+      } catch (error) {
+        if (!current() || state.snapshot !== snapshot) return;
+        state.search = { query, phase: 'error', error: error.code === 'snapshot_stale' ?
+          'Changes expired. Refresh and try again.' : error.message || String(error) };
+      } finally {
+        if (state.pending === pending) state.pending = undefined;
+        if (this.entries.get(id) === state) this.changed();
+      }
+    })();
     state.pending = pending;
     return pending;
   }

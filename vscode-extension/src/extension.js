@@ -49,6 +49,8 @@ class GitpaneViewProvider {
     this.repositories = new Map();
     this.changes = new Map();
     this.worktrees = new Map();
+    this.searchRequests = new Map();
+    this.nextSearchRequest = 0;
     this.viewDisposables = [];
     this.pager = new ChangePager(tree.backend, () => this.publish(), error => tree.output?.appendLine(`Could not release changes: ${error.message}`));
     this.refreshChangesTimer = undefined;
@@ -93,6 +95,7 @@ class GitpaneViewProvider {
       const state = this.pager.get(id);
       return { state: state?.phase || 'idle', page: state?.page || 0,
         previous: state?.previous_cursor != null, next: state?.next_cursor != null,
+        ...(state?.search ? { search: state.search } : {}),
         ...(state?.error ? { error: state.error } : {}) };
     };
     const lowerBound = status => status?.file_count_lower_bound ?? 0;
@@ -379,7 +382,16 @@ class GitpaneViewProvider {
           await this.loadChanges(message.id);
         } else if (message?.type === 'changesPage' && typeof message.id === 'string') {
           await this.pager.move(message.id, message.direction);
+        } else if (message?.type === 'searchChanges' && typeof message.id === 'string' &&
+                   typeof message.query === 'string' && ['first', 'next', 'previous'].includes(message.direction)) {
+          const request = ++this.nextSearchRequest;
+          this.searchRequests.set(message.id, request);
+          if (!this.currentOwner(message.id)) return;
+          if (!this.pager.get(message.id)) await this.loadChanges(message.id);
+          if (this.searchRequests.get(message.id) !== request || !this.currentOwner(message.id)) return;
+          await this.pager.search(message.id, message.query, message.direction);
         } else if (message?.type === 'releaseChanges' && typeof message.id === 'string') {
+          this.searchRequests.delete(message.id);
           this.pager.release(message.id);
           this.publish();
         } else if (message?.type === 'openGraph' && typeof message.id === 'string') {
@@ -421,6 +433,7 @@ class GitpaneViewProvider {
         for (const id of this.pager.entries.keys()) this.pager.release(id);
         this.view = undefined;
         this.ready = false;
+        this.searchRequests.clear();
         this.repositories.clear();
         this.changes.clear();
         this.worktrees.clear();
@@ -437,6 +450,7 @@ class GitpaneViewProvider {
     for (const disposable of this.viewDisposables) disposable.dispose();
     this.viewDisposables = [];
     this.view = undefined;
+    this.searchRequests.clear();
     this.repositories.clear();
     this.changes.clear();
     this.worktrees.clear();

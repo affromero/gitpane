@@ -225,6 +225,7 @@ fn process(
         "changes_begin" => snapshots.begin(scope, params(request.params)?, sub_cfg),
         "changes_next" => snapshots.page(scope, params(request.params)?),
         "changes_find" => snapshots.find(scope, params(request.params)?),
+        "changes_search" => snapshots.search(scope, params(request.params)?),
         "changes_release" => snapshots.release(scope, params(request.params)?),
         "file_action_preview" => {
             let input = params(request.params)?;
