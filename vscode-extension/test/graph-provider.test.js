@@ -507,24 +507,25 @@ test('visible graphs refresh when refs change, reject late polls, and recover fr
   }
 });
 
-test('backend error notifications do not cause rapid graph retries', async t => {
+test('backend and ancestor validation errors do not cause rapid graph retries', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-graph-backoff-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const messages = [];
+  const messages = [], commands = [];
   const event = () => ({ dispose() {} });
   class EventEmitter {
     constructor() { this.listeners = new Set(); this.event = fn => { this.listeners.add(fn); return { dispose: () => this.listeners.delete(fn) }; }; }
     fire(value) { for (const fn of this.listeners) fn(value); }
     dispose() { this.listeners.clear(); }
   }
-  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value,
+    with: change => ({ fsPath: value, ...change }) });
   const panel = { visible: true, webview: { postMessage: message => messages.push(message), onDidReceiveMessage: event },
     onDidChangeViewState: event, onDidDispose(handler) { this.onDispose = handler; },
     dispose() { this.onDispose(); }, reveal() {} };
-  const vscode = { EventEmitter, Uri: { joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
+  const vscode = { EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
     workspace: { workspaceFolders: [{ uri: uri(root) }], onDidChangeWorkspaceFolders: event,
       onDidChangeConfiguration: event, getConfiguration: () => ({ get: () => '' }) },
-    window: { createWebviewPanel: () => panel } };
+    window: { createWebviewPanel: () => panel }, commands: { async executeCommand(...args) { commands.push(args); } } };
   const load = Module._load;
   for (const name of ['../src/repository-tree', '../src/graph-provider']) delete require.cache[require.resolve(name)];
   try {
@@ -539,11 +540,14 @@ test('backend error notifications do not cause rapid graph retries', async t => 
     const repo = { rootUri: uri(root), state: { HEAD: { commit: 'head' }, onDidChange: event } };
     const git = { repositories: [repo], onDidOpenRepository: event, onDidCloseRepository: event };
     let failing = true;
-    let revisions = 0;
+    let revisions = 0, guardCalls = 0, guardFailure = false;
+    const oid = 'a'.repeat(40);
     const manager = new BackendManager({ extensionPath: root }, { vscode, realpath: async value => value,
       createClient: () => ({ async initialize() {}, dispose() {},
         async graphRevision() { revisions++; if (failing) throw new Error('offline'); return { revision: 'a'.repeat(64) }; },
-        async graph() { return { branches: [], rows: [] }; } }) });
+        async graph() { return { branches: [], rows: [{ oid, parent_oids: [] }] }; },
+        async commitFiles() { return { files: [{ path: 'file.txt', status: 'A', is_submodule: false }] }; },
+        async branchReview() { guardCalls++; if (guardFailure) throw new Error('ancestor unavailable'); return {}; } }) });
     await manager.ready();
     const tree = new RepositoryTree(git, { appendLine() {} }, manager);
     const provider = new GraphProvider(tree, manager, git, '/extension');
@@ -559,9 +563,87 @@ test('backend error notifications do not cause rapid graph retries', async t => 
       assert.equal(messages.at(-1).loading, false);
       assert.equal(messages.at(-1).error, undefined);
       assert.equal(manager.state.status, 'ready');
+
+      provider.open(repo, () => true, async () => { await manager.branchReview(root); return true; });
+      await provider.receive({ type: 'ready' });
+      await provider.receive({ type: 'selectCommit', oid });
+      const file = messages.at(-1).files[0];
+      guardFailure = true;
+      await provider.receive({ type: 'openCommitFile', id: file.id });
+      assert.match(messages.at(-1).error, /ancestor unavailable/);
+      assert.equal(commands.length, 0, 'failed validation prevents file actions');
+      const attempts = guardCalls;
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.equal(guardCalls, attempts, 'delayed error notifications must not trigger rapid validation retries');
+      guardFailure = false;
+      await provider.pollRevision();
+      assert.equal(messages.at(-1).error, undefined);
+      assert.equal(manager.state.status, 'ready');
     } finally { provider.dispose(); tree.dispose(); manager.dispose(); }
   } finally {
     Module._load = load;
     for (const name of ['../src/repository-tree', '../src/graph-provider']) delete require.cache[require.resolve(name)];
+  }
+});
+
+test('visible submodule graphs revalidate ancestor guards without Explorer events', async () => {
+  const messages = [], commands = [];
+  let onViewState;
+  const panel = { visible: true, webview: { postMessage: value => messages.push(value), onDidReceiveMessage() {} },
+    onDidChangeViewState(handler) { onViewState = handler; }, onDidDispose(handler) { this.onDispose = handler; },
+    dispose() { this.onDispose(); }, reveal() {} };
+  const uri = value => ({ fsPath: value, toString: () => value, with: change => ({ fsPath: value, ...change }) });
+  const vscode = { Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
+    window: { createWebviewPanel: () => panel }, commands: { async executeCommand(...args) { commands.push(args); } } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './graph/html') return { getHtml: () => '<html></html>' };
+      return load.call(this, name, ...args);
+    };
+    const { GraphProvider } = require('../src/graph-provider');
+    const repo = { rootUri: uri(path.resolve('workspace/child')) };
+    const tree = { git: { repositories: [repo] }, isVisible: () => true, repositoryToken: () => 1,
+      isCurrentRepository: (_, token) => token === 1, onDidChangeTreeData() { return { dispose() {} }; } };
+    const oid = 'a'.repeat(40);
+    const backend = { async graphRevision() { return { revision: 'a'.repeat(64) }; },
+      async graph() { return { branches: [], rows: [{ oid, parent_oids: [] }] }; },
+      async commitFiles() { return { files: [{ path: 'file.txt', status: 'A', is_submodule: false }] }; } };
+    let valid = true, validations = 0, pause = false, finishValidation;
+    const provider = new GraphProvider(tree, backend, { toGitUri: (value, ref) => ({ ...value, ref }) }, '/extension');
+    provider.open(repo, () => true, async () => {
+      validations++;
+      if (pause) await new Promise(resolve => { finishValidation = resolve; });
+      return valid;
+    });
+    try {
+      await provider.receive({ type: 'ready' });
+      pause = true;
+      const before = validations;
+      const poll = provider.pollRevision();
+      const selection = provider.receive({ type: 'selectCommit', oid });
+      await Promise.resolve();
+      assert.equal(validations, before + 1, 'polling and user actions share one ancestor validation');
+      pause = false;
+      finishValidation();
+      await Promise.all([poll, selection]);
+      await provider.receive({ type: 'selectCommit', oid });
+      const file = messages.at(-1).files[0];
+      valid = false;
+      await provider.pollRevision();
+      assert.match(messages.at(-1).error, /parent submodule changed/i);
+      await provider.receive({ type: 'openCommitFile', id: file.id });
+      assert.equal(commands.length, 0, 'a stale ancestor cannot open a commit diff');
+      panel.visible = false;
+      onViewState();
+      const previous = validations;
+      await provider.pollRevision();
+      assert.equal(validations, previous, 'hidden graphs do not poll ancestor guards');
+    } finally { provider.dispose(); }
+  } finally {
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
   }
 });

@@ -33,6 +33,9 @@ class GraphProvider {
     this.panel = undefined;
     this.repoKey = undefined;
     this.guard = () => true;
+    this.validateGuard = undefined;
+    this.ownerEpoch = 0;
+    this.validationPending = undefined;
     this.rows = new Map();
     this.displayedRows = [];
     this.segments = new Set();
@@ -78,14 +81,16 @@ class GraphProvider {
     return this.guard() && repo && this.tree.isVisible(repo) ? repo : undefined;
   }
 
-  open(repo, guard = () => true) {
+  open(repo, guard = () => true, validateGuard) {
     const token = repo && this.tree.repositoryToken(repo);
     const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
     if (!repo || !currentGuard() || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
       throw new Error('Repository is no longer in the workspace.');
     }
     this.repoKey = repo.rootUri.toString();
+    this.ownerEpoch++;
     this.guard = currentGuard;
+    this.validateGuard = validateGuard;
     this.lastHead = repo.state?.HEAD?.commit;
     this.stopPolling();
     this.ready = false;
@@ -137,6 +142,8 @@ class GraphProvider {
       this.ready = false;
       this.repoKey = undefined;
       this.guard = () => true;
+      this.validateGuard = undefined;
+      this.ownerEpoch++;
       this.graphGeneration++;
       this.detailGeneration++;
       this.rows.clear();
@@ -178,6 +185,37 @@ class GraphProvider {
     return result.revision;
   }
 
+  async validateGraph(repo) {
+    if (!this.validateGuard) return true;
+    const panel = this.panel;
+    const epoch = this.ownerEpoch;
+    const guard = this.validateGuard;
+    if (!panel || panel.visible === false || this.currentRepo() !== repo) return false;
+    if (this.validationPending?.epoch === epoch) return this.validationPending.promise;
+    const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === epoch &&
+      this.validateGuard === guard && this.repoKey === repo.rootUri.toString();
+    const pending = (async () => {
+      try {
+        const valid = await guard();
+        if (!current()) return false;
+        if (!valid || !this.currentRepo()) {
+          this.invalidate('The parent submodule changed; reopen the graph.');
+          return false;
+        }
+        return true;
+      } catch (error) {
+        if (current()) {
+          this.retryBackoff = true;
+          this.invalidate(`Could not validate the parent submodule: ${error.message}`, true);
+        }
+        return false;
+      }
+    })();
+    this.validationPending = { epoch, promise: pending };
+    try { return await pending; }
+    finally { if (this.validationPending?.promise === pending) this.validationPending = undefined; }
+  }
+
   async pollRevision() {
     if (!this.ready || !this.panel || this.panel.visible === false) return;
     if (this.pollPending || this.loading) { this.pollAgain = true; return; }
@@ -194,6 +232,7 @@ class GraphProvider {
       this.graphGeneration === generation && this.currentRepo() === repo;
     this.pollPending = true;
     try {
+      if (!await this.validateGraph(repo) || !current()) return;
       const revision = await this.readRevision(repo);
       if (current()) {
         this.retryBackoff = false;
@@ -256,12 +295,14 @@ class GraphProvider {
     this.post({ type: 'graph', repoName, rows: previousRows, loading: true, firstParent: this.firstParent,
       filters: copyFilters(this.filters), collapsedCount: this.collapsedSegments.size });
     try {
+      if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
       const before = await this.readRevision(repo);
       if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
       const result = await this.backend.graph(repo.rootUri.fsPath, this.firstParent, copyFilters(this.filters), [...this.collapsedSegments]);
       if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
       const after = await this.readRevision(repo);
       if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
       if (before !== after) {
         this.revision = undefined;
         this.unstableLoads++;
@@ -378,6 +419,7 @@ class GraphProvider {
     const repo = this.currentRepo();
     const row = this.rows.get(oid);
     if (!repo || !row || row.collapsed) return;
+    if (!await this.validateGraph(repo) || this.rows.get(oid) !== row || this.currentRepo() !== repo) return;
     const generation = ++this.detailGeneration;
     this.selected = oid;
     this.files.clear();
@@ -407,6 +449,7 @@ class GraphProvider {
     const repo = this.currentRepo();
     const file = this.files.get(id);
     if (!repo || !file || file.oid !== this.selected) return;
+    if (!await this.validateGraph(repo) || this.files.get(id) !== file || this.currentRepo() !== repo) return;
     if (file.isSubmodule) throw new Error('Submodule changes cannot be opened as a file diff yet.');
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;

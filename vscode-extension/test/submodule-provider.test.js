@@ -60,8 +60,9 @@ function fixture(t, linkDocuments) {
   let open = async () => child;
   const git = { repositories: [parent, child], openRepository: async () => { opens++; return open(); },
     toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
-  let graphGuard;
+  let graphGuard, graphValidate;
   let scanError;
+  let parentFailure;
   const backend = { inspectSubmodule: async (repo, target, group, originalPath) => {
     inspections.push({ repo, target, group, originalPath });
     if (response instanceof Error) throw response;
@@ -70,10 +71,11 @@ function fixture(t, linkDocuments) {
   async openChangesSession() { if (scanError) throw scanError; return { begin: async () => page(0), next: async (_id, cursor) => page(cursor),
     close() { closedSessions++; } }; },
   async verifyChanges(repo, record) {
+    if (repo === parentPath && parentFailure) throw parentFailure;
     return { change: repo === childPath ? records().find(item => item.path === record.path && item.group === record.group) || null : hasParentRecord ? parentRecord : record };
   } };
   const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments, resolveChange: () => visible && rowVisible ? node : undefined,
-    openGraph: async (repo, guard) => { graphs.push(repo); graphGuard = guard; } });
+    openGraph: async (repo, guard, validate) => { graphs.push(repo); graphGuard = guard; graphValidate = validate; } });
   t.after(() => provider.dispose());
   return { temporary, childPath, node, child, base, head, provider, commands, errors, graphs, inspections,
     opened: () => opens, pick(fn) { pick = fn; }, setVisible(value) { visible = value; },
@@ -93,11 +95,12 @@ function fixture(t, linkDocuments) {
     setResponse(value) { response = value; }, getResponse() { return response; },
     reopenParent() { tokens.set(parentPath, tokens.get(parentPath) + 1); },
     reopenChild() { tokens.set(childPath, tokens.get(childPath) + 1); }, graphCurrent() { return graphGuard(); },
+    graphValidate() { return graphValidate(); },
     closeChild() { git.repositories = [parent]; tokens.delete(childPath); revisions.set(childPath, revisions.get(childPath) + 1); },
     openChild(repo = child) { git.repositories = [parent, repo]; tokens.set(childPath, (tokens.get(childPath) || 0) + 1);
       revisions.set(childPath, (revisions.get(childPath) || 0) + 1); },
     onOpen(callback) { open = callback; }, setRecords(value) { customRecords = value; },
-    failScan(error) { scanError = error; }, closedSessions: () => closedSessions };
+    failScan(error) { scanError = error; }, failParent(error) { parentFailure = error; }, closedSessions: () => closedSessions };
 }
 
 test('opens committed rename and current dirty file comparisons using native editors', async t => {
@@ -174,6 +177,104 @@ test('submodule and regular-file type changes report the backend limitation', as
   await f.provider.open(f.node);
   assert.equal(f.commands.length, 0);
   assert.match(f.errors.at(-1), /type changes cannot be inspected/i);
+});
+
+test('nested working changes traverse beyond four levels and reject stale ancestors', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-nested-submodules-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const uri = (value, scheme = 'file') => ({ fsPath: value, toString: () => `${scheme}:${value}`,
+    with: changes => uri(changes.path || value, changes.scheme || scheme) });
+  const head = 'b'.repeat(40);
+  const repos = [];
+  let current = root;
+  for (let index = 0; index <= 6; index++) {
+    fs.mkdirSync(current, { recursive: true });
+    repos.push({ rootUri: uri(current), state: { HEAD: { commit: head }, submodules: [] } });
+    current = path.join(current, 'child');
+  }
+  fs.writeFileSync(path.join(repos.at(-1).rootUri.fsPath, 'file.txt'), 'nested working change');
+  const submoduleRecord = { path: 'child', group: 'working', kind: 'working_modified',
+    original_path: null, conflict_stages: null, is_submodule: true };
+  const fileRecord = { path: 'file.txt', group: 'working', kind: 'working_modified',
+    original_path: null, conflict_stages: null, is_submodule: false };
+  const node = { repo: repos[0], group: 'working', record: submoduleRecord,
+    change: { uri: uri(repos[1].rootUri.fsPath), status: 5 } };
+  const tokens = new Map(repos.map(repo => [repo.rootUri.fsPath, 1]));
+  let withinWorkspace = true;
+  const tree = { git: { repositories: repos }, isVisible: () => true,
+    isPathInWorkspace: value => withinWorkspace && value.startsWith(root + path.sep), repositoryToken: repo => tokens.get(repo.rootUri.fsPath),
+    repositoryRevision: value => tokens.has(value.fsPath) ? 1 : 0,
+    isCurrentRepository: (repo, token) => token === tokens.get(repo?.rootUri.fsPath), onDidChangeTreeData: () => ({ dispose() {} }) };
+  let activeSessions = 0, maxSessions = 0, stale = false, scopeEscape = false;
+  let fault, nestedInspected = false, removedNested = false, leafSelected = false, leafChecks = 0, removedLeaf = false;
+  const backend = {
+    async inspectSubmodule(repo, target) {
+      if (fault === 'nested' && repo === repos[1].rootUri.fsPath) nestedInspected = true;
+      return { repo: path.join(repo, target), base_oid: head, head_oid: head, child_head_oid: head, pointer_files: [] };
+    },
+    async status() { return { head_oid: head }; },
+    async verifyChanges(repo, record) {
+      if (fault === 'nested' && nestedInspected && repo === repos[0].rootUri.fsPath) removedNested = true;
+      if (fault === 'leaf' && leafSelected && leafChecks === 1 && repo === repos[0].rootUri.fsPath) removedLeaf = true;
+      if (fault === 'leaf' && leafSelected && repo === repos.at(-1).rootUri.fsPath) leafChecks++;
+      return { change: (removedNested && repo === repos[1].rootUri.fsPath) ||
+        (removedLeaf && repo === repos.at(-1).rootUri.fsPath) ? null : record };
+    },
+    async openChangesSession(repo) {
+      activeSessions++;
+      maxSessions = Math.max(maxSessions, activeSessions);
+      const record = repo === repos.at(-1).rootUri.fsPath ? fileRecord : submoduleRecord;
+      return { async begin() { return { snapshot: 'snapshot', revision: 'a'.repeat(64), cursor: 0,
+        previous_cursor: null, next_cursor: null, changes: [record] }; }, close() { activeSessions--; } };
+    }
+  };
+  const commands = [], errors = [];
+  const vscode = { Uri: { file: uri }, window: {
+    async showQuickPick(choices) {
+      const selected = choices.find(item => item.kind === 'browse') || choices.find(item => item.kind === 'change');
+      if (stale && selected?.record?.path === 'file.txt') tokens.set(repos[1].rootUri.fsPath, 2);
+      if (scopeEscape && selected?.record?.is_submodule) withinWorkspace = false;
+      if (fault === 'leaf' && selected?.record?.path === 'file.txt') leafSelected = true;
+      return selected;
+    }, async showErrorMessage(message) { errors.push(message); }
+  }, commands: { async executeCommand(...args) { commands.push(args); } } };
+  const opened = [];
+  const git = { repositories: repos, async openRepository(value) { opened.push(value.fsPath); return repos.find(repo => repo.rootUri.fsPath === value.fsPath); },
+    toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
+  const provider = new SubmoduleProvider(tree, backend, git, { vscode, resolveChange: () => node });
+  t.after(() => provider.dispose());
+  await provider.open(node);
+  assert.equal(commands.length, 1, errors.at(-1));
+  assert.equal(commands[0][2].fsPath, path.join(repos.at(-1).rootUri.fsPath, 'file.txt'));
+  assert.equal(maxSessions, 1, 'each paging session closes before descending');
+  assert.equal(activeSessions, 0);
+  stale = true;
+  await provider.open(node);
+  assert.equal(commands.length, 1);
+  assert.match(errors.at(-1), /changed|no longer/i);
+  assert.equal(activeSessions, 0);
+  tokens.set(repos[1].rootUri.fsPath, 1);
+  stale = false;
+  scopeEscape = true;
+  await provider.open(node);
+  assert.equal(commands.length, 1, 'workspace removal during selection prevents descent');
+  assert.match(errors.at(-1), /changed|no longer/i);
+  assert.equal(activeSessions, 0);
+  scopeEscape = false;
+  withinWorkspace = true;
+  fault = 'nested';
+  opened.length = 0;
+  await provider.open(node);
+  assert.equal(commands.length, 1);
+  assert.ok(removedNested, 'ancestor validation must trigger the selected-record removal');
+  assert.ok(!opened.includes(repos[2].rootUri.fsPath), 'a disappeared nested selection cannot open its repository');
+  assert.match(errors.at(-1), /changed|no longer/i);
+  fault = 'leaf';
+  removedNested = false;
+  await provider.open(node);
+  assert.ok(removedLeaf, 'the leaf must disappear during final ancestor validation');
+  assert.equal(commands.length, 1, 'a disappeared leaf cannot open a diff');
+  assert.match(errors.at(-1), /changed|no longer/i);
 });
 
 test('submodule conflicts report the backend error without opening a diff', async t => {
@@ -378,6 +479,40 @@ test('a paged-away graph invalidates when its parent change disappears', async t
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.graphCurrent(), false);
   assert.deepEqual(f.errors, []);
+});
+
+test('submodule graph validation detects pointer changes without a tree event', async t => {
+  const f = fixture(t);
+  const record = { path: 'child', group: 'working', kind: 'working_modified', original_path: null,
+    conflict_stages: null, is_submodule: true };
+  f.node.record = record;
+  f.setParentRecord(record);
+  f.pick(choices => choices.find(choice => choice.kind === 'graph'));
+  await f.provider.open(f.node);
+  assert.equal(await f.graphValidate(), true);
+  f.setResponse({ ...f.getResponse(), base_oid: 'c'.repeat(40) });
+  assert.equal(await f.graphValidate(), false);
+  assert.equal(f.graphCurrent(), false);
+});
+
+test('temporary ancestor validation errors leave graph guards recoverable', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(t);
+  const record = { path: 'child', group: 'working', kind: 'working_modified', original_path: null,
+    conflict_stages: null, is_submodule: true };
+  f.node.record = record;
+  f.setParentRecord(record);
+  f.pick(choices => choices.find(choice => choice.kind === 'graph'));
+  await f.provider.open(f.node);
+  f.failParent(new Error('temporary backend failure'));
+  f.notifyTreeChange();
+  t.mock.timers.tick(500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(f.errors.at(-1), /temporary backend failure/i);
+  assert.equal(f.graphCurrent(), true, 'temporary errors must not permanently invalidate the graph');
+  f.failParent(undefined);
+  assert.equal(await f.graphValidate(), true, 'the next validation can recover');
+  assert.equal(f.graphCurrent(), true);
 });
 
 test('a submodule graph closes its guard when its owning worktree is reopened', async t => {

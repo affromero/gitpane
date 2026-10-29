@@ -221,10 +221,12 @@ async function main() {
   }
   const childRepo = { rootUri: uri(childPath), state: { HEAD: { commit: gitAt(childPath, 'rev-parse', 'HEAD') },
     onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  const availableSubmodules = new Map([[childPath, childRepo]]);
   api.openRepository = async target => {
-    if (target.fsPath !== childPath) throw new Error(`Unexpected repository ${target.fsPath}`);
-    if (!api.repositories.includes(childRepo)) { api.repositories.push(childRepo); openedRepositories.fire(childRepo); }
-    return childRepo;
+    const submodule = availableSubmodules.get(target.fsPath);
+    if (!submodule) throw new Error(`Unexpected repository ${target.fsPath}`);
+    if (!api.repositories.includes(submodule)) { api.repositories.push(submodule); openedRepositories.fire(submodule); }
+    return submodule;
   };
   await commands.get('gitpane.refresh')();
   const parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
@@ -333,6 +335,50 @@ async function main() {
   assert.equal(diffs.at(-1)[0].ref, pointerB, 'working diff starts at the index pointer');
   assert.equal(diffs.at(-1)[1].ref, pointerC, 'working diff ends at the live child HEAD');
   console.log('PASS staged and unstaged submodule file clicks use their selected A→B and B→C native diffs');
+
+  const grandSource = path.join(temporary, 'grandchild-source');
+  fs.mkdirSync(grandSource);
+  gitAt(grandSource, 'init', '-q');
+  fs.writeFileSync(path.join(grandSource, 'nested.txt'), 'original\n');
+  gitAt(grandSource, 'add', 'nested.txt');
+  gitAt(grandSource, 'commit', '-qm', 'nested initial');
+  gitAt(childPath, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', grandSource, 'nested');
+  gitAt(childPath, 'commit', '-qm', 'add nested submodule');
+  childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+  const grandPath = fs.realpathSync(path.join(childPath, 'nested'));
+  fs.writeFileSync(path.join(grandPath, 'nested.txt'), 'working nested change\n');
+  const grandRepo = { rootUri: uri(grandPath), state: { HEAD: { commit: gitAt(grandPath, 'rev-parse', 'HEAD') },
+    onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  availableSubmodules.set(grandPath, grandRepo);
+  await commands.get('gitpane.refresh')();
+  const nestedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: nestedParent.id });
+  const nestedWorking = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(nestedWorking, 'parent must expose its changed child');
+  pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||
+    choices.find(choice => choice.record?.path === 'nested') || choices.find(choice => choice.record?.path === 'nested.txt');
+  const beforeNestedDiffs = diffs.length;
+  const beforeNestedTerminals = terminals.length;
+  await receive({ type: 'openChange', id: nestedWorking.id });
+  assert.equal(diffs.length, beforeNestedDiffs + 1, errors.at(-1));
+  assert.equal(diffs.at(-1)[1].fsPath, path.join(grandPath, 'nested.txt'));
+  assert.equal(terminals.length, beforeNestedTerminals);
+  let changedAncestor = false;
+  pickChanges = choices => {
+    const selected = choices.find(choice => choice.record?.path === 'nested.txt');
+    if (selected && !changedAncestor) {
+      changedAncestor = true;
+      gitAt(childPath, 'commit', '--allow-empty', '-qm', 'move ancestor while selecting');
+      childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    }
+    return choices.find(choice => choice.kind === 'browse') ||
+      choices.find(choice => choice.record?.path === 'nested') || selected;
+  };
+  await receive({ type: 'openChange', id: nestedWorking.id });
+  assert.equal(diffs.length, beforeNestedDiffs + 1, 'stale ancestor cannot open a nested diff');
+  assert.match(errors.at(-1), /changed|no longer/i);
+  console.log('PASS nested working submodule file opens a native diff and rejects changed ancestors');
 }
 
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; }).finally(async () => {

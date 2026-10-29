@@ -433,7 +433,7 @@ async function activate(context) {
   const launchers = new LauncherProvider(tree, backend);
   const submodules = new SubmoduleProvider(tree, backend, api, {
     resolveChange: node => provider.currentChange(node),
-    openGraph: (repo, guard) => graph.open(repo, guard),
+    openGraph: (repo, guard, validate) => graph.open(repo, guard, validate),
     linkDocuments: links
   });
   const mutations = new MutationManager({

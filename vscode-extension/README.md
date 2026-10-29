@@ -60,9 +60,9 @@ Select a changed submodule to inspect its commit graph, committed pointer
 changes and current file changes. The submodule must be initialized and inside
 the workspace. If removing a submodule also removes its checkout, its diff is
 unavailable here. Staged submodule renames, transitions between submodules and
-regular files, and conflicted pointers cannot be compared yet. Nested submodule
-diffs cannot be opened from this inspection,
-and the parent repository's file actions cannot stage, unstage, discard or
+regular files, and conflicted pointers cannot be compared yet. Working changes
+in nested submodules can be inspected; historical nested pointer diffs are not
+available yet. The parent repository's file actions cannot stage, unstage, discard or
 delete a submodule entry. Gitpane's push and pull actions do not recurse into
 submodules. On Unix, the repository menu can sync direct submodules, update
 submodules recursively, or pull the latest changes in direct submodules. It
