@@ -665,6 +665,7 @@ async function activate(context) {
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
+    vscode.workspace.registerFileSystemProvider('gitpane-blob', links, { isReadonly: true, isCaseSensitive: true }),
     vscode.commands.registerCommand('gitpane.refresh', () => provider.refresh(true)),
     vscode.commands.registerCommand('gitpane.pickTheme', () => themePicker.open()),
     vscode.commands.registerCommand('gitpane.fetchWorkspace', () => workspaceFetch.run()),

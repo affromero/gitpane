@@ -9,7 +9,8 @@ function fixture() {
   const root = path.resolve('workspace/repo');
   const base = 'a'.repeat(40);
   const head = 'b'.repeat(40);
-  const repo = { rootUri: { fsPath: root, toString: () => root }, state: { HEAD: { commit: head } } };
+  const repo = { rootUri: { fsPath: root, toString: () => root }, state: { HEAD: { commit: head } },
+    async buffer(ref) { return Buffer.from(ref); } };
   let visible = true;
   let incarnation = 1;
   let review = { base_ref: 'origin/main', base_oid: base, head_oid: head, repo_identity: 'f'.repeat(64), files: [] };
@@ -36,6 +37,11 @@ function fixture() {
     async createStatic(_uri, content, guard) {
       if (!await guard()) throw new Error('Repository identity changed');
       return { scheme: 'gitpane-link', content, guard };
+    },
+    async createBinary(_uri, metadata, read, guard) {
+      if (!await guard()) throw new Error('Repository identity changed');
+      assert.equal((await metadata()).size, 40);
+      return { scheme: 'gitpane-blob', ref: (await read()).toString(), guard };
     }
   };
   const provider = new BranchReviewProvider(tree, { branchReview: async () => {
@@ -43,6 +49,14 @@ function fixture() {
     const result = structuredClone(review);
     await reviewHook();
     return result;
+  }, async submoduleHistoricalContent(repoPath, identity, commit, relative, oid, mode) {
+    assert.equal(repoPath, root);
+    assert.equal(identity, 'f'.repeat(64));
+    assert.equal(relative, 'module');
+    assert.equal(oid, '3'.repeat(40));
+    assert.equal(mode, 33188);
+    assert.ok(commit === base || commit === head);
+    return { size: 40 };
   } }, git, { vscode, links });
   return {
     provider, repo, root, base, head, calls, errors, information,

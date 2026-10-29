@@ -66,9 +66,11 @@ class BranchReviewProvider {
           return latest.files.some(item => item.path === file.path && item.status === file.status &&
             item.old_path === file.old_path && item.is_submodule === true && JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
         };
-        return await openGitlinkDiff({ vscode: this.vscode, git: this.git, links: this.links, repo,
+        return await openGitlinkDiff({ vscode: this.vscode, links: this.links, repo,
           repoIdentity: result.repo_identity, repoToken: token, file: { ...file, oldPath: file.old_path },
           oldRef: result.base_oid, newRef: result.head_oid, current, verify,
+          readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
+            result.repo_identity, commit, relative, oid, mode),
           title: `${path.basename(file.path)} (${result.base_ref}...HEAD)` });
       }
       const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));

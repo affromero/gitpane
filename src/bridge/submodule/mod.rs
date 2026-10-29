@@ -9,7 +9,9 @@ use crate::git::commit_files::list_revision_files;
 use super::{BridgeError, changes::RepositoryIdentity, commit_file_json, scope::Scope, status};
 
 pub(super) mod actions;
+mod blob;
 pub(super) mod chain;
+pub(super) mod historical;
 pub(super) mod pin;
 pub(super) mod pointer;
 

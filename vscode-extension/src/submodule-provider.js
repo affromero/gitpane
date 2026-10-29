@@ -260,7 +260,14 @@ class SubmoduleProvider {
         if (!await checkHead() || !validRecord(checked?.change) || JSON.stringify(checked.change) !== JSON.stringify(record)) {
           throw new Error('The submodule change is no longer available.');
         }
-        const uri = this.vscode.Uri.file(scopedFile(child.rootUri.fsPath, record.path));
+        // Deleted gitlinks use virtual pointer/empty documents only. A regular
+        // file may block an ancestor of their old path, so no filesystem path
+        // needs to be opened to label those documents.
+        const virtualDeletion = record.group === 'working' && record.kind === 'working_deleted' &&
+          isPointerComparison(record);
+        const selectedPath = virtualDeletion ? path.join(child.rootUri.fsPath, ...record.path.split('/')) :
+          scopedFile(child.rootUri.fsPath, record.path);
+        const uri = this.vscode.Uri.file(selectedPath);
         if (record.is_submodule || isSubmodule(child.rootUri.fsPath, uri.fsPath, child.state.submodules)) {
           session.close();
           sessionClosed = true;
@@ -322,9 +329,6 @@ class SubmoduleProvider {
   async openPointer(repo, result, selected, options) {
     const file = structuredClone(selected);
     if (file.is_submodule) {
-      if (!file.gitlink || [file.gitlink.old, file.gitlink.new].some(side => side && side.kind !== 'gitlink')) {
-        throw new Error('Nested submodule file, symlink, or directory type changes cannot be compared yet.');
-      }
       const verify = async () => {
         if (!options.currentChild() || !await options.checkHead()) return false;
         const latest = await this.backend.inspectSubmodule(options.parent, options.relative, options.group, options.originalPath);
@@ -336,9 +340,11 @@ class SubmoduleProvider {
           item.old_path === file.old_path && item.is_submodule === true &&
           JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
       };
-      return await openGitlinkDiff({ vscode: this.vscode, git: this.git, links: this.linkDocuments, repo,
+      return await openGitlinkDiff({ vscode: this.vscode, links: this.linkDocuments, repo,
         repoIdentity: result.child_identity, repoToken: options.childToken, file: { ...file, oldPath: file.old_path },
         oldRef: result.base_oid, newRef: result.head_oid, current: options.currentLink, verify,
+        readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
+          result.child_identity, commit, relative, oid, mode),
         verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey,
         title: `${path.basename(file.path)} (submodule)` });
     }

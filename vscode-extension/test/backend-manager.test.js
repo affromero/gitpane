@@ -74,7 +74,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     if (request.params.repos.some(repo => repo.endsWith('slow'))) setTimeout(() => send({id: request.id, result}), 300);
     else send({id: request.id, result});
   } else {
-    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch}});
+    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode}});
   }
 });
 
@@ -157,6 +157,9 @@ test('backend initializes workspace roots and reads status and graph', async t =
   const files = await manager.commitFiles(path.join(root, 'repo'), 'abc123');
   assert.equal(files.method, 'commit_files');
   assert.equal(files.oid, 'abc123');
+  assert.deepEqual(await manager.submoduleHistoricalContent(path.join(root, 'repo'), 'e'.repeat(64), 'a'.repeat(40), 'nested', 'b'.repeat(40), 33188),
+    { roots: [root], method: 'submodule_historical_content', expected_repo_identity: 'e'.repeat(64),
+      commit_oid: 'a'.repeat(40), path: 'nested', expected_oid: 'b'.repeat(40), expected_mode: 33188 });
   assert.equal((await manager.branchReview(path.join(root, 'repo'))).method, 'branch_review');
   const child = await manager.inspectSubmodule(path.join(root, 'repo'), 'child');
   assert.equal(child.path, 'child');

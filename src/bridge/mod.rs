@@ -261,6 +261,9 @@ fn process(
         "submodule_pointer_content" => {
             submodule::pointer::content(scope, params(request.params)?, sub_cfg)
         }
+        "submodule_historical_content" => {
+            submodule::historical::content(scope, params(request.params)?)
+        }
         "submodule_pointer_validate_batch" => {
             submodule::pointer::validate_batch(scope, params(request.params)?, sub_cfg)
         }

@@ -204,7 +204,7 @@ test('committed gitlinks use their tree endpoints and reject stale or unsupporte
   try {
     Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
     const { GraphProvider } = require('../src/graph-provider');
-    const repo = { rootUri: uri(path.resolve('workspace/repo')) };
+    const repo = { rootUri: uri(path.resolve('workspace/repo')), async buffer(ref) { return Buffer.from(ref); } };
     let current = true, hold = false, release;
     const tree = { git: { get repositories() { return [{ ...repo }]; } }, isVisible: () => current, repositoryToken: () => 1,
       isCurrentRepository: (_repo, token) => current && token === 1,
@@ -215,9 +215,19 @@ test('committed gitlinks use their tree endpoints and reject stale or unsupporte
       const result = structuredClone(response);
       if (hold) await new Promise(resolve => { release = resolve; });
       return result;
+    }, async submoduleHistoricalContent(repoPath, identity, commit, relative, blobOid, mode) {
+      assert.equal(repoPath, repo.rootUri.fsPath);
+      assert.equal(identity, 'f'.repeat(64));
+      assert.equal(relative, 'child');
+      assert.equal(blobOid, '3'.repeat(40));
+      assert.equal(mode, 33188);
+      assert.ok(commit === oid || commit === parent);
+      return { size: 40 };
     } };
     const links = { async validateStaticIdentity(_repo, _identity, guard) { return guard(); },
-      async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { content, guard }; } };
+      async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { content, guard }; },
+      async createBinary(_uri, metadata, read, guard) { assert.equal(await guard(), true);
+        assert.equal((await metadata()).size, 40); return { ref: (await read()).toString(), guard }; } };
     const provider = new GraphProvider(tree, backend, { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) }, '/extension', undefined, links);
     provider.repoKey = repo.rootUri.toString();
     provider.panel = { visible: true, webview: { postMessage: message => messages.push(message) }, dispose() {} };

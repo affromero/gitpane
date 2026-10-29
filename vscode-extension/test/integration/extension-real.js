@@ -85,11 +85,13 @@ async function main() {
   }, onDidChangeVisibility: event, onDidDispose: event };
   const vscode = {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
+    FileType: { File: 1 }, FileChangeType: { Changed: 1 },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
       getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
       onDidChangeConfiguration: event,
       registerTextDocumentContentProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
+      registerFileSystemProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       createTerminal: options => { terminals.push(options); return { show() {}, dispose() {} }; },
@@ -500,6 +502,12 @@ async function main() {
   }
   const childRepo = { rootUri: uri(childPath), state: { HEAD: { commit: gitAt(childPath, 'rev-parse', 'HEAD') },
     onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  childRepo.buffer = async (ref, relative) => {
+    const result = spawnSync('git', ['-C', childPath, 'show', '--textconv', `${ref}:${relative}`],
+      { env: isolatedGitEnv(), maxBuffer: 8 * 1024 * 1024 });
+    if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr.toString());
+    return result.stdout;
+  };
   const availableSubmodules = new Map([[childPath, childRepo]]);
   api.openRepository = async target => {
     const submodule = availableSubmodules.get(target.fsPath);
@@ -763,20 +771,31 @@ async function main() {
   };
   fs.renameSync(grandPath, historicalParked);
   try {
-    const openHistorical = async (oldOid, newOid) => {
+    const openHistorical = async (oldOid, newOid, text = {}) => {
       await commands.get('gitpane.refresh')();
       const owner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
       await receive({ type: 'loadChanges', id: owner.id });
       const changedChild = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
         .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
       assert.ok(changedChild, 'parent must expose its changed child');
-      pickChanges = choices => choices.find(choice => choice.kind === 'pointer' && choice.file.path === 'nested');
+      pickChanges = choices => {
+        const matching = choices.filter(choice => choice.kind === 'pointer' && choice.file.path === 'nested');
+        assert.equal(matching.length, 1, 'a historical type change must be one comparison');
+        return matching[0];
+      };
       const before = diffs.length, terminalsBefore = terminals.length;
       await receive({ type: 'openChange', id: changedChild.id });
       assert.equal(diffs.length, before + 1, errors.at(-1));
       const [left, right] = diffs.at(-1);
-      for (const [uri, oid] of [[left, oldOid], [right, newOid]]) {
-        if (oid) assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(uri), `Subproject commit ${oid}\n`);
+      for (const [uri, oid, expectedText] of [[left, oldOid, text.old], [right, newOid, text.new]]) {
+        if (expectedText !== undefined) {
+          assert.equal(uri.scheme, 'gitpane-blob');
+          const provider = documents.get('gitpane-blob');
+          const bytes = await provider.readFile(uri);
+          assert.deepEqual(bytes, Buffer.isBuffer(expectedText) ? expectedText : Buffer.from(expectedText));
+          assert.ok((await provider.stat(uri)).size >= 0);
+        }
+        else if (oid) assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(uri), `Subproject commit ${oid}\n`);
         else assert.equal(uri.scheme, 'gitpane-empty');
       }
       assert.equal(historicalNestedOpens, 0, 'historical pointer comparison must not open the nested checkout');
@@ -795,6 +814,60 @@ async function main() {
     childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
     await openHistorical(historicalPointer, laterPointer);
     git('add', 'child');
+    const historicalBlobPath = path.join(temporary, 'historical-blob');
+    fs.writeFileSync(historicalBlobPath, 'historic replacement\n');
+    const historicalBlob = gitAt(childPath, 'hash-object', '-w', historicalBlobPath);
+    gitAt(childPath, 'update-index', '--cacheinfo', '100644', historicalBlob, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace nested pointer with file');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(laterPointer, null, { new: 'historic replacement\n' });
+    git('add', 'child');
+    gitAt(childPath, 'update-index', '--cacheinfo', '160000', laterPointer, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace file with nested pointer');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(null, laterPointer, { old: 'historic replacement\n' });
+    git('add', 'child');
+    const binary = Buffer.alloc(1024 * 1024 + 31);
+    for (let index = 0; index < binary.length; index++) binary[index] = index % 256;
+    fs.writeFileSync(historicalBlobPath, binary);
+    const binaryOid = gitAt(childPath, 'hash-object', '-w', historicalBlobPath);
+    gitAt(childPath, 'update-index', '--cacheinfo', '100644', binaryOid, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace nested pointer with binary');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(laterPointer, null, { new: binary });
+    git('add', 'child');
+    gitAt(childPath, 'update-index', '--cacheinfo', '160000', laterPointer, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace binary with nested pointer');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(null, laterPointer, { old: binary });
+    git('add', 'child');
+    if (process.platform !== 'win32') {
+      const attributes = path.join(childPath, '.gitattributes');
+      fs.writeFileSync(attributes, 'nested diff=gitpane-test\n');
+      gitAt(childPath, 'config', 'diff.gitpane-test.textconv', 'sed y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/');
+      gitAt(childPath, 'update-index', '--cacheinfo', '100644', historicalBlob, 'nested');
+      gitAt(childPath, 'commit', '-qm', 'replace nested pointer with converted text');
+      childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+      await openHistorical(laterPointer, null, { new: 'HISTORIC REPLACEMENT\n' });
+      git('add', 'child');
+      gitAt(childPath, 'update-index', '--cacheinfo', '160000', laterPointer, 'nested');
+      gitAt(childPath, 'commit', '-qm', 'replace converted text with nested pointer');
+      childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+      fs.unlinkSync(attributes);
+      git('add', 'child');
+    }
+    fs.writeFileSync(historicalBlobPath, '../historic-target');
+    const historicalSymlink = gitAt(childPath, 'hash-object', '-w', historicalBlobPath);
+    gitAt(childPath, 'update-index', '--cacheinfo', '120000', historicalSymlink, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace nested pointer with symlink');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(laterPointer, null, { new: '../historic-target' });
+    git('add', 'child');
+    gitAt(childPath, 'update-index', '--cacheinfo', '160000', laterPointer, 'nested');
+    gitAt(childPath, 'commit', '-qm', 'replace symlink with nested pointer');
+    childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+    await openHistorical(null, laterPointer, { old: '../historic-target' });
+    git('add', 'child');
     gitAt(childPath, 'update-index', '--force-remove', 'nested');
     gitAt(childPath, 'commit', '-qm', 'remove nested pointer');
     childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
@@ -807,7 +880,7 @@ async function main() {
     api.openRepository = openBeforeHistorical;
     fs.renameSync(historicalParked, grandPath);
   }
-  console.log('PASS historical nested pointer additions, changes and deletions open without a nested checkout and reject changed ancestors');
+  console.log('PASS historical nested pointers and file/symlink type changes open without a nested checkout and reject changed ancestors');
   await commands.get('gitpane.refresh')();
   const browseRoot = snapshots.at(-1).repositories.find(item => item.name === 'child');
   assert.ok(browseRoot, 'the already-open parent must be visible');
@@ -966,6 +1039,33 @@ async function main() {
   assert.equal(diffs.length, beforeNestedPointer + 1, 'stale ancestor cannot open a nested diff');
   assert.match(errors.at(-1), /changed|no longer/i);
   console.log('PASS nested working submodule file opens a native diff and rejects changed ancestors');
+
+  gitAt(childPath, 'config', '-f', '.gitmodules', 'submodule.blocked.path', 'blocked/nested');
+  gitAt(childPath, 'config', '-f', '.gitmodules', 'submodule.blocked.url', grandSource);
+  gitAt(childPath, 'add', '--', '.gitmodules');
+  gitAt(childPath, 'update-index', '--add', '--cacheinfo', '160000', historicalPointer, 'blocked/nested');
+  gitAt(childPath, 'commit', '-qm', 'add blocked nested pointer');
+  childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(childPath, 'blocked'), 'replacement ancestor\n');
+  await commands.get('gitpane.refresh')();
+  const blockedOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: blockedOwner.id });
+  const blockedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(blockedParent, 'parent must expose the child with a blocked nested gitlink');
+  pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||
+    choices.find(choice => choice.record?.path === 'blocked/nested' && choice.record.group === 'working');
+  const beforeBlockedDiffs = diffs.length, beforeBlockedTerminals = terminals.length;
+  await receive({ type: 'openChange', id: blockedParent.id });
+  assert.equal(diffs.length, beforeBlockedDiffs + 1, errors.at(-1));
+  const blockedPointer = diffs.at(-1)[0];
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(blockedPointer),
+    `Subproject commit ${historicalPointer}\n`);
+  assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
+  assert.equal(terminals.length, beforeBlockedTerminals);
+  git('add', 'child');
+  await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(blockedPointer), /no longer|changed/i);
+  console.log('PASS nested deleted gitlink opens despite a blocking ancestor and rejects changed parents');
 }
 
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; }).finally(async () => {

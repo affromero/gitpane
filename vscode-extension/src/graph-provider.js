@@ -479,8 +479,10 @@ class GraphProvider {
     };
     const persistent = () => this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
       this.tree.isCurrentRepository(repo, repoToken);
-    await openGitlinkDiff({ vscode, git: this.git, links: this.links, repo, repoIdentity: file.repoIdentity, repoToken,
+    await openGitlinkDiff({ vscode, links: this.links, repo, repoIdentity: file.repoIdentity, repoToken,
       file, oldRef: file.parent, newRef: file.oid, current: persistent, verify,
+      readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
+        file.repoIdentity, commit, relative, oid, mode),
       title: `${path.basename(file.path)} (${file.oid.slice(0, 8)})` });
   }
 

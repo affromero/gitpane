@@ -63,6 +63,7 @@ function fixture(t, linkDocuments) {
   let open = async () => child;
   const git = { repositories: [parent, child], openRepository: async () => { opens++; return open(); },
     toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
+  tree.git = git;
   let graphGuard, graphValidate;
   let scanError;
   let parentFailure;
@@ -90,7 +91,7 @@ function fixture(t, linkDocuments) {
   const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments, resolveChange: () => visible && rowVisible ? node : undefined,
     openGraph: async (repo, guard, validate) => { graphs.push(repo); graphGuard = guard; graphValidate = validate; } });
   t.after(() => provider.dispose());
-  return { temporary, childPath, node, child, base, head, provider, commands, errors, graphs, inspections,
+  return { temporary, childPath, node, child, base, head, provider, backend, commands, errors, graphs, inspections,
     opened: () => opens, pick(fn) { pick = fn; }, setVisible(value) { visible = value; },
     setRowVisible(value) { rowVisible = value; }, setParentRecord(value) { parentRecord = value; hasParentRecord = true; },
     notifyTreeChange() { tree.changed(); },
@@ -244,10 +245,10 @@ test('historical nested gitlinks reject changed selections and unsupported sides
   assert.match(f.errors.at(-1), /no longer|changed/i);
 
   f.setResponse({ ...f.getResponse(), pointer_files: [{ ...selected,
-    gitlink: { old: { kind: 'file', oid: '4'.repeat(40), mode: 33188 }, new: pointer('2'.repeat(40)) } }] });
+    gitlink: { old: { kind: 'tree', oid: '4'.repeat(40), mode: 16384 }, new: pointer('2'.repeat(40)) } }] });
   await f.provider.open(f.node);
   assert.equal(f.commands.length, 0);
-  assert.match(f.errors.at(-1), /type changes cannot be compared/i);
+  assert.match(f.errors.at(-1), /directory/i);
   f.setResponse({ ...f.getResponse(), pointer_files: [{ ...selected, path: 'bad\0path' }] });
   await f.provider.open(f.node);
   assert.equal(f.commands.length, 0);
@@ -411,6 +412,42 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   assert.equal(pinned.links.length, 3);
   assert.equal(activeSessions, 0, 'nested pin closes each paging session');
   assert.equal(commands.length, 1, 'pinning does not open a diff or terminal');
+});
+
+test('a nested deleted gitlink opens when a regular file blocks its ancestor', async t => {
+  const pointer = 'c'.repeat(40);
+  const links = {
+    async createVerified(target, read, verify, current) {
+      assert.equal(await verify(), true);
+      assert.equal(current(), true);
+      assert.equal(await read(), `Subproject commit ${pointer}\n`);
+      return target.with({ scheme: 'gitpane-link' });
+    }
+  };
+  const f = fixture(t, links);
+  fs.writeFileSync(path.join(f.childPath, 'blocked'), 'replacement file\n');
+  const record = { path: 'blocked/nested', group: 'working', kind: 'working_deleted',
+    original_path: null, conflict_stages: null, is_submodule: true };
+  f.setRecords([record]);
+  f.backend.submodulePointerCompare = async () => ({ repo_identity: '2'.repeat(64), head_oid: f.head,
+    record, sides: { index: { path: record.path, kind: 'gitlink', mode: 57344, oid: pointer }, working: null } });
+  f.backend.submodulePointerContent = async () => ({ content: `Subproject commit ${pointer}\n` });
+  f.pick(choices => choices.find(choice => choice.kind === 'browse') || choices.find(choice => choice.record));
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 1, f.errors.at(-1));
+  assert.equal(f.commands[0][0], 'vscode.diff');
+  assert.equal(f.commands[0][1].toString(), `gitpane-link:${path.join(f.childPath, 'blocked', 'nested')}`);
+  assert.equal(f.commands[0][2].toString(), `gitpane-empty:${path.join(f.childPath, 'blocked', 'nested')}`);
+  assert.deepEqual(f.errors, []);
+
+  f.pick(choices => {
+    const selected = choices.find(choice => choice.record);
+    if (selected) f.reopenChild();
+    return choices.find(choice => choice.kind === 'browse') || selected;
+  });
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 1, 'a reopened child must not receive the stale diff');
+  assert.match(f.errors.at(-1), /changed|no longer/i);
 });
 
 test('submodule conflicts report the backend error without opening a diff', async t => {

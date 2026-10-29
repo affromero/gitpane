@@ -45,14 +45,14 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown field summary_only'}});
     return;
   }
-  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'submodule_pin_validate', 'worktree_remove_preview', 'repo_fetch_preview', 'ui_config'].includes(request.method)) {
+  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'submodule_pin_validate', 'submodule_historical_content', 'worktree_remove_preview', 'repo_fetch_preview', 'ui_config'].includes(request.method)) {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown bridge method'}}); return;
   }
   if (request.params.repo === '/denied') {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity};
+  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -112,6 +112,9 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.validateSubmodulePin(repo, pinChain), { method: 'submodule_pin_validate', root: repo, roots: [root], chain: pinChain });
   assert.deepEqual(await client.validateRepositoryIdentity(repo, 'e'.repeat(64)),
     { method: 'repo_identity_validate', repo, roots: [root], expected_repo_identity: 'e'.repeat(64) });
+  assert.deepEqual(await client.submoduleHistoricalContent(repo, 'e'.repeat(64), 'a'.repeat(40), 'nested', 'b'.repeat(40), 33188),
+    { method: 'submodule_historical_content', repo, roots: [root], expected_repo_identity: 'e'.repeat(64),
+      commit_oid: 'a'.repeat(40), path: 'nested', expected_oid: 'b'.repeat(40), expected_mode: 33188 });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
   assert.deepEqual(await client.previewFetch(repo), { method: 'repo_fetch_preview', repo, roots: [root] });
   assert.deepEqual(await client.previewWorktreeRemoval(repo, path.join(root, 'linked')), { method: 'worktree_remove_preview', repo, roots: [root], path: path.join(root, 'linked') });
@@ -128,6 +131,8 @@ test('an older backend requires an update for compact status', async t => {
     await assert.rejects(request(), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   }
   assert.equal((await client.status(repo)).method, 'status');
+  await assert.rejects(client.submoduleHistoricalContent(repo, 'e'.repeat(64), 'a'.repeat(40), 'nested', 'b'.repeat(40), 33188),
+    error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.validateSubmoduleChain([]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.validateSubmodulePin(repo, []), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.previewWorktreeRemoval(repo, path.resolve('workspace/linked')), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));

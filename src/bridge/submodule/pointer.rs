@@ -12,14 +12,14 @@ use crate::bridge::{
 };
 use crate::config::SubmoduleConfig;
 
-use super::valid_submodule_path;
+use super::{blob, valid_submodule_path};
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod working_tests;
 
-const MAX_CONTENT: usize = 1024 * 1024;
+const MAX_CONTENT: usize = blob::MAX_CONTENT;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -389,28 +389,7 @@ pub(in crate::bridge) fn content(
         let repo_path = scope.repository(&compare_request.repo)?;
         let repo = git2::Repository::open(repo_path).map_err(repository_error)?;
         let oid = git2::Oid::from_str(oid).map_err(repository_error)?;
-        let (size, kind) = repo
-            .odb()
-            .map_err(repository_error)?
-            .read_header(oid)
-            .map_err(repository_error)?;
-        if kind != git2::ObjectType::Blob {
-            return Err(repository_error("Pointer side is not a blob."));
-        }
-        if size > MAX_CONTENT {
-            return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
-        }
-        let blob = repo.find_blob(oid).map_err(repository_error)?;
-        if blob.size() > MAX_CONTENT {
-            return Err(invalid("Pointer side exceeds the 1 MiB text limit."));
-        }
-        let bytes = blob.content();
-        if bytes.contains(&0) {
-            return Err(invalid("Binary pointer sides cannot be opened as text."));
-        }
-        std::str::from_utf8(bytes)
-            .map_err(|_| invalid("Pointer side is not UTF-8 text."))?
-            .to_owned()
+        blob::read_text(&repo, oid)?
     };
     if snapshot(scope, &compare_request, cfg)? != initial {
         return Err(stale());

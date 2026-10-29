@@ -211,6 +211,18 @@ class BridgeClient {
     }
   }
 
+  async submoduleHistoricalContent(repo, identity, commit, filePath, oid, mode) {
+    try {
+      return await this.request('submodule_historical_content', { repo, expected_repo_identity: identity,
+        commit_oid: commit, path: filePath, expected_oid: oid, expected_mode: mode });
+    } catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support historical submodule file diffs. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async previewWorktreeRemoval(repo, path) {
     try { return await this.request('worktree_remove_preview', { repo, path }); }
     catch (error) {

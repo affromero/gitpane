@@ -37,6 +37,8 @@ class LinkDocuments {
     this.nextWatchToken = 0;
     this.disposed = false;
     this.activeReads = 0;
+    this.activeBinaryReads = 0;
+    this.binaryWaiters = [];
     this.identityChecks = new Map();
     this.waiters = [];
     this.refreshTimer = undefined;
@@ -44,13 +46,19 @@ class LinkDocuments {
     this.refreshAgain = false;
     this.emitter = new vscode.EventEmitter();
     this.onDidChange = this.emitter.event;
+    this.fileEmitter = new vscode.EventEmitter();
+    this.onDidChangeFile = this.fileEmitter.event;
     this.subscriptions = [
       tree.onDidChangeTreeData(() => this.scheduleRefresh()),
       vscode.workspace.onDidOpenTextDocument?.(document => {
         const entry = this.documents.get(document.uri.toString());
-        if (entry) { clearTimeout(entry.timer); entry.timer = undefined; }
+        if (entry && (!entry.readBinary || !vscode.window?.tabGroups)) { clearTimeout(entry.timer); entry.timer = undefined; }
       }) || { dispose() {} },
-      vscode.workspace.onDidCloseTextDocument?.(document => this.remove(document.uri.toString())) || { dispose() {} }
+      vscode.workspace.onDidCloseTextDocument?.(document => {
+        const key = document.uri.toString(), entry = this.documents.get(key);
+        if (!entry?.readBinary || !vscode.window?.tabGroups) this.remove(key);
+      }) || { dispose() {} },
+      vscode.window?.tabGroups?.onDidChangeTabs?.(() => this.updateBinaryTabs()) || { dispose() {} }
     ];
   }
 
@@ -100,7 +108,7 @@ class LinkDocuments {
   }
 
   fingerprint(entry, target) {
-    if (entry.content !== undefined || entry.readContent) return 'static';
+    if (entry.content !== undefined || entry.readContent || entry.readBinary) return 'static';
     let identity;
     try {
       const stat = fs.lstatSync(path.join(entry.repo, entry.path), { bigint: true });
@@ -219,14 +227,14 @@ class LinkDocuments {
             if (result && !result.valid && result.code !== 'stale_target') {
               failure = Object.assign(new Error(result.message), { code: result.code });
             }
-          } else if ((entry.content !== undefined || entry.readContent) && entry.group) {
+          } else if ((entry.content !== undefined || entry.readContent || entry.readBinary) && entry.group) {
             if (!checks.has(entry.group)) checks.set(entry.group, this.current(entry));
             current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
           } else current = await this.current(entry);
         }
         catch (error) { current = false; failure = error; }
         let target;
-        if (current && entry.content === undefined && !entry.readContent) {
+        if (current && entry.content === undefined && !entry.readContent && !entry.readBinary) {
           const key = JSON.stringify([this.repoKey(entry.repo), entry.path]);
           try {
             if (!probes.has(key)) probes.set(key, this.probe(entry.repo, entry.path));
@@ -243,7 +251,8 @@ class LinkDocuments {
             const key = JSON.stringify([entry.batch.repo, failure.code, failure.message]);
             if (!shown.has(key)) { shown.add(key); this.vscode.window?.showErrorMessage(`Gitpane could not validate a submodule diff: ${failure.message}`); }
           }
-          this.emitter.fire(entry.uri);
+          if (entry.readBinary) this.fileEmitter.fire([{ type: this.vscode.FileChangeType.Changed, uri: entry.uri }]);
+          else this.emitter.fire(entry.uri);
         }
       }
     } finally {
@@ -296,6 +305,91 @@ class LinkDocuments {
     entry.fingerprint = 'static';
     this.documents.set(key, entry);
     return entry.uri;
+  }
+
+  async binaryMetadata(entry) {
+    if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
+    const metadata = await entry.readMetadata();
+    if (!metadata || !Number.isSafeInteger(metadata.size) || metadata.size < 0) {
+      throw new Error('Gitpane returned invalid historical file metadata.');
+    }
+    if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
+    return metadata;
+  }
+
+  async createBinary(fileUri, readMetadata, readBinary, guard, guardSync, group) {
+    if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
+    const entry = { readMetadata, readBinary, guard, guardSync, group, closed: false };
+    await this.binaryMetadata(entry);
+    if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
+    const name = path.basename(fileUri.fsPath);
+    entry.uri = fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${name}`, query: '', fragment: '' });
+    const key = entry.uri.toString();
+    entry.timer = setTimeout(() => this.remove(key), 60000);
+    entry.fingerprint = 'static';
+    this.documents.set(key, entry);
+    return entry.uri;
+  }
+
+  binaryEntry(uri) {
+    const entry = this.documents.get(uri.toString());
+    if (!entry?.readBinary || entry.closed) throw new Error('The Gitpane diff is no longer available.');
+    return entry;
+  }
+
+  async stat(uri) {
+    const entry = this.binaryEntry(uri);
+    const metadata = await this.binaryMetadata(entry);
+    if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
+    return { type: this.vscode.FileType.File, size: metadata.size, ctime: 0, mtime: 0 };
+  }
+
+  async readFile(uri) {
+    const entry = this.binaryEntry(uri);
+    await this.binaryMetadata(entry);
+    await this.acquireBinary();
+    try {
+      if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
+      await this.binaryMetadata(entry);
+      const bytes = await entry.readBinary();
+      if (!(bytes instanceof Uint8Array)) throw new Error('VS Code returned invalid historical file contents.');
+      await this.binaryMetadata(entry);
+      if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
+      return bytes;
+    } finally { this.releaseBinary(); }
+  }
+
+  acquireBinary() {
+    if (this.disposed) return Promise.reject(new Error('The Gitpane diff is no longer available.'));
+    if (this.activeBinaryReads < 2) { this.activeBinaryReads++; return Promise.resolve(); }
+    return new Promise((resolve, reject) => this.binaryWaiters.push({ resolve, reject }));
+  }
+
+  releaseBinary() {
+    const next = this.binaryWaiters.shift();
+    if (next) next.resolve();
+    else this.activeBinaryReads--;
+  }
+
+  watch() { return { dispose() {} }; }
+  readDirectory() { throw this.vscode.FileSystemError.NoPermissions(); }
+  createDirectory() { throw this.vscode.FileSystemError.NoPermissions(); }
+  writeFile() { throw this.vscode.FileSystemError.NoPermissions(); }
+  delete() { throw this.vscode.FileSystemError.NoPermissions(); }
+  rename() { throw this.vscode.FileSystemError.NoPermissions(); }
+
+  updateBinaryTabs() {
+    const open = new Set();
+    for (const group of this.vscode.window.tabGroups.all) for (const tab of group.tabs) {
+      for (const uri of [tab.input?.uri, tab.input?.original, tab.input?.modified]) {
+        if (uri) open.add(uri.toString());
+      }
+    }
+    for (const [key, entry] of this.documents) {
+      if (!entry.readBinary) continue;
+      if (open.has(key)) { entry.opened = true; clearTimeout(entry.timer); entry.timer = undefined; }
+      else if (entry.opened) this.remove(key);
+    }
   }
 
   async validateStaticIdentity(repo, identity, guard) {
@@ -352,9 +446,11 @@ class LinkDocuments {
     this.disposed = true;
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     for (const waiter of this.waiters.splice(0)) waiter.reject(new Error('The symlink diff is no longer available.'));
+    for (const waiter of this.binaryWaiters.splice(0)) waiter.reject(new Error('The Gitpane diff is no longer available.'));
     for (const subscription of this.subscriptions) subscription.dispose();
     for (const key of this.documents.keys()) this.remove(key);
     this.emitter.dispose();
+    this.fileEmitter.dispose();
   }
 }
 

@@ -210,7 +210,10 @@ pub(crate) fn list_revision_files(
     let repo = Repository::open(path)?;
     let base_tree = base.map(|oid| repo.find_commit(oid)?.tree()).transpose()?;
     let head_tree = head.map(|oid| repo.find_commit(oid)?.tree()).transpose()?;
-    let mut diff = repo.diff_tree_to_tree(base_tree.as_ref(), head_tree.as_ref(), None)?;
+    let mut options = DiffOptions::new();
+    options.include_typechange(true);
+    let mut diff =
+        repo.diff_tree_to_tree(base_tree.as_ref(), head_tree.as_ref(), Some(&mut options))?;
     diff.find_similar(Some(git2::DiffFindOptions::new().renames(true)))?;
     changed_tree_files(&diff, base_tree.as_ref(), head_tree.as_ref())
 }
@@ -393,6 +396,56 @@ mod tests {
         let delta = single_detailed(&repo, back).gitlink.unwrap();
         assert_side(&delta.old, "gitlink", pointer, 0o160000);
         assert_side(&delta.new, "file", blob, 0o100644);
+    }
+
+    #[test]
+    fn revision_files_pair_gitlinks_with_file_and_symlink_type_changes() {
+        let (_temp, repo, pointer) = create_repo_with_file("base", "content");
+        let pointer = Oid::from_str(&pointer).unwrap();
+        let file = repo.blob(b"regular content\n").unwrap();
+        let symlink = repo.blob(b"target").unwrap();
+        let link = committed_tree(&repo, None, &[("child", pointer, 0o160000)]);
+        let regular = committed_tree(&repo, Some(link), &[("child", file, 0o100644)]);
+        let symlink_commit = committed_tree(&repo, Some(link), &[("child", symlink, 0o120000)]);
+        for (base, head, old_kind, new_kind, old_oid, new_oid, old_mode, new_mode) in [
+            (
+                link, regular, "gitlink", "file", pointer, file, 0o160000, 0o100644,
+            ),
+            (
+                regular, link, "file", "gitlink", file, pointer, 0o100644, 0o160000,
+            ),
+            (
+                link,
+                symlink_commit,
+                "gitlink",
+                "symlink",
+                pointer,
+                symlink,
+                0o160000,
+                0o120000,
+            ),
+            (
+                symlink_commit,
+                link,
+                "symlink",
+                "gitlink",
+                symlink,
+                pointer,
+                0o120000,
+                0o160000,
+            ),
+        ] {
+            let files =
+                list_revision_files(repo.workdir().unwrap(), Some(base), Some(head)).unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(
+                (files[0].path.as_str(), files[0].status.as_str()),
+                ("child", "M")
+            );
+            let delta = files[0].gitlink.as_ref().unwrap();
+            assert_side(&delta.old, old_kind, old_oid, old_mode);
+            assert_side(&delta.new, new_kind, new_oid, new_mode);
+        }
     }
 
     #[test]
