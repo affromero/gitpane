@@ -148,6 +148,7 @@ class BackendManager {
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument, true);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
+      else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
       else if (method === 'launchers_list') result = await client.listLaunchers(repo);
       else if (method === 'launcher_plan') result = await client.planLauncher(repo, argument.id, argument.fingerprint);
@@ -313,6 +314,8 @@ class BackendManager {
   }
 
   graph(repo, firstParent = false, filters, collapsedSegments) { return this.request('graph', repo, firstParent, filters, collapsedSegments); }
+
+  graphRevision(repo) { return this.request('graph_revision', repo); }
 
   commitFiles(repo, oid) { return this.request('commit_files', repo, oid); }
 

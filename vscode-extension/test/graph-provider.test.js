@@ -4,6 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 test('commit files open native diffs against the first parent and reject stale actions', async () => {
   const messages = [];
@@ -54,6 +56,7 @@ test('commit files open native diffs against the first parent and reject stale a
   const firstParent = 'c'.repeat(40);
   let labelMaxLen;
   const backend = {
+    async graphRevision() { return { revision: 'a'.repeat(64) }; },
     async graph() { return { branches: [], label_max_len: labelMaxLen, rows: [
       { oid: rootOid, parent_oids: [] },
       { oid: mergeOid, parent_oids: [firstParent, 'd'.repeat(40)] }
@@ -117,8 +120,8 @@ test('commit files open native diffs against the first parent and reject stale a
     assert.equal(commands[2][2].ref, mergeOid);
 
     await receive({ type: 'refresh' });
-    assert.equal(messages.at(-1).type, 'graph');
-    assert.equal(messages.at(-1).rows.length, 2);
+    assert.equal(messages.at(-1).type, 'commitFiles');
+    assert.equal(messages.at(-1).oid, mergeOid);
 
     linked = false;
     await receive({ type: 'openCommitFile', id: mergeFile.id });
@@ -187,6 +190,7 @@ test('graph filters retain catalog choices, distinguish all and none, and reject
       repositoryToken: () => 1, isCurrentRepository: (_, token) => visible && token === 1,
       onDidChangeTreeData() { return { dispose() {} }; } };
     const backend = {
+      async graphRevision() { return { revision: 'a'.repeat(64) }; },
       async graph(_root, firstParent, filters) {
         calls.push({ firstParent, filters: structuredClone(filters) });
         const rows = [{ oid: 'a'.repeat(40), author: 'Ada' }, { oid: 'b'.repeat(40), author: 'Bob' }];
@@ -283,6 +287,7 @@ test('graph collapses only visible side branches and does not open placeholder c
       repositoryToken: () => 1, isCurrentRepository: (_, token) => visible && token === 1,
       onDidChangeTreeData() { return { dispose() {} }; } };
     const backend = {
+      async graphRevision() { return { revision: 'a'.repeat(64) }; },
       async graph(_repo, firstParent, _filters, collapsed) {
         calls.push({ firstParent, collapsed: [...collapsed] });
         return { branches: [], rows: [
@@ -323,5 +328,239 @@ test('graph collapses only visible side branches and does not open placeholder c
   } finally {
     Module._load = load;
     delete require.cache[require.resolve('../src/graph-provider')];
+  }
+});
+
+test('visible graphs refresh when refs change, reject late polls, and recover from errors', async () => {
+  const messages = [];
+  const calls = [];
+  const commands = [];
+  let viewState;
+  const panel = {
+    visible: true,
+    webview: { postMessage: message => messages.push(message), onDidReceiveMessage() {} },
+    onDidChangeViewState(handler) { viewState = handler; },
+    onDidDispose(handler) { this.onDispose = handler; },
+    dispose() { this.onDispose(); }, reveal() {}
+  };
+  const uri = value => ({ fsPath: value, toString: () => value, with: change => ({ fsPath: value, ...change }) });
+  const vscode = { Uri: { joinPath: (...parts) => parts.join('/'), file: uri }, ViewColumn: { Active: 1 },
+    window: { createWebviewPanel: () => panel }, commands: { async executeCommand(...args) { commands.push(args); } } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './graph/html') return { getHtml: () => '<html></html>' };
+      return load.call(this, name, ...args);
+    };
+    const { GraphProvider } = require('../src/graph-provider');
+    const repo = { rootUri: uri(path.resolve('workspace/repo')), state: { HEAD: { commit: 'initial' } } };
+    let incarnation = 1;
+    let active = true;
+    let onTreeChange;
+    const tree = { git: { repositories: [repo] }, isVisible: () => true,
+      repositoryToken: () => incarnation, isCurrentRepository: (_, token) => active && token === incarnation,
+      onDidChangeTreeData(handler) { onTreeChange = handler; return { dispose() {} }; } };
+    const oid = '1'.repeat(40);
+    let revision = 'a'.repeat(64);
+    let revisionError;
+    let pendingRevision;
+    let pendingGraph;
+    let changeDuringGraph;
+    const backend = {
+      async graphRevision() {
+        if (revisionError) throw new Error(revisionError);
+        if (pendingRevision) return pendingRevision;
+        return { revision };
+      },
+      async graph(_repo, firstParent, filters, collapsed) {
+        calls.push({ firstParent, filters: structuredClone(filters), collapsed: [...collapsed] });
+        if (changeDuringGraph) { revision = changeDuringGraph; changeDuringGraph = undefined; }
+        if (pendingGraph) return pendingGraph;
+        return { branches: ['main'], rows: [{ oid, parent_oids: [], segment_id: oid,
+          collapsed: collapsed.includes(oid) ? { id: oid, count: 1 } : null }] };
+      },
+      async commitFiles() { return { files: [{ path: 'changed.txt', status: 'A', is_submodule: false }] }; }
+    };
+    const provider = new GraphProvider(tree, backend, { toGitUri: (value, ref) => ({ ...value, ref }) }, '/extension');
+    provider.open(repo);
+    try {
+      await provider.receive({ type: 'ready' });
+      await provider.receive({ type: 'selectCommit', oid });
+      const oldFile = messages.at(-1).files[0].id;
+      provider.filters.refs.tags = false;
+      revision = 'b'.repeat(64);
+      await provider.pollRevision();
+      assert.equal(calls.length, 2);
+      assert.equal(calls.at(-1).filters.refs.tags, false);
+      assert.equal(messages.at(-1).type, 'commitFiles');
+      assert.equal(messages.at(-1).oid, oid);
+      await provider.receive({ type: 'openCommitFile', id: oldFile });
+      assert.equal(commands.length, 0, 'old file actions are invalidated by refresh');
+      await provider.pollRevision();
+      assert.equal(calls.length, 2, 'unchanged revision does not reload graph');
+
+      revisionError = 'fingerprint unavailable';
+      await provider.pollRevision();
+      assert.match(messages.at(-1).error, /fingerprint unavailable/);
+      revisionError = undefined;
+      await provider.pollRevision();
+      assert.equal(calls.length, 3);
+      assert.equal(messages.at(-1).oid, oid, 'selection survives recovery');
+
+      let finish;
+      pendingRevision = new Promise(resolve => { finish = resolve; });
+      const pending = provider.pollRevision();
+      await Promise.resolve();
+      await provider.pollRevision();
+      panel.visible = false;
+      viewState();
+      assert.equal(provider.revision, undefined, 'reveal must reload invalidated file actions even without ref changes');
+      const messageCountWhileHidden = messages.length;
+      repo.state.HEAD.commit = 'updated';
+      onTreeChange();
+      assert.equal(messages.length, messageCountWhileHidden, 'HEAD updates do not load hidden graphs');
+      finish({ revision: 'c'.repeat(64) });
+      await pending;
+      pendingRevision = undefined;
+      assert.equal(calls.length, 3, 'hidden panel ignores a late revision');
+      assert.equal(provider.pollTimer, undefined);
+      panel.visible = true;
+      revision = 'c'.repeat(64);
+      viewState();
+      await provider.pollRevision();
+      assert.equal(calls.length, 4, 'showing the panel checks immediately');
+
+      revision = 'd'.repeat(64);
+      changeDuringGraph = 'e'.repeat(64);
+      await provider.pollRevision();
+      assert.equal(calls.length, 5);
+      assert.equal(provider.revision, undefined, 'mid-load ref changes are never accepted as current');
+      await provider.pollRevision();
+      assert.equal(calls.length, 6);
+      assert.equal(provider.revision, 'e'.repeat(64));
+
+      for (const next of ['f', 'a', 'b']) {
+        changeDuringGraph = next.repeat(64);
+        provider.revision = undefined;
+        await provider.pollRevision();
+      }
+      assert.equal(calls.length, 9);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.equal(calls.length, 9, 'persistent changes stop immediate retries');
+      await provider.pollRevision();
+      assert.equal(calls.length, 10);
+      assert.equal(provider.revision, 'b'.repeat(64), 'graph recovers when repository activity settles');
+
+      pendingRevision = new Promise(resolve => { finish = resolve; });
+      const stale = provider.pollRevision();
+      await Promise.resolve();
+      incarnation++;
+      finish({ revision: 'd'.repeat(64) });
+      await stale;
+      assert.equal(calls.length, 10, 'a reopened repository rejects a prior incarnation response');
+
+      pendingRevision = undefined;
+      provider.open(repo);
+      await provider.receive({ type: 'ready' });
+      let fail;
+      pendingRevision = new Promise((_, reject) => { fail = reject; });
+      const staleLoad = provider.receive({ type: 'refresh' });
+      const beforeFailure = messages.length;
+      incarnation++;
+      fail(new Error('stale backend error'));
+      await staleLoad;
+      assert.equal(messages.length, beforeFailure, 'a stale load error cannot update a replaced repository');
+
+      pendingRevision = undefined;
+      provider.open(repo);
+      await provider.receive({ type: 'ready' });
+      let finishGraph;
+      pendingGraph = new Promise(resolve => { finishGraph = resolve; });
+      const interruptedLoad = provider.receive({ type: 'refresh' });
+      await new Promise(resolve => setImmediate(resolve));
+      const callsDuringLoad = calls.length;
+      for (const head of ['one', 'two', 'three']) {
+        repo.state.HEAD.commit = head;
+        onTreeChange();
+      }
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.length, callsDuringLoad, 'repeated HEAD events do not overlap a graph load');
+      active = false;
+      onTreeChange();
+      assert.match(messages.at(-1).error, /no longer in the workspace/i);
+      active = true;
+      pendingGraph = undefined;
+      onTreeChange();
+      await provider.pollRevision();
+      assert.equal(messages.at(-1).loading, false, 'graph reloads after the workspace guard recovers');
+      const messageCount = messages.length;
+      finishGraph({ branches: [], rows: [] });
+      await interruptedLoad;
+      assert.equal(messages.length, messageCount, 'an interrupted graph cannot overwrite the recovered graph');
+    } finally { provider.dispose(); }
+  } finally {
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
+});
+
+test('backend error notifications do not cause rapid graph retries', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-graph-backoff-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const messages = [];
+  const event = () => ({ dispose() {} });
+  class EventEmitter {
+    constructor() { this.listeners = new Set(); this.event = fn => { this.listeners.add(fn); return { dispose: () => this.listeners.delete(fn) }; }; }
+    fire(value) { for (const fn of this.listeners) fn(value); }
+    dispose() { this.listeners.clear(); }
+  }
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const panel = { visible: true, webview: { postMessage: message => messages.push(message), onDidReceiveMessage: event },
+    onDidChangeViewState: event, onDidDispose(handler) { this.onDispose = handler; },
+    dispose() { this.onDispose(); }, reveal() {} };
+  const vscode = { EventEmitter, Uri: { joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
+    workspace: { workspaceFolders: [{ uri: uri(root) }], onDidChangeWorkspaceFolders: event,
+      onDidChangeConfiguration: event, getConfiguration: () => ({ get: () => '' }) },
+    window: { createWebviewPanel: () => panel } };
+  const load = Module._load;
+  for (const name of ['../src/repository-tree', '../src/graph-provider']) delete require.cache[require.resolve(name)];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './graph/html') return { getHtml: () => '<html></html>' };
+      return load.call(this, name, ...args);
+    };
+    const { RepositoryTree } = require('../src/repository-tree');
+    const { BackendManager } = require('../src/backend-manager');
+    const { GraphProvider } = require('../src/graph-provider');
+    const repo = { rootUri: uri(root), state: { HEAD: { commit: 'head' }, onDidChange: event } };
+    const git = { repositories: [repo], onDidOpenRepository: event, onDidCloseRepository: event };
+    let failing = true;
+    let revisions = 0;
+    const manager = new BackendManager({ extensionPath: root }, { vscode, realpath: async value => value,
+      createClient: () => ({ async initialize() {}, dispose() {},
+        async graphRevision() { revisions++; if (failing) throw new Error('offline'); return { revision: 'a'.repeat(64) }; },
+        async graph() { return { branches: [], rows: [] }; } }) });
+    await manager.ready();
+    const tree = new RepositoryTree(git, { appendLine() {} }, manager);
+    const provider = new GraphProvider(tree, manager, git, '/extension');
+    try {
+      provider.open(repo);
+      await provider.receive({ type: 'ready' });
+      assert.match(messages.at(-1).error, /offline/);
+      assert.equal(revisions, 1);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.equal(revisions, 1, 'delayed backend and tree notifications must respect retry backoff');
+      failing = false;
+      await provider.pollRevision();
+      assert.equal(messages.at(-1).loading, false);
+      assert.equal(messages.at(-1).error, undefined);
+      assert.equal(manager.state.status, 'ready');
+    } finally { provider.dispose(); tree.dispose(); manager.dispose(); }
+  } finally {
+    Module._load = load;
+    for (const name of ['../src/repository-tree', '../src/graph-provider']) delete require.cache[require.resolve(name)];
   }
 });

@@ -58,6 +58,39 @@ impl Default for RefFilterRequest {
     }
 }
 
+fn allow_worktree(scope: &Scope, failure: &RefCell<Option<BridgeError>>, path: &Path) -> bool {
+    match scope.allows_missing(path) {
+        Ok(false) => false,
+        Ok(true) => match scope.repository(path) {
+            Ok(_) => true,
+            Err(error) => {
+                *failure.borrow_mut() = Some(error);
+                false
+            }
+        },
+        Err(error) => {
+            *failure.borrow_mut() = Some(error);
+            false
+        }
+    }
+}
+
+pub(super) fn revision(
+    repo: &Path,
+    scope: &Scope,
+    config: &GraphConfig,
+) -> Result<Value, BridgeError> {
+    let failure = RefCell::new(None);
+    let allow = |path: &Path| allow_worktree(scope, &failure, path);
+    let revision = GraphBuilder::revision_scoped(repo, &config.branches, &allow);
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    let revision =
+        revision.map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+    Ok(json!({ "revision": revision }))
+}
+
 pub(super) fn query(
     repo: &Path,
     scope: &Scope,
@@ -83,20 +116,7 @@ pub(super) fn query(
         },
     };
     let failure = RefCell::new(None);
-    let allow_worktree = |path: &Path| match scope.allows_missing(path) {
-        Ok(false) => false,
-        Ok(true) => match scope.repository(path) {
-            Ok(_) => true,
-            Err(error) => {
-                *failure.borrow_mut() = Some(error);
-                false
-            }
-        },
-        Err(error) => {
-            *failure.borrow_mut() = Some(error);
-            false
-        }
-    };
+    let allow_worktree = |path: &Path| allow_worktree(scope, &failure, path);
     let branches = GraphBuilder::branch_names_scoped(repo, &options.branch_filter, &allow_worktree);
     let rows = GraphBuilder::new().build_scoped(repo, &options, &allow_worktree);
     if let Some(error) = failure.into_inner() {

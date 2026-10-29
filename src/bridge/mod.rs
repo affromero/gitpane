@@ -212,6 +212,13 @@ fn process(
             scope.repository(&repo)?;
             Ok(result)
         }
+        "graph_revision" => {
+            let input: RepositoryRequest = params(request.params)?;
+            let repo = scope.repository(&input.repo)?;
+            let result = graph::revision(&repo, scope, graph_cfg)?;
+            scope.repository(&repo)?;
+            Ok(result)
+        }
         "github_list" => github::list(scope, params(request.params)?),
         "github_detail" => github::detail(scope, params(request.params)?),
         "sort_repositories" => repo_sort::sort(scope, params(request.params)?),

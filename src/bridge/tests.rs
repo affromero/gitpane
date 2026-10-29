@@ -354,6 +354,29 @@ fn status_and_graph_use_workspace_repositories_and_canonical_git_logic() {
 }
 
 #[test]
+fn graph_revision_bridge_is_stable_and_scoped_to_the_workspace() {
+    let temporary = TempDir::new().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let inside = workspace.join("repo");
+    let outside = temporary.path().join("outside");
+    create_repo(&inside);
+    create_repo(&outside);
+    let replies = exchange(&[
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
+        json!({"id": 2, "method": "graph_revision", "params": {"repo": inside}}),
+        json!({"id": 3, "method": "graph_revision", "params": {"repo": inside}}),
+        json!({"id": 4, "method": "graph_revision", "params": {"repo": outside}}),
+        json!({"id": 5, "method": "graph_revision", "params": {"repo": inside, "extra": true}}),
+    ]);
+    let revision = replies[1]["result"]["revision"].as_str().unwrap();
+    assert_eq!(revision.len(), 64);
+    assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(replies[1]["result"], replies[2]["result"]);
+    assert_eq!(replies[3]["error"]["code"], "outside_workspace");
+    assert_eq!(replies[4]["error"]["code"], "invalid_request");
+}
+
+#[test]
 fn graph_filters_branches_authors_and_refs_without_losing_branch_choices() {
     let temporary = TempDir::new().unwrap();
     let repo_path = temporary.path().join("repo");

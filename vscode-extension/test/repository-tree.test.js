@@ -693,6 +693,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
       is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
       has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; }
     async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
+    async graphRevision() { return { revision: 'a'.repeat(64) }; }
     async beginChanges() {
       if (holdChanges) await new Promise(resolve => { releaseChanges = resolve; });
       return changesPage([change('untracked', 'file.txt', 'untracked')]);
@@ -757,6 +758,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     const repoId = current.id;
     assert.notEqual(repoId, previousId);
     handlers.get('gitpane.openGraph')(repoId);
+    await receiveGraph({ type: 'ready' });
     assert.deepEqual(graphRequests, [repoPath, repoPath]);
     await provider.loadChanges(repoId);
     const fileId = provider.snapshot().repositories[0].groups[0].files[0].id;
@@ -835,6 +837,7 @@ test('worktree graph opens for the linked repository and rejects a removed link'
         [{ path: linked, branch: 'topic' }] : [], has_dirty_submodules: false, has_unpushed_submodules: false,
       files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; }
     async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
+    async graphRevision() { return { revision: 'a'.repeat(64) }; }
     dispose() {}
   }
   const webview = receive => ({ asWebviewUri: value => value, cspSource: 'test',

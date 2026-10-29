@@ -103,6 +103,19 @@ async function waitForFile(file) {
     assert.ok(firstParent.rows.some(row => row.oid === mergeOid), 'first-parent graph must include the merge');
     console.log('PASS graph and first-parent request');
 
+    const initialGraphRevision = (await client.graphRevision(repoPath)).revision;
+    assert.match(initialGraphRevision, /^[0-9a-f]{64}$/);
+    assert.equal((await client.graphRevision(repoPath)).revision, initialGraphRevision);
+    const topicOid = git(repo, 'rev-parse', 'refs/heads/topic');
+    git(repo, 'update-ref', 'refs/heads/topic', rootOid);
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), mergeOid);
+    assert.notEqual((await client.graphRevision(repoPath)).revision, initialGraphRevision);
+    const updatedGraph = await client.graph(repoPath);
+    assert.ok(updatedGraph.rows.find(row => row.oid === rootOid).labels.some(label => label.name === 'topic'));
+    git(repo, 'update-ref', 'refs/heads/topic', topicOid);
+    assert.equal((await client.graphRevision(repoPath)).revision, initialGraphRevision);
+    console.log('PASS graph revision detects off-HEAD branch updates');
+
     git(repo, 'update-ref', 'refs/remotes/origin/config-check', rootOid);
     const configPath = path.join(temporary, 'graph-config.toml');
     const configuredWorktrees = path.join(root, 'managed-worktrees');
@@ -123,6 +136,13 @@ async function waitForFile(file) {
     assert.ok(!configuredGraph.branches.includes('topic'));
     assert.ok(configuredGraph.rows.length > 0);
     assert.ok(configuredGraph.rows.every(row => row.diff_stat === null));
+    const configuredRevision = (await configuredClient.graphRevision(repoPath)).revision;
+    git(repo, 'update-ref', 'refs/heads/topic', rootOid);
+    assert.equal((await configuredClient.graphRevision(repoPath)).revision, configuredRevision);
+    git(repo, 'update-ref', 'refs/heads/topic', topicOid);
+    git(repo, 'update-ref', 'refs/remotes/origin/config-check', mergeOid);
+    assert.notEqual((await configuredClient.graphRevision(repoPath)).revision, configuredRevision);
+    git(repo, 'update-ref', 'refs/remotes/origin/config-check', rootOid);
     console.log('PASS graph configuration from the workspace-host config file');
 
     const plannedWorktree = await configuredClient.planWorktree(repoPath, 'feature/verify');
@@ -144,6 +164,7 @@ async function waitForFile(file) {
     console.log('PASS root and merge commit files');
 
     for (const request of [() => client.status(outsidePath), () => client.graph(outsidePath),
+      () => client.graphRevision(outsidePath),
       () => client.commitFiles(outsidePath, rootOid)]) {
       await assert.rejects(request(), error => error.code === 'outside_workspace');
     }

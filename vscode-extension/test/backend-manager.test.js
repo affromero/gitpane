@@ -104,6 +104,7 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.equal(compact.summary_only, true);
   assert.deepEqual(compact.watched_paths, ['link']);
   const graph = await manager.graph(path.join(root, 'repo'), true);
+  assert.equal((await manager.graphRevision(path.join(root, 'repo'))).method, 'graph_revision');
   assert.equal(graph.method, 'graph');
   assert.equal(graph.first_parent, true);
   const filters = { branches: ['topic'], authors: ['Alice'], refs: ['v1'] };

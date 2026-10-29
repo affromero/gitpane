@@ -136,6 +136,16 @@ class BridgeClient {
       ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) });
   }
 
+  async graphRevision(repo) {
+    try { return await this.request('graph_revision', { repo }); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support graph refresh. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   commitFiles(repo, oid) {
     return this.request('commit_files', { repo, oid });
   }

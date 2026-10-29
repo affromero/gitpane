@@ -107,6 +107,30 @@ const scenario = String.raw`
     check('commit file path rendered safely', document.getElementById('files').textContent.includes('<img src=x>') && !document.querySelector('img'));
     document.querySelector('.file').click();
     check('file opens diff', window.posted.some(message => message.type === 'openCommitFile' && message.id === 'safe-id'));
+    const selectedBeforeRefresh = window.posted.filter(message => message.type === 'selectCommit').length;
+    window.postMessage({ ...snapshot, loading: true }, '*');
+    await tick();
+    options()[1].click();
+    graph.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('retained rows cannot change selection during refresh', options()[0].getAttribute('aria-selected') === 'true' &&
+      window.posted.filter(message => message.type === 'selectCommit').length === selectedBeforeRefresh &&
+      graph.getAttribute('aria-disabled') === 'true');
+    check('refresh removes stale file actions', !document.querySelector('.file'));
+    window.postMessage({ ...snapshot, error: 'Refresh failed' }, '*');
+    await tick();
+    options()[1].click();
+    check('retained rows remain disabled on refresh error', options()[0].getAttribute('aria-selected') === 'true' &&
+      window.posted.filter(message => message.type === 'selectCommit').length === selectedBeforeRefresh);
+    window.postMessage(snapshot, '*');
+    await tick();
+    check('selection remains on the same commit after recovery', options()[0].getAttribute('aria-selected') === 'true' &&
+      graph.getAttribute('aria-disabled') === 'false');
+    window.postMessage({ type: 'commitFiles', oid: 'abcdef1234', files: [
+      { id: 'safe-id', path: '<img src=x>', status: 'M' }, { id: 'source-id', path: 'src/Server.rs', status: 'A' },
+      { id: 'docs-id', path: 'docs/readme.md', status: 'M' }
+    ] }, '*');
+    await tick();
     const fileSearch = document.getElementById('file-search');
     fileSearch.value = 'SERVER';
     fileSearch.dispatchEvent(new Event('input', { bubbles: true }));

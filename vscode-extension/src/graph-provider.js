@@ -32,6 +32,7 @@ class GraphProvider {
     this.repoKey = undefined;
     this.guard = () => true;
     this.rows = new Map();
+    this.displayedRows = [];
     this.segments = new Set();
     this.collapsedSegments = new Set();
     this.files = new Map();
@@ -43,6 +44,15 @@ class GraphProvider {
     this.detailGeneration = 0;
     this.selected = undefined;
     this.lastHead = undefined;
+    this.revision = undefined;
+    this.pollTimer = undefined;
+    this.pollPending = false;
+    this.pollAgain = false;
+    this.pollEpoch = 0;
+    this.ready = false;
+    this.loading = false;
+    this.unstableLoads = 0;
+    this.retryBackoff = false;
     this.subscription = tree.onDidChangeTreeData(() => {
       if (!this.panel) return;
       const repo = this.currentRepo();
@@ -50,7 +60,13 @@ class GraphProvider {
       const head = repo.state?.HEAD?.commit;
       if (head !== this.lastHead) {
         this.lastHead = head;
-        this.loadGraph();
+        if (this.panel.visible === false) this.revision = undefined;
+        else if (this.loading || this.pollPending) this.pollAgain = true;
+        else if (this.retryBackoff || this.unstableLoads > 2) { if (!this.pollTimer) this.schedulePoll(); }
+        else this.schedulePoll(0);
+      } else if (this.revision === undefined && !this.loading && !this.pollPending) {
+        if (this.retryBackoff || this.unstableLoads > 2) { if (!this.pollTimer) this.schedulePoll(); }
+        else this.schedulePoll(0);
       }
     });
   }
@@ -69,11 +85,17 @@ class GraphProvider {
     this.repoKey = repo.rootUri.toString();
     this.guard = currentGuard;
     this.lastHead = repo.state?.HEAD?.commit;
+    this.stopPolling();
+    this.ready = false;
+    this.revision = undefined;
+    this.unstableLoads = 0;
+    this.retryBackoff = false;
     this.firstParent = false;
     this.filters = defaultFilters();
     this.branches = [];
     this.authors.clear();
     this.rows.clear();
+    this.displayedRows = [];
     this.segments.clear();
     this.collapsedSegments.clear();
     this.files.clear();
@@ -83,6 +105,7 @@ class GraphProvider {
     if (this.panel) {
       this.panel.title = `Gitpane: ${path.basename(repo.rootUri.fsPath)}`;
       this.panel.reveal();
+      this.ready = true;
       this.loadGraph();
       return;
     }
@@ -94,9 +117,22 @@ class GraphProvider {
     this.panel = panel;
     panel.webview.html = require('./graph/html').getHtml(panel.webview, this.extensionUri);
     panel.webview.onDidReceiveMessage(message => this.receive(message));
+    panel.onDidChangeViewState?.(() => {
+      if (this.panel !== panel || !this.ready) return;
+      if (panel.visible === false) {
+        this.stopPolling();
+        this.revision = undefined;
+        this.graphGeneration++;
+        this.detailGeneration++;
+        this.files.clear();
+        this.loading = false;
+      } else this.schedulePoll(0);
+    });
     panel.onDidDispose(() => {
       if (this.panel !== panel) return;
       this.panel = undefined;
+      this.stopPolling();
+      this.ready = false;
       this.repoKey = undefined;
       this.guard = () => true;
       this.graphGeneration++;
@@ -112,15 +148,80 @@ class GraphProvider {
     if (this.panel) this.panel.webview.postMessage(message);
   }
 
-  invalidate(message) {
+  stopPolling() {
+    this.pollEpoch++;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = undefined;
+    this.pollAgain = false;
+  }
+
+  schedulePoll(delay = 5000) {
+    if (!this.ready || !this.panel || this.panel.visible === false) return;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = setTimeout(() => { this.pollTimer = undefined; void this.pollRevision(); }, delay);
+    this.pollTimer.unref?.();
+  }
+
+  async readRevision(repo) {
+    const result = await this.backend.graphRevision(repo.rootUri.fsPath);
+    if (!result || typeof result.revision !== 'string' || !/^[a-f0-9]{64}$/.test(result.revision)) {
+      throw new Error('Gitpane returned an invalid graph revision.');
+    }
+    return result.revision;
+  }
+
+  async pollRevision() {
+    if (!this.ready || !this.panel || this.panel.visible === false) return;
+    if (this.pollPending || this.loading) { this.pollAgain = true; return; }
+    const repo = this.currentRepo();
+    if (!repo) {
+      this.invalidate('Repository is no longer in the workspace.');
+      this.schedulePoll();
+      return;
+    }
+    const panel = this.panel;
+    const epoch = this.pollEpoch;
+    const generation = this.graphGeneration;
+    const current = () => this.panel === panel && panel.visible !== false && this.pollEpoch === epoch &&
+      this.graphGeneration === generation && this.currentRepo() === repo;
+    this.pollPending = true;
+    try {
+      const revision = await this.readRevision(repo);
+      if (current()) {
+        this.retryBackoff = false;
+        if (revision !== this.revision) await this.loadGraph();
+      }
+    } catch (error) {
+      if (current()) {
+        this.revision = undefined;
+        this.retryBackoff = true;
+        this.invalidate(error.message, true);
+      }
+    } finally {
+      this.pollPending = false;
+      if (this.ready && this.panel && this.panel.visible !== false) {
+        const delay = this.pollAgain ? 0 : 5000;
+        this.pollAgain = false;
+        this.schedulePoll(delay);
+      }
+    }
+  }
+
+  invalidate(message, preserve = false) {
+    const previousRows = preserve ? this.displayedRows : [];
     this.graphGeneration++;
+    this.loading = false;
+    this.revision = undefined;
+    this.pollAgain = false;
     this.detailGeneration++;
     this.rows.clear();
     this.segments.clear();
-    this.collapsedSegments.clear();
+    if (!preserve) this.collapsedSegments.clear();
+    if (!preserve) this.displayedRows = [];
+    if (!preserve) this.retryBackoff = false;
     this.files.clear();
-    this.selected = undefined;
-    this.post({ type: 'graph', rows: [], loading: false, error: message, firstParent: this.firstParent,
+    if (!preserve) this.selected = undefined;
+    this.post({ type: 'graph', rows: previousRows, loading: false, error: message, firstParent: this.firstParent,
       filters: copyFilters(this.filters) });
   }
 
@@ -130,18 +231,35 @@ class GraphProvider {
       this.invalidate('Repository is no longer in the workspace.');
       return;
     }
+    if (!this.panel || this.panel.visible === false) {
+      this.revision = undefined;
+      return;
+    }
     const generation = ++this.graphGeneration;
+    const panel = this.panel;
+    const previousRows = this.displayedRows;
+    const previousSelection = this.selected;
+    this.loading = true;
     this.detailGeneration++;
     this.rows.clear();
     this.segments.clear();
     this.files.clear();
-    this.selected = undefined;
     const repoName = path.basename(repo.rootUri.fsPath);
-    this.post({ type: 'graph', repoName, rows: [], loading: true, firstParent: this.firstParent,
+    this.post({ type: 'graph', repoName, rows: previousRows, loading: true, firstParent: this.firstParent,
       filters: copyFilters(this.filters), collapsedCount: this.collapsedSegments.size });
     try {
+      const before = await this.readRevision(repo);
+      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
       const result = await this.backend.graph(repo.rootUri.fsPath, this.firstParent, copyFilters(this.filters), [...this.collapsedSegments]);
-      if (generation !== this.graphGeneration || !this.currentRepo() || !this.panel) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      const after = await this.readRevision(repo);
+      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      if (before !== after) {
+        this.revision = undefined;
+        this.unstableLoads++;
+        this.pollAgain = this.unstableLoads <= 2;
+        return;
+      }
       if (!Array.isArray(result?.rows) || !Array.isArray(result?.branches) ||
         result.branches.some(branch => typeof branch !== 'string')) throw new Error('Gitpane returned an invalid graph.');
       const labelMaxLen = result.label_max_len === undefined ? 24 : result.label_max_len;
@@ -169,14 +287,32 @@ class GraphProvider {
       this.collapsedSegments = collapsed;
       this.branches = [...new Set(result.branches)].sort();
       for (const row of result.rows) if (typeof row.author === 'string' && row.author) this.authors.add(row.author);
+      this.revision = after;
+      this.unstableLoads = 0;
+      this.retryBackoff = false;
+      this.displayedRows = result.rows;
+      this.selected = previousSelection && this.rows.has(previousSelection) && !this.rows.get(previousSelection).collapsed ? previousSelection : undefined;
       this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
         labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
+      if (this.selected) await this.loadCommit(this.selected);
     } catch (error) {
-      if (generation !== this.graphGeneration || !this.panel) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || this.currentRepo() !== repo) return;
       this.rows.clear();
       this.segments.clear();
-      this.post({ type: 'graph', repoName, rows: [], loading: false, error: error.message,
+      this.revision = undefined;
+      this.retryBackoff = true;
+      this.selected = previousSelection;
+      this.post({ type: 'graph', repoName, rows: previousRows, loading: false, error: error.message,
         firstParent: this.firstParent, filters: copyFilters(this.filters) });
+    } finally {
+      if (generation === this.graphGeneration) {
+        this.loading = false;
+        if (!this.pollPending) {
+          const delay = this.pollAgain ? 0 : 5000;
+          this.pollAgain = false;
+          this.schedulePoll(delay);
+        }
+      }
     }
   }
 
@@ -274,7 +410,7 @@ class GraphProvider {
 
   async receive(message) {
     if (!message || typeof message.type !== 'string') return;
-    if (message.type === 'ready') return this.loadGraph();
+    if (message.type === 'ready') { this.ready = true; return this.loadGraph(); }
     if (message.type === 'refresh') return this.loadGraph();
     if (message.type === 'openFilters') {
       try { return await this.openFilters(); }
@@ -304,6 +440,8 @@ class GraphProvider {
   }
 
   dispose() {
+    this.ready = false;
+    this.stopPolling();
     this.subscription.dispose();
     this.panel?.dispose();
     this.panel = undefined;

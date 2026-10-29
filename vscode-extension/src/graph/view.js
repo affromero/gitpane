@@ -23,6 +23,7 @@ let selected;
 let detail;
 let pendingSegment;
 let labelMaxLen = 24;
+let graphInteractive = false;
 
 if (typeof state.search === 'string') search.value = state.search;
 
@@ -106,9 +107,9 @@ function accessibleRow(row) {
 function renderGraph() {
   const query = search.value.trim().toLocaleLowerCase();
   const matchCount = rows.filter(row => !row.collapsed && matchRow(row, query)).length;
-  searchPrev.disabled = searchNext.disabled = !query || !matchCount;
+  searchPrev.disabled = searchNext.disabled = !graphInteractive || !query || !matchCount;
   const selectedRow = rows.find(row => row.oid === selected);
-  collapse.disabled = !selectedRow?.segment_id;
+  collapse.disabled = !graphInteractive || !selectedRow?.segment_id;
   collapse.textContent = selectedRow?.collapsed ? 'Expand branch' : 'Collapse branch';
   searchStatus.textContent = query ? `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}` : '';
   graph.replaceChildren();
@@ -194,7 +195,7 @@ function renderFiles() {
 }
 
 function select(index, focus = true) {
-  if (!rows[index]) return;
+  if (!graphInteractive || !rows[index]) return;
   if (selected !== rows[index].oid) fileSearch.value = '';
   active = index;
   selected = rows[index].oid;
@@ -218,7 +219,7 @@ function navigateMatches(direction) {
 }
 
 graph.addEventListener('keydown', event => {
-  if (!rows.length) return;
+  if (!graphInteractive || !rows.length) return;
   let index;
   if (event.key === 'ArrowDown') index = Math.min(active + 1, rows.length - 1);
   else if (event.key === 'ArrowUp') index = Math.max(active - 1, 0);
@@ -257,12 +258,14 @@ firstParent.addEventListener('change', () => {
 refresh.addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 filters.addEventListener('click', () => vscode.postMessage({ type: 'openFilters' }));
 collapse.addEventListener('click', () => {
+  if (!graphInteractive) return;
   const row = rows.find(item => item.oid === selected);
   if (!row?.segment_id) return;
   pendingSegment = { id: row.segment_id, expand: Boolean(row.collapsed) };
   vscode.postMessage({ type: 'toggleCollapse', id: row.segment_id });
 });
 expandAll.addEventListener('click', () => {
+  if (!graphInteractive) return;
   const row = rows.find(item => item.oid === selected);
   pendingSegment = row?.segment_id ? { id: row.segment_id, expand: Boolean(row.collapsed) } : undefined;
   vscode.postMessage({ type: 'expandAll' });
@@ -271,9 +274,11 @@ expandAll.addEventListener('click', () => {
 window.addEventListener('message', event => {
   const message = event.data;
   if (message?.type === 'graph') {
+    graphInteractive = !message.loading && !message.error;
+    if (message.loading || message.error) detail = undefined;
     rows = Array.isArray(message.rows) ? message.rows : [];
     labelMaxLen = Number.isSafeInteger(message.labelMaxLen) && message.labelMaxLen >= 0 ? message.labelMaxLen : 24;
-    expandAll.disabled = !message.collapsedCount || message.loading;
+    expandAll.disabled = !message.collapsedCount || !graphInteractive;
     firstParent.checked = Boolean(message.firstParent);
     const activeFilters = (Array.isArray(message.filters?.branches) ? 1 : 0) +
       (Array.isArray(message.filters?.authors) ? 1 : 0) +
@@ -297,6 +302,7 @@ window.addEventListener('message', event => {
     graphStatus.textContent = message.error || (message.loading ? 'Loading graph…' : !rows.length ? 'No commits.' :
       limitReached ? `Showing up to ${message.limit} commits.` : '');
     graph.setAttribute('aria-busy', message.loading ? 'true' : 'false');
+    graph.setAttribute('aria-disabled', graphInteractive ? 'false' : 'true');
     renderGraph();
     renderFiles();
     if (openExpandedCommit) {
