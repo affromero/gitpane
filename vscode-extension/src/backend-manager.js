@@ -462,6 +462,23 @@ class BackendManager {
 
   fileActionPreview(repo, path, operation) { return this.request('file_action_preview', repo, { path, operation }); }
 
+  async previewFetch(repo) {
+    const snapshot = await this.mutationSnapshot();
+    const repoPath = await this.realpath(repo);
+    if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before checking fetch.');
+    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk), timeoutMs: 45000 });
+    try {
+      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+      if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before checking fetch.');
+      const result = await client.previewFetch(repoPath);
+      const currentPath = await this.realpath(repo);
+      if (!this.isCurrentMutation(snapshot, repoPath) || currentPath !== repoPath) {
+        throw new BridgeError('workspace_changed', 'Workspace changed while checking fetch.');
+      }
+      return result;
+    } finally { await client.shutdown(); }
+  }
+
   previewWorktreeRemoval(repo, path) { return this.request('worktree_remove_preview', repo, path); }
 
   readWorkingSymlink(repo, path) { return this.request('working_symlink', repo, path); }

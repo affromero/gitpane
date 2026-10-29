@@ -10,7 +10,7 @@ use crate::git::status::{
     watched_symlinks,
 };
 
-use super::{BridgeError, mutation::validate_file_path, scope::Scope};
+use super::{BridgeError, changes::RepositoryIdentity, mutation::validate_file_path, scope::Scope};
 
 fn utf8_path(path: &Path) -> Result<&str, BridgeError> {
     path.to_str()
@@ -43,6 +43,13 @@ pub(super) fn query(
     summary_only: bool,
     watched_paths: &[PathBuf],
 ) -> Result<Value, BridgeError> {
+    if scope.repository(repo)? != repo {
+        return Err(BridgeError::new(
+            "stale_target",
+            "Repository changed while collecting status",
+        ));
+    }
+    let repo_identity = RepositoryIdentity::read(repo)?;
     if watched_paths.len() > 256
         || watched_paths.iter().any(|path| {
             let bytes = path.as_os_str().as_encoded_bytes();
@@ -75,12 +82,15 @@ pub(super) fn query(
         .canonicalize()
         .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let failure = RefCell::new(None);
+    let worktree_identities = RefCell::new(HashMap::<PathBuf, String>::new());
     let allow_worktree = |path: &Path| match scope.allows_missing(path) {
         Ok(false) => false,
-        Ok(true) => match scope
-            .repository(path)
-            .and_then(|path| validate_submodules(scope, &path, sub_cfg))
-        {
+        Ok(true) => match scope.repository(path).and_then(|path| {
+            validate_submodules(scope, &path, sub_cfg)?;
+            let identity = RepositoryIdentity::read(&path)?.fingerprint()?;
+            worktree_identities.borrow_mut().insert(path, identity);
+            Ok(())
+        }) {
             Ok(()) => true,
             Err(error) => {
                 *failure.borrow_mut() = Some(error);
@@ -188,12 +198,24 @@ pub(super) fn query(
             }
         }
     }
+    let worktree_identities = worktree_identities.into_inner();
     let worktrees = result
         .worktree_info
         .iter()
         .map(|worktree| {
+            let path = scope.repository(&worktree.path)?;
+            let expected = worktree_identities.get(&path).ok_or_else(|| {
+                BridgeError::new("stale_target", "Worktree changed while collecting status")
+            })?;
+            if RepositoryIdentity::read(&path)?.fingerprint()? != *expected {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Worktree changed while collecting status",
+                ));
+            }
             Ok(json!({
                 "path": utf8_path(&worktree.path)?,
+                "repo_identity": expected,
                 "branch": worktree.branch,
                 "ahead": worktree.ahead,
                 "behind": worktree.behind,
@@ -209,6 +231,7 @@ pub(super) fn query(
         .collect();
     let files_truncated = summary_only && included_compact < result.files.len();
     let mut response = json!({
+        "repo_identity": repo_identity.fingerprint()?,
         "common_dir": utf8_path(&common_dir)?,
         "branch": result.branch,
         "head_oid": result.head_oid,
@@ -226,6 +249,12 @@ pub(super) fn query(
         response["file_count_lower_bound"] = json!(result.file_count_lower_bound);
         response["files_truncated"] = json!(files_truncated);
         response["watched_errors"] = json!(watched_errors);
+    }
+    if scope.repository(repo)? != repo || RepositoryIdentity::read(repo)? != repo_identity {
+        return Err(BridgeError::new(
+            "stale_target",
+            "Repository changed while collecting status",
+        ));
     }
     Ok(response)
 }
@@ -279,6 +308,95 @@ mod tests {
             watched,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn status_fingerprints_linked_worktree_gitdir_replacement() {
+        if !crate::git::git_test_available() {
+            return;
+        }
+        fn copy_directory(source: &Path, destination: &Path) {
+            std::fs::create_dir(destination).unwrap();
+            for entry in std::fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let destination = destination.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_directory(&entry.path(), &destination);
+                } else {
+                    std::fs::copy(entry.path(), destination).unwrap();
+                }
+            }
+        }
+        let (temp, repo, scope) = fixture();
+        let repository = Repository::open(&repo).unwrap();
+        let mut index = repository.index().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repository.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repository
+            .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .unwrap();
+        drop(tree);
+        drop(repository);
+        let linked = repo.join("linked");
+        let output = crate::git::process::git_command(&repo)
+            .args(["worktree", "add", "-b", "linked"])
+            .arg(&linked)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let query_full =
+            || query(&repo, &scope, &SubmoduleConfig::default(), true, false, &[]).unwrap();
+        let before = query_full();
+        let before_linked = query(
+            &linked,
+            &scope,
+            &SubmoduleConfig::default(),
+            false,
+            true,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            before["worktrees"][0]["repo_identity"],
+            before_linked["repo_identity"]
+        );
+        let linked_repo = Repository::open(&linked).unwrap();
+        let head = linked_repo.head().unwrap().target().unwrap();
+        let gitdir = linked_repo.path().canonicalize().unwrap();
+        let common = linked_repo.commondir().canonicalize().unwrap();
+        drop(linked_repo);
+        let backup = temp.path().join("old-gitdir");
+        std::fs::rename(&gitdir, &backup).unwrap();
+        copy_directory(&backup, &gitdir);
+        let replacement = Repository::open(&linked).unwrap();
+        assert_eq!(replacement.head().unwrap().target(), Some(head));
+        assert_eq!(replacement.commondir().canonicalize().unwrap(), common);
+        drop(replacement);
+        let after = query_full();
+        let after_linked = query(
+            &linked,
+            &scope,
+            &SubmoduleConfig::default(),
+            false,
+            true,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(after["repo_identity"], before["repo_identity"]);
+        assert_eq!(
+            after["worktrees"][0]["repo_identity"],
+            after_linked["repo_identity"]
+        );
+        assert_ne!(
+            after_linked["repo_identity"],
+            before_linked["repo_identity"]
+        );
+        assert_eq!(after_linked["repo_identity"].as_str().unwrap().len(), 64);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::config::{Config, GraphConfig, SubmoduleConfig, WorktreeConfig};
 
 mod changes;
+mod fetch;
 mod file_identity;
 mod github;
 mod graph;
@@ -188,6 +189,7 @@ fn process(
             let input = params(request.params)?;
             mutation::file_action_preview(scope, input)
         }
+        "repo_fetch_preview" => fetch::preview(scope, params(request.params)?),
         "working_symlink" => mutation::working_symlink(scope, params(request.params)?),
         "worktree_remove_preview" => {
             mutation::worktree_remove_preview(scope, params(request.params)?)
@@ -272,6 +274,7 @@ fn process_mutation(scope: &Scope, request: Request) -> Result<Value, BridgeErro
     match request.method.as_str() {
         "file_action" => mutation::file_action(scope, params(request.params)?),
         "repo_sync" => mutation::repo_sync(scope, params(request.params)?),
+        "repo_fetch" => fetch::execute(scope, params(request.params)?),
         "session_goto" => session::goto(scope, params(request.params)?),
         "submodule_action" => submodule::actions::execute(scope, params(request.params)?),
         "worktree_create" => mutation::worktree_create(scope, params(request.params)?),

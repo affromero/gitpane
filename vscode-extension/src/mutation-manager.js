@@ -17,6 +17,10 @@ function normalizeAction(method, params) {
     typeof params.session === 'string' && params.session.length > 0) {
     return { repo: params.repo, backend: params.backend, session: params.session };
   }
+  if (method === 'repo_fetch' && typeof params.expected_repo_identity === 'string' && /^[a-f0-9]{64}$/.test(params.expected_repo_identity) &&
+    typeof params.expected_fetch_token === 'string' && /^[a-f0-9]{64}$/.test(params.expected_fetch_token)) {
+    return { repo: params.repo, expected_repo_identity: params.expected_repo_identity, expected_fetch_token: params.expected_fetch_token };
+  }
   if (method === 'repo_sync' && ['push', 'pull', 'pull_rebase'].includes(params.operation) &&
     (params.expected_branch === null || typeof params.expected_branch === 'string') &&
     typeof params.expected_head === 'string' && /^[a-f0-9]{40,64}$/i.test(params.expected_head)) {
@@ -56,6 +60,7 @@ class MutationWorker {
   constructor(executable, options) {
     this.onStderr = options.onStderr;
     this.dispatched = false;
+    this.authoritative = false;
     this.finished = false;
     this.pending = undefined;
     this.parts = [];
@@ -121,9 +126,18 @@ class MutationWorker {
         if (!response.error || typeof response.error.code !== 'string' || typeof response.error.message !== 'string') {
           pending.reject(new BridgeError(this.dispatched ? 'outcome_unknown' : 'protocol_error', 'Gitpane service returned an invalid error.'));
         } else {
+          if (this.dispatched) this.authoritative = true;
           pending.reject(new BridgeError(response.error.code, response.error.message));
         }
-      } else pending.resolve(response.result);
+      } else {
+        if (this.dispatched && pending.method === 'repo_fetch' &&
+          (!response.result || typeof response.result !== 'object' || Array.isArray(response.result))) {
+          pending.reject(new BridgeError('outcome_unknown', 'Gitpane service returned an invalid fetch result.'));
+        } else {
+          if (this.dispatched) this.authoritative = true;
+          pending.resolve(response.result);
+        }
+      }
       start = newline + 1;
     }
   }
@@ -137,7 +151,7 @@ class MutationWorker {
         this.failTransport(new Error('Service initialization timed out.'));
         this.cancelBeforeSend();
       }, timeoutMs) : undefined;
-      this.pending = { id, resolve, reject, timer };
+      this.pending = { id, method, resolve, reject, timer };
       try {
         if (id === 2) {
           this.dispatched = true;
@@ -150,6 +164,16 @@ class MutationWorker {
   cancelBeforeSend() {
     if (!this.dispatched && !this.finished) this.child.kill();
   }
+
+  async closeAfterResponse(graceMs) {
+    if (this.finished) return;
+    const term = setTimeout(() => this.child.kill('SIGTERM'), graceMs);
+    const kill = setTimeout(() => this.child.kill('SIGKILL'), graceMs + 3000);
+    term.unref?.();
+    kill.unref?.();
+    try { await this.closed; }
+    finally { clearTimeout(term); clearTimeout(kill); }
+  }
 }
 
 class MutationManager {
@@ -160,6 +184,7 @@ class MutationManager {
     this.spawn = options.spawn || spawn;
     this.onStderr = options.onStderr || (() => {});
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 30000;
+    this.responseCloseGraceMs = options.responseCloseGraceMs ?? 2000;
     this.locks = new Map();
     this.workers = new Set();
     this.disposed = false;
@@ -227,10 +252,15 @@ class MutationManager {
         if (this.locks.get(lock) === token) this.locks.delete(lock);
       } else {
         worker.cancelBeforeSend();
-        worker.closed.then(() => {
+        const release = () => {
           this.workers.delete(worker);
           if (this.locks.get(lock) === token) this.locks.delete(lock);
-        });
+        };
+        if (options.waitForClose && (worker.authoritative || !worker.dispatched)) {
+          await worker.closeAfterResponse(this.responseCloseGraceMs);
+          release();
+        }
+        else worker.closed.then(release);
       }
     }
   }

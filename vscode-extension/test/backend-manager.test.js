@@ -152,6 +152,7 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(await manager.fileActionPreview(path.join(root, 'repo'), 'file', 'discard'), {
     roots: [root], method: 'file_action_preview', path: 'file', operation: 'discard'
   });
+  assert.deepEqual(await manager.previewFetch(path.join(root, 'repo')), { roots: [root], method: 'repo_fetch_preview' });
   assert.deepEqual(await manager.previewWorktreeRemoval(path.join(root, 'repo'), path.join(root, 'linked')), {
     roots: [root], method: 'worktree_remove_preview', path: path.join(root, 'linked')
   });

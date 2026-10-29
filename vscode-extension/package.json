@@ -23,11 +23,13 @@
     },
     "commands": [
       { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
+      { "command": "gitpane.fetchWorkspace", "title": "Gitpane: Fetch Workspace", "icon": "$(cloud-download)" },
       { "command": "gitpane.sort", "title": "Gitpane: Sort Repositories", "icon": "$(list-ordered)" },
       { "command": "gitpane.openChange", "title": "Gitpane: Open Change" }
     ],
     "menus": {
       "view/title": [{ "command": "gitpane.sort", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.fetchWorkspace", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
     },
     "configuration": {

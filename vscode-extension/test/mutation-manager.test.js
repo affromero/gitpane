@@ -31,6 +31,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   fs.appendFileSync(file('actions'), JSON.stringify(request) + '\n');
+  if (mode === 'malformed-with-child') {
+    const childScript = "const fs=require('node:fs'),p=require('node:path'); const dir=process.env.MUTATION_TEST_DIR; const f=n=>p.join(dir,n); fs.writeFileSync(f('child-started'),String(process.pid)); const timer=setInterval(()=>{if(fs.existsSync(f('release-child'))){clearInterval(timer);fs.writeFileSync(f('child-finished'),'');}},10);";
+    const child = require('node:child_process').spawn(process.execPath, ['-e', childScript], {detached:true,stdio:'ignore'});
+    child.once('exit', () => process.exit(0));
+    process.stdout.write('not-json\n');
+    return;
+  }
+  if (mode === 'hold-close') release('release-close', () => {});
   if (mode === 'exit-after-action') { process.exit(7); return; }
   const answer = () => {
     if (mode === 'git-error') reply({id: request.id, error: {code: 'git_error', message: 'git failed'}});
@@ -76,7 +84,7 @@ async function fixture(t, mode = 'success') {
   });
   t.after(async () => {
     manager.dispose();
-    await Promise.all(['release-init', 'release-action'].map(name => fs.writeFile(path.join(dir, name), '')));
+    await Promise.all(['release-init', 'release-action', 'release-close', 'release-child'].map(name => fs.writeFile(path.join(dir, name), '')));
     await Promise.all(children.map(({ closed }) => Promise.race([
       closed, new Promise((_, reject) => {
         const timer = setTimeout(() => reject(new Error('Mutation service did not exit')), 5000);
@@ -87,7 +95,7 @@ async function fixture(t, mode = 'success') {
   });
   const opts = { lockKey: common, validateTarget: () => true };
   return {
-    dir, repo, linked, common, outside, manager, opts,
+    dir, repo, linked, common, outside, manager, opts, children,
     changeWorkspace: () => { generation++; },
     mark: name => fs.writeFile(path.join(dir, name), ''),
     wait: name => waitFor(() => exists(path.join(dir, name)), `Timed out waiting for ${name}`),
@@ -149,6 +157,48 @@ test('submodule batches carry the selected repository HEAD identity', async t =>
   assert.equal(actions.length, 1);
   assert.equal(actions[0].method, 'submodule_action');
   assert.deepEqual(actions[0].params, { ...params, repo: await fs.realpath(f.repo) });
+});
+
+test('fetch requires identity and destination tokens and retains its lock until the worker closes', async t => {
+  const f = await fixture(t, 'hold-close');
+  const params = { repo: f.repo, expected_repo_identity: 'a'.repeat(64), expected_fetch_token: 'b'.repeat(64) };
+  await assert.rejects(f.manager.execute('repo_fetch', { repo: f.repo, expected_repo_identity: params.expected_repo_identity }, f.opts), code('invalid_request'));
+  const pending = f.manager.execute('repo_fetch', params, { ...f.opts, waitForClose: true });
+  await f.wait('actions');
+  await assert.rejects(f.manager.execute('repo_fetch', { ...params, repo: f.linked }, { ...f.opts, waitForClose: true }), code('busy'));
+  await f.mark('release-close');
+  assert.deepEqual(await pending, {});
+  assert.deepEqual((await f.actions())[0].params, { ...params, repo: await fs.realpath(f.repo) });
+});
+
+test('a fetch worker that responds but never exits is stopped without losing its result', async t => {
+  const f = await fixture(t, 'hold-close');
+  f.manager.responseCloseGraceMs = 100;
+  const params = { repo: f.repo, expected_repo_identity: 'a'.repeat(64), expected_fetch_token: 'b'.repeat(64) };
+  const pending = f.manager.execute('repo_fetch', params, { ...f.opts, waitForClose: true });
+  await f.wait('actions');
+  await assert.rejects(f.manager.execute('repo_fetch', { ...params, repo: f.linked }, { ...f.opts, waitForClose: true }), code('busy'));
+  assert.deepEqual(await pending, {}, 'the completed fetch outcome is retained');
+  assert.equal(f.manager.locks.size, 0, 'the common-directory lock is released after worker exit');
+});
+
+test('malformed fetch output reports unknown outcome while retaining the lock until Git exits', async t => {
+  const f = await fixture(t, 'malformed-with-child');
+  f.manager.responseCloseGraceMs = 30;
+  const params = { repo: f.repo, expected_repo_identity: 'a'.repeat(64), expected_fetch_token: 'b'.repeat(64) };
+  const pending = f.manager.execute('repo_fetch', params, { ...f.opts, waitForClose: true });
+  const rejected = assert.rejects(pending, code('outcome_unknown'));
+  await f.wait('child-started');
+  await rejected;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(f.children[0].child.exitCode, null, 'bridge remains alive while its Git child is running');
+  assert.equal(f.children[0].child.signalCode, null);
+  assert.equal(await exists(path.join(f.dir, 'child-finished')), false);
+  await assert.rejects(f.manager.execute('repo_fetch', { ...params, repo: f.linked }, { ...f.opts, waitForClose: true }), code('busy'));
+  await f.mark('release-child');
+  await f.wait('child-finished');
+  await f.children[0].closed;
+  await waitFor(() => f.manager.locks.size === 0, 'Fetch lock did not release after worker exit');
 });
 
 test('sends a selected session as a literal one-shot request', async t => {

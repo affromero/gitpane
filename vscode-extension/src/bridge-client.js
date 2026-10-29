@@ -146,6 +146,16 @@ class BridgeClient {
     return this.request('file_action_preview', { repo, path, operation });
   }
 
+  async previewFetch(repo) {
+    try { return await this.request('repo_fetch_preview', { repo }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace fetch. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async previewWorktreeRemoval(repo, path) {
     try { return await this.request('worktree_remove_preview', { repo, path }); }
     catch (error) {

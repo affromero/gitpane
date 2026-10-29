@@ -396,6 +396,30 @@ class RepositoryTree {
     }));
   }
 
+  fetchTargets(view = this.workspaceView()) {
+    const entries = new Map();
+    for (const record of view.records) {
+      const commonDir = record.status?.common_dir;
+      const key = identityKey(record.identity);
+      entries.set(key, { path: record.identity.path, commonDir, repoIdentity: record.status?.repo_identity,
+        commonIdentity: identityKey(record.common),
+        guard: JSON.stringify(['repo', record.key, this.repositoryToken(record.repo), key,
+          identityKey(record.common), record.status?.repo_identity, record.status?.branch]) });
+    }
+    for (const record of view.records) {
+      for (const worktree of view.worktrees.get(record.key) || []) {
+        const identity = directoryIdentity(worktree.path);
+        const key = identityKey(identity);
+        if (!identity || entries.has(key)) continue;
+        entries.set(key, { path: identity.path, commonDir: record.status?.common_dir, repoIdentity: worktree.repo_identity,
+          commonIdentity: identityKey(record.common),
+          guard: JSON.stringify(['worktree', record.key, this.repositoryToken(record.repo), key,
+            identityKey(record.common), worktree.repo_identity, worktree.path, worktree.branch]) });
+      }
+    }
+    return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+
   sessionLive(value) {
     const identity = directoryIdentity(value);
     return !!identity && this.liveness?.live.get(identity.path) === true;

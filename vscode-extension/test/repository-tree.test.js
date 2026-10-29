@@ -640,9 +640,9 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
       if (includeWorktrees && pauseDetails) await new Promise(resolve => { releaseDetails = resolve; });
       const lines = git(value, 'worktree', 'list', '--porcelain').split('\n');
       const paths = lines.filter(line => line.startsWith('worktree ')).map(line => line.slice(9));
-      return { common_dir: common, branch: git(value, 'branch', '--show-current'), is_dirty: false,
+      return { common_dir: common, repo_identity: 'a'.repeat(64), branch: git(value, 'branch', '--show-current'), is_dirty: false,
         ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees ?
-          paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item) })) : [],
+          paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item), repo_identity: 'a'.repeat(64) })) : [],
         has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false };
     }
   };
@@ -730,6 +730,13 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     const sessionTargets = tree.sessionTargets();
     assert.deepEqual(sessionTargets.map(target => target.path).sort(), [root, first, second].map(value => fs.realpathSync(value)).sort());
     assert.ok(sessionTargets.find(target => target.path === fs.realpathSync(second)).references.some(reference => reference.includes('worktree')));
+    const fetchTargets = tree.fetchTargets();
+    assert.deepEqual(fetchTargets.map(target => target.path).sort(), [root, first, second].map(value => fs.realpathSync(value)).sort());
+    assert.equal(new Set(fetchTargets.map(target => target.commonIdentity)).size, 1, 'linked worktrees share one mutation lock');
+    const beforeHeadChange = fetchTargets.find(target => target.path === fs.realpathSync(root));
+    tree.backendStatuses.get(root).head_oid = '1'.repeat(40);
+    assert.equal(tree.fetchTargets().find(target => target.path === beforeHeadChange.path).guard, beforeHeadChange.guard,
+      'a changed commit alone does not invalidate a fetch');
     const removal = provider.resolveRepository(explicitId).worktreeRemoval;
     assert.equal(removal.repoPath, root);
     assert.equal(fs.realpathSync(removal.path), fs.realpathSync(first));

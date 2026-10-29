@@ -80,6 +80,12 @@ navigation uses Gitpane's `[goto]` configuration. Session navigation and
 submodule actions are not yet supported on Windows. Remote workspace hosts may
 not be able to focus a local terminal window.
 
+Use **Gitpane: Fetch Workspace** or the cloud download button to fetch the
+current workspace repositories. Each linked worktree is fetched separately so
+its own branch and remote configuration apply. Repositories sharing a Git
+common directory are fetched in sequence. Gitpane reports failures for each
+repository and refreshes the status and visible graph afterward.
+
 The ◉ marker shows a live session for a repository or worktree. Set
 `gitpane.sessionBackend` to `tmux` or `herdr` when VS Code does not inherit the
 multiplexer environment. The default, `auto`, uses the detected host. Gitpane's

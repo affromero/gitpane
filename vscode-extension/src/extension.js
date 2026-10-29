@@ -19,6 +19,7 @@ const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
 const { ThemeController } = require('./theme');
+const { WorkspaceFetch } = require('./workspace-fetch');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -452,6 +453,8 @@ async function activate(context) {
     isCurrent: (snapshot, repo) => backend.isCurrentMutation(snapshot, repo),
     onStderr: text => output.append(text)
   });
+  const workspaceFetch = new WorkspaceFetch({ tree, backend, mutations, vscode, output,
+    refresh: async () => { await provider.refresh(); await graph.pollRevision(); } });
   const openWorktreeGraph = async (id, guard = () => true) => {
     const repo = provider.currentWorktreeRepository(id);
     if (!repo) return;
@@ -509,6 +512,7 @@ async function activate(context) {
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
     vscode.commands.registerCommand('gitpane.refresh', () => provider.refresh(true)),
+    vscode.commands.registerCommand('gitpane.fetchWorkspace', () => workspaceFetch.run()),
     vscode.commands.registerCommand('gitpane.sort', async () => {
       const choices = [
         { label: 'Default (dirty, by path)', order: 'workspace' },

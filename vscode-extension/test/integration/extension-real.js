@@ -32,6 +32,7 @@ const commands = new Map();
 const documents = new Map();
 const diffs = [];
 const errors = [];
+const warnings = [];
 const snapshots = [];
 const children = [];
 const terminals = [];
@@ -77,7 +78,7 @@ async function main() {
     onDidReceiveMessage: handler => { receive = handler; return { dispose() {} }; }
   }, onDidChangeVisibility: event, onDidDispose: event };
   const vscode = {
-    EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
+    EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
       getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
@@ -87,8 +88,13 @@ async function main() {
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       createTerminal: options => { terminals.push(options); return { show() {}, dispose() {} }; },
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
+      withProgress: async (_options, operation) => operation({ report() {} }),
       showQuickPick: async choices => pickChanges?.(choices),
-      showWarningMessage: async (_message, _options, action) => action,
+      showWarningMessage: async (message, options, action) => {
+        if (typeof options === 'string') { warnings.push(message); return undefined; }
+        return action;
+      },
+      showInformationMessage: async () => {},
       showErrorMessage: async message => errors.push(message) },
     commands: { registerCommand: (name, handler) => { commands.set(name, handler); return { dispose() {} }; },
       async executeCommand(name, ...args) {
@@ -209,6 +215,41 @@ async function main() {
   assert.equal(diffs.at(-1)[0].scheme, 'gitpane-empty');
   assert.equal(diffs.at(-1)[1].fsPath, path.join(worktreePath, linkedFile.path));
   console.log('PASS real linked worktree paging and native file diff');
+
+  const mainRemote = path.join(temporary, 'main-remote.git');
+  const linkedRemote = path.join(temporary, 'linked-remote.git');
+  const mainWriter = path.join(temporary, 'main-writer');
+  const linkedWriter = path.join(temporary, 'linked-writer');
+  for (const remote of [mainRemote, linkedRemote]) {
+    git('init', '--bare', '-q', remote);
+    gitAt(remote, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  }
+  git('remote', 'add', 'origin', mainRemote);
+  git('remote', 'add', 'review', linkedRemote);
+  git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+  git('push', '-q', 'review', 'HEAD:refs/heads/main');
+  git('config', `branch.${git('branch', '--show-current')}.remote`, 'origin');
+  git('config', 'branch.feature/worktree.remote', 'review');
+  for (const [remote, writer] of [[mainRemote, mainWriter], [linkedRemote, linkedWriter]]) {
+    git('clone', '-q', remote, writer);
+    fs.writeFileSync(path.join(writer, 'remote-change.txt'), writer);
+    gitAt(writer, 'add', 'remote-change.txt');
+    gitAt(writer, 'commit', '-qm', 'remote change');
+    gitAt(writer, 'push', '-q');
+  }
+  const oldMain = git('rev-parse', 'refs/remotes/origin/main');
+  const oldLinked = git('rev-parse', 'refs/remotes/review/main');
+  await commands.get('gitpane.refresh')();
+  assert.equal(git('rev-parse', 'refs/remotes/origin/main'), oldMain, 'ordinary refresh must not fetch');
+  assert.equal(git('rev-parse', 'refs/remotes/review/main'), oldLinked, 'ordinary refresh must not fetch linked worktree remote');
+  const errorsBeforeFetch = errors.length;
+  const warningsBeforeFetch = warnings.length;
+  await commands.get('gitpane.fetchWorkspace')();
+  assert.equal(errors.length, errorsBeforeFetch, errors.at(-1));
+  assert.equal(warnings.length, warningsBeforeFetch, warnings.at(-1));
+  assert.equal(git('rev-parse', 'refs/remotes/origin/main'), gitAt(mainWriter, 'rev-parse', 'HEAD'));
+  assert.equal(git('rev-parse', 'refs/remotes/review/main'), gitAt(linkedWriter, 'rev-parse', 'HEAD'));
+  console.log('PASS explicit workspace fetch respects different worktree remotes');
 
   vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }, { uri: uri(worktreePath) }];
   workspaceChanged.fire({});

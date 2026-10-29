@@ -45,7 +45,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown field summary_only'}});
     return;
   }
-  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'worktree_remove_preview'].includes(request.method)) {
+  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'worktree_remove_preview', 'repo_fetch_preview'].includes(request.method)) {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown bridge method'}}); return;
   }
   if (request.params.repo === '/denied') {
@@ -108,6 +108,7 @@ test('status and graph responses are matched to their requests', async t => {
     head_oid: 'a'.repeat(40), child_head_oid: 'a'.repeat(40), parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) }];
   assert.deepEqual(await client.validateSubmoduleChain(chain), { method: 'submodule_chain_validate', roots: [root], chain });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
+  assert.deepEqual(await client.previewFetch(repo), { method: 'repo_fetch_preview', repo, roots: [root] });
   assert.deepEqual(await client.previewWorktreeRemoval(repo, path.join(root, 'linked')), { method: 'worktree_remove_preview', repo, roots: [root], path: path.join(root, 'linked') });
   assert.deepEqual(await client.planWorktree(repo, 'feature/a'), { method: 'worktree_plan', repo, roots: [root], branch: 'feature/a' });
 });
@@ -124,6 +125,7 @@ test('an older backend requires an update for compact status', async t => {
   assert.equal((await client.status(repo)).method, 'status');
   await assert.rejects(client.validateSubmoduleChain([]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.previewWorktreeRemoval(repo, path.resolve('workspace/linked')), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
+  await assert.rejects(client.previewFetch(repo), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.workspaceRootIdentities(), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.initialize([path.resolve('workspace')], ['a'.repeat(64)]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.initialize([path.resolve('workspace')], undefined, [path.resolve('workspace')]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
