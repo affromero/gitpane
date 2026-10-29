@@ -39,6 +39,7 @@ const terminals = [];
 let provider;
 let receive;
 let pickChanges;
+let submoduleInput;
 const workspaceState = new Map();
 
 async function main() {
@@ -91,6 +92,7 @@ async function main() {
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
       withProgress: async (_options, operation) => operation({ report() {} }),
       showQuickPick: async choices => pickChanges?.(choices),
+      showInputBox: async () => submoduleInput,
       showWarningMessage: async (message, options, action) => {
         if (typeof options === 'string') { warnings.push(message); return undefined; }
         return action;
@@ -433,10 +435,49 @@ async function main() {
   gitAt(childPath, 'commit', '-qm', 'add nested submodule');
   childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
   const grandPath = fs.realpathSync(path.join(childPath, 'nested'));
-  fs.writeFileSync(path.join(grandPath, 'nested.txt'), 'working nested change\n');
   const grandRepo = { rootUri: uri(grandPath), state: { HEAD: { commit: gitAt(grandPath, 'rev-parse', 'HEAD') },
     onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
   availableSubmodules.set(grandPath, grandRepo);
+  childRepo.state.submodules = [{ path: 'nested', url: grandSource }];
+  if (!api.repositories.includes(childRepo)) { api.repositories.push(childRepo); openedRepositories.fire(childRepo); }
+  await commands.get('gitpane.refresh')();
+  const browseRoot = snapshots.at(-1).repositories.find(item => item.name === 'child');
+  assert.ok(browseRoot, 'the already-open parent must be visible');
+  let steps = ['browseSubmodules'];
+  const beforeBrowseRepos = api.repositories.length;
+  pickChanges = choices => {
+    const next = steps.shift();
+    if (!next) return undefined;
+    return choices.find(choice => choice.action === next || choice.relative === next);
+  };
+  const beforeBrowseErrors = errors.length;
+  await receive({ type: 'menu', kind: 'repo', id: browseRoot.id });
+  assert.equal(errors.length, beforeBrowseErrors, errors.at(-1));
+  assert.equal(api.repositories.length, beforeBrowseRepos, 'browsing and cancellation do not open repositories');
+  steps = ['browseSubmodules', 'manual'];
+  submoduleInput = 'missing-submodule';
+  pickChanges = choices => {
+    const next = steps.shift();
+    return choices.find(choice => choice.action === next || (next === 'manual' && choice.manual));
+  };
+  await receive({ type: 'menu', kind: 'repo', id: browseRoot.id });
+  assert.equal(errors.length, beforeBrowseErrors + 1, 'invalid submodule paths must report an error');
+  assert.equal(provider.tree.backend.state.status, 'ready', 'an invalid selection must not mark the backend unavailable');
+  assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'child').statusUnavailable);
+  steps = ['browseSubmodules', 'nested'];
+  pickChanges = choices => {
+    const next = steps.shift();
+    return choices.find(choice => choice.action === next || choice.relative === next);
+  };
+  await receive({ type: 'menu', kind: 'repo', id: browseRoot.id });
+  assert.equal(errors.length, beforeBrowseErrors + 1, errors.at(-1));
+  assert.deepEqual(workspaceState.get('gitpane.submodulePins').pins[0].chain.map(link => link.path), ['nested']);
+  assert.ok(api.repositories.includes(grandRepo), 'pinning opens the selected clean nested submodule');
+  pickChanges = choices => choices[0];
+  await commands.get('gitpane.manageSubmodulePins')();
+  assert.equal(workspaceState.get('gitpane.submodulePins').pins.length, 0);
+  console.log('PASS browse and pin clean nested submodules without opening on cancellation');
+  fs.writeFileSync(path.join(grandPath, 'nested.txt'), 'working nested change\n');
   await commands.get('gitpane.refresh')();
   const nestedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   await receive({ type: 'loadChanges', id: nestedParent.id });

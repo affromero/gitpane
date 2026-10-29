@@ -86,10 +86,12 @@ its own branch and remote configuration apply. Repositories sharing a Git
 common directory are fetched in sequence. Gitpane reports failures for each
 repository and refreshes the status and visible graph afterward.
 
-Use **Pin Submodule** on a submodule change, or choose **Pin Submodule in
-Gitpane** while inspecting nested submodules, to keep it in the overview.
-To create a pin, the submodule must currently appear as a change or an
-attention row; clean submodules without a row cannot yet be selected.
+Use **Pin Submodule…** from a repository or worktree menu to pin a direct
+submodule, including one without changes. The list comes from VS Code and can
+be refreshed; you can also enter a registered relative path. To pin a clean
+nested submodule, first open its parent repository in VS Code. You can also use
+**Pin Submodule** on a submodule change, or choose **Pin Submodule in Gitpane**
+while inspecting nested submodules.
 Pinned submodules are restored when their root repository is open in the same
 workspace and their registered paths and repository identities still match.
 Use **Unpin Submodule** from its repository menu to remove the pin. Gitpane

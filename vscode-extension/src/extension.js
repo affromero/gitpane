@@ -272,7 +272,7 @@ class GitpaneViewProvider {
     if (!repo || !this.tree.isVisible(repo)) return undefined;
     const status = this.tree.backendStatuses.get(repo.rootUri.toString());
     if (!status || typeof status.common_dir !== 'string' || !path.isAbsolute(status.common_dir)) return undefined;
-    return { repoPath: repo.rootUri.fsPath, commonDir: status.common_dir,
+    return { repoPath: repo.rootUri.fsPath, commonDir: status.common_dir, repoIdentity: status.repo_identity,
       branch: status.branch === 'HEAD' ? null : status.branch, head: status.head_oid };
   }
 
@@ -317,7 +317,8 @@ class GitpaneViewProvider {
     const available = !!child && typeof selected.childRepoId === 'string' && this.tree.isCurrentRepository(child, selected.childToken);
     if (selected.childRepoId && !available) return undefined;
     return { ...actionRepo, path: worktree.path, branch: worktree.branch,
-      childRepoKey: child?.rootUri.toString(), childRepoId: available ? selected.childRepoId : undefined, available };
+      childRepoKey: child?.rootUri.toString(), childRepoId: available ? selected.childRepoId : undefined,
+      childRepoIdentity: worktree.repo_identity, available };
   }
 
   currentWorktreeRepository(id) {
@@ -471,6 +472,10 @@ async function activate(context) {
   };
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.actions = new SidebarActions({ vscode, mutations,
+    browseSubmodules: async (id, kind, guard, item) => {
+      const repo = kind === 'worktree' ? provider.currentWorktreeRepository(id) : provider.currentRepository(id);
+      if (repo && guard()) await pins.browse(repo, kind === 'worktree' ? item.childRepoIdentity : item.repoIdentity, guard);
+    },
     pinSubmodule: async (id, guard) => {
       const node = provider.currentChange(provider.changes.get(id));
       if (node && guard()) await submodules.open(node, true);

@@ -23,8 +23,8 @@ function fixture(t, initiallyOpen = false) {
   const nested = path.join(child, 'nested');
   fs.mkdirSync(nested, { recursive: true });
   const uri = fsPath => ({ fsPath, scheme: 'file', toString: () => `file:${fsPath}` });
-  const rootRepo = { rootUri: uri(root), state: {} };
-  const childRepo = { rootUri: uri(child), state: {} };
+  const rootRepo = { rootUri: uri(root), state: { submodules: [{ path: 'child', url: 'secret' }] } };
+  const childRepo = { rootUri: uri(child), state: { submodules: [{ path: 'nested' }] } };
   const nestedRepo = { rootUri: uri(nested), state: {} };
   const available = new Map([[root, rootRepo], [child, childRepo], [nested, nestedRepo]]);
   const tokens = new Map([[root, 1], ...(initiallyOpen ? [[child, 1]] : [])]);
@@ -61,22 +61,29 @@ function fixture(t, initiallyOpen = false) {
   const ids = { root: '1'.repeat(64), child: '2'.repeat(64), nested: '3'.repeat(64) };
   const first = { path: 'child', parent_identity: ids.root, child_identity: ids.child };
   const second = { path: 'nested', parent_identity: ids.child, child_identity: ids.nested };
-  let validation = async (_root, chain) => {
-    const paths = [root];
+  let validation = async (rootPath, chain) => {
+    const paths = [rootPath];
     for (const link of chain) paths.push(path.join(paths.at(-1), link.path));
     return { repos: paths };
   };
   let sessions = 0, sessionCloses = 0;
   const backend = { generation: 1, validateSubmodulePin: (...args) => validation(...args),
+    async inspectSubmodule(parent, relative) {
+      if (parent === root && relative === 'child') return { repo: child, parent_identity: ids.root, child_identity: ids.child };
+      if (parent === child && relative === 'nested') return { repo: nested, parent_identity: ids.child, child_identity: ids.nested };
+      throw new Error('Submodule unavailable');
+    },
     async openPinValidationSession() {
       sessions++;
       return { validate: (...args) => validation(...args), async close() { sessionCloses++; } };
     } };
   let pick = choices => choices[0];
   let confirm = () => undefined;
+  let input = () => undefined;
   const manager = options => {
     const pins = new SubmodulePins(tree, backend, git, state, { Uri: { file: uri }, window: {
       showQuickPick: async choices => pick(choices), async showInformationMessage() {},
+      showInputBox: async options => input(options),
       showWarningMessage: async (...args) => confirm(...args)
     } }, options);
     pins.setVisible(true);
@@ -87,11 +94,120 @@ function fixture(t, initiallyOpen = false) {
     setVisible(value) { visible = value; tree.changed(); }, setValidation(value) { validation = value; },
     setSaved(value) { saved = value; }, setFailure(value) { failSave = value; },
     setPick(value) { pick = value; },
+    setInput(value) { input = value; },
     setConfirm(value) { confirm = value; },
     onSave(value) { onSave = value; },
     resetOpen() { git.repositories = [rootRepo]; tokens.delete(child); tokens.delete(nested); revisions.delete(child); revisions.delete(nested); }
   };
 }
+
+test('clean submodules of an already-open parent can be pinned', async t => {
+  const f = fixture(t, true);
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  f.setPick(choices => {
+    assert.equal(f.opens, 0);
+    assert.ok(!JSON.stringify(choices).includes('secret'));
+    return choices.find(choice => choice.relative === 'nested');
+  });
+  await pins.browse(f.childRepo, '2'.repeat(64));
+  assert.equal(f.opens, 1);
+  assert.deepEqual(f.saved.pins[0], { root: f.child, chain: [f.second] });
+  assert.equal(pins.isPinned(f.nestedRepo), true);
+});
+
+test('cancel, forged picker choices, and workspace changes cannot open submodules', async t => {
+  for (const mode of ['cancel', 'forged', 'workspace', 'changed']) {
+    const f = fixture(t);
+    const pins = f.manager();
+    t.after(() => pins.dispose());
+    const original = f.backend.inspectSubmodule;
+    f.backend.inspectSubmodule = async (...args) => {
+      const result = await original(...args);
+      if (mode === 'changed') result.parent_identity = '9'.repeat(64);
+      return result;
+    };
+    f.setPick(choices => {
+      if (mode === 'cancel') return undefined;
+      if (mode === 'forged') return { ...choices[0] };
+      if (mode === 'workspace') { f.backend.generation++; return choices[0]; }
+      return choices[0];
+    });
+    if (mode === 'cancel') await pins.browse(f.rootRepo, '1'.repeat(64));
+    else await assert.rejects(pins.browse(f.rootRepo, '1'.repeat(64)), /changed/i);
+    assert.equal(f.opens, 0);
+    assert.equal(f.saved, undefined);
+  }
+});
+
+test('manual paths are validated and backend scope escapes are rejected', async t => {
+  const f = fixture(t);
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  f.setPick(choices => choices.find(choice => choice.manual));
+  f.setInput(() => '../outside');
+  await assert.rejects(pins.browse(f.rootRepo, '1'.repeat(64)), /valid relative/i);
+  assert.equal(f.opens, 0);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-pin-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  f.setInput(() => 'child');
+  f.backend.inspectSubmodule = async () => ({ repo: outside, parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) });
+  await assert.rejects(pins.browse(f.rootRepo, '1'.repeat(64)), /outside the workspace/i);
+  assert.equal(f.opens, 0);
+});
+
+test('a registered path omitted by VS Code can be pinned by entering it manually', async t => {
+  const f = fixture(t);
+  f.rootRepo.state.submodules = [];
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  f.setPick(choices => choices.find(choice => choice.manual));
+  f.setInput(() => 'child');
+  await pins.browse(f.rootRepo, '1'.repeat(64));
+  assert.deepEqual(f.saved.pins[0], { root: f.root, chain: [f.first] });
+  assert.equal(f.opens, 1);
+});
+
+test('the picker explains its list limit and accepts a path beyond it', async t => {
+  const f = fixture(t);
+  f.rootRepo.state.submodules = [...Array.from({ length: 512 }, (_, index) => ({ path: `module-${index}` })), { path: 'child' }];
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  f.setPick(choices => {
+    assert.ok(!choices.some(choice => choice.relative === 'child'));
+    const manual = choices.find(choice => choice.manual);
+    assert.match(manual.detail, /first 512.*enter another path/i);
+    return manual;
+  });
+  f.setInput(options => { assert.match(options.prompt, /using \/ between folders/i); return 'child'; });
+  await pins.browse(f.rootRepo, '1'.repeat(64));
+  assert.deepEqual(f.saved.pins[0], { root: f.root, chain: [f.first] });
+});
+
+test('manual paths on Windows require forward slashes and reject backslashes', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t);
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  f.setPick(choices => choices.find(choice => choice.manual));
+  f.setInput(options => { assert.match(options.prompt, /using \/ between folders/i); return 'child\\nested'; });
+  await assert.rejects(pins.browse(f.rootRepo, '1'.repeat(64)), /valid relative/i);
+  assert.equal(f.opens, 0);
+});
+
+test('a candidate removed during backend inspection cannot be pinned', async t => {
+  const f = fixture(t);
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  const inspect = f.backend.inspectSubmodule;
+  f.backend.inspectSubmodule = async (...args) => {
+    const result = await inspect(...args);
+    f.rootRepo.state.submodules = [];
+    return result;
+  };
+  await assert.rejects(pins.browse(f.rootRepo, '1'.repeat(64)), /changed/i);
+  assert.equal(f.opens, 0);
+  assert.equal(f.saved, undefined);
+});
 
 test('pins persist durable nested identities and restore after normal repository changes', async t => {
   const f = fixture(t);

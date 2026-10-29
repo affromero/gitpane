@@ -37,6 +37,10 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'invalid branch name'}});
   } else if (request.method === 'worktree_plan' && request.params.branch === 'offline') {
     process.exit(1);
+  } else if (request.method === 'submodule_inspect' && request.params.path === 'missing') {
+    send({id: request.id, error: {code: 'repository_error', message: 'Submodule unavailable'}});
+  } else if (request.method === 'submodule_inspect' && request.params.path === 'offline') {
+    process.exit(1);
   } else if (request.method === 'changes_begin') {
     const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
       previous_cursor: null, next_cursor: 1, changes: []};
@@ -595,6 +599,18 @@ test('invalid worktree branches remain action errors while backend failures stay
   await assert.rejects(manager.planWorktree(repo, 'offline'), error => error.code === 'service_exited');
   assert.equal(manager.state.status, 'error');
   assert.equal(manager.state.error.code, 'service_exited');
+});
+
+test('unavailable submodules do not hide repository status while transport failures remain visible', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo');
+  await assert.rejects(manager.inspectSubmodule(repo, 'missing'), error => error.code === 'repository_error');
+  assert.equal(manager.state.status, 'ready');
+  assert.equal((await manager.status(repo)).method, 'status');
+  await assert.rejects(manager.inspectSubmodule(repo, 'offline'), error => error.code === 'service_exited');
+  assert.equal(manager.state.status, 'error');
 });
 
 test('detailed change scans do not block status and file checks preserve the visible snapshot', async t => {

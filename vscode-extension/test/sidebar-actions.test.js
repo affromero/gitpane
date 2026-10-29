@@ -63,6 +63,7 @@ function fixture() {
     openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
     pinSubmodule: async id => { calls.push(['pinSubmodule', id]); },
+    browseSubmodules: async (id, kind) => { calls.push(['browseSubmodules', id, kind]); },
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     previewFileAction: (...args) => preview(...args),
@@ -127,6 +128,22 @@ test('submodule file and pinned repository menus expose scoped pin actions', asy
   f.setRepo({ ...f.getRepo(), pinned: false });
   await f.actions.handle(action('unpinSubmodule', 'repo'));
   assert.equal(f.calls.length, 2);
+});
+
+test('repository and available worktree menus offer submodule browsing only for current selections', async () => {
+  const f = fixture();
+  f.pick(choices => choices.find(choice => choice.action === 'browseSubmodules'));
+  await f.actions.showMenu('repo', 'repo');
+  f.setWorktree({ ...f.getWorktree(), available: true, childRepoId: 'child' });
+  f.pick(choices => choices.find(choice => choice.action === 'browseWorktreeSubmodules'));
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, [['browseSubmodules', 'repo', 'repo'], ['browseSubmodules', 'worktree', 'worktree']]);
+  f.pick(choices => { f.setRepo({ ...f.getRepo(), repoIdentity: 'replacement' }); return choices.find(choice => choice.action === 'browseSubmodules'); });
+  await f.actions.showMenu('repo', 'repo');
+  assert.equal(f.calls.length, 2);
+  f.setWorktree({ ...f.getWorktree(), available: false });
+  f.pick(choices => { assert.ok(!choices.some(choice => choice.action === 'browseWorktreeSubmodules')); });
+  await f.actions.showMenu('worktree', 'worktree');
 });
 
 test('a file that becomes a submodule while its menu is open cannot be mutated', async () => {

@@ -195,6 +195,52 @@ class SubmodulePins {
     throw new Error('VS Code is still opening this submodule. Try removing the pin after the open finishes.');
   }
 
+  async browse(repo, rootIdentity, guard = () => true) {
+    this.beginUserAction();
+    try { return await this.browseSelection(repo, rootIdentity, guard); }
+    finally { this.endUserAction(); }
+  }
+
+  async browseSelection(repo, rootIdentity, guard) {
+    const rootPath = canonical(repo?.rootUri?.fsPath);
+    const rootToken = repo && this.tree.repositoryToken(repo);
+    const generation = this.backend.generation;
+    if (!rootPath || !token(rootIdentity)) throw new Error('Repository status is unavailable. Refresh Gitpane and try again.');
+    const current = () => !this.disposed && guard() && generation === this.backend.generation &&
+      this.tree.isCurrentRepository(repo, rootToken) && canonical(repo.rootUri.fsPath) === rootPath && this.tree.isPathInWorkspace(rootPath);
+    const clean = value => value.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\$\(/g, '＄(');
+    const candidates = () => {
+      const entries = repo.state?.submodules;
+      if (!Array.isArray(entries)) return [];
+      return [...new Set(entries.slice(0, 512).map(item => item?.path).filter(value => relativeFile(value) && value.length <= 4096))].sort();
+    };
+    if (!current()) throw new Error('The selected repository changed. Open the submodule picker again.');
+    const choices = candidates().map(relative => ({ label: clean(relative), relative }));
+    const limited = Array.isArray(repo.state?.submodules) && repo.state.submodules.length > 512;
+    choices.push({ label: 'Enter submodule path…', manual: true,
+      ...(limited ? { detail: 'Only the first 512 VS Code entries are listed. Enter another path here.' } : {}) });
+    const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: limited ?
+      'Showing the first 512 VS Code entries. Enter another path to pin it.' : 'Choose a submodule to pin' });
+    if (!selected) return;
+    if (!choices.includes(selected) || !current()) throw new Error('The selected submodule changed. Open the picker again.');
+    const relative = selected.manual ? await this.vscode.window.showInputBox({
+      prompt: 'Enter the registered submodule path relative to this repository, using / between folders'
+    }) : selected.relative;
+    if (relative === undefined) return;
+    if (!relativeFile(relative) || relative.length > 4096) throw new Error('Enter a valid relative submodule path.');
+    const stillSelected = () => current() && (selected.manual || candidates().includes(relative));
+    if (!stillSelected()) throw new Error('The selected submodule changed. Open the picker again.');
+    const result = await this.backend.inspectSubmodule(rootPath, relative);
+    const target = canonical(path.join(rootPath, ...relative.split('/')));
+    if (!stillSelected() || !result || result.parent_identity !== rootIdentity || !token(result.child_identity) ||
+        typeof result.repo !== 'string' || !path.isAbsolute(result.repo) || !target || canonical(result.repo) !== target ||
+        !this.tree.isPathInWorkspace(target)) {
+      throw new Error('The selected submodule changed or is outside the workspace. Refresh and try again.');
+    }
+    const link = { path: relative, parent_identity: rootIdentity, child_identity: result.child_identity };
+    await this.pin(rootPath, [link], stillSelected);
+  }
+
   pin(root, frames, guard, verifySelection = async () => true) {
     const pin = { root, chain: frames.map(frame => ({ path: frame.path, parent_identity: frame.parent_identity, child_identity: frame.child_identity })) };
     if (!validPin(pin)) return Promise.reject(new Error('Invalid submodule pin.'));
