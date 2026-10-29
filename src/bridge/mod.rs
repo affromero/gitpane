@@ -231,6 +231,7 @@ fn process(
         "changes_find" => snapshots.find(scope, params(request.params)?),
         "changes_search" => snapshots.search(scope, params(request.params)?),
         "changes_release" => snapshots.release(scope, params(request.params)?),
+        "repo_blob_metadata" => changes::blob::metadata(scope, params(request.params)?),
         "file_action_preview" => {
             let input = params(request.params)?;
             mutation::file_action_preview(scope, input)

@@ -41,6 +41,8 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'repository_error', message: 'Submodule unavailable'}});
   } else if (request.method === 'submodule_inspect' && request.params.path === 'offline') {
     process.exit(1);
+  } else if (request.method === 'repo_blob_metadata' && request.params.path === 'tree') {
+    send({id: request.id, error: {code: 'unsupported_content', message: 'The selected object is not a blob'}});
   } else if (request.method === 'changes_begin') {
     const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
       previous_cursor: null, next_cursor: 1, changes: []};
@@ -74,7 +76,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     if (request.params.repos.some(repo => repo.endsWith('slow'))) setTimeout(() => send({id: request.id, result}), 300);
     else send({id: request.id, result});
   } else {
-    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode}});
+    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode, ref: request.params.ref}});
   }
 });
 
@@ -160,6 +162,12 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(await manager.submoduleHistoricalContent(path.join(root, 'repo'), 'e'.repeat(64), 'a'.repeat(40), 'nested', 'b'.repeat(40), 33188),
     { roots: [root], method: 'submodule_historical_content', expected_repo_identity: 'e'.repeat(64),
       commit_oid: 'a'.repeat(40), path: 'nested', expected_oid: 'b'.repeat(40), expected_mode: 33188 });
+  assert.deepEqual(await manager.repoBlobMetadata(path.join(root, 'repo'), 'e'.repeat(64), ':3', 'blocked/file'),
+    { roots: [root], method: 'repo_blob_metadata', expected_repo_identity: 'e'.repeat(64), ref: ':3', path: 'blocked/file' });
+  await assert.rejects(manager.repoBlobMetadata(path.join(root, 'repo'), 'e'.repeat(64), 'HEAD', 'tree'),
+    error => error.code === 'unsupported_content');
+  assert.equal(manager.state.status, 'ready');
+  assert.equal((await manager.status(path.join(root, 'repo'), false)).method, 'status');
   assert.equal((await manager.branchReview(path.join(root, 'repo'))).method, 'branch_review');
   const child = await manager.inspectSubmodule(path.join(root, 'repo'), 'child');
   assert.equal(child.path, 'child');

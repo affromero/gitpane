@@ -24,7 +24,9 @@ function scopedFile(root, relative) {
     current = path.join(current, part);
     try {
       const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('File has an unsafe ancestor.');
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw Object.assign(new Error('File has an unsafe ancestor.'), { code: 'unsafe_ancestor' });
+      }
     } catch (error) {
       if (error.code === 'ENOENT') break;
       throw error;

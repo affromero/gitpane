@@ -12,6 +12,7 @@ use crate::git::status::{ChangeError, collect_changes};
 
 use super::{BridgeError, scope::Scope};
 
+pub(super) mod blob;
 #[cfg(test)]
 mod scale_tests;
 mod search;

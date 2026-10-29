@@ -45,14 +45,14 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown field summary_only'}});
     return;
   }
-  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'submodule_pin_validate', 'submodule_historical_content', 'worktree_remove_preview', 'repo_fetch_preview', 'ui_config'].includes(request.method)) {
+  if (process.env.MODE === 'old' && ['submodule_chain_validate', 'submodule_pin_validate', 'submodule_historical_content', 'repo_blob_metadata', 'worktree_remove_preview', 'repo_fetch_preview', 'ui_config'].includes(request.method)) {
     send({id: request.id, error: {code: 'invalid_request', message: 'unknown bridge method'}}); return;
   }
   if (request.params.repo === '/denied') {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode};
+  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity, commit_oid: request.params.commit_oid, expected_oid: request.params.expected_oid, expected_mode: request.params.expected_mode, ref: request.params.ref};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -97,6 +97,8 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.theme(), { method: 'theme', roots: [root] });
   assert.deepEqual(await client.commitFiles(repo, 'abc123'), { method: 'commit_files', repo, roots: [root], oid: 'abc123' });
   assert.deepEqual(await client.branchReview(repo), { method: 'branch_review', repo, roots: [root] });
+  assert.deepEqual(await client.repoBlobMetadata(repo, 'e'.repeat(64), ':2', 'blocked/file'),
+    { method: 'repo_blob_metadata', repo, roots: [root], expected_repo_identity: 'e'.repeat(64), ref: ':2', path: 'blocked/file' });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child'), { method: 'submodule_inspect', repo, path: 'child', roots: [root] });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child', true),
     { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true });
@@ -132,6 +134,8 @@ test('an older backend requires an update for compact status', async t => {
   }
   assert.equal((await client.status(repo)).method, 'status');
   await assert.rejects(client.submoduleHistoricalContent(repo, 'e'.repeat(64), 'a'.repeat(40), 'nested', 'b'.repeat(40), 33188),
+    error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
+  await assert.rejects(client.repoBlobMetadata(repo, 'e'.repeat(64), 'HEAD', 'blocked/file'),
     error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.validateSubmoduleChain([]), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
   await assert.rejects(client.validateSubmodulePin(repo, []), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));

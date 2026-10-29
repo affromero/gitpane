@@ -59,6 +59,11 @@ async function main() {
     return result.stdout.trim();
   };
   const git = (...args) => gitAt(repoPath, ...args);
+  const gitBuffer = (directory, ref, relative) => {
+    const result = spawnSync('git', ['-C', directory, 'show', '--textconv', `${ref}:${relative}`], { env: isolatedGitEnv() });
+    if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr.toString());
+    return result.stdout;
+  };
   git('init', '-q');
   git('commit', '--allow-empty', '-qm', 'initial');
   git('worktree', 'add', '-qb', 'feature/worktree', worktreePath);
@@ -193,6 +198,74 @@ async function main() {
   workspaceChanged.fire({});
   await commands.get('gitpane.refresh')();
   console.log('PASS targeted refresh restores temporarily unavailable workspace scope');
+  const blockedCases = process.platform === 'win32' ? [] : [['blocked-working', false, false, false], ['blocked-staged', true, false, false],
+    ['blocked-link', false, true, false], ['blocked-conflict', false, false, true]];
+  for (const [name, staged, symlink, conflict] of blockedCases) {
+    const root = path.join(temporary, 'workspace', name), blocker = path.join(root, 'blocked');
+    fs.mkdirSync(blocker, { recursive: true });
+    const relative = 'blocked/:(glob)*.bin';
+    const bytes = Buffer.from([0, 255, 42, 10]);
+    fs.writeFileSync(path.join(root, relative), bytes);
+    gitAt(root, 'init', '-q');
+    gitAt(root, 'add', '-A');
+    gitAt(root, 'commit', '-qm', 'tracked binary');
+    fs.rmSync(blocker, { recursive: true });
+    if (symlink) {
+      const outside = path.join(temporary, 'outside-blocked');
+      fs.mkdirSync(outside, { recursive: true });
+      fs.writeFileSync(path.join(outside, ':(glob)*.bin'), 'outside');
+      fs.symlinkSync(outside, blocker, 'dir');
+    } else fs.writeFileSync(blocker, 'replacement');
+    if (staged) gitAt(root, 'add', '-A');
+    const ours = Buffer.from([0, 253, 1]), theirs = Buffer.from([0, 254, 2]);
+    if (conflict) {
+      const hash = data => {
+        const result = spawnSync('git', ['-C', root, 'hash-object', '-w', '--stdin'], { env: isolatedGitEnv(), input: data });
+        if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr.toString());
+        return result.stdout.toString().trim();
+      };
+      const base = gitAt(root, 'rev-parse', `HEAD:${relative}`);
+      const records = `0 ${'0'.repeat(40)}\t${relative}\n100644 ${base} 1\t${relative}\n` +
+        `100644 ${hash(ours)} 2\t${relative}\n100644 ${hash(theirs)} 3\t${relative}\n`;
+      const result = spawnSync('git', ['-C', root, 'update-index', '--index-info'], { env: isolatedGitEnv(), input: records });
+      if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr.toString());
+    }
+    const added = { rootUri: uri(root), state: { HEAD: { commit: gitAt(root, 'rev-parse', 'HEAD'), name: 'main' },
+      onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [], submodules: [] },
+      async status() {}, async buffer(ref, file) { return gitBuffer(root, ref, file); } };
+    api.repositories.push(added);
+    openedRepositories.fire(added);
+    await commands.get('gitpane.refresh')();
+    let row = snapshots.at(-1).repositories.find(item => item.name === name);
+    assert.ok(row, `repository ${name} must appear`);
+    await receive({ type: 'loadChanges', id: row.id });
+    row = snapshots.at(-1).repositories.find(item => item.name === name);
+    const group = row.groups.find(item => item.id === (conflict ? 'merge' : staged ? 'index' : 'working'));
+    const deleted = group?.files.find(item => item.path === relative);
+    assert.ok(deleted, `deleted Git path must appear in ${name}`);
+    const previousDiffs = diffs.length, previousErrors = errors.length;
+    await receive({ type: 'openChange', id: deleted.id });
+    assert.equal(errors.length, previousErrors, errors.at(-1));
+    assert.equal(diffs.length, previousDiffs + 1);
+    const [left, right] = diffs.at(-1);
+    assert.equal(left.scheme, 'gitpane-blob');
+    assert.equal(right.scheme, conflict ? 'gitpane-blob' : 'gitpane-empty');
+    const files = documents.get('gitpane-blob');
+    assert.deepEqual(await files.readFile(left), conflict ? ours : bytes);
+    if (conflict) assert.deepEqual(await files.readFile(right), theirs);
+    await receive({ type: 'releaseChanges', id: row.id });
+    assert.deepEqual(await files.readFile(left), conflict ? ours : bytes, 'an open diff survives collapsing its source page');
+    if (!staged && !symlink && !conflict) {
+      gitAt(root, 'add', '-A');
+      await assert.rejects(files.readFile(left), /no longer|changed/i);
+    }
+    api.repositories.splice(api.repositories.indexOf(added), 1);
+    closedRepositories.fire(added);
+    await assert.rejects(files.readFile(left), /no longer/i);
+  }
+  if (blockedCases.length) console.log('PASS blocked historical Git sides use the owning repository for binary files');
+  diffs.length = 0;
+  await commands.get('gitpane.refresh')();
   const owner = snapshots.at(-1).repositories[0];
   assert.equal(repo.state.workingTreeChanges.length, 0);
   assert.equal(owner.dirty, true);

@@ -236,7 +236,7 @@ class LinkDocuments {
               failure = Object.assign(new Error(result.message), { code: result.code });
             }
           } else if ((entry.content !== undefined || entry.readContent || entry.readBinary) && entry.group) {
-            if (!checks.has(entry.group)) checks.set(entry.group, this.current(entry));
+            if (!checks.has(entry.group)) checks.set(entry.group, entry.refreshGuard ? entry.refreshGuard() : this.current(entry));
             current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
           } else current = await this.current(entry);
         }
@@ -325,9 +325,9 @@ class LinkDocuments {
     return metadata;
   }
 
-  async createBinary(fileUri, readMetadata, readBinary, guard, guardSync, group) {
+  async createBinary(fileUri, readMetadata, readBinary, guard, guardSync, group, refreshGuard) {
     if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
-    const entry = { readMetadata, readBinary, guard, guardSync, group, closed: false, textOpen: false, tabOpen: false };
+    const entry = { readMetadata, readBinary, guard, guardSync, group, refreshGuard, closed: false, textOpen: false, tabOpen: false };
     await this.binaryMetadata(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
     const name = path.basename(fileUri.fsPath);
@@ -362,7 +362,9 @@ class LinkDocuments {
 
   async readFile(uri) {
     const entry = this.binaryEntry(uri);
-    await this.binaryMetadata(entry);
+    if (entry.refreshGuard) {
+      if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
+    } else await this.binaryMetadata(entry);
     await this.acquireBinary();
     try {
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');

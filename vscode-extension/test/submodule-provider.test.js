@@ -135,6 +135,53 @@ test('opens committed rename and current dirty file comparisons using native edi
   assert.deepEqual(f.graphs, [f.child]);
 });
 
+test('nested deleted files use the owning repository and retain ancestor guards after paging', async t => {
+  class EventEmitter {
+    constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
+    fire(value) { for (const listener of this.listeners) listener(value); }
+    dispose() { this.listeners.clear(); }
+  }
+  const changes = new EventEmitter();
+  const links = new LinkDocuments({ EventEmitter, workspace: {}, FileType: { File: 1 }, FileChangeType: { Changed: 1 } },
+    { onDidChangeTreeData: changes.event }, {});
+  t.after(() => links.dispose());
+  const f = fixture(t, links);
+  const record = { path: 'blocked/deleted.bin', group: 'working', kind: 'working_deleted',
+    original_path: null, conflict_stages: null, is_submodule: false };
+  f.setRecords([record]);
+  fs.writeFileSync(path.join(f.childPath, 'blocked'), 'replacement');
+  const bytes = Buffer.from([0, 255, 1]);
+  f.child.buffer = async (ref, file) => {
+    assert.equal(ref, '');
+    assert.equal(file, record.path);
+    return bytes;
+  };
+  f.backend.repoBlobMetadata = async () => ({ oid: 'c'.repeat(40), mode: 0o100644, size: bytes.length, head_oid: null });
+  f.pick(choices => choices.find(choice => choice.kind === 'change') || choices.find(choice => choice.kind === 'browse'));
+  await f.provider.open(f.node);
+  assert.equal(f.errors.length, 0, f.errors.at(-1));
+  const [command, left, right] = f.commands.at(-1);
+  assert.equal(command, 'vscode.diff');
+  assert.equal(left.toString().startsWith('gitpane-blob:'), true);
+  assert.equal(right.toString().startsWith('gitpane-empty:'), true);
+  assert.deepEqual(await links.readFile(left), bytes);
+  f.setRowVisible(false);
+  assert.deepEqual(await links.readFile(left), bytes);
+  f.setParentRecord({ ...f.node.record, kind: 'working_deleted' });
+  await assert.rejects(links.readFile(left), /no longer|changed/i);
+});
+
+test('nested working file reads still reject blocked ancestors', async t => {
+  const f = fixture(t);
+  f.setRecords([{ path: 'blocked/file.txt', group: 'working', kind: 'working_modified',
+    original_path: null, conflict_stages: null, is_submodule: false }]);
+  fs.writeFileSync(path.join(f.childPath, 'blocked'), 'replacement');
+  f.pick(choices => choices.find(choice => choice.kind === 'change') || choices.find(choice => choice.kind === 'browse'));
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /unsafe ancestor|cannot open/i);
+});
+
 test('submodule diffs use the selected pointer endpoints while guarding the live child', async t => {
   const f = fixture(t);
   const live = 'c'.repeat(40);

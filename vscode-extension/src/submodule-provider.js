@@ -8,6 +8,7 @@ const { isSubmodule, richComparison } = require('./model');
 const { relativeFile: safeRelative, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { openGitlinkDiff } = require('./gitlink-diff');
+const { createGitSide } = require('./git-side-documents');
 
 class SubmoduleProvider {
   constructor(tree, backend, git, options = {}) {
@@ -201,7 +202,8 @@ class SubmoduleProvider {
       const ownCurrent = persistent => this.childCurrent(node, generation, result.repo, parentToken, child, childToken, persistent);
       const currentChild = () => ancestors.every(ancestor => ancestor.current()) && ownCurrent(false);
       const currentLink = () => ancestors.every(ancestor => ancestor.currentLink()) && ownCurrent(true);
-      const frame = { link, current: () => ownCurrent(false), currentLink: () => ownCurrent(true) };
+      const contextKey = ancestors[0]?.contextKey || JSON.stringify(node.parentWorktree || null);
+      const frame = { link, contextKey, current: () => ownCurrent(false), currentLink: () => ownCurrent(true) };
       const checkHead = (persistent = false) => checkFrames([...ancestors, frame], persistent);
       const pointerOptions = { parent: node.repo.rootUri.fsPath, relative, group, originalPath,
         childToken, currentChild, currentLink, checkHead,
@@ -260,13 +262,9 @@ class SubmoduleProvider {
         if (!await checkHead() || !validRecord(checked?.change) || JSON.stringify(checked.change) !== JSON.stringify(record)) {
           throw new Error('The submodule change is no longer available.');
         }
-        // Deleted gitlinks use virtual pointer/empty documents only. A regular
-        // file may block an ancestor of their old path, so no filesystem path
-        // needs to be opened to label those documents.
-        const virtualDeletion = record.group === 'working' && record.kind === 'working_deleted' &&
-          isPointerComparison(record);
-        const selectedPath = virtualDeletion ? path.join(child.rootUri.fsPath, ...record.path.split('/')) :
-          scopedFile(child.rootUri.fsPath, record.path);
+        // This URI identifies the Git record; it is not read from the filesystem.
+        // A changed file or link is checked separately before it is opened.
+        const selectedPath = path.join(child.rootUri.fsPath, ...record.path.split('/'));
         const uri = this.vscode.Uri.file(selectedPath);
         if (record.is_submodule || isSubmodule(child.rootUri.fsPath, uri.fsPath, child.state.submodules)) {
           session.close();
@@ -297,7 +295,19 @@ class SubmoduleProvider {
         const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
         const resolve = async side => {
           if (side.empty) return empty;
-          const target = scopedFile(child.rootUri.fsPath, side.filePath || side.gitPath);
+          let target;
+          try { target = scopedFile(child.rootUri.fsPath, side.filePath || side.gitPath); }
+          catch (error) {
+            if (side.filePath || error.code !== 'unsafe_ancestor') throw error;
+            const verify = async () => {
+              const current = await this.backend.verifyChanges(child.rootUri.fsPath, record);
+              return validRecord(current?.change) && JSON.stringify(current.change) === JSON.stringify(record);
+            };
+            return createGitSide({ vscode: this.vscode, links: this.linkDocuments, backend: this.backend,
+              repo: child, repoIdentity: result.child_identity, repoToken: childToken, side, record,
+              current: currentLink, verify, verifyAncestors: () => checkHead(true),
+              ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)), contextKey });
+          }
           const sideUri = this.vscode.Uri.file(target);
           if (!side.filePath) return this.git.toGitUri(sideUri, side.ref);
           const stat = fs.lstatSync(target);

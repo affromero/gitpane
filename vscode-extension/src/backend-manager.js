@@ -273,6 +273,7 @@ class BackendManager {
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
       else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
+      else if (method === 'repo_blob_metadata') result = await client.repoBlobMetadata(repo, argument.identity, argument.ref, argument.path);
       else if (method === 'submodule_pointer_compare') result = await client.submodulePointerCompare(repo, argument.record, argument.identity);
       else if (method === 'submodule_pointer_content') result = await client.submodulePointerContent(repo, argument.record, argument.identity, argument.headOid, argument.sides, argument.side);
       else if (method === 'submodule_historical_content') result = await client.submoduleHistoricalContent(repo, argument.identity, argument.commit, argument.path, argument.oid, argument.mode);
@@ -304,6 +305,8 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
       const invalidIdentity = method === 'repo_identity_validate' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
+      const invalidBlob = method === 'repo_blob_metadata' &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'unsupported_content'].includes(error?.code);
       const invalidPointer = ['submodule_pointer_compare', 'submodule_pointer_content', 'submodule_historical_content'].includes(method) &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'file_too_large', 'unsupported_content'].includes(error?.code);
       const invalidRepositoryPreview = method === 'repository_preview' &&
@@ -312,7 +315,7 @@ class BackendManager {
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = ['theme', 'themes_list', 'theme_preview'].includes(method) && ['theme_error', 'invalid_request', 'unsupported_backend', 'stale_target'].includes(error?.code);
       const invalidUiConfig = method === 'ui_config' && ['invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig) {
         this.setState('error', error);
       }
       throw error;
@@ -642,6 +645,8 @@ class BackendManager {
   inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
 
   validateRepositoryIdentity(repo, identity) { return this.request('repo_identity_validate', repo, identity); }
+
+  repoBlobMetadata(repo, identity, ref, path) { return this.request('repo_blob_metadata', repo, { identity, ref, path }); }
 
   submoduleHistoricalContent(repo, identity, commit, filePath, oid, mode) {
     return this.request('submodule_historical_content', repo, { identity, commit, path: filePath, oid, mode });

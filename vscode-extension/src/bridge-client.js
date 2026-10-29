@@ -133,6 +133,16 @@ class BridgeClient {
 
   beginChanges(repo) { return this.request('changes_begin', { repo }); }
 
+  async repoBlobMetadata(repo, identity, ref, path) {
+    try { return await this.request('repo_blob_metadata', { repo, expected_repo_identity: identity, ref, path }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support this diff. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   nextChanges(repo, snapshot, cursor) { return this.request('changes_next', { repo, snapshot, cursor }); }
 
   searchChanges(repo, snapshot, query, direction, position) {

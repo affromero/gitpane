@@ -26,6 +26,7 @@ const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
+const { createGitSide } = require('./git-side-documents');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -776,25 +777,32 @@ async function activate(context) {
         }
         const plan = richComparison(node.record);
         const empty = node.change.uri.with({ scheme: 'gitpane-empty', query: '' });
+        const current = () => {
+          const repo = tree.git.repositories.find(item => item.rootUri.toString() === node.repo.rootUri.toString());
+          if (!repo || !tree.isCurrentRepository(repo, node.repoToken)) return false;
+          if (!node.parentWorktree) return true;
+          const parent = tree.git.repositories.find(item => item.rootUri.toString() === node.parentWorktree.repoKey);
+          return !!parent && tree.isCurrentRepository(parent, node.parentWorktree.repoToken) &&
+            tree.workspaceWorktrees(parent).some(item => item.path === node.parentWorktree.path) &&
+            tree.worktreeRepository(parent, node.parentWorktree.path)?.rootUri.toString() === repo.rootUri.toString();
+        };
+        const verify = async () => {
+          const result = await backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
+          return validRecord(result?.change) && JSON.stringify(result.change) === JSON.stringify(node.record);
+        };
         const resolve = async side => {
           if (side.empty) return empty;
-          const target = scopedFile(node.repo.rootUri.fsPath, side.filePath || side.gitPath);
+          let target;
+          try { target = scopedFile(node.repo.rootUri.fsPath, side.filePath || side.gitPath); }
+          catch (error) {
+            if (side.filePath || error.code !== 'unsafe_ancestor') throw error;
+            const repoIdentity = tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
+            return createGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
+              side, record: node.record, current, verify, contextKey: JSON.stringify(node.parentWorktree || null) });
+          }
           if (side.filePath) {
             const stat = fs.lstatSync(target);
             if (stat.isSymbolicLink()) {
-              const current = () => {
-                const repo = tree.git.repositories.find(item => item.rootUri.toString() === node.repo.rootUri.toString());
-                if (!repo || !tree.isCurrentRepository(repo, node.repoToken)) return false;
-                if (!node.parentWorktree) return true;
-                const parent = tree.git.repositories.find(item => item.rootUri.toString() === node.parentWorktree.repoKey);
-                return !!parent && tree.isCurrentRepository(parent, node.parentWorktree.repoToken) &&
-                  tree.workspaceWorktrees(parent).some(item => item.path === node.parentWorktree.path) &&
-                  tree.worktreeRepository(parent, node.parentWorktree.path)?.rootUri.toString() === repo.rootUri.toString();
-              };
-              const verify = async () => {
-                const result = await backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
-                return validRecord(result?.change) && JSON.stringify(result.change) === JSON.stringify(node.record);
-              };
               const revision = statusRevision(() => tree.backendStatuses.get(node.repo.rootUri.toString()), side.filePath);
               return links.create(vscode.Uri.file(target), node.repo.rootUri.fsPath, side.filePath,
                 current, verify, revision);

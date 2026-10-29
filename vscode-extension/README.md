@@ -15,6 +15,13 @@ their metadata. Git status scans also use temporary memory. If the cache is
 full, collapse another repository or worktree and retry. A single snapshot
 larger than 64 MiB cannot be loaded.
 
+When a file or symlink blocks the old path of a deleted or renamed file, the
+Git side opens as a read-only snapshot from the selected repository. Reopen
+the diff after changing that index entry. Gitpane checks the entry before and
+after reading; a change that is reversed during the read may go undetected.
+Other Git sides use VS Code's Git provider, which selects a repository by path.
+An overlapping open repository can affect which history that provider reads.
+
 The view includes detected repositories inside the open workspace folders,
 including multi-root workspaces. Linked worktrees inside the workspace appear
 under their repository, with their own changed files and actions. A worktree
