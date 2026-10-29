@@ -79,6 +79,7 @@ class RepositoryTree {
     this.worktreeOpenings = new Map();
     this.groupCache = new Map();
     this.backendStatuses = new Map();
+    this.statusEvidence = new WeakMap();
     this.watchedPathsFor = () => [];
     this.watchTokenFor = () => undefined;
     this.backendErrors = new Map();
@@ -185,7 +186,15 @@ class RepositoryTree {
     this.scheduleChanged();
   }
 
-  async refreshBackend(repo, cycle, includeWorktrees) {
+  statusError(repo, error) {
+    const key = repo.rootUri.toString();
+    this.backendStatuses.delete(key);
+    const message = `Could not load Gitpane status for ${repo.rootUri.fsPath}: ${error.message}`;
+    if (this.backendErrors.get(key) !== message) this.output.appendLine(message);
+    this.backendErrors.set(key, message);
+  }
+
+  async refreshBackend(repo, cycle, includeWorktrees, deferDiscovery = false) {
     const key = repo.rootUri.toString();
     const generation = cycle.generation;
     const current = () => !this.disposed && generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
@@ -204,24 +213,47 @@ class RepositoryTree {
         throw new Error('Gitpane backend returned an invalid compact repository status. Update the backend and try again.');
       }
       const previous = this.backendStatuses.get(key);
+      const commonIdentity = directoryIdentity(status.common_dir);
+      const previousEvidence = previous && this.statusEvidence.get(previous);
       const preserveWorktrees = !includeWorktrees && previous?.worktrees.length &&
-        sameIdentity(directoryIdentity(previous.common_dir), directoryIdentity(status.common_dir));
+        previousEvidence?.generation === generation && previousEvidence.token === cycle.tokens.get(key) &&
+        sameIdentity(previousEvidence.common, commonIdentity);
       const stored = { ...status, watchedPaths, watchTokens, ...(preserveWorktrees ? { worktrees: previous.worktrees } : {}) };
+      this.statusEvidence.set(stored, { common: commonIdentity, generation, token: cycle.tokens.get(key) });
       this.backendStatuses.set(key, stored);
       this.backendErrors.delete(key);
-      if (includeWorktrees) await this.openWorkspaceWorktrees(repo, stored, generation, cycle);
+      if (includeWorktrees && !deferDiscovery) await this.openWorkspaceWorktrees(repo, stored, generation, cycle);
+      return stored;
     } catch (error) {
       if (!current() || error.code === 'workspace_changed') return;
-      this.backendStatuses.delete(key);
-      const message = `Could not load Gitpane status for ${repo.rootUri.fsPath}: ${error.message}`;
-      if (this.backendErrors.get(key) !== message) this.output.appendLine(message);
-      this.backendErrors.set(key, message);
+      this.statusError(repo, error);
     }
   }
 
   async refreshRepositories(repos, cycle, visibleOnly) {
     const current = repo => !this.disposed && cycle.generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
       (!visibleOnly || this.visible) && this.isCurrentRepository(repo, cycle.tokens.get(repo.rootUri.toString()));
+    // Cached identities select provisional anchors only. New statuses decide
+    // the actual groups before any worktree discovery is allowed.
+    const cachedGroups = new Map();
+    for (const repo of repos) {
+      if (!current(repo)) continue;
+      const key = repo.rootUri.toString();
+      const status = this.backendStatuses.get(key);
+      if (!status) continue;
+      const evidence = this.statusEvidence.get(status);
+      if (!evidence || evidence.generation !== cycle.generation || evidence.token !== cycle.tokens.get(key)) continue;
+      const common = evidence.common;
+      if (!sameIdentity(common, directoryIdentity(status.common_dir))) continue;
+      const group = identityKey(common);
+      if (!cachedGroups.has(group)) cachedGroups.set(group, { common, repos: [] });
+      cachedGroups.get(group).repos.push(repo);
+    }
+    const provisional = new Map();
+    for (const { common, repos: group } of cachedGroups.values()) {
+      provisional.set(group.sort(compareWorktreeAnchors)[0].rootUri.toString(), common);
+    }
+    const detailed = new Map();
     await parallel(repos, 4, async repo => {
       if (!current(repo)) return;
       try {
@@ -230,7 +262,12 @@ class RepositoryTree {
       } catch (error) {
         if (current(repo)) this.statusFailed(repo, error);
       }
-      if (current(repo)) await this.refreshBackend(repo, cycle, false);
+      if (current(repo)) {
+        const key = repo.rootUri.toString();
+        const includeWorktrees = provisional.has(key);
+        const status = await this.refreshBackend(repo, cycle, includeWorktrees, includeWorktrees);
+        if (includeWorktrees && status) detailed.set(key, status);
+      }
     });
     if (this.disposed || cycle.generation !== this.backendGeneration || (visibleOnly && !this.visible)) return;
     const commonIdentities = new Map();
@@ -255,7 +292,25 @@ class RepositoryTree {
     }
     const anchors = [...groups.values()].map(group => group.sort(compareWorktreeAnchors)[0]);
     await parallel(anchors, 4, async repo => {
-      if (current(repo)) await this.refreshBackend(repo, cycle, true);
+      if (!current(repo)) return;
+      const key = repo.rootUri.toString();
+      const status = detailed.get(key);
+      const evidence = status && this.statusEvidence.get(status);
+      let watchCurrent = false;
+      if (status) {
+        try {
+          const watched = [...new Set(this.watchedPathsFor(repo.rootUri.fsPath))];
+          watchCurrent = watched.length === status.watchedPaths.length && watched.every(value =>
+            status.watchTokens.has(value) && status.watchTokens.get(value) === this.watchTokenFor(repo.rootUri.fsPath, value));
+        } catch { /* The fresh scan reports invalid watch state. */ }
+      }
+      if (status && this.backendStatuses.get(key) === status && watchCurrent &&
+          evidence?.generation === cycle.generation && evidence.token === cycle.tokens.get(key) &&
+          sameIdentity(provisional.get(key), evidence.common) &&
+          sameIdentity(evidence.common, directoryIdentity(status.common_dir))) {
+        try { await this.openWorkspaceWorktrees(repo, status, cycle.generation, cycle); }
+        catch (error) { if (current(repo) && error.code !== 'workspace_changed') this.statusError(repo, error); }
+      } else await this.refreshBackend(repo, cycle, true);
     });
   }
 

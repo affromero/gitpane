@@ -680,6 +680,10 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     let rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['main']);
     assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    statusRequests.length = 0;
+    await tree.refresh();
+    assert.deepEqual(statusRequests.filter(([, include]) => include).map(([value]) => value), [root]);
+    assert.deepEqual(statusRequests.filter(([, include]) => !include).map(([value]) => value).sort(), [first, second].sort());
     pauseDetails = true;
     const refresh = tree.refresh();
     const deadline = Date.now() + 5000;
@@ -818,6 +822,12 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     await changeFolders([workspace]);
     await changeFolders([workspace, initiallyMissing]);
     assert.ok(!provider.snapshot().errors.some(message => message.includes(initiallyMissing)));
+    const third = path.join(linkedRoot, 'three');
+    git(root, 'worktree', 'add', '-qb', 'topic-three', third);
+    await tree.refresh();
+    rows = provider.snapshot().repositories;
+    assert.ok(rows.find(row => row.name === 'main').worktrees.some(row => row.name === 'three'),
+      'a worktree added after the grouping cache was populated is discovered');
     pauseDetails = true;
     releaseDetails = undefined;
     const activeRefresh = tree.refresh();
