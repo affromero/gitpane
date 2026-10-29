@@ -115,6 +115,7 @@ body {
 .dirty-submodule { color: var(--gitpane-repo-list-dirty-submodule, var(--submodule)); }
 .unpushed-submodule { color: var(--gitpane-repo-list-unpushed-submodule, var(--behind)); }
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
+.pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
 .tail { display: flex; gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
 .graph-action, .menu-action, .stash-action {
   flex: none;
@@ -162,7 +163,7 @@ body {
 
 @media (forced-colors: active) {
   .dirty, .count, .branch, .ahead, .behind, .worktree, .modified,
-  .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule, .live,
+  .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule, .live, .pin,
   .graph-action, .menu-action { color: CanvasText; }
   .treeitem:focus > .row { outline: 1px solid Highlight; }
 }

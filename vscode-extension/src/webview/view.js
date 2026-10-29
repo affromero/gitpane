@@ -114,6 +114,7 @@ function labelForRepo(repo, info) {
     if (repo.hasUnpushedSubmodules) details.push('submodules need attention');
   }
   if (repo.live) details.push('live session');
+  if (repo.pinned) details.push('pinned submodule');
   return details.filter(Boolean).join(', ');
 }
 
@@ -121,6 +122,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
   const name = add(row, 'name', '', repo.name);
+  if (repo.pinned) add(name, 'pin', '⌖ ', 'Pinned submodule');
   if (repo.worktree) add(name, 'worktree', '⎇ ');
   name.appendChild(document.createTextNode(repo.name));
   const branch = repo.branch || '—';

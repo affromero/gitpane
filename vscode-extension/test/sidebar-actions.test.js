@@ -62,6 +62,8 @@ function fixture() {
     openLauncher: async id => { calls.push(['openLauncher', id]); },
     openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
+    pinSubmodule: async id => { calls.push(['pinSubmodule', id]); },
+    unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     previewFileAction: (...args) => preview(...args),
     previewWorktreeRemoval: (...args) => worktreePreview(...args)
@@ -104,13 +106,27 @@ test('submodule rows offer inspection but no file mutations', async () => {
   for (const group of ['working', 'index', 'untracked', 'merge', 'attention']) {
     f.setFile({ ...f.getFile(), group, isSubmodule: true });
     f.pick(choices => {
-      assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy']);
+      assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy', 'pinSubmodule']);
       return choices.find(choice => choice.action === 'open');
     });
     await f.actions.showMenu('file', 'file');
     for (const name of ['stage', 'unstage', 'discard']) await f.actions.handle(action(name, 'file'));
   }
   assert.deepEqual(f.calls, Array.from({ length: 5 }, () => ['gitpane.openChange', f.node]));
+});
+
+test('submodule file and pinned repository menus expose scoped pin actions', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), isSubmodule: true });
+  f.pick(choices => choices.find(choice => choice.action === 'pinSubmodule'));
+  await f.actions.showMenu('file', 'file');
+  f.setRepo({ ...f.getRepo(), pinned: true });
+  f.pick(choices => choices.find(choice => choice.action === 'unpinSubmodule'));
+  await f.actions.showMenu('repo', 'repo');
+  assert.deepEqual(f.calls, [['pinSubmodule', 'file'], ['unpinSubmodule', 'repo']]);
+  f.setRepo({ ...f.getRepo(), pinned: false });
+  await f.actions.handle(action('unpinSubmodule', 'repo'));
+  assert.equal(f.calls.length, 2);
 });
 
 test('a file that becomes a submodule while its menu is open cannot be mutated', async () => {

@@ -21,6 +21,7 @@ class SubmoduleProvider {
     this.resolveChange = options.resolveChange;
     this.openGraph = options.openGraph;
     this.linkDocuments = options.linkDocuments;
+    this.pins = options.pins;
     this.generation = 0;
     this.disposed = false;
     this.graphWatch = undefined;
@@ -122,17 +123,17 @@ class SubmoduleProvider {
     catch (error) { if (this.graphWatch === watch) this.clearGraphWatch(); throw error; }
   }
 
-  async open(selected) {
+  async open(selected, pinDirect = false) {
     this.clearGraphWatch();
     const generation = ++this.generation;
     try {
-      await this.openLevel(selected, generation, []);
+      await this.openLevel(selected, generation, [], pinDirect);
     } catch (error) {
       await this.vscode.window.showErrorMessage(`Gitpane submodule: ${error.message}`);
     }
   }
 
-  async openLevel(selected, generation, ancestors) {
+  async openLevel(selected, generation, ancestors, pinDirect = false) {
       const parentToken = selected?.repo && this.tree.repositoryToken(selected.repo);
       const currentNode = ancestors.length ? selected : this.current(selected, generation, parentToken);
       if (!currentNode) throw new Error('The submodule is no longer in the workspace.');
@@ -192,6 +193,7 @@ class SubmoduleProvider {
         throw new Error('The submodule is unavailable or no longer in the workspace.');
       }
       const fixedChoices = [{ label: 'Open Commit Graph', kind: 'graph' }];
+      if (this.pins) fixedChoices.push({ label: 'Pin Submodule in Gitpane', kind: 'pin' });
       for (const file of result.pointer_files) {
         if (!file || !safeRelative(file.path) || !['A', 'D', 'M', 'R', '?'].includes(file.status) ||
           (file.status === 'R' && !safeRelative(file.old_path)) || typeof file.is_submodule !== 'boolean') {
@@ -204,11 +206,18 @@ class SubmoduleProvider {
       const currentLink = () => ancestors.every(ancestor => ancestor.currentLink()) && ownCurrent(true);
       const frame = { link, current: () => ownCurrent(false), currentLink: () => ownCurrent(true) };
       const checkHead = (persistent = false) => checkFrames([...ancestors, frame], persistent);
+      const pin = async () => {
+        if (!this.pins) throw new Error('Submodule pins are unavailable.');
+        const links = [...ancestors, frame].map(item => item.link);
+        await this.pins.pin(links[0].repo, links, currentChild, checkHead);
+      };
       if (!await checkHead()) throw new Error('The submodule HEAD changed; refresh and try again.');
       const initialChoices = [...fixedChoices, { label: 'Browse working changes', kind: 'browse' }];
-      const initial = await this.vscode.window.showQuickPick(initialChoices, { placeHolder: `Inspect ${relative}`, matchOnDescription: true });
+      const initial = pinDirect ? initialChoices.find(choice => choice.kind === 'pin') :
+        await this.vscode.window.showQuickPick(initialChoices, { placeHolder: `Inspect ${relative}`, matchOnDescription: true });
       if (!initial || !initialChoices.includes(initial)) return;
       if (!await checkHead()) throw new Error('The submodule changed; refresh and try again.');
+      if (initial.kind === 'pin') return await pin();
       if (initial.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
       if (initial.kind === 'pointer') {
         return await this.openPointer(child, result, initial.file);
@@ -237,6 +246,11 @@ class SubmoduleProvider {
           page = next;
         }
         if (chosen.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
+        if (chosen.kind === 'pin') {
+          session.close();
+          sessionClosed = true;
+          return await pin();
+        }
         if (chosen.kind === 'pointer') {
           return await this.openPointer(child, result, chosen.file);
         }

@@ -41,6 +41,7 @@ class BridgeClient {
     if (this.child) return;
     const child = this.spawn(this.executable, this.serviceArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
+    this.lastChild = child;
     this.closed = new Promise(resolve => child.once('close', resolve));
     child.stdout.on('data', chunk => this.receive(child, chunk));
     child.stdout.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service output failed: ${error.message}`)));
@@ -151,6 +152,16 @@ class BridgeClient {
     catch (error) {
       if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
         throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace fetch. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  async validateSubmodulePin(root, chain) {
+    try { return await this.request('submodule_pin_validate', { root, chain }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support submodule pins. Update the backend and try again.');
       }
       throw error;
     }
@@ -351,6 +362,12 @@ class BridgeClient {
     this.initialization = undefined;
     this.rejectPending(new BridgeError('disposed', 'Gitpane service has been disposed.'));
     this.stop(child, !options.immediate);
+    const streams = child || this.lastChild;
+    if (options.closeStreams && streams) {
+      streams.stdin.destroy();
+      streams.stdout.destroy();
+      streams.stderr.destroy();
+    }
   }
 
   async shutdown(options = {}) {

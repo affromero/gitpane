@@ -212,6 +212,7 @@ fn process(
         "submodule_chain_validate" => {
             submodule::chain::validate(scope, params(request.params)?, sub_cfg)
         }
+        "submodule_pin_validate" => submodule::pin::validate(scope, params(request.params)?),
         "sessions_list" => session::list(scope, params(request.params)?),
         "session_liveness" => session::liveness(scope, params(request.params)?, options.theme),
         "launchers_list" => launcher::list(scope, params(request.params)?),

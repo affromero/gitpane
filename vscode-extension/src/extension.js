@@ -20,6 +20,7 @@ const { ChangePager, scopedFile, validRecord, validatePage } = require('./change
 const { LinkDocuments, statusRevision } = require('./link-documents');
 const { ThemeController } = require('./theme');
 const { WorkspaceFetch } = require('./workspace-fetch');
+const { SubmodulePins } = require('./submodule-pins');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -133,6 +134,7 @@ class GitpaneViewProvider {
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
         worktree: repo.kind === 'worktree',
+        pinned: this.pins?.isPinned(repo) || false,
         live: this.tree.sessionLive?.(root) || false,
         statusUnavailable: !status,
         stashCount: status?.stashes.length || 0,
@@ -278,6 +280,7 @@ class GitpaneViewProvider {
     const repo = this.currentRepository(id);
     const actionRepo = this.actionRepository(repo);
     if (!actionRepo) return undefined;
+    actionRepo.pinned = this.pins?.isPinned(repo) || false;
     const found = this.tree.explicitWorktreeAnchor?.(repo);
     if (!found || !this.tree.isPathInWorkspace(found.path)) return actionRepo;
     const anchorToken = this.tree.repositoryToken(found.anchor);
@@ -434,6 +437,9 @@ async function activate(context) {
   const theme = new ThemeController(backend, vscode.window.onDidChangeActiveColorTheme);
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
   const provider = new GitpaneViewProvider(tree, context.extensionUri, theme);
+  const pins = new SubmodulePins(tree, backend, api, context.workspaceState, vscode);
+  tree.pins = pins;
+  provider.pins = pins;
   const links = new LinkDocuments(vscode, tree, backend);
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
@@ -446,7 +452,7 @@ async function activate(context) {
   const submodules = new SubmoduleProvider(tree, backend, api, {
     resolveChange: node => provider.currentChange(node),
     openGraph: (repo, guard, validate) => graph.open(repo, guard, validate),
-    linkDocuments: links
+    linkDocuments: links, pins
   });
   const mutations = new MutationManager({
     getSnapshot: () => backend.mutationSnapshot(),
@@ -465,6 +471,14 @@ async function activate(context) {
   };
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.actions = new SidebarActions({ vscode, mutations,
+    pinSubmodule: async (id, guard) => {
+      const node = provider.currentChange(provider.changes.get(id));
+      if (node && guard()) await submodules.open(node, true);
+    },
+    unpinSubmodule: async (id, guard) => {
+      const repo = provider.currentRepository(id);
+      if (repo && guard()) await pins.unpin(repo, guard);
+    },
     previewFileAction: (repo, target, operation) => backend.fileActionPreview(repo, target, operation),
     previewWorktreeRemoval: (repo, target) => backend.previewWorktreeRemoval(repo, target),
     planWorktree: (repo, branch) => backend.planWorktree(repo, branch),
@@ -507,12 +521,16 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, mutations,
+  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
     vscode.commands.registerCommand('gitpane.refresh', () => provider.refresh(true)),
     vscode.commands.registerCommand('gitpane.fetchWorkspace', () => workspaceFetch.run()),
+    vscode.commands.registerCommand('gitpane.manageSubmodulePins', async () => {
+      try { await pins.manage(); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane submodule pins: ${error.message}`); }
+    }),
     vscode.commands.registerCommand('gitpane.sort', async () => {
       const choices = [
         { label: 'Default (dirty, by path)', order: 'workspace' },

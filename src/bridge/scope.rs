@@ -217,6 +217,18 @@ impl Scope {
         self.submodule_repositories(path).map(|_| ())
     }
 
+    pub(super) fn validate_modules_file(&self, parent: &Path) -> Result<(), BridgeError> {
+        match parent.join(".gitmodules").symlink_metadata() {
+            Ok(metadata) if metadata.file_type().is_symlink() => Err(BridgeError::new(
+                "outside_workspace",
+                ".gitmodules must not be a symlink",
+            )),
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(BridgeError::new("repository_error", error.to_string())),
+        }
+    }
+
     /// Validate all initialized descendants before any status query can traverse them.
     pub(super) fn submodule_repositories(&self, path: &Path) -> Result<Vec<PathBuf>, BridgeError> {
         const MAX_REPOSITORIES: usize = 1024;
@@ -226,18 +238,7 @@ impl Scope {
         let mut pending = vec![(root, 0)];
         let mut descendants = Vec::new();
         while let Some((parent, depth)) = pending.pop() {
-            let modules_file = parent.join(".gitmodules");
-            match modules_file.symlink_metadata() {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(BridgeError::new(
-                        "outside_workspace",
-                        ".gitmodules must not be a symlink",
-                    ));
-                }
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(BridgeError::new("repository_error", error.to_string())),
-            }
+            self.validate_modules_file(&parent)?;
             let repo = git2::Repository::open(&parent)
                 .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
             let submodules = repo

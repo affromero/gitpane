@@ -1,4 +1,4 @@
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,6 +10,7 @@ use super::{BridgeError, changes::RepositoryIdentity, commit_file_json, scope::S
 
 pub(super) mod actions;
 pub(super) mod chain;
+pub(super) mod pin;
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,11 +49,11 @@ fn ensure_no_conflict(repo: &git2::Repository, path: &std::path::Path) -> Result
     Ok(())
 }
 
-fn ensure_no_type_change(
+fn head_filemode(
     repo: &git2::Repository,
     path: &std::path::Path,
-) -> Result<(), BridgeError> {
-    let head_mode = match repo.head() {
+) -> Result<Option<u32>, BridgeError> {
+    Ok(match repo.head() {
         Ok(head) => {
             let tree = head.peel_to_tree().map_err(error)?;
             match tree.get_path(path) {
@@ -70,7 +71,14 @@ fn ensure_no_type_change(
             None
         }
         Err(failure) => return Err(error(failure)),
-    };
+    })
+}
+
+fn ensure_no_type_change(
+    repo: &git2::Repository,
+    path: &std::path::Path,
+) -> Result<(), BridgeError> {
+    let head_mode = head_filemode(repo, path)?;
     let index_mode = repo
         .index()
         .map_err(error)?
@@ -130,14 +138,149 @@ struct LinkSnapshot {
     head: Option<git2::Oid>,
 }
 
-fn read_link(scope: &Scope, input: &Request) -> Result<LinkSnapshot, BridgeError> {
-    if input.path.as_os_str().is_empty()
-        || input.path.as_os_str().as_encoded_bytes().contains(&0)
-        || input
-            .path
+fn valid_submodule_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.as_os_str().as_encoded_bytes().contains(&0)
+        && path
             .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
-    {
+            .all(|part| matches!(part, Component::Normal(_)))
+}
+
+struct RegisteredLink {
+    parent_path: PathBuf,
+    child_path: PathBuf,
+    child: PathBuf,
+    parent_identity: RepositoryIdentity,
+    child_identity: RepositoryIdentity,
+    parent_head: Option<git2::Oid>,
+    index: Option<git2::Oid>,
+}
+
+fn registered_link(
+    scope: &Scope,
+    repo: &Path,
+    path: &Path,
+    pin: bool,
+) -> Result<RegisteredLink, BridgeError> {
+    if !valid_submodule_path(path) {
+        return Err(BridgeError::new(
+            "invalid_request",
+            "submodule path must be relative",
+        ));
+    }
+    let parent_path = scope.repository(repo)?;
+    let parent_identity = RepositoryIdentity::read(&parent_path)?;
+    scope.validate_modules_file(&parent_path)?;
+    let parent = git2::Repository::open(&parent_path).map_err(error)?;
+    let modules = parent.submodules().map_err(error)?;
+    let sub = modules
+        .iter()
+        .find(|sub| sub.path() == path)
+        .ok_or_else(|| {
+            BridgeError::new(
+                "invalid_request",
+                "Submodule is no longer registered or unavailable.",
+            )
+        })?;
+    if pin {
+        require_pin_registration(&parent_path, sub, path)?;
+        require_pin_path(&parent_path, path)?;
+    }
+    let child_path = parent_path.join(path);
+    if !scope.allows_missing(&child_path)? {
+        return Err(BridgeError::new(
+            "outside_workspace",
+            "submodule is outside the workspace",
+        ));
+    }
+    let child = scope.repository(&child_path).map_err(|failure| {
+        if failure.code == "repository_error"
+            || failure.message == "path does not identify a workspace repository root"
+        {
+            BridgeError::new(
+                "repository_error",
+                format!(
+                    "Submodule is not initialized or unavailable: {}",
+                    failure.message
+                ),
+            )
+        } else {
+            failure
+        }
+    })?;
+    if pin && !child.starts_with(&parent_path) {
+        return Err(BridgeError::new(
+            "outside_workspace",
+            "submodule resolves outside its parent repository",
+        ));
+    }
+    let child_identity = RepositoryIdentity::read(&child)?;
+    Ok(RegisteredLink {
+        parent_path,
+        child_path,
+        child,
+        parent_identity,
+        child_identity,
+        parent_head: sub.head_id(),
+        index: sub.index_id(),
+    })
+}
+
+fn require_pin_registration(
+    parent_path: &Path,
+    sub: &git2::Submodule<'_>,
+    path: &Path,
+) -> Result<(), BridgeError> {
+    let no_registration = || {
+        BridgeError::new(
+            "invalid_request",
+            "Submodule is no longer registered or unavailable.",
+        )
+    };
+    let modules_path = parent_path.join(".gitmodules");
+    match modules_path.metadata() {
+        Ok(_) => {}
+        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {
+            return Err(no_registration());
+        }
+        Err(failure) => return Err(error(failure)),
+    }
+    let config = git2::Config::open(&modules_path).map_err(error)?;
+    let key = format!("submodule.{}.path", sub.name().map_err(error)?);
+    let declared = config.get_string(&key).map_err(|failure| {
+        if failure.code() == git2::ErrorCode::NotFound {
+            no_registration()
+        } else {
+            error(failure)
+        }
+    })?;
+    if Path::new(&declared) != path {
+        return Err(no_registration());
+    }
+    Ok(())
+}
+
+fn require_pin_path(parent_path: &Path, path: &Path) -> Result<(), BridgeError> {
+    let mut component_path = parent_path.to_path_buf();
+    for component in path.components() {
+        component_path.push(component.as_os_str());
+        match component_path.symlink_metadata() {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(BridgeError::new(
+                    "outside_workspace",
+                    "submodule path must not contain a symlink",
+                ));
+            }
+            Ok(_) => {}
+            Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => break,
+            Err(failure) => return Err(error(failure)),
+        }
+    }
+    Ok(())
+}
+
+fn read_link(scope: &Scope, input: &Request) -> Result<LinkSnapshot, BridgeError> {
+    if !valid_submodule_path(&input.path) {
         return Err(BridgeError::new(
             "invalid_request",
             "submodule path must be relative",
@@ -168,51 +311,18 @@ fn read_link(scope: &Scope, input: &Request) -> Result<LinkSnapshot, BridgeError
             "Staged submodule renames cannot be inspected yet. Inspect the rename in Source Control.",
         ));
     }
-    let parent_identity = RepositoryIdentity::read(&parent_path)?;
     let parent = git2::Repository::open(&parent_path).map_err(error)?;
     ensure_no_conflict(&parent, &input.path)?;
     ensure_supported_type(&parent, &input.path, input.group)?;
-    let modules = parent.submodules().map_err(error)?;
-    let sub = modules
-        .iter()
-        .find(|sub| sub.path() == input.path)
-        .ok_or_else(|| {
-            BridgeError::new(
-                "invalid_request",
-                "Submodule is no longer registered or unavailable.",
-            )
-        })?;
-    let child_path = parent_path.join(&input.path);
-    if !scope.allows_missing(&child_path)? {
-        return Err(BridgeError::new(
-            "outside_workspace",
-            "submodule is outside the workspace",
-        ));
-    }
-    let child = scope.repository(&child_path).map_err(|failure| {
-        if failure.code == "repository_error"
-            || failure.message == "path does not identify a workspace repository root"
-        {
-            BridgeError::new(
-                "repository_error",
-                format!(
-                    "Submodule is not initialized or unavailable: {}",
-                    failure.message
-                ),
-            )
-        } else {
-            failure
-        }
-    })?;
-    let child_identity = RepositoryIdentity::read(&child)?;
-    let child_repo = git2::Repository::open(&child).map_err(error)?;
+    let registered = registered_link(scope, &parent_path, &input.path, false)?;
+    let child_repo = git2::Repository::open(&registered.child).map_err(error)?;
     let child_head = child_repo
         .head()
         .and_then(|head| head.peel_to_commit())
         .map_err(error)?
         .id();
-    let parent_head = sub.head_id();
-    let index = sub.index_id();
+    let parent_head = registered.parent_head;
+    let index = registered.index;
     let (base, head) = match input.group {
         Some(Group::Index) => (parent_head, index),
         Some(Group::Working | Group::Attention) => (index, Some(child_head)),
@@ -220,11 +330,11 @@ fn read_link(scope: &Scope, input: &Request) -> Result<LinkSnapshot, BridgeError
         Some(Group::Merge) => unreachable!(),
     };
     Ok(LinkSnapshot {
-        parent_path,
-        child_path,
-        child,
-        parent_identity,
-        child_identity,
+        parent_path: registered.parent_path,
+        child_path: registered.child_path,
+        child: registered.child,
+        parent_identity: registered.parent_identity,
+        child_identity: registered.child_identity,
         parent_head,
         index,
         child_head,
@@ -475,6 +585,53 @@ mod tests {
             json!([
                 {"status": "A", "path": "base", "is_submodule": false}
             ])
+        );
+    }
+
+    #[test]
+    fn staged_gitlink_and_registration_removal_keeps_initialized_child_inspectable() {
+        let (_temp, parent, child, scope) = fixture();
+        let repository = Repository::open(&parent).unwrap();
+        let mut index = repository.index().unwrap();
+        index.remove_path(Path::new("child")).unwrap();
+        std::fs::write(parent.join(".gitmodules"), "").unwrap();
+        index.add_path(Path::new(".gitmodules")).unwrap();
+        index.write().unwrap();
+        assert!(child.join(".git").exists());
+        let deleted = request_group(&parent, "child", &scope, Group::Index).unwrap();
+        assert!(deleted["base_oid"].is_string());
+        assert!(deleted["head_oid"].is_null());
+        assert!(
+            deleted["pointer_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["status"] == "D")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspection_preserves_registered_in_scope_symlink() {
+        use std::os::unix::fs::symlink;
+        let (temp, parent, child, scope) = fixture();
+        let moved = temp.path().join("workspace/moved-child");
+        let gitdir = Repository::open(&child)
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+        std::fs::rename(&child, &moved).unwrap();
+        std::fs::write(
+            moved.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+        symlink(&moved, &child).unwrap();
+        let result = request_group(&parent, "child", &scope, Group::Working).unwrap();
+        assert_eq!(
+            Path::new(result["repo"].as_str().unwrap()),
+            moved.canonicalize().unwrap()
         );
     }
 

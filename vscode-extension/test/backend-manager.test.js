@@ -51,6 +51,11 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     const result = {valid: true};
     if (request.params.chain.some(link => link.path === 'slow')) setTimeout(() => send({id: request.id, result}), 300);
     else send({id: request.id, result});
+  } else if (request.method === 'submodule_pin_validate') {
+    const repos = [request.params.root];
+    for (const link of request.params.chain) repos.push(require('node:path').join(repos[repos.length - 1], link.path));
+    if (request.params.chain.some(link => link.path === 'slow')) setTimeout(() => send({id: request.id, result: {repos}}), 5000);
+    else send({id: request.id, result: {repos}});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else if (request.method === 'session_liveness') {
@@ -451,6 +456,8 @@ test('submodule validation uses a bounded reusable worker isolated from paging a
   assert.equal(executed.length, 2, 'paging gets a separate worker');
   assert.deepEqual(await manager.validateSubmoduleChain([link]), { valid: true });
   assert.deepEqual(await manager.validateSubmoduleChain([link]), { valid: true });
+  assert.deepEqual(await manager.validateSubmodulePin(link.repo, [{ path: 'child', parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) }]),
+    { repos: [link.repo, link.child_repo] });
   assert.equal(executed.length, 3, 'repeated validation reuses its own worker');
   assert.equal((await manager.nextChanges(link.repo, 'sample', 1)).snapshot, 'sample');
   await assert.rejects(manager.validateSubmoduleChain(Array(33).fill(link)), error => error.code === 'invalid_request');
@@ -477,6 +484,27 @@ test('submodule validation uses a bounded reusable worker isolated from paging a
   manager.dispose();
   await rejected;
   assert.equal(manager.validationClient, undefined);
+});
+
+test('background pin validation cannot block interactive validation and can be cancelled', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo');
+  const link = name => ({ path: name, parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) });
+  const session = await manager.openPinValidationSession();
+  const pending = session.validate(repo, [link('slow')]);
+  const rejected = assert.rejects(pending);
+  const deadline = Date.now() + 5000;
+  while (!manager.pinValidationClient) {
+    if (Date.now() > deadline) throw new Error('Background pin worker did not start');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.deepEqual(await manager.validateSubmodulePin(repo, [link('child')]), { repos: [repo, path.join(repo, 'child')] });
+  manager.cancelPinValidation();
+  await rejected;
+  await session.close();
+  assert.equal(manager.pinValidationClient, undefined);
 });
 
 test('session discovery is limited to current workspace repositories', async t => {

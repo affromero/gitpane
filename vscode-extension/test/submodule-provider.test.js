@@ -220,6 +220,7 @@ test('nested working changes traverse beyond four levels and reject stale ancest
     repositoryRevision: value => tokens.has(value.fsPath) ? 1 : 0,
     isCurrentRepository: (repo, token) => token === tokens.get(repo?.rootUri.fsPath), onDidChangeTreeData: () => ({ dispose() {} }) };
   let activeSessions = 0, maxSessions = 0, stale = false, scopeEscape = false;
+  let pinMode = false, browseDepth = 0, pinned;
   let fault, nestedInspected = false, removedNested = false, leafSelected = false, leafChecks = 0, removedLeaf = false, identityChanged = false;
   const backend = {
     async inspectSubmodule(repo, target) {
@@ -258,7 +259,9 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   const commands = [], errors = [];
   const vscode = { Uri: { file: uri }, window: {
     async showQuickPick(choices) {
+      if (pinMode && browseDepth >= 2 && choices.some(item => item.kind === 'browse')) return choices.find(item => item.kind === 'pin');
       const selected = choices.find(item => item.kind === 'browse') || choices.find(item => item.kind === 'change');
+      if (pinMode && selected?.kind === 'browse') browseDepth++;
       if (stale && selected?.record?.path === 'file.txt') tokens.set(repos[1].rootUri.fsPath, 2);
       if (scopeEscape && selected?.record?.is_submodule) withinWorkspace = false;
       if (fault === 'leaf' && selected?.record?.path === 'file.txt') leafSelected = true;
@@ -309,6 +312,19 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   assert.ok(identityChanged, 'repository identity must change while the leaf is selected');
   assert.equal(commands.length, 1, 'replaced repository metadata cannot open a diff');
   assert.match(errors.at(-1), /changed|no longer/i);
+  fault = undefined;
+  identityChanged = false;
+  pinMode = true;
+  provider.pins = { noteOwned() {}, async pin(rootPath, links, guard, validate) {
+    assert.equal(guard(), true);
+    assert.equal(await validate(), true);
+    pinned = { rootPath, links };
+  } };
+  await provider.open(node);
+  assert.equal(pinned.rootPath, repos[0].rootUri.fsPath);
+  assert.equal(pinned.links.length, 3);
+  assert.equal(activeSessions, 0, 'nested pin closes each paging session');
+  assert.equal(commands.length, 1, 'pinning does not open a diff or terminal');
 });
 
 test('submodule conflicts report the backend error without opening a diff', async t => {

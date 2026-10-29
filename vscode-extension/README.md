@@ -86,6 +86,22 @@ its own branch and remote configuration apply. Repositories sharing a Git
 common directory are fetched in sequence. Gitpane reports failures for each
 repository and refreshes the status and visible graph afterward.
 
+Use **Pin Submodule** on a submodule change, or choose **Pin Submodule in
+Gitpane** while inspecting nested submodules, to keep it in the overview.
+To create a pin, the submodule must currently appear as a change or an
+attention row; clean submodules without a row cannot yet be selected.
+Pinned submodules are restored when their root repository is open in the same
+workspace and their registered paths and repository identities still match.
+Use **Unpin Submodule** from its repository menu to remove the pin. Gitpane
+never closes or hides a repository discovered by VS Code when unpinning. The
+repository can remain visible after its pin marker is removed.
+Use **Gitpane: Manage Submodule Pins** to remove a saved pin that can no longer
+be restored.
+If VS Code is already opening a pinned repository, wait for that open to finish
+before removing its pin. VS Code does not provide a way to cancel an open in
+progress. If the workspace changes during that call, the repository may still
+open, but Gitpane rejects the stale pin and does not close the repository.
+
 The ◉ marker shows a live session for a repository or worktree. Set
 `gitpane.sessionBackend` to `tmux` or `herdr` when VS Code does not inherit the
 multiplexer environment. The default, `auto`, uses the detected host. Gitpane's

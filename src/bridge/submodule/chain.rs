@@ -1,11 +1,11 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::config::SubmoduleConfig;
 
-use super::{Group, LinkSnapshot, Request as InspectRequest, read_link};
+use super::{Group, LinkSnapshot, Request as InspectRequest, read_link, valid_submodule_path};
 use crate::bridge::{BridgeError, changes, scope::Scope};
 
 #[cfg(test)]
@@ -40,11 +40,7 @@ fn invalid(message: &str) -> BridgeError {
 }
 
 fn relative(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-        && !path.as_os_str().as_encoded_bytes().contains(&0)
-        && path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
+    valid_submodule_path(path)
 }
 
 fn oid(value: &str) -> bool {

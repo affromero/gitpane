@@ -2,14 +2,14 @@
 
 const path = require('node:path');
 
-const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard']);
-const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
+const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule']);
+const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir];
-  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval);
+  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned);
   if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId);
   return JSON.stringify(fields);
@@ -29,7 +29,7 @@ function fileOptions(item) {
     { label: 'Reveal in Explorer', action: 'reveal' },
     { label: 'Copy Path', action: 'copy' }
   ];
-  if (item.isSubmodule) return choices;
+  if (item.isSubmodule) return [...choices, { label: 'Pin Submodule', action: 'pinSubmodule' }];
   if (item.group === 'index') choices.push({ label: 'Unstage', action: 'unstage' });
   if (['working', 'untracked', 'merge'].includes(item.group)) choices.push({ label: 'Stage', action: 'stage' });
   if (['index', 'working', 'untracked'].includes(item.group)) choices.push({
@@ -54,6 +54,8 @@ class SidebarActions {
     this.openLauncher = options.openLauncher;
     this.openWorktreeGraph = options.openWorktreeGraph;
     this.reviewWorktree = options.reviewWorktree;
+    this.pinSubmodule = options.pinSubmodule;
+    this.unpinSubmodule = options.unpinSubmodule;
     this.previewFileAction = options.previewFileAction;
     this.previewWorktreeRemoval = options.previewWorktreeRemoval;
     this.planWorktree = options.planWorktree;
@@ -84,6 +86,7 @@ class SidebarActions {
       else if (kind === 'repo') choices = [
         { label: 'Create Worktree', action: 'createWorktree' },
         ...(item.worktreeRemoval ? [{ label: 'Remove Worktree', action: 'removeWorkspaceWorktree' }] : []),
+        ...(item.pinned ? [{ label: 'Unpin Submodule', action: 'unpinSubmodule' }] : []),
         { label: 'Review Branch', action: 'reviewBranch' },
         { label: 'GitHub Issues and Pull Requests', action: 'github' },
         { label: 'Sessions', action: 'session' },
@@ -150,6 +153,14 @@ class SidebarActions {
       }
       if (action === 'open') {
         await this.vscode.commands.executeCommand('gitpane.openChange', item.node);
+        return;
+      }
+      if (action === 'pinSubmodule') {
+        if (this.pinSubmodule) await this.pinSubmodule(message.id, current);
+        return;
+      }
+      if (action === 'unpinSubmodule') {
+        if (item.pinned && this.unpinSubmodule) await this.unpinSubmodule(message.id, current);
         return;
       }
       if (action === 'openFile') {

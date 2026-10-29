@@ -319,7 +319,8 @@ class RepositoryTree {
       const status = this.backendStatuses.get(key);
       const common = typeof status?.common_dir === 'string' && path.isAbsolute(status.common_dir)
         ? identify(status.common_dir) : undefined;
-      const record = { repo, key, identity, status, common, explicit: roots.some(root => sameIdentity(root, identity)) };
+      const explicit = roots.some(root => sameIdentity(root, identity));
+      const record = { repo, key, identity, status, common, explicit };
       records.push(record);
       if (!byIdentity.has(identityKey(identity))) byIdentity.set(identityKey(identity), record);
       if (common) {
@@ -560,6 +561,7 @@ class RepositoryTree {
   setVisible(visible) {
     this.visible = visible;
     this.liveness?.setVisible(visible);
+    this.pins?.setVisible(visible);
     if (!visible && this.pollTimer !== undefined) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -692,7 +694,7 @@ class RepositoryTree {
         }
         return [];
       });
-      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
+      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.workspaceView();
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
         repo, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty

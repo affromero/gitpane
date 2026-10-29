@@ -37,6 +37,8 @@ class BackendManager {
     this.validationClient = undefined;
     this.validationConfiguration = undefined;
     this.validationEpoch = 0;
+    this.pinValidationEpoch = 0;
+    this.pinValidationClient = undefined;
     this.activeValidations = 0;
     this.verifyClients = new Set();
     this.livenessClient = undefined;
@@ -338,9 +340,15 @@ class BackendManager {
 
   cancelValidation() {
     this.validationEpoch++;
+    this.cancelPinValidation();
     this.validationClient?.dispose({ immediate: true });
     this.validationClient = undefined;
     this.validationConfiguration = undefined;
+  }
+
+  cancelPinValidation() {
+    this.pinValidationEpoch++;
+    this.pinValidationClient?.dispose({ immediate: true, closeStreams: true });
   }
 
   async getValidationClient(epoch) {
@@ -399,6 +407,74 @@ class BackendManager {
       if (error?.code === 'ENOENT') return { valid: false };
       throw error;
     } finally { this.activeValidations--; }
+  }
+
+  async validateSubmodulePin(root, chain) {
+    if (typeof root !== 'string' || !path.isAbsolute(root) || !Array.isArray(chain) || !chain.length || chain.length > 32) {
+      throw new BridgeError('invalid_request', 'Invalid submodule pin.');
+    }
+    if (this.activeValidations >= 4) throw new BridgeError('busy', 'Too many submodule checks are running. Try again.');
+    this.activeValidations++;
+    const epoch = this.validationEpoch;
+    try {
+      const snapshot = await this.mutationSnapshot();
+      const resolved = await this.realpath(root);
+      if (epoch !== this.validationEpoch || !this.isCurrentMutation(snapshot, resolved)) {
+        throw new BridgeError('workspace_changed', 'Workspace changed before validating the submodule pin.');
+      }
+      const client = await this.getValidationClient(epoch);
+      if (epoch !== this.validationEpoch || !this.isCurrentMutation(snapshot, resolved)) throw new BridgeError('workspace_changed', 'Submodule pin validation was cancelled.');
+      const result = await client.validateSubmodulePin(root, chain);
+      if (epoch !== this.validationEpoch || client !== this.validationClient || !this.isCurrentMutation(snapshot, resolved) ||
+        await this.realpath(root) !== resolved || !this.isCurrentMutation(snapshot, resolved)) {
+        throw new BridgeError('workspace_changed', 'Workspace changed while validating the submodule pin.');
+      }
+      return result;
+    } finally { this.activeValidations--; }
+  }
+
+  async openPinValidationSession() {
+    if (this.activeValidations >= 4 || this.pinValidationClient) throw new BridgeError('busy', 'A pinned submodule check is already running.');
+    this.activeValidations++;
+    const epoch = this.validationEpoch;
+    const pinEpoch = this.pinValidationEpoch;
+    let client;
+    let closing;
+    const close = () => {
+      if (closing) return closing;
+      closing = (async () => {
+        if (client) await client.shutdown({ immediate: true, closeStreams: true });
+        if (this.pinValidationClient === client) this.pinValidationClient = undefined;
+        this.activeValidations--;
+      })();
+      return closing;
+    };
+    try {
+      const snapshot = await this.mutationSnapshot();
+      if (this.disposed || epoch !== this.validationEpoch || pinEpoch !== this.pinValidationEpoch) {
+        throw new BridgeError('workspace_changed', 'Submodule pin validation was cancelled.');
+      }
+      if (this.pinValidationClient) throw new BridgeError('busy', 'A pinned submodule check is already running.');
+      client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk), timeoutMs: 30000 });
+      this.pinValidationClient = client;
+      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+      const current = () => !closing && !this.disposed && epoch === this.validationEpoch && pinEpoch === this.pinValidationEpoch &&
+        client === this.pinValidationClient && snapshot.generation === this.generation;
+      if (!current()) throw new BridgeError('workspace_changed', 'Submodule pin validation was cancelled.');
+      return { close, validate: async (root, chain) => {
+        if (typeof root !== 'string' || !path.isAbsolute(root) || !Array.isArray(chain) || !chain.length || chain.length > 32) {
+          throw new BridgeError('invalid_request', 'Invalid submodule pin.');
+        }
+        const resolved = await this.realpath(root);
+        if (!current() || !this.isCurrentMutation(snapshot, resolved)) throw new BridgeError('workspace_changed', 'Workspace changed before validating the submodule pin.');
+        const result = await client.validateSubmodulePin(root, chain);
+        const after = await this.realpath(root);
+        if (!current() || !this.isCurrentMutation(snapshot, resolved) || after !== resolved) {
+          throw new BridgeError('workspace_changed', 'Workspace changed while validating the submodule pin.');
+        }
+        return result;
+      } };
+    } catch (error) { await close(); throw error; }
   }
 
   async openChangesSession(repo) {

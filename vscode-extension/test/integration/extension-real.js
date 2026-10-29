@@ -39,6 +39,7 @@ const terminals = [];
 let provider;
 let receive;
 let pickChanges;
+const workspaceState = new Map();
 
 async function main() {
   if (!executable || !path.isAbsolute(executable) || !fs.existsSync(executable)) {
@@ -116,7 +117,8 @@ async function main() {
       return load.call(this, name, ...args);
     };
     ({ activate } = require('../../src/extension'));
-    context = { extensionPath: path.resolve(__dirname, '../..'), extensionUri: '/extension', subscriptions: [] };
+    context = { extensionPath: path.resolve(__dirname, '../..'), extensionUri: '/extension', subscriptions: [],
+      workspaceState: { get: key => workspaceState.get(key), async update(key, value) { workspaceState.set(key, structuredClone(value)); } } };
     await activate(context);
   } finally { Module._load = load; }
   // The HTML provider is a VS Code boundary; exercise the message handler directly.
@@ -449,6 +451,30 @@ async function main() {
   assert.equal(diffs.length, beforeNestedDiffs + 1, errors.at(-1));
   assert.equal(diffs.at(-1)[1].fsPath, path.join(grandPath, 'nested.txt'));
   assert.equal(terminals.length, beforeNestedTerminals);
+  let browseDepth = 0;
+  pickChanges = choices => {
+    if (choices.some(choice => choice.kind === 'browse')) {
+      if (browseDepth++ === 0) return choices.find(choice => choice.kind === 'browse');
+      return choices.find(choice => choice.kind === 'pin');
+    }
+    return choices.find(choice => choice.record?.path === 'nested');
+  };
+  const errorsBeforePin = errors.length;
+  await receive({ type: 'openChange', id: nestedWorking.id });
+  assert.equal(errors.length, errorsBeforePin, errors.at(-1));
+  const pinState = workspaceState.get('gitpane.submodulePins');
+  assert.equal(pinState.version, 1);
+  assert.deepEqual(pinState.pins[0].chain.map(link => link.path), ['child', 'nested']);
+  assert.ok(pinState.pins[0].chain.every(link => Object.keys(link).sort().join(',') === 'child_identity,parent_identity,path'));
+  assert.equal(diffs.length, beforeNestedDiffs + 1, 'pinning must not open a terminal or diff');
+  assert.equal(terminals.length, beforeNestedTerminals);
+  const pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
+  assert.ok(pinnedRow?.pinned, 'nested pin is visible in the overview');
+  pickChanges = choices => choices.find(choice => choice.action === 'unpinSubmodule');
+  await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
+  assert.deepEqual(workspaceState.get('gitpane.submodulePins').pins, []);
+  assert.ok(api.repositories.includes(grandRepo), 'unpin does not close a shared VS Code repository');
+  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested' && !item.pinned), 'the discovered repository remains visible without its pin');
   let changedAncestor = false;
   pickChanges = choices => {
     const selected = choices.find(choice => choice.record?.path === 'nested.txt');

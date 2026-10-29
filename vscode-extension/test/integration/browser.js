@@ -16,7 +16,7 @@ const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js')
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
   repositories: [
-    { id: 'api', name: 'api-service', branch: 'main', dirty: true, live: true, ahead: 2, behind: 1,
+    { id: 'api', name: 'api-service', branch: 'main', dirty: true, live: true, pinned: true, ahead: 2, behind: 1,
       groups: [
         { id: 'working', label: 'Unstaged', files: [
           { id: 'file1', status: 'M', path: 'src/server.rs' },
@@ -132,6 +132,7 @@ const scenario = String.raw`
     let repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository status and branch', repo.textContent.includes('*') && repo.textContent.includes('main'));
     check('live session is visible and accessible', repo.textContent.includes('◉') && repo.getAttribute('aria-label').includes('live session'));
+    check('pinned submodule is visible and accessible', repo.textContent.includes('⌖') && repo.getAttribute('aria-label').includes('pinned submodule'));
     check('ahead and behind', repo.textContent.includes('↑2') && repo.textContent.includes('↓1'));
     check('unique file count', repo.textContent.includes('[2]'));
     check('collapsed by default', repo.getAttribute('aria-expanded') === 'false');
