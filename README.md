@@ -551,6 +551,9 @@ Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...)
 
 ## Troubleshooting
 
+A corrupt or unreadable submodule index can prevent its parent repository's
+status from refreshing. Repair the affected checkout before retrying.
+
 For a copyable snapshot of the active config, scan roots, watcher settings, repo count, and CPU pressure warnings, run:
 
 ```sh

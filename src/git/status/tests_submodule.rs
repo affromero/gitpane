@@ -4,6 +4,74 @@ use git2::Repository;
 use std::{fs, path::Path};
 
 #[test]
+fn corrupt_child_index_is_reported_instead_of_a_clean_child_observation() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+    fs::write(child.path().join("index"), b"not a Git index").unwrap();
+    drop(child);
+    let error = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap_err();
+    assert!(error.to_string().to_lowercase().contains("index"));
+}
+
+#[test]
+fn direct_child_observations_match_git_submodule_ignore_modes() {
+    use git2::{SubmoduleIgnore, SubmoduleStatus};
+    let mask = SubmoduleStatus::WD_ADDED
+        | SubmoduleStatus::WD_DELETED
+        | SubmoduleStatus::WD_MODIFIED
+        | SubmoduleStatus::WD_INDEX_MODIFIED
+        | SubmoduleStatus::WD_WD_MODIFIED
+        | SubmoduleStatus::WD_UNTRACKED;
+    for scenario in [
+        "clean",
+        "untracked",
+        "working",
+        "staged",
+        "pointer",
+        "mixed",
+    ] {
+        let (tmp, _source, _child) = init_repo_with_submodule();
+        let parent = Repository::open(tmp.path()).unwrap();
+        let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+        let recorded = parent
+            .index()
+            .unwrap()
+            .get_path(Path::new("my-sub"), 0)
+            .unwrap()
+            .id;
+        if matches!(scenario, "pointer" | "mixed") {
+            add_commit_on_head(&child, "committed.rs", "committed change");
+        }
+        if scenario == "untracked" {
+            fs::write(tmp.path().join("my-sub/new.rs"), "untracked").unwrap();
+        }
+        if matches!(scenario, "working" | "staged" | "mixed") {
+            fs::write(tmp.path().join("my-sub/lib.rs"), "changed").unwrap();
+            if matches!(scenario, "staged" | "mixed") {
+                let mut index = child.index().unwrap();
+                index.add_path(Path::new("lib.rs")).unwrap();
+                index.write().unwrap();
+            }
+        }
+        for ignore in [
+            SubmoduleIgnore::None,
+            SubmoduleIgnore::Untracked,
+            SubmoduleIgnore::Dirty,
+            SubmoduleIgnore::All,
+        ] {
+            let expected = parent.submodule_status("my-sub", ignore).unwrap();
+            let observed = super::submodule::observe_child(&child, Some(recorded), ignore).unwrap();
+            assert_eq!(
+                observed.status & mask,
+                expected & mask,
+                "{scenario} {ignore:?}"
+            );
+            assert_eq!(observed.head_oid, child.head().unwrap().target());
+        }
+    }
+}
+
+#[test]
 fn ignored_submodule_addition_keeps_staged_and_working_type_change() {
     let (tmp, _source, _child) = init_repo_with_submodule();
     let repo = Repository::open(tmp.path()).unwrap();

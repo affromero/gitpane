@@ -170,25 +170,68 @@ impl SubmoduleWarn {
     }
 }
 
-/// Open the submodule once to read its checked-out branch and, when
-/// `warn_enabled`, compute its push/merge warnings. Returns `(head, warn)`;
-/// `head` is `None` only when the submodule cannot be opened.
-pub(super) fn compute_submodule_head_and_warn(
-    sub: &git2::Submodule,
-    warn_enabled: bool,
-    strict: bool,
-) -> color_eyre::Result<(Option<SubmoduleHead>, SubmoduleWarn)> {
-    let inner = match sub.open() {
-        Ok(r) => r,
-        Err(error) if strict => return Err(error.into()),
-        Err(_) => return Ok((None, SubmoduleWarn::default())),
-    };
+pub(super) struct ChildObservation {
+    pub(super) status: git2::SubmoduleStatus,
+    pub(super) head_oid: Option<git2::Oid>,
+}
 
-    Ok(submodule_head_and_warn(
-        &inner,
-        sub.index_id(),
-        warn_enabled,
-    ))
+/// Inspect an already opened checkout independently of the parent's
+/// submodule cache. Match Git's separate child index/workdir dirty signals.
+pub(super) fn observe_child(
+    child: &Repository,
+    recorded: Option<git2::Oid>,
+    ignore: git2::SubmoduleIgnore,
+) -> Result<ChildObservation, git2::Error> {
+    use git2::{DiffOptions, SubmoduleIgnore, SubmoduleStatus};
+    let head = match child.head().and_then(|head| head.peel_to_commit()) {
+        Ok(head) => Some(head),
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+            ) =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let head_oid = head.as_ref().map(|head| head.id());
+    let mut status = SubmoduleStatus::empty();
+    if ignore == SubmoduleIgnore::All {
+        return Ok(ChildObservation { status, head_oid });
+    }
+    match (recorded, head_oid) {
+        (None, Some(_)) => status |= SubmoduleStatus::WD_ADDED,
+        (Some(_), None) => status |= SubmoduleStatus::WD_DELETED,
+        (Some(old), Some(new)) if old != new => status |= SubmoduleStatus::WD_MODIFIED,
+        _ => {}
+    }
+    if ignore == SubmoduleIgnore::Dirty {
+        return Ok(ChildObservation { status, head_oid });
+    }
+    let index = child.index()?;
+    let mut options = DiffOptions::new();
+    options.include_untracked(ignore == SubmoduleIgnore::None);
+    if let Some(head) = &head {
+        let tree = head.tree()?;
+        if child
+            .diff_tree_to_index(Some(&tree), Some(&index), Some(&mut options))?
+            .deltas()
+            .len()
+            > 0
+        {
+            status |= SubmoduleStatus::WD_INDEX_MODIFIED;
+        }
+    }
+    let working = child.diff_index_to_workdir(Some(&index), Some(&mut options))?;
+    for delta in working.deltas() {
+        if delta.status() == git2::Delta::Untracked {
+            status |= SubmoduleStatus::WD_UNTRACKED;
+        } else {
+            status |= SubmoduleStatus::WD_WD_MODIFIED;
+        }
+    }
+    Ok(ChildObservation { status, head_oid })
 }
 
 /// Observe a validated child using the parent's staged pointer. Keeping this

@@ -2,7 +2,7 @@ use crate::config::SubmoduleConfig;
 use git2::{Repository, Status, StatusOptions, SubmoduleStatus};
 use std::path::{Path, PathBuf};
 
-use super::submodule::{compute_submodule_head_and_warn, regular_submodule_blocker};
+use super::submodule::{observe_child, regular_submodule_blocker, submodule_head_and_warn};
 use super::{FileEntry, FileStatus, SubmoduleInfo, SubmoduleState, SubmoduleWarn};
 
 pub(super) struct ChangeSummary {
@@ -110,15 +110,40 @@ pub(super) fn collect_submodule_infos(
             } else {
                 false
             };
+            let ignore = sub.ignore_rule();
+            let inner = if uninitialized
+                || (ignore == git2::SubmoduleIgnore::All && !sub_cfg.warn_unpushed)
+            {
+                None
+            } else {
+                match sub.open() {
+                    Ok(inner) => Some(inner),
+                    Err(error) if strict => return Err(error.into()),
+                    Err(_) => None,
+                }
+            };
+            let inspect = if sub_cfg.ignore_dirty && !strict {
+                git2::SubmoduleIgnore::Dirty
+            } else {
+                ignore
+            };
+            let observation = inner
+                .as_ref()
+                .map(|inner| observe_child(inner, sub.index_id(), inspect))
+                .transpose()?;
             let status = if !sub_cfg.ignore_dirty || (strict && sub_cfg.warn_unpushed) {
                 if uninitialized {
                     Some(SubmoduleStatus::WD_UNINITIALIZED)
+                } else if let Some(observation) = &observation {
+                    Some(observation.status)
+                } else if ignore == git2::SubmoduleIgnore::All {
+                    Some(SubmoduleStatus::empty())
+                } else if path.join(&sub_path).is_dir()
+                    && !path.join(&sub_path).join(".git").exists()
+                {
+                    Some(SubmoduleStatus::WD_UNINITIALIZED)
                 } else {
-                    match repo.submodule_status(&name, git2::SubmoduleIgnore::Unspecified) {
-                        Ok(status) => Some(status),
-                        Err(error) if strict => return Err(error.into()),
-                        Err(_) => Some(SubmoduleStatus::empty()),
-                    }
+                    Some(SubmoduleStatus::WD_DELETED)
                 }
             } else {
                 None
@@ -142,15 +167,15 @@ pub(super) fn collect_submodule_infos(
                 }
             };
 
-            // Open the submodule (once) to read its checked-out branch and,
-            // when enabled, compute push/merge warnings. Skip for uninitialized
-            // submodules (`sub.open()` fails) and when there is nothing to show
-            // (clean working tree with warnings disabled): branch is only worth
-            // reading for a submodule that will render a row.
+            // Read branch and warning details only for initialized checkouts
+            // with a dirty or warning signal to display.
             let is_uninit = state == Some(SubmoduleState::Uninitialized)
                 || status.is_some_and(|status| status.is_wd_uninitialized());
-            let (head, warn) = if !is_uninit && (state.is_some() || sub_cfg.warn_unpushed) {
-                compute_submodule_head_and_warn(sub, sub_cfg.warn_unpushed, strict)?
+            let (head, warn) = if !is_uninit
+                && (state.is_some() || sub_cfg.warn_unpushed)
+                && let Some(inner) = &inner
+            {
+                submodule_head_and_warn(inner, sub.index_id(), sub_cfg.warn_unpushed)
             } else {
                 (None, SubmoduleWarn::default())
             };
@@ -163,7 +188,10 @@ pub(super) fn collect_submodule_infos(
             }
 
             let head_oid = sub.head_id().map(|id| id.to_string());
-            let workdir_oid = sub.workdir_id().map(|id| id.to_string());
+            let workdir_oid = observation
+                .as_ref()
+                .and_then(|observation| observation.head_oid)
+                .map(|id| id.to_string());
 
             submodules.push(SubmoduleInfo {
                 name: name.clone(),
