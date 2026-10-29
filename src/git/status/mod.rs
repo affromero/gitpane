@@ -177,7 +177,7 @@ pub(crate) enum SubmoduleHead {
 }
 
 /// "You owe a push" warnings for a submodule. Orthogonal to `SubmoduleState`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct SubmoduleWarn {
     /// Submodule HEAD branch ahead of its upstream (0 if no upstream).
     pub unpushed_commits: usize,

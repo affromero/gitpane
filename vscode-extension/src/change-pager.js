@@ -37,6 +37,18 @@ function validRecord(record) {
   if (!record || !Object.hasOwn(KINDS, record.group) || !KINDS[record.group].has(record.kind) ||
       !relativeFile(record.path) || typeof record.is_submodule !== 'boolean' ||
       !(record.original_path === null || relativeFile(record.original_path))) return false;
+  if (record.submodule != null) {
+    const info = record.submodule, head = info.head, warn = info.warn;
+    if (!record.is_submodule || typeof info !== 'object' || Array.isArray(info) ||
+        ![null, 'modified', 'uninitialized', 'dirty'].includes(info.state) ||
+        !(head === null || (head && typeof head === 'object' && !Array.isArray(head) &&
+          ((typeof head.branch === 'string' && head.branch.length > 0 && Buffer.byteLength(head.branch, 'utf8') <= 256 * 1024 &&
+            Object.keys(head).length === 1) ||
+           (head.detached === true && Object.keys(head).length === 1)))) ||
+        !warn || typeof warn !== 'object' || Array.isArray(warn) ||
+        !Number.isSafeInteger(warn.unpushed_commits) || warn.unpushed_commits < 0 ||
+        typeof warn.pointer_unreachable !== 'boolean' || typeof warn.needs_merge_to_default !== 'boolean') return false;
+  }
   if (['index_renamed', 'index_copied', 'working_renamed'].includes(record.kind) && !record.original_path) return false;
   if (record.group === 'attention' && (!record.is_submodule || record.original_path !== null)) return false;
   if (record.group !== 'merge') return record.conflict_stages === null;

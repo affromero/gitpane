@@ -52,11 +52,19 @@ class LinkDocuments {
       tree.onDidChangeTreeData(() => this.scheduleRefresh()),
       vscode.workspace.onDidOpenTextDocument?.(document => {
         const entry = this.documents.get(document.uri.toString());
-        if (entry && (!entry.readBinary || !vscode.window?.tabGroups)) { clearTimeout(entry.timer); entry.timer = undefined; }
+        if (!entry) return;
+        if (entry.readBinary && vscode.window?.tabGroups) entry.textOpen = true;
+        clearTimeout(entry.timer);
+        entry.timer = undefined;
       }) || { dispose() {} },
       vscode.workspace.onDidCloseTextDocument?.(document => {
         const key = document.uri.toString(), entry = this.documents.get(key);
-        if (!entry?.readBinary || !vscode.window?.tabGroups) this.remove(key);
+        if (!entry?.readBinary || !vscode.window?.tabGroups) { this.remove(key); return; }
+        const wasOpen = entry.textOpen;
+        entry.textOpen = false;
+        if (entry.tabOpen || !wasOpen) return;
+        if (entry.opened) this.expirePendingBinary(key, entry, 100);
+        else this.expirePendingBinary(key, entry);
       }) || { dispose() {} },
       vscode.window?.tabGroups?.onDidChangeTabs?.(() => this.updateBinaryTabs()) || { dispose() {} }
     ];
@@ -319,16 +327,24 @@ class LinkDocuments {
 
   async createBinary(fileUri, readMetadata, readBinary, guard, guardSync, group) {
     if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
-    const entry = { readMetadata, readBinary, guard, guardSync, group, closed: false };
+    const entry = { readMetadata, readBinary, guard, guardSync, group, closed: false, textOpen: false, tabOpen: false };
     await this.binaryMetadata(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
     const name = path.basename(fileUri.fsPath);
     entry.uri = fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${name}`, query: '', fragment: '' });
     const key = entry.uri.toString();
-    entry.timer = setTimeout(() => this.remove(key), 60000);
     entry.fingerprint = 'static';
     this.documents.set(key, entry);
+    this.expirePendingBinary(key, entry);
     return entry.uri;
+  }
+
+  expirePendingBinary(key, entry, delay = 60000) {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      entry.timer = undefined;
+      if (this.documents.get(key) === entry && !entry.textOpen && !entry.tabOpen) this.remove(key);
+    }, delay);
   }
 
   binaryEntry(uri) {
@@ -387,8 +403,10 @@ class LinkDocuments {
     }
     for (const [key, entry] of this.documents) {
       if (!entry.readBinary) continue;
-      if (open.has(key)) { entry.opened = true; clearTimeout(entry.timer); entry.timer = undefined; }
-      else if (entry.opened) this.remove(key);
+      const wasOpen = entry.tabOpen;
+      entry.tabOpen = open.has(key);
+      if (entry.tabOpen) { entry.opened = true; clearTimeout(entry.timer); entry.timer = undefined; }
+      else if (wasOpen && !entry.textOpen) this.expirePendingBinary(key, entry, 100);
     }
   }
 

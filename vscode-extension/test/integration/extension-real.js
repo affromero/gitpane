@@ -521,6 +521,9 @@ async function main() {
   parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const submodule = parentAfterSubmodule.groups.flatMap(group => group.files).find(item => item.path === 'child');
   assert.ok(submodule, 'dirty in-workspace submodule must appear in the parent changes');
+  assert.equal(submodule.submoduleDetails?.state, 'dirty');
+  assert.ok(submodule.submoduleDetails.head?.branch || submodule.submoduleDetails.head?.detached);
+  assert.equal(typeof submodule.submoduleDetails.warn.pointer_unreachable, 'boolean');
   assert.equal(childRepo.state.workingTreeChanges.length, 0, 'VS Code child changes are intentionally empty');
   let selectedChild;
   pickChanges = choices => {
@@ -583,6 +586,7 @@ async function main() {
   assert.equal(warningGroup.files.length, 1);
   assert.equal(warningGroup.files[0].path, 'child');
   assert.equal(warningGroup.files[0].status, '!');
+  assert.equal(warningGroup.files[0].submoduleDetails?.warn.pointer_unreachable, true);
   let inspectorChoices;
   pickChanges = choices => { inspectorChoices = choices; return undefined; };
   const errorsBeforeWarning = errors.length;

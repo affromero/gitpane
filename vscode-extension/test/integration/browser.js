@@ -64,7 +64,7 @@ const scenario = String.raw`
       'repo-list-worktree-count': 'rgb(240, 150, 0)', 'repo-list-repo-name': 'rgb(0, 180, 180)',
       'repo-list-live': 'rgb(30, 190, 130)',
       'repo-list-worktree-subtree-icon': 'rgb(160, 80, 240)', 'file-list-regular-path': 'rgb(0, 180, 0)',
-      'file-list-submodule-path': 'rgb(255, 100, 0)' }, lanes: [], authors: [] };
+      'file-list-submodule-path': 'rgb(255, 100, 0)', 'file-list-submodule-branch': 'rgb(20, 180, 200)' }, lanes: [], authors: [] };
     themed.repositories[1].live = true;
     window.postMessage(themed, '*');
     await tick();
@@ -209,10 +209,13 @@ const scenario = String.raw`
     stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     stashRepo.querySelector('.row').click();
     const withWorktree = JSON.parse(JSON.stringify(snapshot));
+    withWorktree.theme = themed.theme;
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
       name: 'web-review', branch: 'review', dirty: true, live: true, fileCount: 2, ahead: 1, behind: 0, available: true,
       groups: [
-        { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt', submodule: true }] },
+        { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt', submodule: true,
+          submoduleDetails: { state: 'dirty', head: { branch: 'feature/test' }, warn: { unpushed_commits: 2,
+            pointer_unreachable: false, needs_merge_to_default: true } } }] },
         { id: 'working', label: 'Unstaged', files: [{ id: 'worktree-working', status: 'M', path: 'working.txt' }] }
       ] }] });
     window.postMessage(withWorktree, '*');
@@ -244,10 +247,19 @@ const scenario = String.raw`
     check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&
       worktree.textContent.includes('staged.txt') && worktree.textContent.includes('working.txt'));
     const nestedFile = items().find(item => item.getAttribute('aria-label') === 'M working.txt');
-    const submoduleFile = items().find(item => item.getAttribute('aria-label') === 'M staged.txt');
+    const submoduleFile = items().find(item => item.getAttribute('aria-label').startsWith('M staged.txt'));
     check('regular and submodule paths use their native semantic colors',
       getComputedStyle(nestedFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-regular-path') &&
       getComputedStyle(submoduleFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-path'));
+    check('submodule diagnostics use native symbols, colors and accessible labels',
+      submoduleFile.querySelector('.submodule-tag').textContent === '[sub: ~dirty @feature/test ↑2 ↛main]' &&
+      ['dirty', 'branch feature/test', '2 unpushed commits', 'needs merge to default branch'].every(value => submoduleFile.getAttribute('aria-label').includes(value)) &&
+      getComputedStyle(submoduleFile.querySelector('.submodule-branch')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-branch'));
+    root.style.width = '210px';
+    const diagnosticRow = submoduleFile.querySelector('.row').getBoundingClientRect();
+    const diagnosticPath = submoduleFile.querySelector('.file-path').getBoundingClientRect();
+    check('submodule path remains within the narrow row', diagnosticPath.width > 0 && diagnosticPath.right <= diagnosticRow.right + 1);
+    root.style.width = '';
     nestedFile.querySelector('.row').click();
     check('clicking a worktree file opens its native change', window.posted.some(message =>
       message.type === 'openChange' && message.id === 'worktree-working' && !('path' in message)));
@@ -259,6 +271,23 @@ const scenario = String.raw`
     worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     check('keyboard collapses the worktree', worktree.getAttribute('aria-expanded') === 'false');
+    worktree.querySelector('.row').click();
+    const diagnosticFile = withWorktree.repositories[1].worktrees[0].groups[0].files[0];
+    for (const [info, expected] of [
+      [{ state: 'uninitialized', head: { branch: 'ignored' }, warn: { unpushed_commits: 2, pointer_unreachable: true, needs_merge_to_default: true } }, '[sub: -uninit]'],
+      [{ state: 'modified', head: { detached: true }, warn: { unpushed_commits: 2, pointer_unreachable: true, needs_merge_to_default: true } }, '[sub: +commit @detached ⚠unreach]'],
+      [{ state: null, head: { branch: '<img src=x>' }, warn: { unpushed_commits: 0, pointer_unreachable: false, needs_merge_to_default: false } }, '[sub: @<img src=x>]'],
+      [{ state: null, head: { branch: 'feature\u202ehidden\u2066x\u2069\nname' }, warn: { unpushed_commits: 0, pointer_unreachable: false, needs_merge_to_default: false } }, '[sub: @feature hidden x  name]']
+    ]) {
+      diagnosticFile.submoduleDetails = info;
+      window.postMessage(withWorktree, '*');
+      await tick();
+      const item = items().find(node => node.getAttribute('aria-label').startsWith('M staged.txt'));
+      check('submodule diagnostic precedence and text-safe branch', item.querySelector('.submodule-tag').textContent === expected && !item.querySelector('img'));
+      check('submodule accessible description removes control characters', !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(item.getAttribute('aria-label')));
+    }
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    worktree.querySelector('.row').click();
     const unavailable = JSON.parse(JSON.stringify(withWorktree));
     unavailable.repositories[1].worktrees[0].available = false;
     window.postMessage(unavailable, '*');
@@ -569,7 +598,9 @@ const scenario = String.raw`
     items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
     check('reopening a parent reloads its restored expanded worktree', window.posted.filter(message =>
       message.type === 'loadChanges' && message.id === 'page-child').length === childLoads + 1);
-    const attention = { type: 'snapshot', errors: [], expandWorktrees: true, repositories: [{
+    const attention = { type: 'snapshot', errors: [], expandWorktrees: true,
+      theme: { name: 'custom', values: { 'repo-list-dirty-submodule': 'rgb(160, 80, 240)' }, lanes: [], authors: [] },
+      repositories: [{
       id: 'attention-parent', name: 'warning-parent', branch: 'main', dirty: false, hasUnpushedSubmodules: true,
       changeCountLowerBound: 0, groups: [], changesPage: { state: 'idle', page: 0, previous: false, next: false },
       worktreeCount: 1, worktrees: [{ id: 'attention-child', name: 'warning-child', branch: 'topic', dirty: false,
@@ -585,6 +616,41 @@ const scenario = String.raw`
     let warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
     check('clean linked worktree exposes its submodule warning', warningChild.getAttribute('aria-expanded') === 'false' &&
       warningChild.getAttribute('aria-label').includes('submodules need attention') && !warningChild.querySelector('.count'));
+    const attentionChild = attention.repositories[0].worktrees[0];
+    for (const [dirty, unpushed] of [[true, false], [true, true], [false, false]]) {
+      attentionChild.hasDirtySubmodules = dirty;
+      attentionChild.hasUnpushedSubmodules = unpushed;
+      attentionChild.live = dirty && unpushed;
+      attentionChild.ahead = dirty && unpushed ? 1 : 0;
+      attentionChild.behind = dirty && unpushed ? 1 : 0;
+      window.postMessage(attention, '*');
+      await tick();
+      warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
+      const label = warningChild.getAttribute('aria-label');
+      const dirtyBadge = warningChild.querySelector('.worktree-row .dirty-submodule');
+      const unpushedBadge = warningChild.querySelector('.worktree-row .unpushed-submodule');
+      check('worktree submodule indicators reflect status ' + dirty + '/' + unpushed,
+        !!dirtyBadge === dirty && !!unpushedBadge === unpushed &&
+        label.includes('dirty submodules') === dirty && label.includes('submodules need attention') === unpushed);
+      if (dirtyBadge) check('worktree dirty submodule uses native semantic color', dirtyBadge.textContent === '◈' &&
+        getComputedStyle(dirtyBadge).color === document.documentElement.style.getPropertyValue('--gitpane-repo-list-dirty-submodule'));
+      if (dirty && unpushed) {
+        root.style.width = '210px';
+        const bounds = warningChild.querySelector('.tail').getBoundingClientRect();
+        const rowBounds = warningChild.querySelector('.worktree-row').getBoundingClientRect();
+        const rootBounds = root.getBoundingClientRect();
+        check('both worktree submodule indicators remain visible in a narrow sidebar', [dirtyBadge, unpushedBadge].every(badge => {
+          const rect = badge.getBoundingClientRect();
+          return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+            rect.right <= rowBounds.right + 1 && rect.right <= rootBounds.right + 1;
+        }));
+        root.style.width = '';
+      }
+    }
+    attentionChild.hasUnpushedSubmodules = true;
+    window.postMessage(attention, '*');
+    await tick();
+    warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
     warningChild.querySelector('.row').click();
     check('warning worktree requests its own changes', window.posted.some(message =>
       message.type === 'loadChanges' && message.id === 'attention-child'));
@@ -599,7 +665,7 @@ const scenario = String.raw`
     warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
     check('warning entries do not become changed-file counts', !warningParent.querySelector('.repo-row .count') &&
       !warningChild.querySelector('.worktree-row .count'));
-    const warningFile = items().find(item => item.getAttribute('aria-label') === 'Submodule needs attention: vendor/module');
+    const warningFile = items().find(item => item.getAttribute('aria-label').startsWith('Submodule needs attention: vendor/module'));
     check('warning has distinct group and symbol', warningFile && warningFile.textContent.includes('!') &&
       items().some(item => item.getAttribute('aria-label').startsWith('Submodules needing attention')));
     warningFile.querySelector('.row').click();

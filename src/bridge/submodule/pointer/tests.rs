@@ -1,3 +1,5 @@
+mod diagnostic_tests;
+
 use super::*;
 use git2::{Repository, Signature};
 

@@ -93,7 +93,8 @@ class GitpaneViewProvider {
         if (!grouped.has(record.group)) grouped.set(record.group, { id: record.group, label: labels[record.group], files: [] });
         grouped.get(record.group).files.push({ id: fileId, name: path.basename(uri.fsPath),
           path: directory ? `${record.path}/` : record.path, status: record.group === 'attention' ? '!' : statusLabel(change.status),
-          ...(directory ? { directory: true } : {}), ...(record.is_submodule ? { submodule: true } : {}) });
+          ...(directory ? { directory: true } : {}), ...(record.is_submodule ? { submodule: true } : {}),
+          ...(record.submodule ? { submoduleDetails: record.submodule } : {}) });
       }
       return ['merge', 'index', 'working', 'untracked', 'attention'].flatMap(group => grouped.has(group) ? [grouped.get(group)] : []);
     };
@@ -132,7 +133,8 @@ class GitpaneViewProvider {
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
         return { id: worktreeId, name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
-          available: !!child, hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
+          available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
+          hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
           changeCountLowerBound: child ? lowerBound(childStatus) : 0,
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
             { repoKey, repoToken, path: item.path }) : [] };

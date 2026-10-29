@@ -116,7 +116,7 @@ fn validate_link(link: &Link) -> Result<(), BridgeError> {
             ));
         }
     };
-    if object.len() != 6
+    if object.len() != 6 + usize::from(object.contains_key("submodule"))
         || !valid_kind
         || object.get("path").and_then(Value::as_str) != Some(path)
         || object.get("group").and_then(Value::as_str) != Some(group_name(link.group))

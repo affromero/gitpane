@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use git2::{Delta, FileMode, Index, IndexEntry, IndexEntryExtendedFlag, Repository, Status};
@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use crate::config::SubmoduleConfig;
 
-use super::change_summary::{collect_change_summary, status_options};
+use super::change_summary::{collect_submodule_infos, status_options};
+use super::{SubmoduleHead, SubmoduleInfo, SubmoduleState, SubmoduleWarn};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ConflictStages {
@@ -23,6 +24,43 @@ pub(crate) struct ChangeRecord {
     original_path: Option<String>,
     conflict_stages: Option<ConflictStages>,
     is_submodule: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    submodule: Option<SubmoduleDetails>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SubmoduleDetails {
+    state: Option<&'static str>,
+    head: Option<SubmoduleHeadRecord>,
+    warn: SubmoduleWarn,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum SubmoduleHeadRecord {
+    Branch { branch: String },
+    Detached { detached: bool },
+}
+
+impl From<&SubmoduleInfo> for SubmoduleDetails {
+    fn from(module: &SubmoduleInfo) -> Self {
+        let state = module.state.as_ref().map(|state| match state {
+            SubmoduleState::Modified => "modified",
+            SubmoduleState::Uninitialized => "uninitialized",
+            SubmoduleState::Dirty => "dirty",
+        });
+        let head = module.head.as_ref().map(|head| match head {
+            SubmoduleHead::Branch(branch) => SubmoduleHeadRecord::Branch {
+                branch: branch.clone(),
+            },
+            SubmoduleHead::Detached => SubmoduleHeadRecord::Detached { detached: true },
+        });
+        Self {
+            state,
+            head,
+            warn: module.warn,
+        }
+    }
 }
 
 impl ChangeRecord {
@@ -127,6 +165,7 @@ fn collect_conflicts(
                 original_path: None,
                 conflict_stages: Some(ConflictStages { base, ours, theirs }),
                 is_submodule,
+                submodule: None,
             },
         )?;
     }
@@ -200,6 +239,7 @@ fn add_index(
             original_path: original,
             conflict_stages: None,
             is_submodule,
+            submodule: None,
         },
     )
 }
@@ -267,6 +307,7 @@ fn add_working(
             original_path: original,
             conflict_stages: None,
             is_submodule,
+            submodule: None,
         },
     )
 }
@@ -312,18 +353,25 @@ pub(crate) fn collect_changes(
             &submodules,
         )?;
     }
-    if sub_cfg.warn_unpushed && !submodules.is_empty() {
+    if !submodules.is_empty() {
         let workdir = repo.workdir().ok_or_else(|| {
             ChangeError::Repository("Repository has no working directory.".to_owned())
         })?;
-        let summary = collect_change_summary(repo, workdir, false, sub_cfg, true)
+        let modules = collect_submodule_infos(repo, workdir, sub_cfg, true)
             .map_err(|error| ChangeError::Repository(error.to_string()))?;
-        let changed_paths: HashSet<_> = records.iter().map(|record| record.path.clone()).collect();
-        for module in summary.submodules {
-            if module.warn.is_clean() {
-                continue;
-            }
+        let mut details = HashMap::with_capacity(modules.len());
+        for module in &modules {
             let path = path_string(&module.path)?;
+            details.insert(path, SubmoduleDetails::from(module));
+        }
+        let mut changed_paths = HashSet::new();
+        for record in &mut records {
+            if record.is_submodule {
+                record.submodule = details.get(&record.path).cloned();
+                changed_paths.insert(record.path.clone());
+            }
+        }
+        for (path, submodule) in details {
             if changed_paths.contains(&path) {
                 continue;
             }
@@ -337,6 +385,7 @@ pub(crate) fn collect_changes(
                     original_path: None,
                     conflict_stages: None,
                     is_submodule: true,
+                    submodule: Some(submodule),
                 },
             )?;
         }

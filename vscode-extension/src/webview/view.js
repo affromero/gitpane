@@ -228,9 +228,41 @@ function statusClass(status) {
   return ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted', '!': 'behind' })[status] || 'muted';
 }
 
+function submoduleParts(file) {
+  if (!file.submodule) return [];
+  const info = file.submoduleDetails;
+  if (!info) return [];
+  const parts = [];
+  const state = { modified: ['+commit', 'commit changed'], uninitialized: ['-uninit', 'uninitialized'], dirty: ['~dirty', 'dirty'] }[info.state];
+  if (state) parts.push([state[0], 'submodule-bracket', state[1]]);
+  if (info.state === 'uninitialized') return parts;
+  if (info.head) {
+    const branch = info.head.detached ? 'detached' : info.head.branch.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, ' ');
+    parts.push([`@${branch}`, 'submodule-branch', `branch ${branch}`]);
+  }
+  if (info.warn.pointer_unreachable) parts.push(['⚠unreach', 'submodule-unreachable', 'pointer unreachable']);
+  else {
+    if (info.warn.unpushed_commits > 0) parts.push([`↑${info.warn.unpushed_commits}`, 'submodule-unpushed', `${info.warn.unpushed_commits} unpushed commits`]);
+    if (info.warn.needs_merge_to_default) parts.push(['↛main', 'submodule-needs-merge', 'needs merge to default branch']);
+  }
+  return parts;
+}
+
 function fileRow(file) {
-  const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}`);
+  const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}${file.submodule ? ' submodule-file-row' : ''}`);
   add(row, statusClass(file.status), file.status || ' ');
+  if (file.submodule) {
+    const parts = submoduleParts(file);
+    const tag = element('span', 'submodule-tag');
+    tag.title = parts.length ? parts.map(part => part[2]).join(', ') : 'Submodule';
+    add(tag, 'submodule-bracket', parts.length ? '[sub: ' : '[submodule]');
+    parts.forEach((part, index) => {
+      if (index) add(tag, 'submodule-bracket', ' ');
+      add(tag, part[1], part[0]);
+    });
+    if (parts.length) add(tag, 'submodule-bracket', ']');
+    row.appendChild(tag);
+  }
   add(row, `file-path${file.submodule ? ' submodule-path' : ''}`, file.path || file.name, file.path || file.name);
   if (file.directory) add(row, 'muted', 'directory', 'Untracked directory');
   else row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
@@ -247,6 +279,7 @@ function worktreeRow(worktree) {
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
+  if (worktree.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
   if (worktree.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
   if (worktree.changesPage) {
     const info = countInfo(worktree);
@@ -310,7 +343,8 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
       if (searchOwner === ownerId && searchInput.value && (file.path || '').toLowerCase().includes(searchInput.value.toLowerCase())) {
         row.classList.add('search-match');
       }
-      const fileItem = createItem(fileKey, `${group.id === 'attention' ? 'Submodule needs attention:' : file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}`,
+      const details = file.submodule ? `, submodule${submoduleParts(file).map(part => `, ${part[2]}`).join('')}` : '';
+      const fileItem = createItem(fileKey, `${group.id === 'attention' ? 'Submodule needs attention:' : file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}${details}`,
         row, false, false, groupKey);
       fileItem.searchOwner = ownerId;
       fileItem.searchPath = file.directory ? file.path.slice(0, -1) : file.path;
@@ -437,6 +471,7 @@ function render() {
       else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
       if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
       if (worktree.live) worktreeDetails.push('live session');
       if (!worktree.available) worktreeDetails.push('repository unavailable');

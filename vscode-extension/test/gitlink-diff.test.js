@@ -89,6 +89,7 @@ test('historical file sides read from their parent repository and preserve ances
 });
 
 test('binary documents reject malformed metadata and release closed image tabs', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const changes = new EventEmitter(), tabsChanged = new EventEmitter(), closed = new EventEmitter();
   const tabs = { all: [], onDidChangeTabs: tabsChanged.event };
   const docs = new LinkDocuments({ EventEmitter, workspace: { onDidCloseTextDocument: closed.event }, window: { tabGroups: tabs },
@@ -117,7 +118,63 @@ test('binary documents reject malformed metadata and release closed image tabs',
   current = true;
   tabs.all = [];
   tabsChanged.fire();
+  t.mock.timers.tick(100);
   await assert.rejects(docs.readFile(image), /no longer/i);
+});
+
+test('binary documents live while text or tabs reference them and release after closing', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const changes = new EventEmitter(), tabsChanged = new EventEmitter(), opened = new EventEmitter(), closed = new EventEmitter();
+  const tabs = { all: [], onDidChangeTabs: tabsChanged.event };
+  const docs = new LinkDocuments({ EventEmitter, workspace: { onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event },
+    window: { tabGroups: tabs }, FileType: { File: 1 } }, { onDidChangeTreeData: changes.event }, {});
+  t.after(() => docs.dispose());
+  const make = () => docs.createBinary(uri('/workspace/image.png'), async () => ({ size: 1 }),
+    async () => Buffer.from([7]), async () => true, () => true, 'image');
+  const image = await make();
+  opened.fire({ uri: image });
+  t.mock.timers.tick(60000);
+  assert.deepEqual(await docs.readFile(image), Buffer.from([7]));
+  tabs.all = [{ tabs: [{ input: { modified: image } }] }];
+  tabsChanged.fire();
+  tabs.all = [];
+  tabsChanged.fire();
+  assert.deepEqual(await docs.readFile(image), Buffer.from([7]));
+  closed.fire({ uri: image });
+  opened.fire({ uri: image });
+  t.mock.timers.tick(100);
+  assert.deepEqual(await docs.readFile(image), Buffer.from([7]));
+  closed.fire({ uri: image });
+  tabsChanged.fire();
+  t.mock.timers.tick(100);
+  await assert.rejects(docs.readFile(image), /no longer/i);
+
+  const delayed = await make();
+  opened.fire({ uri: delayed });
+  closed.fire({ uri: delayed });
+  t.mock.timers.tick(59000);
+  opened.fire({ uri: delayed });
+  t.mock.timers.tick(60000);
+  assert.deepEqual(await docs.readFile(delayed), Buffer.from([7]));
+  closed.fire({ uri: delayed });
+  tabs.all = [{ tabs: [{ input: { original: delayed } }] }];
+  tabsChanged.fire();
+  t.mock.timers.tick(60000);
+  assert.deepEqual(await docs.readFile(delayed), Buffer.from([7]));
+  tabs.all = [];
+  tabsChanged.fire();
+  t.mock.timers.tick(100);
+  await assert.rejects(docs.readFile(delayed), /no longer/i);
+
+  const pending = await make();
+  t.mock.timers.tick(30000);
+  tabsChanged.fire();
+  t.mock.timers.tick(30000);
+  await assert.rejects(docs.readFile(pending), /no longer/i);
+  const disposed = await make();
+  opened.fire({ uri: disposed });
+  docs.dispose();
+  await assert.rejects(docs.readFile(disposed), /no longer/i);
 });
 
 test('binary reads limit concurrent Git buffers and recheck waiting documents', async t => {

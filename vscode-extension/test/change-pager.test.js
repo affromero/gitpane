@@ -18,6 +18,25 @@ test('attention records are accepted only for a scoped submodule', () => {
   assert.equal(validRecord({ ...attention, original_path: 'other' }), false);
 });
 
+test('submodule diagnostics validate state, branch and warning values', () => {
+  const base = { group: 'working', kind: 'working_modified', path: 'vendor/child',
+    original_path: null, conflict_stages: null, is_submodule: true };
+  const warn = { unpushed_commits: 2, pointer_unreachable: false, needs_merge_to_default: true };
+  const details = { state: 'dirty', head: { branch: 'feature/test' }, warn };
+  assert.equal(validRecord({ ...base, submodule: details }), true);
+  assert.equal(validRecord({ ...base, submodule: { state: 'uninitialized', head: null, warn } }), true);
+  assert.equal(validRecord({ ...base, submodule: { state: null, head: { detached: true }, warn } }), true);
+  assert.equal(validRecord({ ...base, submodule: { ...details, head: { branch: 'x'.repeat(4097) } } }), true);
+  assert.equal(validRecord({ ...base, submodule: { ...details, head: { branch: 'name\u202ereversed' } } }), true);
+  for (const submodule of [{ ...details, state: 'unknown' },
+    { ...details, head: { branch: 'é'.repeat(131073) } }, { ...details, head: { detached: false } },
+    { ...details, warn: { ...warn, unpushed_commits: -1 } }, { ...details, warn: { ...warn, pointer_unreachable: 'yes' } }]) {
+    assert.equal(validRecord({ ...base, submodule }), false);
+  }
+  assert.equal(validRecord({ ...base, is_submodule: false, submodule: details }), false);
+  assert.equal(validRecord(base), true);
+});
+
 test('paging preserves the current position across unchanged refreshes and resets after changes', async () => {
   let sequence = 0;
   let revision = 'a'.repeat(64);

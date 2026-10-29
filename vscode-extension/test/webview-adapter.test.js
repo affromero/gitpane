@@ -133,6 +133,8 @@ test('webview shows workspace state and opens only currently visible changes', a
     const worktree = first.repositories[0].worktrees[0];
     assert.equal(provider.resolveWorktree(worktree.id).branch, 'worktree-branch');
     assert.equal(worktree.available, true);
+    assert.equal(worktree.hasDirtySubmodules, false);
+    assert.equal(worktree.hasUnpushedSubmodules, false);
     let childFile = worktree.groups[0].files[0];
     assert.equal(childFile.path, 'child.txt');
     const oldChildFileId = childFile.id;
@@ -209,22 +211,38 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls[1][1], first.repositories[0].id);
 
     const attention = { group: 'attention', kind: 'submodule_attention', path: 'child-module',
-      original_path: null, conflict_stages: null, is_submodule: true };
+      original_path: null, conflict_stages: null, is_submodule: true,
+      submodule: { state: 'dirty', head: { branch: 'topic' },
+        warn: { unpushed_commits: 2, pointer_unreachable: false, needs_merge_to_default: true } } };
     backend.beginChanges = async () => page([attention]);
     Object.assign(tree.backendStatuses.get(root), { is_dirty: false, has_unpushed_submodules: false, file_count_lower_bound: 0 });
-    Object.assign(tree.backendStatuses.get(worktreePath), { has_unpushed_submodules: true, file_count_lower_bound: 0 });
+    const childStatus = tree.backendStatuses.get(worktreePath);
+    Object.assign(childStatus, { has_dirty_submodules: true, has_unpushed_submodules: false, file_count_lower_bound: 0 });
+    onChange();
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].hasDirtySubmodules, true);
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].hasUnpushedSubmodules, false);
+    childStatus.has_unpushed_submodules = true;
     await onMessage({ type: 'loadChanges', id: worktree.id });
     const warnedWorktree = snapshots.at(-1).repositories[0].worktrees[0];
+    assert.equal(warnedWorktree.hasDirtySubmodules, true);
     assert.equal(warnedWorktree.hasUnpushedSubmodules, true);
     assert.equal(warnedWorktree.changeCountLowerBound, 0);
     assert.equal(warnedWorktree.groups[0].label, 'Submodules needing attention');
     const warning = warnedWorktree.groups[0].files[0];
     assert.equal(warning.status, '!');
+    assert.deepEqual(warning.submoduleDetails, attention.submodule);
     assert.equal(provider.resolveChange(warning.id).isSubmodule, true);
     await onMessage({ type: 'openChange', id: warning.id });
     assert.equal(calls.at(-1)[0], 'gitpane.openChange');
     assert.equal(calls.at(-1)[1].record.kind, 'submodule_attention');
     calls.pop();
+
+    tree.backendStatuses.delete(worktreePath);
+    onChange();
+    const loadingWorktree = snapshots.at(-1).repositories[0].worktrees[0];
+    assert.equal(loadingWorktree.hasDirtySubmodules, false);
+    assert.equal(loadingWorktree.hasUnpushedSubmodules, false);
+    tree.backendStatuses.set(worktreePath, childStatus);
 
     const rootStatus = tree.backendStatuses.get(root);
     rootStatus.repo_identity = 'a'.repeat(64);

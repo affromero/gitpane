@@ -72,6 +72,9 @@ fn validates_nested_chain_and_detects_each_changed_record_and_pointer() {
     assert_eq!(check(&scope, aliases).unwrap(), json!({"valid": true}));
     for index in 0..links.len() {
         let mut changed = links.clone();
+        changed[index].record["submodule"]["state"] = json!("uninitialized");
+        assert_eq!(check(&scope, changed).unwrap(), json!({"valid": false}));
+        let mut changed = links.clone();
         changed[index].record["kind"] = json!("working_deleted");
         assert_eq!(check(&scope, changed).unwrap(), json!({"valid": false}));
         let mut changed = links.clone();
@@ -114,6 +117,12 @@ fn rejects_invalid_chains_and_unsupported_changes() {
     invalid.record["path"] = json!("other");
     assert_eq!(
         check(&scope, vec![invalid]).unwrap_err().code,
+        "invalid_request"
+    );
+    let mut unknown = links[0].clone();
+    unknown.record["extra"] = json!(true);
+    assert_eq!(
+        check(&scope, vec![unknown]).unwrap_err().code,
         "invalid_request"
     );
     let mut conflict = links[0].clone();

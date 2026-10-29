@@ -72,61 +72,14 @@ pub(super) fn file_entry(path: PathBuf, s: Status) -> Option<FileEntry> {
     })
 }
 
-pub(super) fn collect_change_summary(
+pub(super) fn collect_submodule_infos(
     repo: &Repository,
     path: &Path,
-    recurse_untracked_dirs: bool,
     sub_cfg: &SubmoduleConfig,
     strict: bool,
-) -> color_eyre::Result<ChangeSummary> {
-    if repo.is_bare() {
-        return Ok(ChangeSummary {
-            files: Vec::new(),
-            file_count_lower_bound: 0,
-            is_dirty: false,
-            has_submodules: false,
-            submodules: Vec::new(),
-            has_dirty_submodules: false,
-            has_unpushed_submodules: false,
-        });
-    }
-    let mut opts = status_options(recurse_untracked_dirs, sub_cfg);
-
-    let statuses = repo.statuses(Some(&mut opts))?;
-    let mut files = Vec::new();
-
-    for entry in statuses.iter() {
-        let s = entry.status();
-        let file_path = entry
-            .index_to_workdir()
-            .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
-            .or_else(|| {
-                entry
-                    .head_to_index()
-                    .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
-            })
-            .ok_or_else(|| color_eyre::eyre::eyre!("Git status entry has no path"))?;
-
-        if let Some(file) = file_entry(file_path, s) {
-            files.push(file);
-        }
-    }
-
-    let is_dirty = !files.is_empty();
-    let mut file_count_lower_bound = files.len();
-
-    // Detect submodules by checking for .gitmodules
-    let has_submodules = path.join(".gitmodules").is_file();
-
-    // Submodule enumeration
+) -> color_eyre::Result<Vec<SubmoduleInfo>> {
     let mut submodules = Vec::new();
-    let mut has_dirty_submodules = false;
-    let mut has_unpushed_submodules = false;
-
-    // Iterate when *any* submodule signal is requested. `ignore_dirty` and
-    // `warn_unpushed` are independent: even with dirty hidden, we may still
-    // need to surface unpushed-pointer warnings.
-    if has_submodules && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed) {
+    if path.join(".gitmodules").is_file() && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed) {
         let subs = match repo.submodules() {
             Ok(subs) => subs,
             Err(error) if strict => return Err(error.into()),
@@ -221,39 +174,83 @@ pub(super) fn collect_change_summary(
                 workdir_oid,
                 warn,
             });
+        }
+    }
+    Ok(submodules)
+}
 
-            // Cross-reference with files vec
-            if let Some(file_entry) = files.iter_mut().find(|f| f.path == sub_path) {
-                file_entry.is_submodule = true;
-                file_entry.submodule_state = state.clone();
-                file_entry.submodule_warn = warn;
-                file_entry.submodule_head = head;
-            } else {
-                // Synthetic FileEntry for any submodule with a dirty or warn signal.
-                // FileStatus::Modified keeps the leading `M` "needs attention" cue;
-                // the [sub: ...] tag carries the actual semantics.
-                files.push(FileEntry {
-                    path: sub_path,
-                    status: FileStatus::Modified,
-                    // A dirty submodule is a worktree-side signal; staging is
-                    // gated off for submodule rows anyway.
-                    staged: false,
-                    unstaged: true,
-                    is_submodule: true,
-                    submodule_state: state,
-                    submodule_warn: warn,
-                    submodule_head: head,
-                });
-                if has_dirty_signal {
-                    file_count_lower_bound += 1;
-                }
-            }
+pub(super) fn collect_change_summary(
+    repo: &Repository,
+    path: &Path,
+    recurse_untracked_dirs: bool,
+    sub_cfg: &SubmoduleConfig,
+    strict: bool,
+) -> color_eyre::Result<ChangeSummary> {
+    if repo.is_bare() {
+        return Ok(ChangeSummary {
+            files: Vec::new(),
+            file_count_lower_bound: 0,
+            is_dirty: false,
+            has_submodules: false,
+            submodules: Vec::new(),
+            has_dirty_submodules: false,
+            has_unpushed_submodules: false,
+        });
+    }
+    let mut opts = status_options(recurse_untracked_dirs, sub_cfg);
 
+    let statuses = repo.statuses(Some(&mut opts))?;
+    let mut files = Vec::new();
+
+    for entry in statuses.iter() {
+        let s = entry.status();
+        let file_path = entry
+            .index_to_workdir()
+            .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            .or_else(|| {
+                entry
+                    .head_to_index()
+                    .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("Git status entry has no path"))?;
+
+        if let Some(file) = file_entry(file_path, s) {
+            files.push(file);
+        }
+    }
+
+    let is_dirty = !files.is_empty();
+    let mut file_count_lower_bound = files.len();
+
+    // Detect submodules by checking for .gitmodules
+    let has_submodules = path.join(".gitmodules").is_file();
+
+    let submodules = collect_submodule_infos(repo, path, sub_cfg, strict)?;
+    let mut has_dirty_submodules = false;
+    let mut has_unpushed_submodules = false;
+    for module in &submodules {
+        let has_dirty_signal = module.state.is_some();
+        has_dirty_submodules |= has_dirty_signal;
+        has_unpushed_submodules |= !module.warn.is_clean();
+
+        if let Some(file_entry) = files.iter_mut().find(|file| file.path == module.path) {
+            file_entry.is_submodule = true;
+            file_entry.submodule_state = module.state.clone();
+            file_entry.submodule_warn = module.warn;
+            file_entry.submodule_head = module.head.clone();
+        } else {
+            files.push(FileEntry {
+                path: module.path.clone(),
+                status: FileStatus::Modified,
+                staged: false,
+                unstaged: true,
+                is_submodule: true,
+                submodule_state: module.state.clone(),
+                submodule_warn: module.warn,
+                submodule_head: module.head.clone(),
+            });
             if has_dirty_signal {
-                has_dirty_submodules = true;
-            }
-            if has_warn_signal {
-                has_unpushed_submodules = true;
+                file_count_lower_bound += 1;
             }
         }
     }

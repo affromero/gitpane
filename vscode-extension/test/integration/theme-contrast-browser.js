@@ -53,11 +53,42 @@ const scenario = String.raw`
     if (!forced) check('VS Code high contrast uses inherited semantic color with nonempty palettes',
       window.GitpaneTheme.lane(0) === 'currentColor' && window.GitpaneTheme.author('Andres') === 'currentColor');
     const searchable = { type: 'snapshot', errors: [], repositories: [{ id: 'repo', name: 'repo', branch: 'feature', dirty: true,
-      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'file', path: 'match.txt', status: 'M' }] }],
-      changesPage: { state: 'ready', page: 0, previous: false, next: false }, worktrees: [] }] };
+      groups: [{ id: 'working', label: 'Unstaged', files: [
+        { id: 'file', path: 'match.txt', status: 'M' },
+        { id: 'sub-dirty', path: 'vendor/dirty', status: 'M', submodule: true, submoduleDetails: {
+          state: 'dirty', head: { branch: 'topic' }, warn: { unpushed_commits: 2, pointer_unreachable: false, needs_merge_to_default: true } } },
+        { id: 'sub-unreachable', path: 'vendor/unreachable', status: 'M', submodule: true, submoduleDetails: {
+          state: 'modified', head: { detached: true }, warn: { unpushed_commits: 0, pointer_unreachable: true, needs_merge_to_default: false } } }
+      ] }], changesPage: { state: 'ready', page: 0, previous: false, next: false }, worktrees: [] }],
+      theme: { name: 'custom', values: { 'file-list-submodule-bracket': 'rgb(200, 30, 140)',
+        'file-list-submodule-branch': 'rgb(20, 180, 210)', 'file-list-submodule-unpushed': 'rgb(0, 170, 70)',
+        'file-list-submodule-unreachable': 'rgb(210, 40, 40)', 'file-list-submodule-needs-merge': 'rgb(210, 170, 0)' },
+      lanes: [], authors: [] } };
     window.postMessage(searchable, '*');
     await tick();
     document.querySelector('[role="treeitem"] .repo-row').click();
+    const badges = [
+      ['vendor/dirty', '[sub: ~dirty @topic ↑2 ↛main]', ['.submodule-bracket', '.submodule-branch', '.submodule-unpushed', '.submodule-needs-merge']],
+      ['vendor/unreachable', '[sub: +commit @detached ⚠unreach]', ['.submodule-bracket', '.submodule-branch', '.submodule-unreachable']]
+    ];
+    for (const [path, text, selectors] of badges) {
+      const item = [...document.querySelectorAll('[role="treeitem"]')].find(node => node.getAttribute('aria-label').includes(path));
+      const badge = item?.querySelector('.submodule-tag');
+      check('submodule badge shows representative state for ' + path, !!badge && badge.textContent === text);
+      check('submodule badge initially unselected for ' + path, item.getAttribute('aria-selected') === 'false');
+      const background = getComputedStyle(document.body).backgroundColor;
+      for (const selector of selectors) {
+        const node = badge.querySelector(selector);
+        check('unselected ' + path + ' ' + selector + ' is readable', !!node && contrast(getComputedStyle(node).color, background) >= 4.5);
+      }
+      item.focus();
+      check('submodule badge is selected for ' + path, item.getAttribute('aria-selected') === 'true');
+      const selectedBackground = getComputedStyle(item.querySelector('.file-row')).backgroundColor;
+      for (const selector of selectors) {
+        const node = badge.querySelector(selector);
+        check('selected ' + path + ' ' + selector + ' is readable', contrast(getComputedStyle(node).color, selectedBackground) >= 4.5);
+      }
+    }
     const expanded = document.querySelector('[role="treeitem"]');
     expanded.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
     const input = document.getElementById('file-search');
