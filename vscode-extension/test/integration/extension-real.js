@@ -40,6 +40,7 @@ let provider;
 let receive;
 let pickChanges;
 let submoduleInput;
+let selectedWorkspaceRepository;
 const workspaceState = new Map();
 
 async function main() {
@@ -92,6 +93,7 @@ async function main() {
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
       withProgress: async (_options, operation) => operation({ report() {} }),
       showQuickPick: async choices => pickChanges?.(choices),
+      showOpenDialog: async () => selectedWorkspaceRepository,
       showInputBox: async () => submoduleInput,
       showWarningMessage: async (message, options, action) => {
         if (typeof options === 'string') { warnings.push(message); return undefined; }
@@ -139,6 +141,28 @@ async function main() {
   assert.equal(provider.theme.value?.name, 'default');
   assert.equal(provider.theme.value.values['repo-list-worktree-count'], 'rgb(255, 175, 0)');
   assert.ok(provider.theme.value.lanes.length > 0);
+  const nestedPath = fs.realpathSync(path.join(repoPath, 'nested-repo'));
+  const explicitlyAdded = { rootUri: uri(nestedPath), state: { HEAD: {}, onDidChange: event,
+    workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  api.openRepository = async target => {
+    if (target.fsPath !== nestedPath) throw new Error('Unexpected repository');
+    if (!api.repositories.includes(explicitlyAdded)) { api.repositories.push(explicitlyAdded); openedRepositories.fire(explicitlyAdded); }
+    return explicitlyAdded;
+  };
+  selectedWorkspaceRepository = [uri(nestedPath)];
+  const errorsBeforeAdd = errors.length;
+  await commands.get('gitpane.addWorkspaceRepository')();
+  assert.equal(errors.length, errorsBeforeAdd, errors.at(-1));
+  assert.ok(api.repositories.includes(explicitlyAdded));
+  assert.equal(workspaceState.get('gitpane.workspaceRepositories').repositories[0].path, nestedPath);
+  pickChanges = choices => choices.find(choice => choice.label === 'nested-repo');
+  await commands.get('gitpane.manageWorkspaceRepositories')();
+  assert.equal(workspaceState.get('gitpane.workspaceRepositories').repositories.length, 0);
+  assert.ok(api.repositories.includes(explicitlyAdded), 'removing the saved addition must not close the repository');
+  api.repositories = api.repositories.filter(item => item !== explicitlyAdded);
+  closedRepositories.fire(explicitlyAdded);
+  await commands.get('gitpane.refresh')();
+  console.log('PASS explicit workspace repository addition and removal without closing VS Code repositories');
   const owner = snapshots.at(-1).repositories[0];
   assert.equal(repo.state.workingTreeChanges.length, 0);
   assert.equal(owner.dirty, true);

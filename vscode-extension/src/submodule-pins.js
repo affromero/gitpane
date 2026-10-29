@@ -10,6 +10,8 @@ const token = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const canonical = value => {
   try { return fs.realpathSync.native(value); } catch { return undefined; }
 };
+const openingKey = (value, platform = process.platform) => platform === 'win32'
+  ? path.win32.normalize(value.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '')).toLowerCase() : value;
 
 function validPin(pin) {
   return !!pin && Object.keys(pin).sort().join(',') === 'chain,root' && typeof pin.root === 'string' && path.isAbsolute(pin.root) && !pin.root.includes('\0') && pin.root.length <= 4096 &&
@@ -39,6 +41,7 @@ class SubmodulePins {
     this.revalidateIntervalMs = options.revalidateIntervalMs ?? 5000;
     this.restoreDelayMs = options.restoreDelayMs ?? 50;
     this.openTimeoutMs = options.openTimeoutMs ?? 10000;
+    this.openingPlatform = options.platform ?? process.platform;
     this.pins = [];
     this.active = new Map();
     this.openings = new Map();
@@ -112,33 +115,11 @@ class SubmodulePins {
     if (!currentChain()) throw new Error('The selected submodule changed.');
     const target = before.at(-1);
     let repo = this.git.repositories.find(candidate => canonical(candidate.rootUri.fsPath) === target);
-    const inFlight = [...this.openings.values()].find(opening => opening.target === target);
-    if (!repo && inFlight) {
-      throw Object.assign(new Error('VS Code is still opening this submodule. Try again after it finishes.'), { code: 'open_pending' });
-    }
     const existingToken = repo && this.tree.repositoryToken(repo);
     const uri = this.vscode.Uri.file(target);
     const revision = this.tree.repositoryRevision(uri);
     if (!repo) {
-      const key = this.key(pin);
-      const opening = { target };
-      opening.promise = Promise.resolve().then(() => {
-        if (!currentChain()) throw new Error('The pinned submodule changed before opening.');
-        return this.git.openRepository(uri);
-      }).then(value => ({ value }), error => ({ error })).finally(() => {
-        if (this.openings.get(key) === opening) this.openings.delete(key);
-      });
-      this.openings.set(key, opening);
-      let timer;
-      const timeout = new Promise(resolve => {
-        timer = setTimeout(() => resolve({ pending: true }), this.openTimeoutMs);
-        timer.unref?.();
-      });
-      const outcome = await Promise.race([opening.promise, timeout]);
-      clearTimeout(timer);
-      if (outcome.pending) throw Object.assign(new Error('VS Code is still opening this submodule. Try again after it finishes.'), { code: 'open_pending' });
-      if (outcome.error) throw outcome.error;
-      repo = outcome.value;
+      repo = await this.openTarget(target, uri, currentChain, this.key(pin));
     }
     if (!repo || canonical(repo.rootUri.fsPath) !== target || !currentChain()) {
       throw new Error('The pinned submodule could not be opened in the workspace.');
@@ -154,6 +135,32 @@ class SubmodulePins {
     if (!guard() || before.some((value, index) => value !== after[index]) ||
         !this.tree.isCurrentRepository(found, repoToken)) throw new Error('The pinned submodule changed while opening.');
     return { path: target, token: repoToken, repo: found };
+  }
+
+  hasOpening(target) {
+    const normalized = openingKey(target, this.openingPlatform);
+    return [...this.openings.values()].some(opening => openingKey(opening.target, this.openingPlatform) === normalized);
+  }
+
+  async openTarget(target, uri, guard, key) {
+    if (this.hasOpening(target)) {
+      throw Object.assign(new Error('VS Code is still opening this repository. Try again after it finishes.'), { code: 'open_pending' });
+    }
+    const opening = { target };
+    opening.promise = Promise.resolve().then(() => {
+      if (!guard()) throw new Error('The selected repository changed before opening.');
+      return this.git.openRepository(uri);
+    }).then(value => ({ value }), error => ({ error })).finally(() => {
+      if (this.openings.get(key) === opening) this.openings.delete(key);
+    });
+    this.openings.set(key, opening);
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ pending: true }), this.openTimeoutMs); timer.unref?.(); });
+    const outcome = await Promise.race([opening.promise, timeout]);
+    clearTimeout(timer);
+    if (outcome.pending) throw Object.assign(new Error('VS Code is still opening this repository. Try again after it finishes.'), { code: 'open_pending' });
+    if (outcome.error) throw outcome.error;
+    return outcome.value;
   }
 
   enqueue(operation) {
@@ -190,8 +197,13 @@ class SubmodulePins {
   }
 
   async waitForOpen(keys) {
-    const openings = keys.map(key => this.openings.get(key)?.promise).filter(Boolean);
-    if (!openings.length) return;
+    const pending = keys.some(key => {
+      if (this.openings.has(key)) return true;
+      const pin = this.pins.find(item => this.key(item) === key);
+      const target = this.active.get(key)?.path || (pin && canonical(path.join(pin.root, ...pin.chain.flatMap(link => link.path.split('/')))));
+      return !!target && this.hasOpening(target);
+    });
+    if (!pending) return;
     throw new Error('VS Code is still opening this submodule. Try removing the pin after the open finishes.');
   }
 
@@ -475,4 +487,4 @@ class SubmodulePins {
   }
 }
 
-module.exports = { SubmodulePins, readPins, validPin };
+module.exports = { SubmodulePins, readPins, validPin, openingKey };

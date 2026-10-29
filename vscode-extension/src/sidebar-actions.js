@@ -3,13 +3,13 @@
 const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule']);
-const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
+const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir, item.repoIdentity];
-  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned);
+  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned, !!item.added);
   if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId, item.childRepoIdentity);
   return JSON.stringify(fields);
@@ -57,6 +57,7 @@ class SidebarActions {
     this.pinSubmodule = options.pinSubmodule;
     this.browseSubmodules = options.browseSubmodules;
     this.hideRepository = options.hideRepository;
+    this.removeWorkspaceRepository = options.removeWorkspaceRepository;
     this.unpinSubmodule = options.unpinSubmodule;
     this.previewFileAction = options.previewFileAction;
     this.previewWorktreeRemoval = options.previewWorktreeRemoval;
@@ -89,6 +90,7 @@ class SidebarActions {
         { label: 'Create Worktree', action: 'createWorktree' },
         { label: 'Pin Submodule…', action: 'browseSubmodules' },
         { label: 'Hide from Gitpane', action: 'hideRepository' },
+        ...(item.added ? [{ label: 'Stop Restoring Repository', action: 'removeWorkspaceRepository' }] : []),
         ...(item.worktreeRemoval ? [{ label: 'Remove Worktree', action: 'removeWorkspaceWorktree' }] : []),
         ...(item.pinned ? [{ label: 'Unpin Submodule', action: 'unpinSubmodule' }] : []),
         { label: 'Review Branch', action: 'reviewBranch' },
@@ -171,6 +173,10 @@ class SidebarActions {
       }
       if (action === 'hideRepository' || action === 'hideWorktree') {
         if (this.hideRepository) await this.hideRepository(item, kind, current);
+        return;
+      }
+      if (action === 'removeWorkspaceRepository') {
+        if (item.added && this.removeWorkspaceRepository) await this.removeWorkspaceRepository(message.id, current);
         return;
       }
       if (action === 'unpinSubmodule') {

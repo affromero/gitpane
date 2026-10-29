@@ -22,6 +22,7 @@ const { ThemeController } = require('./theme');
 const { WorkspaceFetch } = require('./workspace-fetch');
 const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
+const { WorkspaceRepositories } = require('./workspace-repositories');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -282,6 +283,7 @@ class GitpaneViewProvider {
     const actionRepo = this.actionRepository(repo);
     if (!actionRepo) return undefined;
     actionRepo.pinned = this.pins?.isPinned(repo) || false;
+    actionRepo.added = this.workspaceRepositories?.isAdded(repo) || false;
     const found = this.tree.explicitWorktreeAnchor?.(repo);
     if (!found || !this.tree.isPathInWorkspace(found.path)) return actionRepo;
     const anchorToken = this.tree.repositoryToken(found.anchor);
@@ -442,8 +444,11 @@ async function activate(context) {
   tree.hiddenRepositories = hidden;
   const provider = new GitpaneViewProvider(tree, context.extensionUri, theme);
   const pins = new SubmodulePins(tree, backend, api, context.workspaceState, vscode);
+  const workspaceRepositories = new WorkspaceRepositories(tree, backend, api, context.workspaceState, vscode, pins);
   tree.pins = pins;
+  tree.workspaceRepositories = workspaceRepositories;
   provider.pins = pins;
+  provider.workspaceRepositories = workspaceRepositories;
   const links = new LinkDocuments(vscode, tree, backend);
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
@@ -475,6 +480,10 @@ async function activate(context) {
   };
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.actions = new SidebarActions({ vscode, mutations,
+    removeWorkspaceRepository: async (id, guard) => {
+      const repo = provider.currentRepository(id);
+      if (repo && guard()) await workspaceRepositories.remove(repo, guard);
+    },
     hideRepository: async (item, kind, guard) => {
       if (kind === 'repo') {
         const repo = api.repositories.find(candidate => candidate.rootUri.fsPath === item.repoPath);
@@ -539,12 +548,20 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, mutations,
+  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
     vscode.commands.registerCommand('gitpane.refresh', () => provider.refresh(true)),
     vscode.commands.registerCommand('gitpane.fetchWorkspace', () => workspaceFetch.run()),
+    vscode.commands.registerCommand('gitpane.addWorkspaceRepository', async () => {
+      try { await workspaceRepositories.add(); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane could not add the repository: ${error.message}`); }
+    }),
+    vscode.commands.registerCommand('gitpane.manageWorkspaceRepositories', async () => {
+      try { await workspaceRepositories.manage(); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane workspace repositories: ${error.message}`); }
+    }),
     vscode.commands.registerCommand('gitpane.restoreHiddenRepositories', async () => {
       try { await hidden.manage(); }
       catch (error) { await vscode.window.showErrorMessage(`Gitpane hidden repositories: ${error.message}`); }

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { SubmodulePins, readPins } = require('../src/submodule-pins');
+const { SubmodulePins, readPins, openingKey } = require('../src/submodule-pins');
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 5000;
@@ -273,6 +273,43 @@ test('concurrent duplicate pin requests share the saved pin and open only once',
   await Promise.all([pins.pin(f.root, [f.first], () => true), pins.pin(f.root, [f.first], () => true)]);
   assert.equal(f.opens, 1);
   assert.equal(f.saved.pins.length, 1);
+});
+
+test('workspace additions and submodule pins share the same in-flight open lease', async t => {
+  const f = fixture(t);
+  const pins = f.manager();
+  t.after(() => pins.dispose());
+  const original = f.git.openRepository.bind(f.git);
+  let release;
+  f.git.openRepository = async value => { await new Promise(resolve => { release = resolve; }); return original(value); };
+  const uri = { fsPath: f.child, toString: () => `file:${f.child}` };
+  const pending = pins.openTarget(f.child, uri, () => true, `workspace:${f.child}`);
+  await waitFor(() => !!release);
+  await assert.rejects(pins.pin(f.root, [f.first], () => true), /still opening/i);
+  release();
+  await pending;
+  assert.equal(f.opens, 1);
+  assert.equal(f.saved, undefined);
+});
+
+test('Windows open leases match case and extended drive or UNC aliases', async t => {
+  assert.equal(openingKey(String.raw`C:\Work\Repo`, 'win32'), openingKey(String.raw`\\?\c:\work\repo`, 'win32'));
+  assert.equal(openingKey(String.raw`\\Server\Share\Repo`, 'win32'), openingKey(String.raw`\\?\UNC\server\share\repo`, 'win32'));
+  const f = fixture(t), pins = f.manager({ platform: 'win32' });
+  t.after(() => pins.dispose());
+  await pins.pin(f.root, [f.first], () => true);
+  let release;
+  f.git.openRepository = () => new Promise(resolve => { release = resolve; });
+  const target = f.child.toUpperCase();
+  const pending = pins.openTarget(target, { fsPath: target }, () => true, `workspace:${target}`);
+  await waitFor(() => !!release);
+  assert.equal(pins.hasOpening(f.child), true);
+  await assert.rejects(pins.manage(), /still opening/i);
+  await assert.rejects(pins.openTarget(f.child, { fsPath: f.child }, () => true, 'duplicate'), /still opening/i);
+  release(f.childRepo);
+  await pending;
+  await pins.manage();
+  assert.deepEqual(f.saved.pins, []);
 });
 
 test('a symlink escaping the workspace cannot be pinned even with a malformed backend response', { skip: process.platform === 'win32' }, async t => {

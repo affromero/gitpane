@@ -26,11 +26,14 @@
       { "command": "gitpane.fetchWorkspace", "title": "Gitpane: Fetch Workspace", "icon": "$(cloud-download)" },
       { "command": "gitpane.manageSubmodulePins", "title": "Gitpane: Manage Submodule Pins", "icon": "$(pinned)" },
       { "command": "gitpane.restoreHiddenRepositories", "title": "Gitpane: Restore Hidden Repositories", "icon": "$(eye)" },
+      { "command": "gitpane.addWorkspaceRepository", "title": "Gitpane: Add Workspace Repository…", "icon": "$(add)" },
+      { "command": "gitpane.manageWorkspaceRepositories", "title": "Gitpane: Manage Workspace Repositories" },
       { "command": "gitpane.sort", "title": "Gitpane: Sort Repositories", "icon": "$(list-ordered)" },
       { "command": "gitpane.openChange", "title": "Gitpane: Open Change" }
     ],
     "menus": {
       "view/title": [{ "command": "gitpane.sort", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.addWorkspaceRepository", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.restoreHiddenRepositories", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.fetchWorkspace", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.manageSubmodulePins", "when": "view == gitpane.repositories", "group": "navigation" },

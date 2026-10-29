@@ -255,6 +255,7 @@ class BackendManager {
       }
       let result;
       if (method === 'status') result = await client.status(repo, argument.includeWorktrees, argument.options);
+      else if (method === 'repository_preview') result = await client.status(repo, false, { summaryOnly: true, watchedPaths: [] });
       else if (method === 'changes_begin') result = await client.beginChanges(repo);
       else if (method === 'changes_next') result = await client.nextChanges(repo, argument.snapshot, argument.cursor);
       else if (method === 'changes_release') result = await client.releaseChanges(repo, argument);
@@ -291,10 +292,12 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
       const invalidIdentity = method === 'repo_identity_validate' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
+      const invalidRepositoryPreview = method === 'repository_preview' &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !staleChanges && !obsoleteRelease && !invalidTheme) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
       throw error;
@@ -532,6 +535,8 @@ class BackendManager {
   }
 
   status(repo, includeWorktrees, options) { return this.request('status', repo, { includeWorktrees, options }); }
+
+  previewRepository(repo) { return this.request('repository_preview', repo); }
 
   beginChanges(repo) { return this.request('changes_begin', repo); }
 

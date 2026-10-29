@@ -600,6 +600,7 @@ class RepositoryTree {
     this.visible = visible;
     this.liveness?.setVisible(visible);
     this.pins?.setVisible(visible);
+    this.workspaceRepositories?.setVisible(visible);
     if (!visible && this.pollTimer !== undefined) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -732,7 +733,7 @@ class RepositoryTree {
         }
         return [];
       });
-      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
+      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.workspaceRepositories?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.presentationView();
       if (view.pendingHidden) failures.push({ type: 'error', message: 'Hidden repository identity verification is pending.' });
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({

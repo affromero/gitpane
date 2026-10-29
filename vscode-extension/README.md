@@ -102,6 +102,13 @@ from the overview. **Gitpane: Restore Hidden Repositories** restores it.
 This preference belongs to the current workspace and leaves VS Code's Git
 repositories and workspace folders unchanged. Newly detected repositories
 remain visible. Hiding a pinned submodule does not remove its pin.
+If VS Code has not discovered a repository inside an open workspace folder,
+use **Gitpane: Add Workspace Repository…** and choose its root folder. Gitpane
+restores explicitly added repositories while their paths and identities still
+match. **Stop Restoring Repository** or **Gitpane: Manage Workspace
+Repositories** removes that preference without closing the repository in VS
+Code. If an open request is still running, wait for it to finish before
+removing the saved addition. VS Code cannot cancel an open already in progress.
 Use **Gitpane: Manage Submodule Pins** to remove a saved pin that can no longer
 be restored.
 If VS Code is already opening a pinned repository, wait for that open to finish
