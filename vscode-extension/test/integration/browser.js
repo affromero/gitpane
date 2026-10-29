@@ -62,10 +62,13 @@ const scenario = String.raw`
     const themed = JSON.parse(JSON.stringify(snapshot));
     themed.theme = { name: 'custom', values: { 'repo-list-stash': 'rgb(255, 0, 120)',
       'repo-list-worktree-count': 'rgb(240, 150, 0)', 'repo-list-repo-name': 'rgb(0, 180, 180)',
+      'repo-list-dirty-marker': 'rgb(220, 180, 0)', 'repo-list-branch': 'rgb(20, 180, 200)',
+      'repo-list-file-count': 'rgb(220, 180, 0)',
       'repo-list-live': 'rgb(30, 190, 130)',
       'repo-list-worktree-subtree-icon': 'rgb(160, 80, 240)', 'file-list-regular-path': 'rgb(0, 180, 0)',
       'file-list-submodule-path': 'rgb(255, 100, 0)', 'file-list-submodule-branch': 'rgb(20, 180, 200)' }, lanes: [], authors: [] };
     themed.repositories[1].live = true;
+    themed.repositories[0].branch = 'feature/colors';
     window.postMessage(themed, '*');
     await tick();
     check('workspace semantic theme applies under CSP',
@@ -77,6 +80,24 @@ const scenario = String.raw`
       document.documentElement.style.getPropertyValue('--gitpane-repo-list-repo-name'));
     check('live session uses native semantic color', getComputedStyle(webName.closest('.row').querySelector('.live')).color ===
       document.documentElement.style.getPropertyValue('--gitpane-repo-list-live'));
+    webName.closest('[role="treeitem"]').focus();
+    let coloredRepo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    const semanticSelectors = ['.dirty', '.name', '.branch', '.count'];
+    const unselectedColors = semanticSelectors.map(selector => getComputedStyle(coloredRepo.querySelector(selector)).color);
+    coloredRepo.focus();
+    for (const [index, selector] of semanticSelectors.entries()) {
+      check('selection preserves semantic color for ' + selector,
+        getComputedStyle(coloredRepo.querySelector(selector)).color === unselectedColors[index]);
+    }
+    window.postMessage(themed, '*');
+    await tick();
+    coloredRepo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    check('refresh preserves row selection', coloredRepo.getAttribute('aria-selected') === 'true');
+    document.getElementById('start-search').focus();
+    for (const [index, selector] of semanticSelectors.entries()) {
+      check('refresh and focus changes preserve semantic color for ' + selector,
+        getComputedStyle(coloredRepo.querySelector(selector)).color === unselectedColors[index]);
+    }
     const badTheme = JSON.parse(JSON.stringify(themed));
     badTheme.theme.values['repo-list-stash'] = 'red; display: none';
     window.postMessage(badTheme, '*');
@@ -180,8 +201,8 @@ const scenario = String.raw`
     check('stash toggle is accessible', stashButton.getAttribute('aria-label') === 'Expand stashes for web-app' &&
       stashButton.getAttribute('aria-expanded') === 'false');
     stashButton.focus();
-    check('selected stash action uses selection foreground', getComputedStyle(stashButton).color ===
-      getComputedStyle(stashRepo.querySelector('.repo-row')).color);
+    check('selected stash action keeps its semantic color', getComputedStyle(stashButton).color ===
+      document.documentElement.style.getPropertyValue('--gitpane-repo-list-stash'));
     stashButton.click();
     stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     stashButton = stashRepo.querySelector('.stash-action');

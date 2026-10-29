@@ -169,8 +169,10 @@ body {
 .worktree-files .page-row, .worktree-files .page-status { padding-left: 4.7ch; }
 .treeitem[aria-disabled="true"] > .page-row { opacity: .65; cursor: default; }
 
-.treeitem[aria-selected="true"] > .row span,
-.treeitem[aria-selected="true"] > .row button { color: inherit; }
+body.vscode-high-contrast .treeitem[aria-selected="true"] > .row span,
+body.vscode-high-contrast .treeitem[aria-selected="true"] > .row button,
+body.vscode-high-contrast-light .treeitem[aria-selected="true"] > .row span,
+body.vscode-high-contrast-light .treeitem[aria-selected="true"] > .row button { color: inherit; }
 
 @media (max-width: 230px) {
   #repositories { grid-template-columns: 2.5ch minmax(4ch, 1fr) minmax(3ch, .75fr) minmax(0, max-content); column-gap: .6ch; }
@@ -179,6 +181,8 @@ body {
 }
 
 @media (forced-colors: active) {
+  .treeitem[aria-selected="true"] > .row span,
+  .treeitem[aria-selected="true"] > .row button { color: inherit; }
   .dirty, .count, .branch, .ahead, .behind, .worktree, .modified,
   .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule, .live, .pin,
   .graph-action, .menu-action, .worktree-action { color: CanvasText; }
