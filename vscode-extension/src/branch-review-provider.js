@@ -2,11 +2,7 @@
 
 const path = require('node:path');
 const { openGitlinkDiff } = require('./gitlink-diff');
-
-function validFilePath(value) {
-  return typeof value === 'string' && !!value && !path.isAbsolute(value) &&
-    !value.split(/[\\/]/).some(part => !part || part === '.' || part === '..');
-}
+const { relativeFile } = require('./change-pager');
 
 class BranchReviewProvider {
   constructor(tree, backend, git, options = {}) {
@@ -41,8 +37,8 @@ class BranchReviewProvider {
         throw new Error('Gitpane returned an invalid branch review.');
       }
       const choices = result.files.map(file => {
-        if (!file || !validFilePath(file.path) || !['A', 'D', 'M', 'R', '?'].includes(file.status) ||
-          (file.status === 'R' && !validFilePath(file.old_path)) || typeof file.is_submodule !== 'boolean') {
+        if (!file || !relativeFile(file.path) || !['A', 'D', 'M', 'R', '?'].includes(file.status) ||
+          (file.status === 'R' && !relativeFile(file.old_path)) || typeof file.is_submodule !== 'boolean') {
           throw new Error('Gitpane returned an invalid branch review file.');
         }
         return { label: file.path, description: file.status, file };

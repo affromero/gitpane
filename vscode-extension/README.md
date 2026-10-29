@@ -24,6 +24,8 @@ opens a repository's stash list. Stash entries are view-only.
 Select a repository or worktree and press `/` or the search button to search
 all of its changed paths. Use the arrow keys to move between matches, Enter to
 open a file diff, and Escape to clear the search.
+An untracked embedded Git repository appears as an informational directory;
+open or add that repository in VS Code to inspect its files.
 The Explorer title menu offers repository sorting; the default keeps the
 existing dirty-first, full-path order.
 
@@ -97,7 +99,11 @@ Use **Gitpane: Fetch Workspace** or the cloud download button to fetch the
 current workspace repositories. Each linked worktree is fetched separately so
 its own branch and remote configuration apply. Repositories sharing a Git
 common directory are fetched in sequence. Gitpane reports failures for each
-repository and refreshes the status and visible graph afterward.
+repository and refreshes the status and visible graph afterward. Fetch
+Workspace is unavailable on Windows.
+
+The extension does not use Gitpane's `[watch] poll_fetch_secs` or automatically
+fetch remotes. VS Code's Git auto-fetch setting can fetch them independently.
 
 Use **Pin Submodule…** from a repository or worktree menu to pin a direct
 submodule, including one without changes. The list comes from VS Code and can

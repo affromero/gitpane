@@ -80,6 +80,20 @@ test('opens committed additions, modifications and deletions against the merge b
   assert.equal(f.calls[3][2].ref, f.head);
 });
 
+test('opens Unix filenames containing backslashes as literal names', { skip: process.platform === 'win32' }, async () => {
+  const f = fixture();
+  const oldPath = 'old\\..\\name.txt', newPath = 'new\\..\\name.txt';
+  f.setReview({ ...f.getReview(), files: [{ path: newPath, old_path: oldPath, status: 'R', is_submodule: false }] });
+  await f.provider.open(f.repo);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0][0], 'vscode.diff');
+  assert.equal(f.calls[0][1].fsPath, path.join(f.root, oldPath));
+  assert.equal(f.calls[0][1].ref, f.base);
+  assert.equal(f.calls[0][2].fsPath, path.join(f.root, newPath));
+  assert.equal(f.calls[0][2].ref, f.head);
+  assert.deepEqual(f.errors, []);
+});
+
 test('reports empty reviews and backend failures', async () => {
   const f = fixture();
   await f.provider.open(f.repo);

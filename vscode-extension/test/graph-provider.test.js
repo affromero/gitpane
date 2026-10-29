@@ -7,6 +7,45 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 
+test('commit graph opens Unix filenames containing literal backslashes', { skip: process.platform === 'win32' }, async () => {
+  const calls = [], messages = [];
+  const uri = value => ({ fsPath: value, toString: () => value, with: change => ({ fsPath: value, ...change }) });
+  const vscode = { Uri: { file: uri }, commands: { async executeCommand(...args) { calls.push(args); } } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    const { GraphProvider } = require('../src/graph-provider');
+    const root = path.resolve('workspace/repo');
+    const repo = { rootUri: uri(root) };
+    const tree = { git: { get repositories() { return [{ ...repo }]; } }, isVisible: () => true,
+      repositoryToken: () => 1, isCurrentRepository: (_repo, token) => token === 1,
+      onDidChangeTreeData: () => ({ dispose() {} }) };
+    const oid = 'a'.repeat(40), parent = 'b'.repeat(40);
+    const oldPath = 'old\\..\\file.txt', newPath = 'new\\..\\file.txt';
+    const backend = { async commitFiles() { return { files: [{ status: 'R', path: newPath, old_path: oldPath }] }; } };
+    const git = { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
+    const provider = new GraphProvider(tree, backend, git, '/extension');
+    provider.repoKey = repo.rootUri.toString();
+    provider.panel = { visible: true, webview: { postMessage: message => messages.push(message) }, dispose() {} };
+    provider.rows.set(oid, { oid, parent_oids: [parent] });
+    try {
+      await provider.loadCommit(oid);
+      const file = messages.at(-1).files[0];
+      await provider.openCommitFile(file.id);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0][0], 'vscode.diff');
+      assert.equal(calls[0][1].fsPath, path.join(root, oldPath));
+      assert.equal(calls[0][1].ref, parent);
+      assert.equal(calls[0][2].fsPath, path.join(root, newPath));
+      assert.equal(calls[0][2].ref, oid);
+    } finally { provider.dispose(); }
+  } finally {
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
+});
+
 test('commit files open native diffs against the first parent and reject stale actions', async () => {
   const messages = [];
   const commands = [];

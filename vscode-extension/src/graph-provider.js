@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const vscode = require('vscode');
 const { openGitlinkDiff } = require('./gitlink-diff');
+const { relativeFile } = require('./change-pager');
 
 function defaultFilters() {
   return { branches: null, authors: null, refs: { local: true, remote: true, tags: true, stashes: true } };
@@ -16,11 +17,6 @@ function copyFilters(filters) {
 
 function selectionSummary(values) {
   return values === null ? 'All' : `${values.length} selected`;
-}
-
-function validFilePath(value) {
-  return typeof value === 'string' && !!value && !path.isAbsolute(value) &&
-    !value.split(/[\\/]/).some(part => !part || part === '.' || part === '..');
 }
 
 class GraphProvider {
@@ -435,8 +431,8 @@ class GraphProvider {
       if (generation !== this.detailGeneration || !this.currentRepo() || !this.panel) return;
       if (!Array.isArray(result?.files)) throw new Error('Gitpane returned invalid commit files.');
       const files = result.files.map(file => {
-        if (!file || !validFilePath(file.path) || typeof file.status !== 'string' ||
-          (file.status === 'R' && !validFilePath(file.old_path))) {
+        if (!file || !relativeFile(file.path) || typeof file.status !== 'string' ||
+          (file.status === 'R' && !relativeFile(file.old_path))) {
           throw new Error('Gitpane returned an invalid commit path.');
         }
         const id = randomUUID();
