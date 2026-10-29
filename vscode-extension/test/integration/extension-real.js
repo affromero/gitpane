@@ -220,6 +220,70 @@ async function main() {
   assert.equal(diffs.at(-1)[1].fsPath, path.join(worktreePath, linkedFile.path));
   console.log('PASS real linked worktree paging and native file diff');
 
+  pickChanges = choices => choices.find(choice => choice.action === 'hideWorktree');
+  await receive({ type: 'menu', kind: 'worktree', id: linked.id });
+  assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'linked'));
+  assert.ok(api.repositories.includes(worktree), 'hiding a worktree does not close it in VS Code');
+  const parentStatusKey = repo.rootUri.toString();
+  const originalParentStatus = provider.tree.backendStatuses.get(parentStatusKey);
+  api.repositories = api.repositories.filter(item => item !== worktree);
+  closedRepositories.fire(worktree);
+  provider.tree.backendStatuses.set(parentStatusKey, { ...originalParentStatus,
+    worktrees: originalParentStatus.worktrees.map(item => fs.realpathSync(item.path) === fs.realpathSync(worktreePath)
+      ? { ...item, repo_identity: undefined } : item) });
+  provider.tree.changed();
+  assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'linked'));
+  assert.ok(snapshots.at(-1).errors.some(message => /identity verification is pending/i.test(message)),
+    'a hidden unopened worktree with no identity must be reported as pending');
+  provider.tree.backendStatuses.set(parentStatusKey, originalParentStatus);
+  api.repositories.push(worktree);
+  openedRepositories.fire(worktree);
+  await commands.get('gitpane.refresh')();
+  const onlyVisible = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  pickChanges = choices => choices.find(choice => choice.action === 'hideRepository');
+  await receive({ type: 'menu', kind: 'repo', id: onlyVisible.id });
+  assert.equal(snapshots.at(-1).repositories.length, 0);
+  assert.match(snapshots.at(-1).emptyMessage, /repositories are hidden/i);
+  pickChanges = choices => choices.find(choice => choice.label === 'repo');
+  await commands.get('gitpane.restoreHiddenRepositories')();
+  pickChanges = choices => choices.find(choice => choice.label === 'linked');
+  await commands.get('gitpane.restoreHiddenRepositories')();
+  assert.ok(snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'linked'));
+  const anchor = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  pickChanges = choices => choices.find(choice => choice.action === 'hideRepository');
+  await receive({ type: 'menu', kind: 'repo', id: anchor.id });
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'repo'));
+  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'linked'), 'a hidden anchor must not hide its opened worktree');
+  assert.ok(api.repositories.includes(repo), 'hiding an anchor does not close it in VS Code');
+  const verifiedStatuses = new Map(provider.tree.backendStatuses);
+  provider.tree.backendStatuses.clear();
+  provider.tree.changed();
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'repo'), 'a hidden row stays hidden while status is unavailable');
+  assert.ok(snapshots.at(-1).errors.some(message => /identity verification is pending/i.test(message)));
+  provider.tree.backendStatuses.set(parentStatusKey, { ...verifiedStatuses.get(parentStatusKey), repo_identity: 'malformed' });
+  provider.tree.changed();
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'repo'), 'malformed identity must not reveal a hidden row');
+  assert.ok(snapshots.at(-1).errors.some(message => /identity verification is pending/i.test(message)));
+  for (const [key, status] of verifiedStatuses) provider.tree.backendStatuses.set(key, status);
+  provider.tree.changed();
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'repo'));
+  const latePath = path.join(path.dirname(repoPath), 'late');
+  fs.mkdirSync(latePath);
+  gitAt(latePath, 'init', '-q');
+  gitAt(latePath, 'commit', '--allow-empty', '-qm', 'initial');
+  const lateRepo = { rootUri: uri(latePath), state: { HEAD: { commit: gitAt(latePath, 'rev-parse', 'HEAD') },
+    onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  api.repositories.push(lateRepo);
+  openedRepositories.fire(lateRepo);
+  await commands.get('gitpane.refresh')();
+  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'late'), 'new workspace repositories remain visible');
+  api.repositories = api.repositories.filter(item => item !== lateRepo);
+  closedRepositories.fire(lateRepo);
+  pickChanges = choices => choices.find(choice => choice.label === 'repo');
+  await commands.get('gitpane.restoreHiddenRepositories')();
+  assert.ok(snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'linked'));
+  console.log('PASS hide and restore repository and worktree overview rows');
+
   const mainRemote = path.join(temporary, 'main-remote.git');
   const linkedRemote = path.join(temporary, 'linked-remote.git');
   const mainWriter = path.join(temporary, 'main-writer');
@@ -511,8 +575,16 @@ async function main() {
   assert.equal(terminals.length, beforeNestedTerminals);
   const pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
   assert.ok(pinnedRow?.pinned, 'nested pin is visible in the overview');
-  pickChanges = choices => choices.find(choice => choice.action === 'unpinSubmodule');
+  pickChanges = choices => choices.find(choice => choice.action === 'hideRepository');
   await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'nested'));
+  assert.equal(workspaceState.get('gitpane.submodulePins').pins.length, 1, 'hiding does not remove the pin');
+  pickChanges = choices => choices.find(choice => choice.label === 'nested');
+  await commands.get('gitpane.restoreHiddenRepositories')();
+  const restoredPin = snapshots.at(-1).repositories.find(item => item.name === 'nested');
+  assert.ok(restoredPin?.pinned, 'restoring retains the pin');
+  pickChanges = choices => choices.find(choice => choice.action === 'unpinSubmodule');
+  await receive({ type: 'menu', kind: 'repo', id: restoredPin.id });
   assert.deepEqual(workspaceState.get('gitpane.submodulePins').pins, []);
   assert.ok(api.repositories.includes(grandRepo), 'unpin does not close a shared VS Code repository');
   assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested' && !item.pinned), 'the discovered repository remains visible without its pin');

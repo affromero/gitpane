@@ -64,6 +64,7 @@ function fixture() {
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
     pinSubmodule: async id => { calls.push(['pinSubmodule', id]); },
     browseSubmodules: async (id, kind) => { calls.push(['browseSubmodules', id, kind]); },
+    hideRepository: async (item, kind) => { calls.push(['hideRepository', item.path || item.repoPath, kind]); },
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     previewFileAction: (...args) => preview(...args),
@@ -144,6 +145,19 @@ test('repository and available worktree menus offer submodule browsing only for 
   f.setWorktree({ ...f.getWorktree(), available: false });
   f.pick(choices => { assert.ok(!choices.some(choice => choice.action === 'browseWorktreeSubmodules')); });
   await f.actions.showMenu('worktree', 'worktree');
+});
+
+test('repository and worktree hide actions follow the current menu selection', async () => {
+  const f = fixture();
+  f.pick(choices => choices.find(choice => choice.action === 'hideRepository'));
+  await f.actions.showMenu('repo', 'repo');
+  f.pick(choices => choices.find(choice => choice.action === 'hideWorktree'));
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, [['hideRepository', f.root, 'repo'], ['hideRepository', f.getWorktree().path, 'worktree']]);
+  f.pick(choices => { f.setWorktree({ ...f.getWorktree(), path: path.resolve('other') });
+    return choices.find(choice => choice.action === 'hideWorktree'); });
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.equal(f.calls.length, 2);
 });
 
 test('a file that becomes a submodule while its menu is open cannot be mutated', async () => {
@@ -259,6 +273,7 @@ test('worktree creation and removal use current opaque targets and confirm remov
   assert.deepEqual(f.calls[2], ['refresh']);
   f.calls.length = 0;
   f.confirm(button => button);
+  f.pick(choices => choices.find(choice => choice.action === 'removeWorktree'));
   await f.actions.showMenu('worktree', 'worktree');
   assert.match(f.calls[0][1], /remove worktree/i);
   assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.getWorktree().path,
@@ -381,7 +396,7 @@ test('available worktrees offer graph and review only while their repository rem
   await f.actions.handle(action('reviewWorktree', 'worktree'));
   assert.deepEqual(f.calls, []);
   f.pick(choices => {
-    assert.deepEqual(choices.map(choice => choice.action), ['removeWorktree']);
+    assert.deepEqual(choices.map(choice => choice.action), ['hideWorktree', 'removeWorktree']);
     return undefined;
   });
   await f.actions.showMenu('worktree', 'worktree');

@@ -97,6 +97,11 @@ workspace and their registered paths and repository identities still match.
 Use **Unpin Submodule** from its repository menu to remove the pin. Gitpane
 never closes or hides a repository discovered by VS Code when unpinning. The
 repository can remain visible after its pin marker is removed.
+Use **Hide from Gitpane** in a repository or worktree menu to remove its row
+from the overview. **Gitpane: Restore Hidden Repositories** restores it.
+This preference belongs to the current workspace and leaves VS Code's Git
+repositories and workspace folders unchanged. Newly detected repositories
+remain visible. Hiding a pinned submodule does not remove its pin.
 Use **Gitpane: Manage Submodule Pins** to remove a saved pin that can no longer
 be restored.
 If VS Code is already opening a pinned repository, wait for that open to finish

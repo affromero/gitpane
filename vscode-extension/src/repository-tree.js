@@ -356,6 +356,44 @@ class RepositoryTree {
     return { records, worktrees, children, nested };
   }
 
+  presentationView() {
+    const view = this.workspaceView();
+    if (!this.hiddenRepositories) return view;
+    const verifiedToken = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : undefined;
+    const identities = new Map();
+    for (const items of view.worktrees.values()) for (const item of items) {
+      const identity = directoryIdentity(item.path);
+      const token = verifiedToken(item.repo_identity);
+      if (identity && token) identities.set(identityKey(identity), token);
+    }
+    let pendingHidden = false;
+    const records = view.records.filter(record => {
+      const token = verifiedToken(record.status?.repo_identity) || identities.get(identityKey(record.identity));
+      const hidden = this.hiddenRepositories.isHidden(record.identity, token);
+      if (hidden && token === undefined) pendingHidden = true;
+      return !hidden;
+    });
+    const visible = new Set(records.map(record => record.key));
+    const worktrees = new Map();
+    const nested = new Set();
+    for (const record of records) {
+      const items = (view.worktrees.get(record.key) || []).filter(item => {
+        const token = verifiedToken(item.repo_identity);
+        const hidden = this.hiddenRepositories.isHidden(directoryIdentity(item.path), token);
+        if (hidden && token === undefined) pendingHidden = true;
+        return !hidden;
+      });
+      worktrees.set(record.key, items);
+      for (const item of items) {
+        const child = view.children.get(record.key)?.get(item.path);
+        if (child && visible.has(child.rootUri.toString())) nested.add(child.rootUri.toString());
+      }
+    }
+    return { ...view, records, worktrees, nested, pendingHidden };
+  }
+
+  directoryIdentity(value) { return directoryIdentity(value); }
+
   worktreeRepository(parent, worktreePath, view = this.workspaceView()) {
     return view.children.get(parent.rootUri.toString())?.get(worktreePath);
   }
@@ -694,8 +732,9 @@ class RepositoryTree {
         }
         return [];
       });
-      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
-      const view = workspaceView || this.workspaceView();
+      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
+      const view = workspaceView || this.presentationView();
+      if (view.pendingHidden) failures.push({ type: 'error', message: 'Hidden repository identity verification is pending.' });
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
         repo, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty
       })).sort((a, b) => Number(b.dirty) - Number(a.dirty) || a.repo.rootUri.fsPath.localeCompare(b.repo.rootUri.fsPath));
@@ -704,8 +743,9 @@ class RepositoryTree {
           (this.sortRanks.get(b.repo.rootUri.toString()) ?? Number.MAX_SAFE_INTEGER));
       }
       if (this.busy && !repos.length && !failures.length) return [{ type: 'info', message: 'Loading repositories…' }];
-      if (!repos.length && !failures.length) return [{ type: 'info', message: this.workspacePaths.length
-        ? 'No repositories found in the workspace' : 'Open a folder or workspace to see repositories' }];
+      if (!repos.length && !failures.length) return [{ type: 'info', message: this.hiddenRepositories?.repositories.length && this.workspaceView().records.length
+        ? 'Repositories are hidden. Use Restore Hidden Repositories to show them.' : this.workspacePaths.length
+          ? 'No repositories found in the workspace' : 'Open a folder or workspace to see repositories' }];
       const names = new Map();
       for (const { repo } of repos) {
         const name = path.basename(repo.rootUri.fsPath);
