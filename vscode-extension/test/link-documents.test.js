@@ -18,6 +18,14 @@ function uri(value, scheme = 'file') {
     with: change => uri(change.path || value, change.scheme || scheme) };
 }
 
+async function settleRefresh(docs) {
+  const deadline = Date.now() + 5000;
+  do {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(Date.now() < deadline, 'symlink refresh did not finish');
+  } while (docs.refreshing);
+}
+
 test('commit pointer documents are guarded, read-only, and do not watch filesystem paths', async t => {
   const changes = new EventEmitter(), closed = new EventEmitter();
   const vscode = { EventEmitter, workspace: { onDidCloseTextDocument: closed.event } };
@@ -54,7 +62,7 @@ test('many open pointer documents share lightweight identity checks and invalida
   valid = false;
   changes.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(docs);
   assert.equal(calls, 1, 'one lightweight check validates all pointer documents for this repository');
   assert.equal(notified.length, pointers.length);
   await assert.rejects(docs.provideTextDocumentContent(pointers[0]), /no longer/i);
@@ -72,7 +80,8 @@ test('symlink documents show link text, refresh, and expire when closed', { skip
   fs.symlinkSync(outside, file);
   const treeChanges = new EventEmitter(), opened = new EventEmitter(), closed = new EventEmitter();
   const vscode = { EventEmitter, workspace: { onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event } };
-  const backend = { async readWorkingSymlink(base, relative) { return { target: await fs.promises.readlink(path.join(base, relative)) }; } };
+  let reads = 0;
+  const backend = { async readWorkingSymlink(base, relative) { reads++; return { target: await fs.promises.readlink(path.join(base, relative)) }; } };
   const links = new LinkDocuments(vscode, { onDidChangeTreeData: treeChanges.event }, backend);
   t.after(() => links.dispose());
   let current = true;
@@ -90,10 +99,12 @@ test('symlink documents show link text, refresh, and expire when closed', { skip
   assert.equal(await links.provideTextDocumentContent(document), 'inside');
   fs.unlinkSync(file);
   fs.symlinkSync('missing-target', file);
+  const beforeRefresh = reads;
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, [document.toString(), duplicate.toString()]);
+  assert.equal(reads - beforeRefresh, 1, 'duplicate documents share the scoped link check');
   assert.equal(await links.provideTextDocumentContent(document), 'missing-target');
   current = false;
   await assert.rejects(links.provideTextDocumentContent(document), /no longer in the workspace/i);
@@ -138,7 +149,7 @@ test('a watched path error affects only its link and survives an older poll', as
   status = { ...status, watched_errors: [{ path: 'one', code: 'outside_workspace', message: 'Path leaves the workspace' }] };
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, [first.toString()]);
   assert.match(errors[0], /one.*leaves the workspace/i);
   await assert.rejects(links.provideTextDocumentContent(first), /leaves the workspace/i);
@@ -146,13 +157,13 @@ test('a watched path error affects only its link and survives an older poll', as
   status = { ...status, watchedPaths: [], watched_errors: [] };
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, [first.toString()]);
   await assert.rejects(links.provideTextDocumentContent(first), /leaves the workspace/i);
   status = { ...status, watchedPaths: ['one', 'two'], watched_errors: [] };
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, [first.toString(), first.toString()]);
   assert.equal(await links.provideTextDocumentContent(first), 'target-one');
 });
@@ -182,12 +193,12 @@ test('reopening a restored link ignores errors from its previous watch', async t
   status = { ...status };
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.equal(await links.provideTextDocumentContent(reopened), 'restored');
   status = { ...status, watchTokens: new Map([['link', newToken]]), watched_errors: [] };
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.equal(await links.provideTextDocumentContent(reopened), 'restored');
 });
 
@@ -215,28 +226,68 @@ test('unrelated repository updates do not refresh link documents', { skip: proce
   treeChanges.fire();
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, []);
   assert.equal(verified, before);
 
-  fs.unlinkSync(path.join(root, 'two'));
-  fs.symlinkSync('new-target', path.join(root, 'two'));
+  const changedPath = path.join(root, 'two');
+  const originalLstat = fs.lstatSync.bind(fs);
+  const unchangedMetadata = originalLstat(changedPath, { bigint: true });
+  t.mock.method(fs, 'lstatSync', (file, options) => file === changedPath ? unchangedMetadata : originalLstat(file, options));
+  fs.unlinkSync(changedPath);
+  fs.symlinkSync('new-target', changedPath);
+  assert.equal(unchangedMetadata.size, BigInt('new-target'.length));
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications, [documents[1].toString()]);
   assert.equal(await links.provideTextDocumentContent(documents[1]), 'new-target');
 
   revision = 'changed';
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications.slice(1), documents.map(value => value.toString()));
   live = false;
   treeChanges.fire();
   t.mock.timers.tick(50);
-  await new Promise(resolve => setImmediate(resolve));
+  await settleRefresh(links);
   assert.deepEqual(notifications.slice(4), documents.map(value => value.toString()));
+});
+
+test('closing one link document during a shared probe does not invalidate its sibling', { skip: process.platform === 'win32' }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-link-shared-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'link');
+  fs.symlinkSync('old-target', file);
+  const changes = new EventEmitter(), closed = new EventEmitter();
+  const vscode = { EventEmitter, workspace: { onDidCloseTextDocument: closed.event } };
+  let hold = false, reads = 0, started, release;
+  const ready = new Promise(resolve => { started = resolve; });
+  const backend = { async readWorkingSymlink(base, relative) {
+    reads++;
+    if (hold) { started(); await new Promise(resolve => { release = resolve; }); }
+    return { target: await fs.promises.readlink(path.join(base, relative)) };
+  } };
+  const links = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => links.dispose());
+  const first = await links.create(uri(file), root, 'link', () => true);
+  const second = await links.create(uri(file), root, 'link', () => true);
+  const notifications = [];
+  links.onDidChange(value => notifications.push(value.toString()));
+  fs.unlinkSync(file);
+  fs.symlinkSync('new-target', file);
+  hold = true;
+  const before = reads;
+  const refresh = links.refresh();
+  await ready;
+  closed.fire({ uri: first });
+  hold = false;
+  release();
+  await refresh;
+  assert.equal(reads - before, 1);
+  assert.deepEqual(notifications, [second.toString()]);
+  assert.equal(await links.provideTextDocumentContent(second), 'new-target');
 });
 
 test('concurrent link reads are bounded and closed documents reject pending results', async t => {

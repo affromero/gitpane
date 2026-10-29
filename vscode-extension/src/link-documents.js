@@ -93,7 +93,7 @@ class LinkDocuments {
     else this.activeReads--;
   }
 
-  fingerprint(entry) {
+  fingerprint(entry, target) {
     if (entry.content !== undefined) return 'static';
     let identity;
     try {
@@ -103,7 +103,17 @@ class LinkDocuments {
     let revision;
     try { revision = entry.revision?.(); }
     catch (error) { revision = `error:${error.message}`; }
-    return JSON.stringify([identity, revision ?? null]);
+    return JSON.stringify([identity, revision ?? null, target]);
+  }
+
+  async probe(repo, relative) {
+    await this.acquire();
+    try {
+      if (this.disposed) throw new Error('The symlink diff is no longer available.');
+      const result = await this.backend.readWorkingSymlink(repo, relative);
+      if (!result || typeof result.target !== 'string') throw new Error('Gitpane returned invalid symlink contents.');
+      return result.target;
+    } finally { this.release(); }
   }
 
   scheduleRefresh() {
@@ -122,7 +132,7 @@ class LinkDocuments {
     if (this.refreshing) { this.refreshAgain = true; return; }
     this.refreshing = true;
     try {
-      const checks = new Map();
+      const checks = new Map(), probes = new Map();
       for (const entry of this.documents.values()) {
         let current, failure;
         try {
@@ -132,8 +142,17 @@ class LinkDocuments {
           } else current = await this.current(entry);
         }
         catch (error) { current = false; failure = error; }
+        let target;
+        if (current && entry.content === undefined) {
+          const key = JSON.stringify([this.repoKey(entry.repo), entry.path]);
+          try {
+            if (!probes.has(key)) probes.set(key, this.probe(entry.repo, entry.path));
+            target = await probes.get(key);
+            current = await this.current(entry);
+          } catch (error) { current = false; failure = error; }
+        }
         if (this.disposed || entry.closed) continue;
-        const next = current ? this.fingerprint(entry) : `stale:${failure?.message || ''}`;
+        const next = current ? this.fingerprint(entry, target) : `stale:${failure?.message || ''}`;
         if (entry.fingerprint !== next) {
           entry.fingerprint = next;
           if (failure?.code === 'watched_path_error') this.vscode.window?.showErrorMessage(failure.message);
@@ -150,7 +169,7 @@ class LinkDocuments {
     if (this.disposed || this.documents.size >= 256) throw new Error('Too many symlink diffs are open.');
     const entry = { repo, path: relative, guard, verify, revision, closed: false };
     revision?.suspend?.();
-    await this.read(entry);
+    const initialContent = await this.read(entry);
     if (this.disposed) throw new Error('The symlink diff is no longer available.');
     if (this.documents.size >= 256) throw new Error('Too many symlink diffs are open.');
     entry.uri = fileUri.with({ scheme: 'gitpane-link', path: `/${randomUUID()}`, query: '', fragment: '' });
@@ -159,7 +178,7 @@ class LinkDocuments {
     entry.watchToken = this.watchTokenFor(repo, relative) ?? ++this.nextWatchToken;
     this.documents.set(key, entry);
     revision?.activate?.(entry.watchToken);
-    entry.fingerprint = this.fingerprint(entry);
+    entry.fingerprint = this.fingerprint(entry, initialContent);
     return entry.uri;
   }
 
