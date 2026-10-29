@@ -57,8 +57,13 @@ fn worker_subprocess_helper() {
     assert!(mode == "active_probe" || mode == "ignored_active_probe");
     let pid_file = directory.join("host.pid");
     let escaped = pid_file.to_str().unwrap().replace('\'', "'\\''");
+    let ready = directory.join("host.ready");
+    let escaped_ready = ready.to_str().unwrap().replace('\'', "'\\''");
     let mut command = Command::new("sh");
-    command.args(["-c", &format!("echo $$ > '{escaped}'; exec sleep 30")]);
+    command.args([
+        "-c",
+        &format!("printf '%s\\n' $$ > '{escaped}'; : > '{escaped_ready}'; exec sleep 30"),
+    ]);
     match bounded_output(&mut command) {
         Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::Interrupted),
         Ok(output) => assert!(mode == "ignored_active_probe" && !output.status.success()),
@@ -158,7 +163,7 @@ fn worker_resets_ignored_sigchld_before_cleanup_during_probe_exit() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = helper("ignored_active_probe", temp.path(), true);
     let pid_file = temp.path().join("host.pid");
-    wait_for_file(&pid_file, &mut child);
+    wait_for_file(&temp.path().join("host.ready"), &mut child);
     let host: i32 = std::fs::read_to_string(pid_file)
         .unwrap()
         .trim()
@@ -225,7 +230,7 @@ fn cancellation_kills_and_reaps_active_probe() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = helper("active_probe", temp.path(), false);
     let pid_file = temp.path().join("host.pid");
-    wait_for_file(&pid_file, &mut child);
+    wait_for_file(&temp.path().join("host.ready"), &mut child);
     let host: i32 = std::fs::read_to_string(pid_file)
         .unwrap()
         .trim()
