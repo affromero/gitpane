@@ -46,6 +46,7 @@ function menuButton(label, kind, id) {
 function fileCount(repo) {
   const paths = new Set();
   for (const group of repo.groups || []) {
+    if (group.id === 'attention') continue;
     for (const file of group.files || []) paths.add(file.path);
   }
   return paths.size;
@@ -57,9 +58,10 @@ function countInfo(owner) {
   const pending = !!page && page.state !== 'ready';
   const lower = Number.isSafeInteger(owner.changeCountLowerBound) && owner.changeCountLowerBound >= 0
     ? owner.changeCountLowerBound : 0;
-  const count = pending ? Math.max(loaded, lower) : loaded;
+  const paginated = !!page && (page.previous || page.next || page.page > 0);
+  const count = pending || paginated ? Math.max(loaded, lower) : loaded;
   return { count, unknown: !!page && page.state !== 'ready' && !count && !!owner.dirty,
-    partial: !!page && ((pending && count > 0) || page.previous || page.next || page.page > 0),
+    partial: !!page && ((pending && count > 0) || paginated),
     hasDirectory: (owner.groups || []).some(group => (group.files || []).some(file => file.directory)) };
 }
 
@@ -109,7 +111,7 @@ function labelForRepo(repo, info) {
     if (repo.ahead > 0) details.push(`${repo.ahead} ahead`);
     if (repo.behind > 0) details.push(`${repo.behind} behind`);
     if (repo.hasDirtySubmodules) details.push('dirty submodules');
-    if (repo.hasUnpushedSubmodules) details.push('unpushed submodule commits');
+    if (repo.hasUnpushedSubmodules) details.push('submodules need attention');
   }
   return details.filter(Boolean).join(', ');
 }
@@ -149,7 +151,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
     if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
     if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
     if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
-    if (repo.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Unpushed submodule commits');
+    if (repo.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Submodules need attention');
     if (info.count || (info.unknown && repo.dirty)) {
       const value = info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`;
       add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
@@ -170,7 +172,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
 }
 
 function statusClass(status) {
-  return ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted' })[status] || 'muted';
+  return ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted', '!': 'behind' })[status] || 'muted';
 }
 
 function fileRow(file) {
@@ -191,6 +193,7 @@ function worktreeRow(worktree) {
   const tail = element('span', 'tail');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
+  if (worktree.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Submodules need attention');
   if (worktree.changesPage) {
     const info = countInfo(worktree);
     if (info.count || (info.unknown && worktree.dirty)) {
@@ -244,7 +247,7 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
     groupItem.item.appendChild(filesGroup);
     for (const file of files) {
       const fileKey = `file:${file.id}`;
-      const fileItem = createItem(fileKey, `${file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}`,
+      const fileItem = createItem(fileKey, `${group.id === 'attention' ? 'Submodule needs attention:' : file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}`,
         fileRow(file), false, false, groupKey);
       if (!file.directory) fileItem.fileId = file.id;
       filesGroup.appendChild(fileItem.item);
@@ -265,10 +268,10 @@ function renderPage(parentElement, owner, parentKey) {
     parentElement.appendChild(error);
   } else if (page.state === 'ready' && (page.previous || page.next)) {
     const count = (owner.groups || []).reduce((total, group) => total + (group.files?.length || 0), 0);
-    const status = element('div', 'page-status', `Page ${page.page + 1} · ${count} ${count === 1 ? 'change' : 'changes'} shown`);
+    const status = element('div', 'page-status', `Page ${page.page + 1} · ${count} ${count === 1 ? 'entry' : 'entries'} shown`);
     status.setAttribute('role', 'status');
     parentElement.appendChild(status);
-  } else if (page.state === 'ready' && !fileCount(owner)) {
+  } else if (page.state === 'ready' && !(owner.groups || []).some(group => group.files?.length)) {
     const status = element('div', 'page-status', 'No changed files.');
     status.setAttribute('role', 'status');
     parentElement.appendChild(status);
@@ -334,7 +337,7 @@ function render() {
     const worktrees = !repo.statusUnavailable && Array.isArray(repo.worktrees) ? repo.worktrees : [];
     const stashes = !repo.statusUnavailable && Array.isArray(repo.stashes) ? repo.stashes : [];
     const isExpanded = expanded.has(key);
-    const hasPage = !!repo.changesPage && (repo.dirty || repo.changesPage.state === 'loading' ||
+    const hasPage = !!repo.changesPage && (repo.dirty || repo.hasUnpushedSubmodules || repo.changesPage.state === 'loading' ||
       repo.changesPage.state === 'error' || repo.changesPage.previous || repo.changesPage.next);
     const item = createItem(key, labelForRepo(repo, info), repoRow(repo, info, isExpanded, worktrees.length > 0, stashes.length > 0),
       groups.length > 0 || worktrees.length > 0 || stashes.length > 0 || hasPage, isExpanded, undefined);
@@ -357,12 +360,13 @@ function render() {
       else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
       if (!worktree.available) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
       const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
       const worktreeExpanded = expanded.has(worktreeKey);
       const worktreeHasPage = worktree.available && !!worktree.changesPage &&
-        (worktree.dirty || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
+        (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
           worktree.changesPage.previous || worktree.changesPage.next);
       const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
         worktreeGroups.length > 0 || worktreeHasPage, worktreeExpanded, key);

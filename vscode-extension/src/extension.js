@@ -63,7 +63,8 @@ class GitpaneViewProvider {
       const repoKey = repo.rootUri.toString();
       const repoToken = this.tree.repositoryToken(repo);
       const state = this.pager.get(ownerId);
-      const labels = { merge: 'Conflicts', index: 'Staged', working: 'Unstaged', untracked: 'Untracked' };
+      const labels = { merge: 'Conflicts', index: 'Staged', working: 'Unstaged', untracked: 'Untracked',
+        attention: 'Submodules needing attention' };
       const grouped = new Map();
       for (const record of state?.changes || []) {
         const uri = vscode.Uri.file(path.join(root, ...record.path.split('/')));
@@ -74,10 +75,10 @@ class GitpaneViewProvider {
           parentWorktree, ownerId, record });
         if (!grouped.has(record.group)) grouped.set(record.group, { id: record.group, label: labels[record.group], files: [] });
         grouped.get(record.group).files.push({ id: fileId, name: path.basename(uri.fsPath),
-          path: directory ? `${record.path}/` : record.path, status: statusLabel(change.status),
+          path: directory ? `${record.path}/` : record.path, status: record.group === 'attention' ? '!' : statusLabel(change.status),
           ...(directory ? { directory: true } : {}) });
       }
-      return ['merge', 'index', 'working', 'untracked'].flatMap(group => grouped.has(group) ? [grouped.get(group)] : []);
+      return ['merge', 'index', 'working', 'untracked', 'attention'].flatMap(group => grouped.has(group) ? [grouped.get(group)] : []);
     };
     const pageFor = id => {
       const state = this.pager.get(id);
@@ -105,6 +106,7 @@ class GitpaneViewProvider {
       const worktreeData = this.tree.workspaceWorktrees(repo, hierarchy).map(item => {
         const child = this.tree.worktreeRepository(repo, item.path, hierarchy);
         const childRepoKey = child?.rootUri.toString();
+        const childStatus = child && this.tree.backendStatuses.get(childRepoKey);
         const childToken = child && this.tree.repositoryToken(child);
         const worktreeId = this.idFor(JSON.stringify(['worktree', repoKey, repoToken, item.path, childToken]), live);
         const childRepoId = childRepoKey && this.idFor(JSON.stringify(['repo', childRepoKey, childToken]), live);
@@ -112,7 +114,8 @@ class GitpaneViewProvider {
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
         return { id: worktreeId, name: path.basename(item.path), branch: item.branch,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
-          available: !!child, changeCountLowerBound: child ? lowerBound(this.tree.backendStatuses.get(childRepoKey)) : 0,
+          available: !!child, hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
+          changeCountLowerBound: child ? lowerBound(childStatus) : 0,
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
             { repoKey, repoToken, path: item.path }) : [] };
       });

@@ -185,6 +185,24 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls[1][0], 'gitpane.openGraph');
     assert.equal(calls[1][1], first.repositories[0].id);
 
+    const attention = { group: 'attention', kind: 'submodule_attention', path: 'child-module',
+      original_path: null, conflict_stages: null, is_submodule: true };
+    backend.beginChanges = async () => page([attention]);
+    Object.assign(tree.backendStatuses.get(root), { is_dirty: false, has_unpushed_submodules: false, file_count_lower_bound: 0 });
+    Object.assign(tree.backendStatuses.get(worktreePath), { has_unpushed_submodules: true, file_count_lower_bound: 0 });
+    await onMessage({ type: 'loadChanges', id: worktree.id });
+    const warnedWorktree = snapshots.at(-1).repositories[0].worktrees[0];
+    assert.equal(warnedWorktree.hasUnpushedSubmodules, true);
+    assert.equal(warnedWorktree.changeCountLowerBound, 0);
+    assert.equal(warnedWorktree.groups[0].label, 'Submodules needing attention');
+    const warning = warnedWorktree.groups[0].files[0];
+    assert.equal(warning.status, '!');
+    assert.equal(provider.resolveChange(warning.id).isSubmodule, true);
+    await onMessage({ type: 'openChange', id: warning.id });
+    assert.equal(calls.at(-1)[0], 'gitpane.openChange');
+    assert.equal(calls.at(-1)[1].record.kind, 'submodule_attention');
+    calls.pop();
+
     view.visible = false;
     onVisibility();
     assert.equal(visible, false);

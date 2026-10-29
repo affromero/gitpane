@@ -2,12 +2,21 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { ChangePager } = require('../src/change-pager');
+const { ChangePager, validRecord } = require('../src/change-pager');
 
 const record = path => ({ path, group: 'untracked', kind: 'untracked', original_path: null,
   conflict_stages: null, is_submodule: false });
 const page = (snapshot, revision, cursor, previous, next, files) => ({ snapshot, revision, cursor,
   previous_cursor: previous, next_cursor: next, changes: files.map(record) });
+
+test('attention records are accepted only for a scoped submodule', () => {
+  const attention = { group: 'attention', kind: 'submodule_attention', path: 'vendor/child',
+    original_path: null, conflict_stages: null, is_submodule: true };
+  assert.equal(validRecord(attention), true);
+  assert.equal(validRecord({ ...attention, is_submodule: false }), false);
+  assert.equal(validRecord({ ...attention, path: '../outside' }), false);
+  assert.equal(validRecord({ ...attention, original_path: 'other' }), false);
+});
 
 test('paging preserves the current position across unchanged refreshes and resets after changes', async () => {
   let sequence = 0;

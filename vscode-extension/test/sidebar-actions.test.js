@@ -98,7 +98,7 @@ test('file menu offers applicable actions and executes stage or unstage using th
 
 test('submodule rows offer inspection but no file mutations', async () => {
   const f = fixture();
-  for (const group of ['working', 'index', 'untracked', 'merge']) {
+  for (const group of ['working', 'index', 'untracked', 'merge', 'attention']) {
     f.setFile({ ...f.getFile(), group, isSubmodule: true });
     f.pick(choices => {
       assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy']);
@@ -107,7 +107,7 @@ test('submodule rows offer inspection but no file mutations', async () => {
     await f.actions.showMenu('file', 'file');
     for (const name of ['stage', 'unstage', 'discard']) await f.actions.handle(action(name, 'file'));
   }
-  assert.deepEqual(f.calls, Array.from({ length: 4 }, () => ['gitpane.openChange', f.node]));
+  assert.deepEqual(f.calls, Array.from({ length: 5 }, () => ['gitpane.openChange', f.node]));
 });
 
 test('a file that becomes a submodule while its menu is open cannot be mutated', async () => {

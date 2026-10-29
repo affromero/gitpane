@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::config::SubmoduleConfig;
 
-use super::change_summary::status_options;
+use super::change_summary::{collect_change_summary, status_options};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ConflictStages {
@@ -28,6 +28,7 @@ pub(crate) struct ChangeRecord {
 #[derive(Debug)]
 pub(crate) enum ChangeError {
     Git(git2::Error),
+    Repository(String),
     InvalidPath,
     Limit,
 }
@@ -304,6 +305,35 @@ pub(crate) fn collect_changes(
             max_records,
             &submodules,
         )?;
+    }
+    if sub_cfg.warn_unpushed && !submodules.is_empty() {
+        let workdir = repo.workdir().ok_or_else(|| {
+            ChangeError::Repository("Repository has no working directory.".to_owned())
+        })?;
+        let summary = collect_change_summary(repo, workdir, false, sub_cfg, true)
+            .map_err(|error| ChangeError::Repository(error.to_string()))?;
+        let changed_paths: HashSet<_> = records.iter().map(|record| record.path.clone()).collect();
+        for module in summary.submodules {
+            if module.warn.is_clean() {
+                continue;
+            }
+            let path = path_string(&module.path)?;
+            if changed_paths.contains(&path) {
+                continue;
+            }
+            add(
+                &mut records,
+                max_records,
+                ChangeRecord {
+                    path,
+                    group: "attention",
+                    kind: "submodule_attention",
+                    original_path: None,
+                    conflict_stages: None,
+                    is_submodule: true,
+                },
+            )?;
+        }
     }
     records.sort_by(|a, b| {
         a.path

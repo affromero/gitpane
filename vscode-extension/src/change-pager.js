@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const KINDS = {
   index: new Set(['index_modified', 'index_added', 'index_deleted', 'index_renamed', 'index_copied', 'index_type_changed']),
   working: new Set(['working_modified', 'working_deleted', 'working_renamed', 'intent_to_add', 'type_changed']),
-  untracked: new Set(['untracked', 'untracked_directory']), merge: new Set(['conflicted'])
+  untracked: new Set(['untracked', 'untracked_directory']), merge: new Set(['conflicted']),
+  attention: new Set(['submodule_attention'])
 };
 
 function relativeFile(value) {
@@ -37,6 +38,7 @@ function validRecord(record) {
       !relativeFile(record.path) || typeof record.is_submodule !== 'boolean' ||
       !(record.original_path === null || relativeFile(record.original_path))) return false;
   if (['index_renamed', 'index_copied', 'working_renamed'].includes(record.kind) && !record.original_path) return false;
+  if (record.group === 'attention' && (!record.is_submodule || record.original_path !== null)) return false;
   if (record.group !== 'merge') return record.conflict_stages === null;
   const stages = record.conflict_stages;
   return !!stages && ['base', 'ours', 'theirs'].every(key => stages[key] === null || relativeFile(stages[key])) &&

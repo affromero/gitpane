@@ -130,7 +130,7 @@ const scenario = String.raw`
     await tick();
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository indicators are visible', ['$2', '⎇1', '◈', '⇡'].every(value => repo.textContent.includes(value)));
-    check('repository indicators have accessible meaning', ['2 stashes', '1 worktree', 'dirty submodules', 'unpushed submodule commits']
+    check('repository indicators have accessible meaning', ['2 stashes', '1 worktree', 'dirty submodules', 'submodules need attention']
       .every(value => repo.getAttribute('aria-label').includes(value)));
     badges.repositories[0].statusUnavailable = true;
     window.postMessage(badges, '*');
@@ -302,7 +302,7 @@ const scenario = String.raw`
     window.postMessage(paged, '*');
     await tick();
     pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
-    check('partial count is not presented as a total', pagedRepo.textContent.includes('[1+]') && pagedRepo.getAttribute('aria-label').includes('at least 1 change'));
+    check('partial count retains the compact-status lower bound', pagedRepo.textContent.includes('[3+]') && pagedRepo.getAttribute('aria-label').includes('at least 3 changes'));
     const complete = structuredClone(paged);
     complete.repositories[0].changesPage.next = false;
     window.postMessage(complete, '*');
@@ -414,6 +414,54 @@ const scenario = String.raw`
     items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
     check('reopening a parent reloads its restored expanded worktree', window.posted.filter(message =>
       message.type === 'loadChanges' && message.id === 'page-child').length === childLoads + 1);
+    const attention = { type: 'snapshot', errors: [], repositories: [{
+      id: 'attention-parent', name: 'warning-parent', branch: 'main', dirty: false, hasUnpushedSubmodules: true,
+      changeCountLowerBound: 0, groups: [], changesPage: { state: 'idle', page: 0, previous: false, next: false },
+      worktreeCount: 1, worktrees: [{ id: 'attention-child', name: 'warning-child', branch: 'topic', dirty: false,
+        available: true, hasUnpushedSubmodules: true, changeCountLowerBound: 0, groups: [],
+        changesPage: { state: 'idle', page: 0, previous: false, next: false } }]
+    }] };
+    window.postMessage(attention, '*');
+    await tick();
+    let warningParent = items().find(item => item.getAttribute('aria-label').startsWith('warning-parent'));
+    check('clean repository with submodule warning can expand without a changed file count',
+      warningParent.getAttribute('aria-expanded') === 'false' && !warningParent.querySelector('.count'));
+    warningParent.querySelector('.row').click();
+    let warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
+    check('clean linked worktree exposes its submodule warning', warningChild.getAttribute('aria-expanded') === 'false' &&
+      warningChild.getAttribute('aria-label').includes('submodules need attention') && !warningChild.querySelector('.count'));
+    warningChild.querySelector('.row').click();
+    check('warning worktree requests its own changes', window.posted.some(message =>
+      message.type === 'loadChanges' && message.id === 'attention-child'));
+    for (const owner of [attention.repositories[0], attention.repositories[0].worktrees[0]]) {
+      owner.changesPage = { state: 'ready', page: 0, previous: false, next: false };
+      owner.groups = [{ id: 'attention', label: 'Submodules needing attention',
+        files: [{ id: owner.id + '-module', status: '!', path: 'vendor/module' }] }];
+    }
+    window.postMessage(attention, '*');
+    await tick();
+    warningParent = items().find(item => item.getAttribute('aria-label').startsWith('warning-parent'));
+    warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
+    check('warning entries do not become changed-file counts', !warningParent.querySelector('.repo-row .count') &&
+      !warningChild.querySelector('.worktree-row .count'));
+    const warningFile = items().find(item => item.getAttribute('aria-label') === 'Submodule needs attention: vendor/module');
+    check('warning has distinct group and symbol', warningFile && warningFile.textContent.includes('!') &&
+      items().some(item => item.getAttribute('aria-label').startsWith('Submodules needing attention')));
+    warningFile.querySelector('.row').click();
+    check('clicking warning opens the submodule inspector', window.posted.some(message =>
+      message.type === 'openChange' && message.id === 'attention-parent-module'));
+    for (const owner of [attention.repositories[0], attention.repositories[0].worktrees[0]]) {
+      owner.dirty = true;
+      owner.changeCountLowerBound = 4;
+      owner.changesPage.next = true;
+    }
+    window.postMessage(attention, '*');
+    await tick();
+    warningParent = items().find(item => item.getAttribute('aria-label').startsWith('warning-parent'));
+    warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
+    check('warning-only pages preserve the changed-file lower bound for repositories and worktrees',
+      warningParent.querySelector('.repo-row .count')?.textContent.includes('[4+]') &&
+      warningChild.querySelector('.worktree-row .count')?.textContent.includes('[4+]'));
     window.postMessage(snapshot, '*');
     await tick();
     check('theme background applied', getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');

@@ -189,6 +189,7 @@ impl Snapshots {
         let changes =
             collect_changes(&repository, sub_cfg, MAX_RECORDS).map_err(|error| match error {
                 ChangeError::Git(error) => repository_error(error),
+                ChangeError::Repository(error) => repository_error(error),
                 ChangeError::InvalidPath => BridgeError::new(
                     "repository_error",
                     "A changed path is invalid or is not UTF-8.",
@@ -280,7 +281,7 @@ impl Snapshots {
                 .any(|part| !matches!(part, std::path::Component::Normal(_)))
             || !matches!(
                 input.group.as_str(),
-                "index" | "working" | "untracked" | "merge"
+                "index" | "working" | "untracked" | "merge" | "attention"
             )
         {
             return Err(BridgeError::new(
@@ -289,6 +290,7 @@ impl Snapshots {
             ));
         }
         let repo = scope.repository(&input.repo)?;
+        scope.validate_submodules(&repo)?;
         let snapshot = self.entries.get_mut(&input.snapshot).ok_or_else(stale)?;
         if repo != snapshot.repo || RepositoryIdentity::read(&repo)? != snapshot.identity {
             return Err(stale());

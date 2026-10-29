@@ -34,6 +34,7 @@ const diffs = [];
 const errors = [];
 const snapshots = [];
 const children = [];
+const terminals = [];
 let provider;
 let receive;
 let pickChanges;
@@ -83,6 +84,7 @@ async function main() {
       registerTextDocumentContentProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
+      createTerminal: options => { terminals.push(options); return { show() {}, dispose() {} }; },
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
       showQuickPick: async choices => pickChanges?.(choices),
       showErrorMessage: async message => errors.push(message) },
@@ -254,6 +256,46 @@ async function main() {
   assert.equal(diffs.length, priorSubmoduleDiffs + 1);
   assert.match(errors.at(-1), /changed|no longer/i);
   console.log('PASS hidden submodule changes, second page native diff, and stale child guards');
+
+  for (const name of fs.readdirSync(repoPath)) {
+    if (/^file-\d{3}\.txt$/.test(name) || ['nested-repo', 'unrelated.txt', 'new-after-refresh.txt', '000-link'].includes(name)) {
+      fs.rmSync(path.join(repoPath, name), { recursive: true, force: true });
+    }
+  }
+  for (const name of fs.readdirSync(childPath)) {
+    if (/^child-\d{3}\.txt$/.test(name)) fs.unlinkSync(path.join(childPath, name));
+  }
+  fs.writeFileSync(path.join(childPath, 'unpushed.txt'), 'committed locally\n');
+  gitAt(childPath, 'add', 'unpushed.txt');
+  gitAt(childPath, 'commit', '-qm', 'local child commit');
+  childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
+  git('add', 'child');
+  git('commit', '-qm', 'record unpushed child');
+  repo.state.HEAD.commit = git('rev-parse', 'HEAD');
+  assert.equal(git('status', '--porcelain'), '', 'parent must be clean');
+  await commands.get('gitpane.refresh')();
+  const cleanParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  assert.equal(cleanParent.dirty, false);
+  assert.equal(cleanParent.changeCountLowerBound, 0);
+  assert.equal(cleanParent.hasUnpushedSubmodules, true);
+  await receive({ type: 'loadChanges', id: cleanParent.id });
+  const warnedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  const warningGroup = warnedParent.groups.find(group => group.id === 'attention');
+  assert.equal(warningGroup?.label, 'Submodules needing attention');
+  assert.equal(warningGroup.files.length, 1);
+  assert.equal(warningGroup.files[0].path, 'child');
+  assert.equal(warningGroup.files[0].status, '!');
+  let inspectorChoices;
+  pickChanges = choices => { inspectorChoices = choices; return undefined; };
+  const errorsBeforeWarning = errors.length;
+  const diffsBeforeWarning = diffs.length;
+  const terminalsBeforeWarning = terminals.length;
+  await receive({ type: 'openChange', id: warningGroup.files[0].id });
+  assert.equal(errors.length, errorsBeforeWarning, errors.at(-1));
+  assert.ok(inspectorChoices?.some(choice => choice.kind === 'graph'), 'warning click must open the submodule inspector');
+  assert.equal(diffs.length, diffsBeforeWarning);
+  assert.equal(terminals.length, terminalsBeforeWarning);
+  console.log('PASS clean parent unpushed submodule warning opens the scoped inspector without a terminal');
 }
 
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; }).finally(async () => {
