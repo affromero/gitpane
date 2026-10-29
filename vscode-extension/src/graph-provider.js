@@ -30,6 +30,7 @@ class GraphProvider {
     this.extensionUri = extensionUri;
     this.panel = undefined;
     this.repoKey = undefined;
+    this.guard = () => true;
     this.rows = new Map();
     this.segments = new Set();
     this.collapsedSegments = new Set();
@@ -56,14 +57,17 @@ class GraphProvider {
 
   currentRepo() {
     const repo = this.tree.git.repositories.find(item => item.rootUri.toString() === this.repoKey);
-    return repo && this.tree.isVisible(repo) ? repo : undefined;
+    return this.guard() && repo && this.tree.isVisible(repo) ? repo : undefined;
   }
 
-  open(repo) {
-    if (!repo || !this.tree.isVisible(repo) || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
+  open(repo, guard = () => true) {
+    const token = repo && this.tree.repositoryToken(repo);
+    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
+    if (!repo || !currentGuard() || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
       throw new Error('Repository is no longer in the workspace.');
     }
     this.repoKey = repo.rootUri.toString();
+    this.guard = currentGuard;
     this.lastHead = repo.state?.HEAD?.commit;
     this.firstParent = false;
     this.filters = defaultFilters();
@@ -94,6 +98,7 @@ class GraphProvider {
       if (this.panel !== panel) return;
       this.panel = undefined;
       this.repoKey = undefined;
+      this.guard = () => true;
       this.graphGeneration++;
       this.detailGeneration++;
       this.rows.clear();

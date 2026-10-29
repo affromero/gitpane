@@ -86,7 +86,7 @@ pub(super) fn inspect(
     } else {
         list_revision_files(&child, base, head).map_err(error)?
     };
-    let child_status = status::query(&child, scope, sub_cfg)?;
+    let child_status = status::query(&child, scope, sub_cfg, true)?;
     if scope.repository(&input.repo)? != parent_path || scope.repository(&child_path)? != child {
         return Err(BridgeError::new(
             "stale_target",

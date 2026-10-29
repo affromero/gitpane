@@ -6,6 +6,93 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
+const { spawnSync } = require('node:child_process');
+const { isolatedGitEnv } = require('./integration/git-env');
+const { SidebarActions } = require('../src/sidebar-actions');
+
+test('reopening a repository invalidates pending status, selections, and menus', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-reopen-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const workspace = path.join(temporary, 'workspace');
+  const root = path.join(workspace, 'repo');
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const makeRepo = () => ({ rootUri: uri(root), state: { onDidChange: event, HEAD: { name: 'main' },
+    workingTreeChanges: [{ uri: uri(path.join(root, 'file.txt')), status: 5 }] }, async status() {} });
+  let onOpen, onClose, releaseStatus, releaseMenu;
+  let holdStatus = false;
+  const status = branch => ({ common_dir: path.join(root, '.git'), branch, head_oid: 'a'.repeat(40),
+    is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
+    has_dirty_submodules: false, has_unpushed_submodules: false });
+  const api = { repositories: [makeRepo()],
+    onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
+    onDidCloseRepository(handler) { onClose = handler; return { dispose() {} }; } };
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event },
+    window: { showQuickPick: choices => new Promise(resolve => { releaseMenu = () => resolve(choices.find(item => item.action === 'copyRepo')); }),
+      showErrorMessage: async message => { throw new Error(message); } },
+    env: { clipboard: { writeText: async value => copied.push(value) } } };
+  const copied = [];
+  const backend = { state: { status: 'ready' }, onDidChange: event,
+    async status() { if (holdStatus) return new Promise(resolve => { releaseStatus = () => resolve(status('old-response')); }); return status('main'); } };
+  const load = Module._load;
+  let RepositoryTree, GitpaneViewProvider;
+  delete require.cache[require.resolve('../src/extension')];
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    ({ RepositoryTree, GitpaneViewProvider } = require('../src/extension'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+  const provider = new GitpaneViewProvider(tree, '/extension');
+  const actions = new SidebarActions({ vscode, resolveRepository: id => provider.resolveRepository(id),
+    resolveChange: id => provider.resolveChange(id), resolveWorktree: id => provider.resolveWorktree(id) });
+  try {
+    await tree.refresh();
+    for (const replaceDirectory of [false, true]) {
+      const before = provider.snapshot().repositories[0];
+      const fileId = before.groups[0].files[0].id;
+      const oldNode = provider.changes.get(fileId);
+      const menu = actions.showMenu('repo', before.id);
+      holdStatus = true;
+      const pending = tree.refresh();
+      while (!releaseStatus) await new Promise(resolve => setImmediate(resolve));
+      const oldRepo = api.repositories[0];
+      const revision = tree.repositoryRevision(oldRepo.rootUri);
+      api.repositories = [];
+      onClose(oldRepo);
+      if (replaceDirectory) {
+        fs.renameSync(root, path.join(workspace, 'old-repo'));
+        fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+      }
+      const reopened = makeRepo();
+      api.repositories = [reopened];
+      onOpen(reopened);
+      assert.equal(tree.repositoryRevision(reopened.rootUri), revision + 2);
+      releaseStatus();
+      releaseStatus = undefined;
+      holdStatus = false;
+      releaseMenu();
+      await Promise.all([pending, menu]);
+      assert.equal(tree.backendStatuses.get(root), undefined);
+      assert.equal(provider.currentChange(oldNode), undefined);
+      assert.equal(provider.currentRepository(before.id), undefined);
+      assert.deepEqual(copied, []);
+      await tree.refresh();
+      const after = provider.snapshot().repositories[0];
+      assert.equal(after.branch, 'main');
+      assert.notEqual(after.id, before.id);
+      assert.notEqual(after.groups[0].files[0].id, fileId);
+    }
+  } finally {
+    provider.dispose();
+    tree.dispose();
+    delete require.cache[require.resolve('../src/extension')];
+    delete require.cache[require.resolve('../src/repository-tree')];
+  }
+});
 
 test('workspace repositories appear automatically and reconcile while visible', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -19,6 +106,7 @@ test('workspace repositories appear automatically and reconcile while visible', 
   for (const directory of [root, addedRoot, otherRoot, path.join(otherWorkspace, 'external')]) {
     fs.mkdirSync(directory, { recursive: true });
   }
+  for (const directory of [root, addedRoot, otherRoot]) fs.mkdirSync(path.join(directory, '.git'));
   let failed = false;
   let backendFailed = false;
   let addedFile = false;
@@ -66,12 +154,13 @@ test('workspace repositories appear automatically and reconcile while visible', 
   const backend = {
     state: { status: 'ready' },
     onDidChange: event,
-    async status(repoPath) {
+    async status(repoPath, includeWorktrees = true) {
       if (backendFailed) throw new Error('backend status failed');
       return {
+        common_dir: path.join(repoPath, '.git'),
         branch: repoPath === root ? 'main' : 'feature', is_dirty: repoPath === root,
         ahead: 2, behind: 1, stashes: [{ index: 0 }],
-        worktrees: [{ path: addedRoot }, { path: path.join(otherWorkspace, 'external') }],
+        worktrees: includeWorktrees ? [{ path: addedRoot }, { path: path.join(otherWorkspace, 'external') }] : [],
         has_dirty_submodules: true, has_unpushed_submodules: true
       };
     },
@@ -194,6 +283,209 @@ test('workspace repositories appear automatically and reconcile while visible', 
   }
 });
 
+test('workspace worktrees are opened automatically and expose their current file groups', async t => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-worktree-view-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const workspace = path.join(temporary, 'workspace');
+  const root = path.join(workspace, 'parent');
+  const linked = path.join(workspace, 'linked');
+  const outside = path.join(temporary, 'outside');
+  const common = path.join(root, '.git');
+  for (const directory of [common, linked, outside]) fs.mkdirSync(directory, { recursive: true });
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const parent = { rootUri: uri(root), state: { onDidChange: event, HEAD: { name: 'main' } }, async status() {} };
+  const child = { rootUri: uri(linked), kind: 'worktree', state: { onDidChange: event, HEAD: { name: 'topic' },
+    indexChanges: [{ uri: uri(path.join(linked, 'staged.txt')), status: 0 }],
+    workingTreeChanges: [{ uri: uri(path.join(linked, 'working.txt')), status: 5 }] }, async status() {} };
+  let onOpen;
+  let canOpen = false;
+  let linkedExists = true;
+  const opened = [];
+  const api = { repositories: [parent],
+    onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
+    onDidCloseRepository: event,
+    async openRepository(target) {
+      opened.push(target.fsPath);
+      if (!canOpen) return undefined;
+      this.repositories.push(child);
+      onOpen(child);
+      return child;
+    }
+  };
+  const vscode = {
+    EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    Uri: { file: uri },
+    workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event }
+  };
+  const backend = { state: { status: 'ready' }, onDidChange: event,
+    async status(value, includeWorktrees = true) { return { common_dir: common, branch: value === root ? 'main' : 'topic',
+      is_dirty: value === linked, ahead: 0, behind: 0, stashes: [],
+      worktrees: includeWorktrees && value === root && linkedExists ? [{ path: linked, branch: 'topic', is_dirty: true, file_count: 2 },
+        { path: outside, branch: 'outside' }] : [],
+      has_dirty_submodules: false, has_unpushed_submodules: false }; }
+  };
+  const load = Module._load;
+  let RepositoryTree, GitpaneViewProvider;
+  delete require.cache[require.resolve('../src/extension')];
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      return load.call(this, name, ...args);
+    };
+    ({ RepositoryTree, GitpaneViewProvider } = require('../src/extension'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+  const provider = new GitpaneViewProvider(tree, '/extension');
+  try {
+    await tree.refresh();
+    let worktree = provider.snapshot().repositories.find(item => item.name === 'parent').worktrees[0];
+    assert.equal(worktree.available, false);
+    assert.deepEqual(worktree.groups, []);
+    assert.deepEqual(opened, [linked]);
+    canOpen = true;
+    await tree.refresh();
+    await tree.refresh();
+    const snapshot = provider.snapshot();
+    worktree = snapshot.repositories.find(item => item.name === 'parent').worktrees[0];
+    assert.equal(worktree.available, true);
+    assert.deepEqual(worktree.groups.map(group => [group.id, group.files.map(file => file.path)]), [
+      ['index', ['staged.txt']], ['working', ['working.txt']]
+    ]);
+    const node = provider.changes.get(worktree.groups[1].files[0].id);
+    assert.equal(provider.currentChange(node).repo, child);
+    assert.equal(provider.currentWorktreeRepository(worktree.id), child);
+    assert.equal(opened.includes(outside), false);
+    linkedExists = false;
+    await tree.refresh();
+    assert.equal(provider.currentChange(node), undefined);
+    assert.equal(provider.currentWorktreeRepository(worktree.id), undefined);
+    assert.deepEqual(provider.snapshot().repositories.find(item => item.name === 'parent').worktrees, []);
+  } finally {
+    provider.dispose();
+    tree.dispose();
+  }
+});
+
+test('real linked worktrees appear once under an in-workspace anchor while explicit roots remain visible', async t => {
+  const version = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (version.error?.code === 'ENOENT') return t.skip('Git is not installed');
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, version.stderr);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-worktree-topology-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const workspace = path.join(temporary, 'workspace');
+  const root = path.join(workspace, 'main');
+  const linkedRoot = path.join(workspace, 'worktrees');
+  const first = path.join(linkedRoot, 'one');
+  const second = path.join(linkedRoot, 'two');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(linkedRoot, { recursive: true });
+  const env = isolatedGitEnv();
+  const git = (directory, ...args) => {
+    const result = spawnSync('git', ['-C', directory, '-c', 'user.name=Gitpane Test',
+      '-c', 'user.email=gitpane-test@example.invalid', ...args], { env, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(root, 'init', '-q');
+  fs.writeFileSync(path.join(root, 'file.txt'), 'initial\n');
+  git(root, 'add', '--', 'file.txt');
+  git(root, 'commit', '-qm', 'initial');
+  git(root, 'worktree', 'add', '-qb', 'topic-one', first);
+  git(root, 'worktree', 'add', '-qb', 'topic-two', second);
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const makeRepo = (value, kind) => ({ rootUri: uri(value), kind,
+    state: { onDidChange: event, HEAD: { name: git(value, 'branch', '--show-current') } }, async status() {} });
+  const main = makeRepo(root, 'repository');
+  const one = makeRepo(first, 'worktree');
+  const two = makeRepo(second, 'worktree');
+  const repos = [main, one, two];
+  const common = fs.realpathSync(path.resolve(root, git(root, 'rev-parse', '--git-common-dir')));
+  const statusRequests = [];
+  let pauseDetails = false;
+  let releaseDetails;
+  const backend = { state: { status: 'ready' }, onDidChange: event,
+    async status(value, includeWorktrees = true) {
+      statusRequests.push([value, includeWorktrees]);
+      if (includeWorktrees && pauseDetails) await new Promise(resolve => { releaseDetails = resolve; });
+      const lines = git(value, 'worktree', 'list', '--porcelain').split('\n');
+      const paths = lines.filter(line => line.startsWith('worktree ')).map(line => line.slice(9));
+      return { common_dir: common, branch: git(value, 'branch', '--show-current'), is_dirty: false,
+        ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees ?
+          paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item) })) : [],
+        has_dirty_submodules: false, has_unpushed_submodules: false };
+    }
+  };
+  const api = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event };
+  let onWorkspaceChange;
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    workspace: { workspaceFolders: [{ uri: uri(workspace) }],
+      onDidChangeWorkspaceFolders(handler) { onWorkspaceChange = handler; return { dispose() {} }; } } };
+  const load = Module._load;
+  let RepositoryTree, GitpaneViewProvider;
+  delete require.cache[require.resolve('../src/extension')];
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      return load.call(this, name, ...args);
+    };
+    ({ RepositoryTree, GitpaneViewProvider } = require('../src/extension'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+  const provider = new GitpaneViewProvider(tree, '/extension');
+  const changeFolders = async folders => {
+    vscode.workspace.workspaceFolders = folders.map(folder => ({ uri: uri(folder) }));
+    onWorkspaceChange();
+    const deadline = Date.now() + 5000;
+    while (tree.busy) {
+      if (Date.now() > deadline) throw new Error('Workspace refresh timed out');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
+  try {
+    await tree.refresh();
+    assert.deepEqual(statusRequests.filter(([, include]) => !include).map(([value]) => value).sort(), [root, first, second].sort());
+    assert.deepEqual(statusRequests.filter(([, include]) => include).map(([value]) => value), [root]);
+    let rows = provider.snapshot().repositories;
+    assert.deepEqual(rows.map(row => row.name), ['main']);
+    assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    pauseDetails = true;
+    const refresh = tree.refresh();
+    const deadline = Date.now() + 5000;
+    while (!releaseDetails) {
+      if (Date.now() > deadline) throw new Error('Detailed status did not start');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    rows = provider.snapshot().repositories;
+    assert.deepEqual(rows.map(row => row.name), ['main']);
+    assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    pauseDetails = false;
+    releaseDetails();
+    await refresh;
+    await changeFolders([workspace, first]);
+    rows = provider.snapshot().repositories;
+    assert.deepEqual(rows.map(row => row.name).sort(), ['main', 'one']);
+    assert.deepEqual(rows.find(row => row.name === 'main').worktrees.map(row => row.name), ['two']);
+    assert.deepEqual(rows.find(row => row.name === 'one').worktrees, []);
+    await changeFolders([linkedRoot]);
+    rows = provider.snapshot().repositories;
+    assert.deepEqual(rows.map(row => row.name), ['one']);
+    assert.deepEqual(rows[0].worktrees.map(row => row.name), ['two']);
+    await changeFolders([linkedRoot, second]);
+    rows = provider.snapshot().repositories;
+    assert.deepEqual(rows.map(row => row.name).sort(), ['one', 'two']);
+    assert.ok(rows.every(row => row.worktrees.length === 0));
+  } finally {
+    provider.dispose();
+    tree.dispose();
+  }
+});
+
 test('replaced repository and workspace symlinks cannot authorize stale actions', { skip: process.platform === 'win32' }, async t => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-scope-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
@@ -204,6 +496,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   const workspace = path.join(temporary, 'workspace-link');
   const repoPath = path.join(workspace, 'repo');
   for (const dir of [realRepo, outsideRepo, otherWorkspace]) fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(realRepo, '.git'));
   fs.symlinkSync(realWorkspace, workspace);
   fs.symlinkSync(realRepo, path.join(realWorkspace, 'repo'));
   fs.symlinkSync(realRepo, path.join(otherWorkspace, 'repo'));
@@ -216,27 +509,41 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   const change = { uri: uri(path.join(repoPath, 'file.txt')), status: 7 };
   const repo = { rootUri: uri(repoPath), state: { HEAD: { name: 'main' }, onDidChange: event,
     workingTreeChanges: [change] }, async status() { statusCalls++; } };
-  const api = { repositories: [repo], onDidOpenRepository: event, onDidCloseRepository: event,
+  let onOpen, onClose;
+  const api = { repositories: [repo],
+    onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
+    onDidCloseRepository(handler) { onClose = handler; return { dispose() {} }; },
     toGitUri: (value, ref) => ({ value, ref }) };
   const calls = [];
   const errors = [];
   const handlers = new Map();
+  const graphRequests = [];
+  const graphMessages = [];
+  let receiveGraph, disposeGraph;
+  const panel = { webview: { asWebviewUri: value => value, cspSource: 'test',
+    postMessage: message => graphMessages.push(message),
+    onDidReceiveMessage(handler) { receiveGraph = handler; } },
+    onDidDispose(handler) { disposeGraph = handler; },
+    dispose() { disposeGraph(); }, reveal() {} };
   let provider;
   class Backend {
     constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
     async status() { backendCalls++; return { common_dir: path.join(realRepo, '.git'), branch: 'main',
       is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
       has_dirty_submodules: false, has_unpushed_submodules: false }; }
+    async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
     dispose() {}
   }
   const vscode = {
     EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
-    Uri: { file: uri },
+    Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
+    ViewColumn: { Active: 1 },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event,
       registerTextDocumentContentProvider: event, fs: { stat: async () => ({}) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
+      createWebviewPanel: () => panel,
       showErrorMessage: message => errors.push(message) },
     commands: { registerCommand: (name, handler) => { handlers.set(name, handler); return { dispose() {} }; },
       executeCommand: async (...args) => calls.push(args) }
@@ -245,20 +552,43 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   let activate;
   const context = { extensionUri: '/extension', extensionPath: '/extension', subscriptions: [] };
   delete require.cache[require.resolve('../src/extension')];
+  delete require.cache[require.resolve('../src/repository-tree')];
+  delete require.cache[require.resolve('../src/graph-provider')];
+  delete require.cache[require.resolve('../src/graph/html')];
   try {
     Module._load = function(name, ...args) {
       if (name === 'vscode') return vscode;
       if (name === './backend-manager') return { BackendManager: Backend };
       return load.call(this, name, ...args);
     };
+    require('../src/graph/html');
     ({ activate } = require('../src/extension'));
     await activate(context);
   } finally { Module._load = load; }
   try {
     const snapshot = provider.snapshot();
     assert.equal(snapshot.repositories.length, 1);
-    const repoId = snapshot.repositories[0].id;
-    const fileId = snapshot.repositories[0].groups[0].files[0].id;
+    const previousId = snapshot.repositories[0].id;
+    handlers.get('gitpane.openGraph')(previousId);
+    await receiveGraph({ type: 'ready' });
+    assert.deepEqual(graphRequests, [repoPath]);
+    api.repositories = [];
+    onClose(repo);
+    const reopened = { ...repo, state: { ...repo.state } };
+    api.repositories = [reopened];
+    onOpen(reopened);
+    handlers.get('gitpane.openGraph')(repo);
+    handlers.get('gitpane.openGraph')(previousId);
+    await receiveGraph({ type: 'refresh' });
+    assert.deepEqual(graphRequests, [repoPath]);
+    assert.match(graphMessages.at(-1).error, /no longer in the workspace/i);
+    await provider.tree.refresh();
+    const current = provider.snapshot().repositories[0];
+    const repoId = current.id;
+    assert.notEqual(repoId, previousId);
+    handlers.get('gitpane.openGraph')(repoId);
+    assert.deepEqual(graphRequests, [repoPath, repoPath]);
+    const fileId = current.groups[0].files[0].id;
     const node = provider.changes.get(fileId);
     await handlers.get('gitpane.openChange')(node);
     assert.equal(calls[0][0], 'vscode.diff');
@@ -292,5 +622,91 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   } finally {
     for (const disposable of context.subscriptions) disposable.dispose();
     delete require.cache[require.resolve('../src/extension')];
+    delete require.cache[require.resolve('../src/repository-tree')];
+    delete require.cache[require.resolve('../src/graph-provider')];
+    delete require.cache[require.resolve('../src/graph/html')];
+  }
+});
+
+test('worktree graph opens for the linked repository and rejects a removed link', async t => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-worktree-graph-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const root = path.join(workspace, 'main');
+  const linked = path.join(workspace, 'linked');
+  const common = path.join(root, '.git');
+  fs.mkdirSync(common, { recursive: true });
+  fs.mkdirSync(linked);
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const makeRepo = (value, kind) => ({ rootUri: uri(value), kind,
+    state: { HEAD: { name: 'main' }, onDidChange: event }, async status() {} });
+  const parent = makeRepo(root, 'repository');
+  const child = makeRepo(linked, 'worktree');
+  const api = { repositories: [parent, child], onDidOpenRepository: event, onDidCloseRepository: event };
+  const graphRequests = [];
+  const graphMessages = [];
+  const snapshots = [];
+  let linkExists = true;
+  let receiveSidebar, receiveGraph, disposeGraph, provider;
+  class Backend {
+    constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
+    async status(value, includeWorktrees = true) { return { common_dir: common, branch: 'main', is_dirty: false,
+      ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees && value === root && linkExists ?
+        [{ path: linked, branch: 'topic' }] : [], has_dirty_submodules: false, has_unpushed_submodules: false }; }
+    async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
+    dispose() {}
+  }
+  const webview = receive => ({ asWebviewUri: value => value, cspSource: 'test',
+    onDidReceiveMessage: receive });
+  const panel = { webview: { ...webview(handler => { receiveGraph = handler; }),
+    postMessage: message => graphMessages.push(message) },
+    onDidDispose(handler) { disposeGraph = handler; }, dispose() { disposeGraph(); }, reveal() {} };
+  const view = { visible: true, webview: { ...webview(handler => { receiveSidebar = handler; return event(); }),
+    postMessage: message => snapshots.push(message) }, onDidChangeVisibility: event, onDidDispose: event };
+  const vscode = {
+    EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
+    extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
+    workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event,
+      registerTextDocumentContentProvider: event },
+    window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
+      registerWebviewViewProvider: (_name, value) => { provider = value; return event(); },
+      createWebviewPanel: () => panel, showErrorMessage: message => { throw new Error(message); } },
+    commands: { registerCommand: event, executeCommand: async () => {} }
+  };
+  const load = Module._load;
+  const modules = ['../src/extension', '../src/repository-tree', '../src/graph-provider',
+    '../src/graph/html', '../src/webview/html'];
+  for (const name of modules) delete require.cache[require.resolve(name)];
+  const context = { extensionUri: '/extension', extensionPath: '/extension', subscriptions: [] };
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './backend-manager') return { BackendManager: Backend };
+      return load.call(this, name, ...args);
+    };
+    require('../src/graph/html');
+    require('../src/webview/html');
+    const { activate } = require('../src/extension');
+    await activate(context);
+  } finally { Module._load = load; }
+  try {
+    provider.resolveWebviewView(view);
+    await receiveSidebar({ type: 'ready' });
+    const worktree = snapshots.at(-1).repositories[0].worktrees[0];
+    assert.equal(worktree.available, true);
+    await receiveSidebar({ type: 'openWorktreeGraph', id: worktree.id });
+    await receiveGraph({ type: 'ready' });
+    assert.deepEqual(graphRequests, [linked]);
+
+    linkExists = false;
+    await provider.tree.refresh();
+    await receiveGraph({ type: 'refresh' });
+    assert.match(graphMessages.at(-1).error, /no longer in the workspace/i);
+    await receiveSidebar({ type: 'openWorktreeGraph', id: worktree.id });
+    assert.deepEqual(graphRequests, [linked]);
+  } finally {
+    for (const disposable of context.subscriptions) disposable.dispose();
+    for (const name of modules) delete require.cache[require.resolve(name)];
   }
 });

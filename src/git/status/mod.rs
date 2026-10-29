@@ -229,7 +229,7 @@ pub(crate) fn query_status(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, false, sub_cfg, None)
+    query_status_inner(path, false, sub_cfg, None, true)
 }
 
 /// Query local status while limiting which linked worktrees may be inspected.
@@ -237,8 +237,15 @@ pub(crate) fn query_status_scoped(
     path: &Path,
     sub_cfg: &SubmoduleConfig,
     allow_worktree: &dyn Fn(&Path) -> bool,
+    include_worktrees: bool,
 ) -> color_eyre::Result<RepoStatus> {
-    query_status_inner(path, false, sub_cfg, Some(allow_worktree))
+    query_status_inner(
+        path,
+        false,
+        sub_cfg,
+        Some(allow_worktree),
+        include_worktrees,
+    )
 }
 
 /// Validate a scoped descendant separately because libgit2 may suppress errors
@@ -261,7 +268,7 @@ pub(crate) fn query_status_with_fetch(
     // Keep untracked directories compact, matching local-poll and
     // watcher-triggered queries. Otherwise a fetch refresh expands every file
     // only for the next local refresh to collapse it again.
-    query_status_inner(path, true, sub_cfg, None)
+    query_status_inner(path, true, sub_cfg, None, true)
 }
 
 fn query_status_inner(
@@ -269,6 +276,7 @@ fn query_status_inner(
     fetch: bool,
     sub_cfg: &SubmoduleConfig,
     allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+    include_worktrees: bool,
 ) -> color_eyre::Result<RepoStatus> {
     let mut repo = Repository::open(path)?;
 
@@ -315,7 +323,11 @@ fn query_status_inner(
     } = collect_change_summary(&repo, path, false, sub_cfg, allow_worktree.is_some())?;
 
     // Collect linked worktree details (excludes the main working tree)
-    let worktree_info = collect_worktree_info(&repo, sub_cfg, allow_worktree)?;
+    let worktree_info = if include_worktrees {
+        collect_worktree_info(&repo, sub_cfg, allow_worktree)?
+    } else {
+        Vec::new()
+    };
 
     // Snapshot rendered ref tips (post-fetch, so moved remotes are reflected).
     let refs = graph_refs_fingerprint(&repo);

@@ -17,6 +17,7 @@ pub(super) fn query(
     repo: &Path,
     scope: &Scope,
     sub_cfg: &SubmoduleConfig,
+    include_worktrees: bool,
 ) -> Result<Value, BridgeError> {
     validate_submodules(scope, repo, sub_cfg)?;
     let common_repo = git2::Repository::open(repo)
@@ -26,7 +27,7 @@ pub(super) fn query(
         .canonicalize()
         .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let failure = RefCell::new(None);
-    let result = query_status_scoped(repo, sub_cfg, &|path| match scope.allows_missing(path) {
+    let allow_worktree = |path: &Path| match scope.allows_missing(path) {
         Ok(false) => false,
         Ok(true) => match scope
             .repository(path)
@@ -42,7 +43,8 @@ pub(super) fn query(
             *failure.borrow_mut() = Some(error);
             false
         }
-    });
+    };
+    let result = query_status_scoped(repo, sub_cfg, &allow_worktree, include_worktrees);
     if let Some(error) = failure.into_inner() {
         return Err(error);
     }

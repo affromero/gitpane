@@ -24,7 +24,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else {
-    send({id: request.id, result: {roots, method: request.method, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation}});
+    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation}});
   }
 });
 
@@ -85,6 +85,7 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.equal(manager.state.status, 'ready');
   assert.equal(executed[0], path.resolve('extension/bin', process.platform === 'win32' ? 'gitpane.exe' : 'gitpane'));
   assert.deepEqual((await manager.status(path.join(root, 'repo'))).roots, [root]);
+  assert.equal((await manager.status(path.join(root, 'repo'), false)).include_worktrees, false);
   const graph = await manager.graph(path.join(root, 'repo'), true);
   assert.equal(graph.method, 'graph');
   assert.equal(graph.first_parent, true);

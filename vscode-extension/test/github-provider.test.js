@@ -9,7 +9,9 @@ function fixture() {
   const root = path.resolve('workspace');
   const repoPath = path.join(root, 'repo');
   const repo = { rootUri: { fsPath: repoPath, toString: () => `file:${repoPath}` } };
-  const tree = { git: { repositories: [repo] }, isVisible: () => true };
+  let incarnation = 1;
+  const tree = { git: { repositories: [repo] }, isVisible: () => true,
+    repositoryToken: () => incarnation, isCurrentRepository: (item, token) => token === incarnation && tree.isVisible(item) };
   let generation = 1;
   let picks = [];
   let response = () => { throw new Error('Unexpected request'); };
@@ -51,7 +53,7 @@ function fixture() {
   });
   return { provider, repo, repoPath, tree, calls, documents, errors, menus, clients,
     setPicks(values) { picks = values; }, setResponse(fn) { response = fn; },
-    changeWorkspace() { generation++; }
+    changeWorkspace() { generation++; }, reopen() { incarnation++; }
   };
 }
 
@@ -129,6 +131,26 @@ test('workspace changes ignore an in-flight response without stopping its servic
   assert.equal(f.menus.length, 0);
   assert.equal(f.documents.length, 0);
   assert.equal(f.clients[0].disposed, true);
+});
+
+test('a removed worktree link during selection prevents opening GitHub details', async () => {
+  const f = fixture();
+  let linked = true;
+  f.setResponse(async () => list({ prs: [item(7)] }));
+  f.setPicks([choices => { linked = false; return choices.find(choice => choice.number === 7); }]);
+  await f.provider.open(f.repo, () => linked);
+  assert.equal(f.calls.filter(call => call[0] === 'request').length, 1);
+  assert.deepEqual(f.documents, []);
+  assert.equal(f.calls.some(call => call[0] === 'browser'), false);
+});
+
+test('reopening the same repository path during selection prevents opening GitHub details', async () => {
+  const f = fixture();
+  f.setResponse(async () => list({ prs: [item(7)] }));
+  f.setPicks([choices => { f.reopen(); return choices.find(choice => choice.number === 7); }]);
+  await f.provider.open(f.repo);
+  assert.deepEqual(f.documents, []);
+  assert.equal(f.calls.filter(call => call[0] === 'request').length, 1);
 });
 
 test('item detail must match the repository and number in the selected list', async () => {

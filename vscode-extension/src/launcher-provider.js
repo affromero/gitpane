@@ -56,25 +56,27 @@ class LauncherProvider {
     this.disposed = false;
   }
 
-  current(repo, generation) {
-    if (!repo?.rootUri || this.disposed || generation !== this.generation) return null;
+  current(repo, generation, guard = () => true) {
+    if (!guard() || !repo?.rootUri || this.disposed || generation !== this.generation) return null;
     const current = this.tree.git.repositories.find(item => item.rootUri.toString() === repo.rootUri.toString());
     return current && this.tree.isVisible(current) ? current : null;
   }
 
-  requireCurrent(repo, generation) {
-    const current = this.current(repo, generation);
+  requireCurrent(repo, generation, guard) {
+    const current = this.current(repo, generation, guard);
     if (!current) throw new Error('Repository or workspace changed; choose the launcher again.');
     return current;
   }
 
-  async open(repo) {
+  async open(repo, guard = () => true) {
     const generation = ++this.generation;
+    const token = repo && this.tree.repositoryToken(repo);
+    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
     let terminal;
     try {
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       const result = await this.backend.listLaunchers(repo.rootUri.fsPath);
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       if (!result || !Array.isArray(result.actions)) throw new Error('Gitpane returned an invalid launcher list.');
       const ids = new Set();
       const choices = result.actions.map(action => {
@@ -88,13 +90,13 @@ class LauncherProvider {
         return;
       }
       const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane launcher' });
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       if (!selected || !choices.includes(selected)) return;
       const plan = await this.backend.planLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
-      let current = this.requireCurrent(repo, generation);
+      let current = this.requireCurrent(repo, generation, currentGuard);
       const options = terminalOptions(plan, current, selected.label, selected.fingerprint);
       const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
-      current = this.requireCurrent(repo, generation);
+      current = this.requireCurrent(repo, generation, currentGuard);
       if (!validation || validation.valid !== true) throw new Error('Launcher configuration changed. Choose it again.');
       options.cwd = current.rootUri;
       terminal = this.vscode.window.createTerminal(options);

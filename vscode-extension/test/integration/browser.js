@@ -179,26 +179,55 @@ const scenario = String.raw`
     stashRepo.querySelector('.row').click();
     const withWorktree = JSON.parse(JSON.stringify(snapshot));
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
-      name: 'web-review', branch: 'review', dirty: true, fileCount: 2, ahead: 1, behind: 0 }] });
+      name: 'web-review', branch: 'review', dirty: true, fileCount: 2, ahead: 1, behind: 0, available: true,
+      groups: [
+        { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt' }] },
+        { id: 'working', label: 'Unstaged', files: [{ id: 'worktree-working', status: 'M', path: 'working.txt' }] }
+      ] }] });
     window.postMessage(withWorktree, '*');
     await tick();
     let cleanRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     check('clean repository with worktrees is expandable', cleanRepo.getAttribute('aria-expanded') === 'false' && cleanRepo.textContent.includes('▸⎇1'));
     cleanRepo.querySelector('.row').click();
     cleanRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
-    const worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    let worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     check('workspace worktree status is visible', !!worktree && ['⎇', '*', 'review', '[2]', '↑1'].every(value => worktree.textContent.includes(value)));
     check('worktree status has accessible meaning', ['has changes', '2 files', '1 ahead'].every(value => worktree.getAttribute('aria-label').includes(value)));
+    check('dirty worktree is collapsed and expandable', worktree.getAttribute('aria-expanded') === 'false');
+    const worktreeGraph = worktree.querySelector('.graph-action');
+    check('worktree graph is accessible', worktreeGraph.getAttribute('aria-label') === 'Open commit graph for web-review');
+    worktreeGraph.click();
+    check('worktree graph sends only opaque id', window.posted.some(message => message.type === 'openWorktreeGraph' &&
+      message.id === 'opaque-worktree' && !('path' in message)) && worktree.getAttribute('aria-expanded') === 'false');
     const worktreeMenu = worktree.querySelector('.menu-action');
     check('worktree action has an accessible name', worktreeMenu.getAttribute('aria-label') === 'Actions for worktree web-review');
     worktreeMenu.click();
     check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'menu' &&
       message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
     worktree.querySelector('.row').click();
-    const worktreeCalls = window.posted.filter(message => message.type === 'menu' && message.kind === 'worktree').length;
-    worktree.focus();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&
+      worktree.textContent.includes('staged.txt') && worktree.textContent.includes('working.txt'));
+    const nestedFile = items().find(item => item.getAttribute('aria-label') === 'M working.txt');
+    nestedFile.querySelector('.row').click();
+    check('clicking a worktree file opens its native change', window.posted.some(message =>
+      message.type === 'openChange' && message.id === 'worktree-working' && !('path' in message)));
+    worktree.querySelector('.row').click();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('keyboard expands the selected worktree', worktree.getAttribute('aria-expanded') === 'true');
     worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    check('keyboard opens worktree actions', window.posted.filter(message => message.type === 'menu' && message.kind === 'worktree').length === worktreeCalls + 1);
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('keyboard collapses the worktree', worktree.getAttribute('aria-expanded') === 'false');
+    const unavailable = JSON.parse(JSON.stringify(withWorktree));
+    unavailable.repositories[1].worktrees[0].available = false;
+    window.postMessage(unavailable, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('unavailable worktree is reported without stale file or graph actions',
+      worktree.getAttribute('aria-label').includes('repository unavailable') && !worktree.querySelector('.graph-action') &&
+      !items().some(item => item.getAttribute('aria-label') === 'M working.txt'));
     window.postMessage(snapshot, '*');
     await tick();
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));

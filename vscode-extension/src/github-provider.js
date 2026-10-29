@@ -36,29 +36,29 @@ class GithubProvider {
     this.clients = new Set();
   }
 
-  current(repo, generation, snapshot, repoPath) {
+  current(repo, generation, snapshot, repoPath, guard = () => true) {
     const current = repo && this.tree.git.repositories.find(item => item.rootUri.toString() === repo.rootUri.toString());
-    return !this.disposed && generation === this.generation && !!current && this.tree.isVisible(current) &&
+    return guard() && !this.disposed && generation === this.generation && !!current && this.tree.isVisible(current) &&
       (!snapshot || this.backend.isCurrentMutation(snapshot, repoPath));
   }
 
-  async request(repo, generation, method, params) {
+  async request(repo, generation, method, params, guard) {
     const snapshot = await this.backend.mutationSnapshot();
     const repoPath = await this.realpath(repo.rootUri.fsPath);
-    if (!this.current(repo, generation, snapshot, repoPath)) throw new Error('Repository or workspace changed; reopen GitHub view.');
+    if (!this.current(repo, generation, snapshot, repoPath, guard)) throw new Error('Repository or workspace changed; reopen GitHub view.');
     const client = this.createClient(snapshot.executable);
     this.clients.add(client);
     let dispatched = false;
     let timedOut = false;
     try {
       await client.initialize(snapshot.roots);
-      if (!this.current(repo, generation, snapshot, repoPath)) throw new Error('Repository or workspace changed; reopen GitHub view.');
+      if (!this.current(repo, generation, snapshot, repoPath, guard)) throw new Error('Repository or workspace changed; reopen GitHub view.');
       // call() sends synchronously after the final scope check. The service is
       // dedicated to this request, so status polling cannot queue behind gh.
       const pending = client.call(method, { repo: repoPath, ...params });
       dispatched = true;
       const value = await pending;
-      if (await this.realpath(repo.rootUri.fsPath) !== repoPath || !this.current(repo, generation, snapshot, repoPath)) {
+      if (await this.realpath(repo.rootUri.fsPath) !== repoPath || !this.current(repo, generation, snapshot, repoPath, guard)) {
         throw new Error('Repository or workspace changed; reopen GitHub view.');
       }
       return { value, snapshot, repoPath };
@@ -110,8 +110,8 @@ class GithubProvider {
     }
   }
 
-  async detail(repo, generation, list, item) {
-    const result = await this.request(repo, generation, 'github_detail', { kind: item.kind, number: item.number });
+  async detail(repo, generation, list, item, guard) {
+    const result = await this.request(repo, generation, 'github_detail', { kind: item.kind, number: item.number }, guard);
     this.validateDetail(result.value, list, item);
     const detail = result.value;
     const lines = [`${item.kind === 'pr' ? 'Pull request' : 'Issue'} #${item.number}: ${text(detail.title)}`,
@@ -120,15 +120,15 @@ class GithubProvider {
     if (!detail.comments.length) lines.push('No comments.');
     if (detail.diff_error) lines.push('', `Pull request diff unavailable: ${text(detail.diff_error)}`);
     else if (detail.diff !== null) lines.push('', 'Pull request diff', text(detail.diff));
-    if (!this.current(repo, generation, result.snapshot, result.repoPath)) throw new Error('Repository or workspace changed; reopen GitHub view.');
+    if (!this.current(repo, generation, result.snapshot, result.repoPath, guard)) throw new Error('Repository or workspace changed; reopen GitHub view.');
     const document = await this.vscode.workspace.openTextDocument({ language: 'plaintext', content: lines.join('\n') });
-    if (!this.current(repo, generation, result.snapshot, result.repoPath)) return;
+    if (!this.current(repo, generation, result.snapshot, result.repoPath, guard)) return;
     await this.vscode.window.showTextDocument(document, { preview: false });
-    if (!this.current(repo, generation, result.snapshot, result.repoPath)) return;
+    if (!this.current(repo, generation, result.snapshot, result.repoPath, guard)) return;
     const choices = [{ label: 'Open on GitHub', action: 'browser' }, { label: 'Back to GitHub list', action: 'back' }];
     const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'GitHub item actions' });
     if (!selected || !choices.includes(selected) || selected.action !== 'browser') return;
-    if (await this.realpath(repo.rootUri.fsPath) !== result.repoPath || !this.current(repo, generation, result.snapshot, result.repoPath)) {
+    if (await this.realpath(repo.rootUri.fsPath) !== result.repoPath || !this.current(repo, generation, result.snapshot, result.repoPath, guard)) {
       throw new Error('Repository or workspace changed; reopen GitHub view.');
     }
     const type = item.kind === 'pr' ? 'pull' : 'issues';
@@ -136,15 +136,17 @@ class GithubProvider {
     await this.vscode.env.openExternal(this.vscode.Uri.parse(url));
   }
 
-  async open(repo) {
+  async open(repo, guard = () => true) {
     const generation = ++this.generation;
-    if (!this.current(repo, generation)) return;
+    const token = repo && this.tree.repositoryToken(repo);
+    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
+    if (!this.current(repo, generation, undefined, undefined, currentGuard)) return;
     let state = 'open';
     let data;
     try {
-      while (this.current(repo, generation)) {
-        if (!data) data = await this.request(repo, generation, 'github_list', { state });
-        if (!this.current(repo, generation, data.snapshot, data.repoPath)) return;
+      while (this.current(repo, generation, undefined, undefined, currentGuard)) {
+        if (!data) data = await this.request(repo, generation, 'github_list', { state }, currentGuard);
+        if (!this.current(repo, generation, data.snapshot, data.repoPath, currentGuard)) return;
         const choices = [
           { label: 'Refresh', action: 'refresh' },
           { label: `State: ${state}`, action: 'filter' },
@@ -153,20 +155,20 @@ class GithubProvider {
         const selected = await this.vscode.window.showQuickPick(choices, {
           placeHolder: `${data.value.owner}/${data.value.repo} · GitHub`, matchOnDescription: true
         });
-        if (!selected || !choices.includes(selected) || !this.current(repo, generation, data.snapshot, data.repoPath)) return;
+        if (!selected || !choices.includes(selected) || !this.current(repo, generation, data.snapshot, data.repoPath, currentGuard)) return;
         if (selected.action === 'refresh') data = undefined;
         else if (selected.action === 'filter') {
           const filters = ['open', 'all', 'closed'].map(value => ({ label: value, value }));
           const filter = await this.vscode.window.showQuickPick(filters, { placeHolder: 'GitHub item state' });
-          if (!filter || !filters.includes(filter) || !this.current(repo, generation, data.snapshot, data.repoPath)) return;
+          if (!filter || !filters.includes(filter) || !this.current(repo, generation, data.snapshot, data.repoPath, currentGuard)) return;
           state = filter.value;
           data = undefined;
         } else if (selected.action === 'item') {
-          await this.detail(repo, generation, data.value, selected);
+          await this.detail(repo, generation, data.value, selected, currentGuard);
         }
       }
     } catch (error) {
-      if (this.current(repo, generation)) await this.vscode.window.showErrorMessage(`Gitpane GitHub: ${error.message}`);
+      if (this.current(repo, generation, undefined, undefined, currentGuard)) await this.vscode.window.showErrorMessage(`Gitpane GitHub: ${error.message}`);
     }
   }
 

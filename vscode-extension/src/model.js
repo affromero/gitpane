@@ -8,7 +8,9 @@ const Status = Object.freeze({
   INDEX_MODIFIED: 0, INDEX_ADDED: 1, INDEX_DELETED: 2,
   INDEX_RENAMED: 3, INDEX_COPIED: 4, MODIFIED: 5, DELETED: 6,
   UNTRACKED: 7, IGNORED: 8, INTENT_TO_ADD: 9, INTENT_TO_RENAME: 10,
-  TYPE_CHANGED: 11
+  TYPE_CHANGED: 11, ADDED_BY_US: 12, ADDED_BY_THEM: 13,
+  DELETED_BY_US: 14, DELETED_BY_THEM: 15, BOTH_ADDED: 16,
+  BOTH_DELETED: 17, BOTH_MODIFIED: 18
 });
 
 function groups(state) {
@@ -43,7 +45,22 @@ function statusLabel(status) {
 function comparison(group, change) {
   const current = change.uri;
   const original = change.originalUri || current;
-  if (group === 'merge') return { open: current };
+  if (group === 'merge') {
+    let left;
+    let right;
+    switch (change.status) {
+      case Status.ADDED_BY_US: right = ':2'; break;
+      case Status.ADDED_BY_THEM: right = ':3'; break;
+      case Status.DELETED_BY_US: left = ':1'; right = ':3'; break;
+      case Status.DELETED_BY_THEM: left = ':1'; right = ':2'; break;
+      case Status.BOTH_ADDED:
+      case Status.BOTH_MODIFIED: left = ':2'; right = ':3'; break;
+      case Status.BOTH_DELETED: left = ':1'; break;
+      default: throw new Error(`Unsupported conflict status: ${change.status}`);
+    }
+    const side = ref => ref ? { git: current, ref } : { empty: true };
+    return { left: side(left), right: side(right) };
+  }
   if (group === 'untracked' || change.status === Status.UNTRACKED) {
     return { left: { empty: true }, right: { file: current } };
   }

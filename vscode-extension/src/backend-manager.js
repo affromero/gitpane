@@ -124,7 +124,7 @@ class BackendManager {
     const client = this.client;
     try {
       let result;
-      if (method === 'status') result = await client.status(repo);
+      if (method === 'status') result = await client.status(repo, argument);
       else if (method === 'sort_repositories') result = await client.sortRepositories(argument.order, argument.repositories);
       else if (method === 'file_action_preview') result = await client.fileActionPreview(repo, argument.path, argument.operation);
       else if (method === 'branch_review') result = await client.branchReview(repo);
@@ -149,7 +149,7 @@ class BackendManager {
     }
   }
 
-  status(repo) { return this.request('status', repo); }
+  status(repo, includeWorktrees) { return this.request('status', repo, includeWorktrees); }
 
   sortRepositories(order, repositories) { return this.request('sort_repositories', undefined, { order, repositories }); }
 

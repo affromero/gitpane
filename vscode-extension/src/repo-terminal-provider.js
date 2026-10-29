@@ -15,13 +15,14 @@ class RepoTerminalProvider {
     this.disposed = false;
   }
 
-  async open(repo) {
+  async open(repo, guard = () => true) {
     let terminal;
     try {
-      if (this.disposed || !repo?.rootUri) throw new Error('Repository is no longer in the workspace.');
+      if (!guard() || this.disposed || !repo?.rootUri) throw new Error('Repository is no longer in the workspace.');
+      const token = this.tree.repositoryToken(repo);
       const key = repo.rootUri.toString();
       const current = this.tree.git.repositories.find(item => item.rootUri.toString() === key);
-      if (!current || !this.tree.isVisible(current)) throw new Error('Repository is no longer in the workspace.');
+      if (!current || !this.tree.isCurrentRepository(current, token)) throw new Error('Repository is no longer in the workspace.');
       terminal = this.vscode.window.createTerminal({ name: terminalName(current.rootUri.fsPath), cwd: current.rootUri });
       terminal.show();
     } catch (error) {

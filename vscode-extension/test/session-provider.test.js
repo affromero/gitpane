@@ -9,6 +9,7 @@ function fixture() {
   const root = path.resolve('workspace/repo');
   const repo = { rootUri: { fsPath: root, toString: () => root } };
   let visible = true;
+  let incarnation = 1;
   let sessions = ['main'];
   let listError;
   let gotoError;
@@ -20,7 +21,8 @@ function fixture() {
   const navigation = [];
   const errors = [];
   const information = [];
-  const tree = { git: { repositories: [repo] }, isVisible: () => visible };
+  const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+    repositoryToken: () => incarnation, isCurrentRepository: (_, token) => visible && token === incarnation };
   const vscode = { window: {
     async showQuickPick(choices) {
       const choose = picks.shift();
@@ -49,7 +51,7 @@ function fixture() {
   const provider = new SessionProvider(tree, backend, { vscode });
   return {
     root, repo, tree, provider, picks, requests, navigation, errors, information,
-    setVisible(value) { visible = value; },
+    setVisible(value) { visible = value; }, reopen() { incarnation++; },
     setSessions(value) { sessions = value; },
     setListError(value) { listError = value; },
     setGotoError(value) { gotoError = value; },
@@ -131,6 +133,25 @@ test('a workspace change during service initialization prevents dispatch', async
   f.picks.push(choices => choices[0]);
   f.picks.push(choices => choices[0]);
   f.beforeDispatch(() => f.setVisible(false));
+  await f.provider.open(f.repo);
+  assert.deepEqual(f.navigation, []);
+  assert.match(f.errors[0], /workspace changed/i);
+});
+
+test('a removed worktree link prevents session navigation during service initialization', async () => {
+  const f = fixture();
+  let linked = true;
+  f.picks.push(choices => choices[0], choices => choices[0]);
+  f.beforeDispatch(() => { linked = false; });
+  await f.provider.open(f.repo, () => linked);
+  assert.deepEqual(f.navigation, []);
+  assert.match(f.errors[0], /workspace changed/i);
+});
+
+test('reopening the same repository path before session dispatch cancels navigation', async () => {
+  const f = fixture();
+  f.picks.push(choices => choices[0], choices => choices[0]);
+  f.beforeDispatch(() => f.reopen());
   await f.provider.open(f.repo);
   assert.deepEqual(f.navigation, []);
   assert.match(f.errors[0], /workspace changed/i);

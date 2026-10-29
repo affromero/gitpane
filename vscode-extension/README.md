@@ -6,9 +6,10 @@ repository to see staged, unstaged, untracked and conflicted files. Select a
 change to open it in the editor.
 
 The view includes detected repositories inside the open workspace folders,
-including multi-root workspaces. A linked worktree appears when it is inside a
-workspace folder and VS Code detects it. Repositories outside the workspace are
-not included.
+including multi-root workspaces. Linked worktrees inside the workspace appear
+under their repository, with their own changed files and actions. A worktree
+added as a workspace folder appears at the top level. Repositories outside the
+workspace are not included.
 
 The view updates as workspace folders and detected repositories change. While
 visible, it also refreshes local Git status periodically. The `$` indicator

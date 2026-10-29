@@ -23,28 +23,43 @@ test('webview shows workspace state and opens only currently visible changes', a
     Module._load = load;
   }
   const root = path.resolve('workspace/repo');
+  const worktreePath = path.join(path.dirname(root), 'worktree');
   const uri = value => ({ fsPath: value, toString: () => value });
   const repo = { rootUri: uri(root), state: { HEAD: { name: 'topic', ahead: 2 }, indexChanges: [] } };
+  const child = { rootUri: uri(worktreePath), state: { HEAD: { name: 'worktree-branch' }, indexChanges: [] } };
   let current = { uri: uri(path.join(root, 'file.txt')), status: 0 };
+  let childCurrent = { uri: uri(path.join(worktreePath, 'child.txt')), status: 5 };
   let visible = true;
   let onChange;
   const tree = {
-    git: { repositories: [repo] }, busy: false, failedStatuses: new Set(),
+    git: { repositories: [repo, child] }, busy: false, failedStatuses: new Set(),
     workspacePaths: [path.dirname(root)], isPathInWorkspace(value) { return value.startsWith(`${path.dirname(root)}${path.sep}`); },
     backendStatuses: new Map([[root, {
       common_dir: path.join(root, '.git'), branch: 'topic', is_dirty: true, ahead: 2, behind: 1,
-      stashes: [{ index: 0, message: 'WIP on topic', oid: 'stash-commit-id' }], worktrees: [{ path: path.join(path.dirname(root), 'worktree'), branch: 'worktree-branch' },
+      stashes: [{ index: 0, message: 'WIP on topic', oid: 'stash-commit-id' }], worktrees: [{ path: worktreePath, branch: 'worktree-branch' },
         { path: path.resolve('outside/worktree'), branch: 'outside' }], has_dirty_submodules: false,
       has_unpushed_submodules: false
-    }]]),
+    }], [worktreePath, { common_dir: path.join(root, '.git') }]]),
     onDidChangeTreeData(handler) { onChange = handler; return { dispose() {} }; },
     setVisible(value) { visible = value; },
     isVisible() { return visible; },
-    groupsFor() { return current ? [{ id: 'index', label: 'Staged', changes: [current] }] : []; },
+    repositoryToken(target) { return target === repo ? 1 : target === child ? 2 : undefined; },
+    isCurrentRepository(target, token) { return visible && this.repositoryToken(target) === token; },
+    workspaceWorktrees(parent) {
+      return visible && parent === repo ? this.backendStatuses.get(root).worktrees.filter(item => this.isPathInWorkspace(item.path)) : [];
+    },
+    worktreeRepository(parent, value) {
+      return visible && parent === repo && value === worktreePath &&
+        this.backendStatuses.get(root).worktrees.some(item => item.path === value) ? child : undefined;
+    },
+    groupsFor(target) {
+      const change = target === child ? childCurrent : current;
+      return change ? [{ id: target === child ? 'working' : 'index', label: target === child ? 'Unstaged' : 'Staged', changes: [change] }] : [];
+    },
     getChildren(node) {
       if (!node) return [{ type: 'repo', repo }];
-      if (node.type === 'repo') return this.groupsFor().map(group => ({ type: 'group', repo, group }));
-      return node.group.changes.map(change => ({ type: 'change', repo, group: node.group.id, change }));
+      if (node.type === 'repo') return this.groupsFor(node.repo).map(group => ({ type: 'group', repo: node.repo, group }));
+      return node.group.changes.map(change => ({ type: 'change', repo: node.repo, group: node.group.id, change }));
     },
     async refresh() { repo.state.HEAD.name = 'updated'; this.backendStatuses.get(root).branch = 'updated'; onChange(); }
   };
@@ -88,8 +103,29 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(first.repositories[0].worktrees.length, 1);
     const worktree = first.repositories[0].worktrees[0];
     assert.equal(provider.resolveWorktree(worktree.id).branch, 'worktree-branch');
+    assert.equal(worktree.available, true);
+    const childFile = worktree.groups[0].files[0];
+    assert.equal(childFile.path, 'child.txt');
+    assert.equal(provider.resolveChange(childFile.id).repoPath, worktreePath);
+    await onMessage({ type: 'openChange', id: childFile.id });
+    assert.equal(calls[0][0], 'gitpane.openChange');
+    assert.equal(calls[0][1].repo, child);
+    const linked = tree.backendStatuses.get(root).worktrees.shift();
+    await onMessage({ type: 'openChange', id: childFile.id });
+    assert.equal(calls.length, 1);
+    tree.backendStatuses.get(root).worktrees.unshift(linked);
+    calls.length = 0;
     assert.equal(provider.resolveChange(file.id).path, 'file.txt');
+    assert.equal(provider.resolveChange(file.id).isSubmodule, false);
+    repo.state.submodules = [{ path: 'file.txt' }];
+    assert.equal(provider.resolveChange(file.id).isSubmodule, true);
+    repo.state.submodules = [];
     assert.equal(provider.resolveRepository(first.repositories[0].id).commonDir, path.join(root, '.git'));
+    repo.state.HEAD.name = 'new-branch';
+    Object.assign(tree.backendStatuses.get(root), { branch: '(no branch)', head_oid: null });
+    assert.equal(provider.snapshot().repositories[0].branch, 'new-branch');
+    repo.state.HEAD.name = 'topic';
+    tree.backendStatuses.get(root).branch = 'topic';
     await onMessage({ type: 'menu', kind: 'file', id: file.id, path: '/outside' });
     assert.deepEqual(menus, [['file', file.id]]);
     const activeListener = onChange;
@@ -125,7 +161,7 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls.length, 1);
     await onMessage({ type: 'openGraph', id: first.repositories[0].id });
     assert.equal(calls[1][0], 'gitpane.openGraph');
-    assert.equal(calls[1][1], repo);
+    assert.equal(calls[1][1], first.repositories[0].id);
 
     view.visible = false;
     onVisibility();

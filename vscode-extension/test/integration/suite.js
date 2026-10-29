@@ -49,9 +49,8 @@ exports.run = async () => {
     tree.setVisible(true);
     await waitFor(() => [fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND]
       .every(target => rootNode(target)), () => `workspace repositories were not discovered; expected: ${JSON.stringify([fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND])}; VS Code repositories: ${JSON.stringify(api.repositories.map(item => item.rootUri.fsPath))}; tree: ${JSON.stringify(tree.getChildren().filter(item => item.type === 'repo').map(item => item.repo.rootUri.fsPath))}; workspace: ${JSON.stringify(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath))}; repositoryScanMaxDepth: ${vscode.workspace.getConfiguration('git').get('repositoryScanMaxDepth')}`, 30000);
-    const root = rootNode(fixture);
     await waitFor(() => snapshotRepo(fixture)?.dirty, 'repository changes were not loaded');
-    nodes = tree.getChildren(root).flatMap(group => tree.getChildren(group));
+    nodes = [...provider.changes.values()].filter(node => samePath(node.repo.rootUri.fsPath, fixture));
   });
 
   await test('ignore repositories outside the workspace', async () => {

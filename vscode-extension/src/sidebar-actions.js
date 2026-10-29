@@ -4,14 +4,14 @@ const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard']);
 const REPO_ACTIONS = new Set(['createWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
-const WORKTREE_ACTIONS = new Set(['removeWorktree']);
+const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir];
   if (kind === 'repo') fields.push(item.branch, item.head);
-  if (kind === 'file') fields.push(item.path, item.group, item.status);
-  if (kind === 'worktree') fields.push(item.path, item.branch);
+  if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule);
+  if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId);
   return JSON.stringify(fields);
 }
 
@@ -29,6 +29,7 @@ function fileOptions(item) {
     { label: 'Reveal in Explorer', action: 'reveal' },
     { label: 'Copy Path', action: 'copy' }
   ];
+  if (item.isSubmodule) return choices;
   if (item.group === 'index') choices.push({ label: 'Unstage', action: 'unstage' });
   if (['working', 'untracked', 'merge'].includes(item.group)) choices.push({ label: 'Stage', action: 'stage' });
   if (['index', 'working', 'untracked'].includes(item.group)) choices.push({
@@ -51,6 +52,8 @@ class SidebarActions {
     this.openSession = options.openSession;
     this.openTerminal = options.openTerminal;
     this.openLauncher = options.openLauncher;
+    this.openWorktreeGraph = options.openWorktreeGraph;
+    this.reviewWorktree = options.reviewWorktree;
     this.previewFileAction = options.previewFileAction;
   }
 
@@ -66,8 +69,9 @@ class SidebarActions {
     return !!expected && fingerprint(this.resolve(kind, id), kind) === expected;
   }
 
-  async showMenu(kind, id) {
+  async showMenu(kind, id, guard = () => true) {
     try {
+      if (!guard()) return;
       const item = this.resolve(kind, id);
       const expected = fingerprint(item, kind);
       if (!expected) return;
@@ -90,12 +94,17 @@ class SidebarActions {
         { label: 'Pull', action: 'pull' },
         { label: 'Pull with Rebase', action: 'pull_rebase' }
       ];
-      else if (kind === 'worktree') choices = [{ label: 'Remove Worktree', action: 'removeWorktree' }];
+      else if (kind === 'worktree') choices = [
+        ...(item.available ? [{ label: 'Open Commit Graph', action: 'openWorktreeGraph' },
+          { label: 'Review Branch', action: 'reviewWorktree' },
+          { label: 'Repository Actions', action: 'worktreeRepositoryActions' }] : []),
+        { label: 'Remove Worktree', action: 'removeWorktree' }
+      ];
       else return;
       if (!choices.length) return;
       const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane action' });
-      if (!selected || !choices.includes(selected) || !this.current(kind, id, expected)) return;
-      await this.handle({ type: 'action', action: selected.action, id }, expected);
+      if (!selected || !choices.includes(selected) || !guard() || !this.current(kind, id, expected)) return;
+      await this.handle({ type: 'action', action: selected.action, id }, expected, guard);
     } catch (error) {
       await this.report(error);
     }
@@ -107,15 +116,29 @@ class SidebarActions {
     await this.vscode.window.showErrorMessage(prefix + message);
   }
 
-  async handle(message, expected) {
+  async handle(message, expected, guard = () => true) {
     const action = message?.action;
     const kind = FILE_ACTIONS.has(action) ? 'file' : REPO_ACTIONS.has(action) ? 'repo' : WORKTREE_ACTIONS.has(action) ? 'worktree' : undefined;
     if (message?.type !== 'action' || !kind || typeof message.id !== 'string') return;
     try {
       const item = this.resolve(kind, message.id);
       const original = fingerprint(item, kind);
-      if (!original || (expected && original !== expected)) return;
+      if (!original || (expected && original !== expected) || !guard()) return;
+      const current = () => guard() && this.current(kind, message.id, original);
       if (kind === 'file' && !fileOptions(item).some(choice => choice.action === action)) return;
+      if (kind === 'worktree' && action !== 'removeWorktree' && !item.available) return;
+      if (action === 'worktreeRepositoryActions') {
+        if (typeof item.childRepoId === 'string') await this.showMenu('repo', item.childRepoId, current);
+        return;
+      }
+      if (action === 'openWorktreeGraph') {
+        if (this.openWorktreeGraph) await this.openWorktreeGraph(message.id, current);
+        return;
+      }
+      if (action === 'reviewWorktree') {
+        if (this.reviewWorktree) await this.reviewWorktree(message.id, current);
+        return;
+      }
       if (action === 'open') {
         await this.vscode.commands.executeCommand('gitpane.openChange', item.node);
         return;
@@ -123,7 +146,7 @@ class SidebarActions {
       if (action === 'openFile') {
         try { await this.vscode.workspace.fs.stat(item.uri); }
         catch (error) { throw new Error(`File is unavailable: ${error.message}`); }
-        if (!this.current(kind, message.id, original)) return;
+        if (!current()) return;
         await this.vscode.commands.executeCommand('vscode.open', item.uri);
         return;
       }
@@ -136,23 +159,23 @@ class SidebarActions {
         return;
       }
       if (action === 'reviewBranch') {
-        if (this.reviewBranch) await this.reviewBranch(message.id);
+        if (this.reviewBranch) await this.reviewBranch(message.id, current);
         return;
       }
       if (action === 'github') {
-        if (this.openGithub) await this.openGithub(message.id);
+        if (this.openGithub) await this.openGithub(message.id, current);
         return;
       }
       if (action === 'session') {
-        if (this.openSession) await this.openSession(message.id);
+        if (this.openSession) await this.openSession(message.id, current);
         return;
       }
       if (action === 'openTerminal') {
-        if (this.openTerminal) await this.openTerminal(message.id);
+        if (this.openTerminal) await this.openTerminal(message.id, current);
         return;
       }
       if (action === 'openLauncher') {
-        if (this.openLauncher) await this.openLauncher(message.id);
+        if (this.openLauncher) await this.openLauncher(message.id, current);
         return;
       }
       if (action === 'revealRepo') {
@@ -175,7 +198,7 @@ class SidebarActions {
           if (!preview || typeof preview.token !== 'string' || !/^[a-f0-9]{64}$/.test(preview.token)) {
             throw new Error('Gitpane returned an invalid file confirmation.');
           }
-          if (!this.current(kind, message.id, original)) return;
+          if (!current()) return;
           token = preview.token;
           const detail = operation === 'delete_untracked'
             ? `Delete untracked file ${item.path}? This cannot be undone.`
@@ -196,7 +219,7 @@ class SidebarActions {
           expected_branch: item.branch ?? null, expected_head: item.head };
       } else if (action === 'createWorktree') {
         const branch = await this.vscode.window.showInputBox({ prompt: 'New worktree branch name' });
-        if (!branch || !this.current(kind, message.id, original)) return;
+        if (!branch || !current()) return;
         const target = await this.vscode.window.showInputBox({
           prompt: 'Absolute path for the new worktree inside a workspace folder',
           validateInput: value => path.isAbsolute(value) ? undefined : 'Enter an absolute path.'
@@ -211,12 +234,12 @@ class SidebarActions {
         method = 'worktree_remove';
         params = { repo: item.repoPath, path: item.path };
       }
-      if (!this.current(kind, message.id, original)) return;
+      if (!current()) return;
       let actionError;
       try {
         const result = await this.mutations.execute(method, params, {
           lockKey: item.commonDir,
-          validateTarget: () => this.current(kind, message.id, original)
+          validateTarget: current
         });
         if (method === 'submodule_action') {
           if (!result || !Array.isArray(result.completed) || !Array.isArray(result.skipped) ||

@@ -11,12 +11,14 @@ function fixture() {
   const head = 'b'.repeat(40);
   const repo = { rootUri: { fsPath: root, toString: () => root }, state: { HEAD: { commit: head } } };
   let visible = true;
+  let incarnation = 1;
   let review = { base_ref: 'origin/main', base_oid: base, head_oid: head, files: [] };
   let choose = choices => choices[0];
   const calls = [];
   const errors = [];
   const information = [];
-  const tree = { git: { repositories: [repo] }, isVisible: () => visible };
+  const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+    repositoryToken: () => incarnation, isCurrentRepository: (_, token) => visible && token === incarnation };
   const vscode = {
     window: {
       showQuickPick: async choices => choose(choices),
@@ -34,7 +36,7 @@ function fixture() {
   return {
     provider, repo, root, base, head, calls, errors, information,
     setReview(value) { review = value; }, getReview() { return review; },
-    setVisible(value) { visible = value; }, pick(fn) { choose = fn; }
+    setVisible(value) { visible = value; }, reopen() { incarnation++; }, pick(fn) { choose = fn; }
   };
 }
 
@@ -87,6 +89,25 @@ test('does not open a selected file after the repository or HEAD changes', async
   await f.provider.open(f.repo);
   assert.equal(f.calls.length, 0);
   assert.match(f.errors[1], /repository or head changed/i);
+});
+
+test('does not open a review diff when its worktree link changes during selection', async () => {
+  const f = fixture();
+  let linked = true;
+  f.setReview({ ...f.getReview(), files: [{ path: 'file', status: 'M', is_submodule: false }] });
+  f.pick(choices => { linked = false; return choices[0]; });
+  await f.provider.open(f.repo, () => linked);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.errors[0], /repository or head changed/i);
+});
+
+test('does not open a review diff after the same repository path is reopened', async () => {
+  const f = fixture();
+  f.setReview({ ...f.getReview(), files: [{ path: 'file', status: 'M', is_submodule: false }] });
+  f.pick(choices => { f.reopen(); return choices[0]; });
+  await f.provider.open(f.repo);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.errors[0], /repository or head changed/i);
 });
 
 test('rejects escaped paths and submodules instead of opening unsafe diffs', async () => {

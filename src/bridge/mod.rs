@@ -65,6 +65,18 @@ struct RepositoryRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StatusRequest {
+    repo: PathBuf,
+    #[serde(default = "include_worktrees_by_default")]
+    include_worktrees: bool,
+}
+
+fn include_worktrees_by_default() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommitFilesRequest {
     repo: PathBuf,
     oid: String,
@@ -125,9 +137,9 @@ fn process(
             mutation::file_action_preview(scope, input)
         }
         "status" => {
-            let input: RepositoryRequest = params(request.params)?;
+            let input: StatusRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
-            let result = status::query(&repo, scope, sub_cfg)?;
+            let result = status::query(&repo, scope, sub_cfg, input.include_worktrees)?;
             scope.repository(&repo)?;
             Ok(result)
         }

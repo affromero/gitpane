@@ -12,8 +12,10 @@ function fixture() {
   const calls = [];
   const errors = [];
   let visible = true;
+  let incarnation = 1;
   let failShow = false;
-  const tree = { git: { repositories: [repo] }, isVisible: () => visible };
+  const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+    repositoryToken: () => incarnation, isCurrentRepository: (_, token) => visible && token === incarnation };
   const vscode = { window: {
     createTerminal(options) {
       calls.push(['create', options]);
@@ -47,6 +49,13 @@ test('does not create a terminal after the repository is removed, hidden or disp
   assert.deepEqual(f.calls, []);
   assert.equal(f.errors.length, 3);
   assert.ok(f.errors.every(message => /no longer in the workspace/i.test(message)));
+});
+
+test('does not create a terminal for a removed worktree link', async () => {
+  const f = fixture();
+  await f.provider.open(f.repo, () => false);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.errors[0], /no longer in the workspace/i);
 });
 
 test('reports terminal creation errors and disposes an unusable terminal', async () => {

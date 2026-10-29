@@ -7,7 +7,9 @@ const { LauncherProvider } = require('../src/launcher-provider');
 function fixture() {
   const root = '/workspace/repo $(touch unexpected)';
   const repo = { rootUri: { fsPath: root, toString: () => `file://${root}` } };
-  const tree = { git: { repositories: [repo] }, isVisible: () => true };
+  let incarnation = 1;
+  const tree = { git: { repositories: [repo] }, isVisible: () => true,
+    repositoryToken: () => incarnation, isCurrentRepository: (item, token) => token === incarnation && tree.isVisible(item) };
   const action = { id: 'editor', label: 'Open editor', kind: 'open', fingerprint: 'original' };
   const opened = [];
   const errors = [];
@@ -35,7 +37,7 @@ function fixture() {
     },
   };
   const provider = new LauncherProvider(tree, backend, { vscode: { window } });
-  return { repo, root, tree, action, opened, errors, calls, backend, window, provider };
+  return { repo, root, tree, action, opened, errors, calls, backend, window, provider, reopen() { incarnation++; } };
 }
 
 test('a configured argv launcher starts only after a selection and validation', async () => {
@@ -127,6 +129,23 @@ test('scope changes and disposal during selection or planning prevent launches',
     assert.deepEqual(f.opened, [], phase);
     assert.match(f.errors[0], /workspace changed/i);
   }
+});
+
+test('a removed worktree link during launcher validation prevents launch', async () => {
+  const f = fixture();
+  let linked = true;
+  f.backend.validateLauncher = async () => { linked = false; return { valid: true }; };
+  await f.provider.open(f.repo, () => linked);
+  assert.deepEqual(f.opened, []);
+  assert.match(f.errors[0], /workspace changed/i);
+});
+
+test('reopening the same repository path during launcher validation prevents launch', async () => {
+  const f = fixture();
+  f.backend.validateLauncher = async () => { f.reopen(); return { valid: true }; };
+  await f.provider.open(f.repo);
+  assert.deepEqual(f.opened, []);
+  assert.match(f.errors[0], /workspace changed/i);
 });
 
 test('failed terminal presentation disposes the created terminal and reports the error', async () => {

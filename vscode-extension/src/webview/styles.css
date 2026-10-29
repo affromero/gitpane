@@ -124,6 +124,8 @@ body {
 }
 .group-row { grid-template-columns: 1ch 1fr; padding-left: 2.7ch; color: var(--muted); }
 .file-row { grid-template-columns: 1ch minmax(0, 1fr) auto; padding-left: 4.7ch; }
+.worktree-files .group-row { padding-left: 4.7ch; }
+.worktree-files .file-row { padding-left: 6.7ch; }
 .worktree-row { grid-template-columns: 1ch 1ch minmax(3ch, 1fr) minmax(4ch, 1fr) auto; padding-left: 2.7ch; }
 .stash-row { grid-template-columns: auto minmax(0, 1fr); padding-left: 4.7ch; }
 .stash-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

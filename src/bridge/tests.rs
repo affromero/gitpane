@@ -64,10 +64,12 @@ fn status_validates_nested_submodule_scope_and_reports_corrupt_child_index() {
     let requests = [
         json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
         json!({"id": 2, "method": "status", "params": {"repo": parent_path}}),
+        json!({"id": 3, "method": "status", "params": {"repo": parent_path, "include_worktrees": false}}),
     ];
 
     let result = exchange(&requests);
     assert!(result[1].get("result").is_some(), "{result:?}");
+    assert!(result[2].get("result").is_some(), "{result:?}");
 
     if nested.exists() {
         std::fs::remove_dir(&nested).unwrap();
@@ -78,6 +80,10 @@ fn status_validates_nested_submodule_scope_and_reports_corrupt_child_index() {
         result[1]["error"]["code"], "outside_workspace",
         "{result:?}"
     );
+    assert_eq!(
+        result[2]["error"]["code"], "outside_workspace",
+        "{result:?}"
+    );
     std::fs::remove_file(&nested).unwrap();
 
     let child = Repository::open(&child_path).unwrap();
@@ -86,6 +92,7 @@ fn status_validates_nested_submodule_scope_and_reports_corrupt_child_index() {
     std::fs::write(&index, b"invalid index").unwrap();
     let result = exchange(&requests);
     assert_eq!(result[1]["error"]["code"], "repository_error", "{result:?}");
+    assert_eq!(result[2]["error"]["code"], "repository_error", "{result:?}");
     std::fs::write(&index, original).unwrap();
     let result = exchange(&requests);
     assert!(result[1].get("result").is_some(), "{result:?}");
@@ -275,6 +282,9 @@ fn status_and_graph_use_workspace_repositories_and_canonical_git_logic() {
         json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
         json!({"id": 2, "method": "status", "params": {"repo": repo_path}}),
         json!({"id": 3, "method": "graph", "params": {"repo": repo_path}}),
+        json!({"id": 4, "method": "status", "params": {"repo": repo_path, "include_worktrees": false}}),
+        json!({"id": 5, "method": "status", "params": {"repo": repo_path, "include_worktrees": true}}),
+        json!({"id": 6, "method": "status", "params": {"repo": repo_path, "include_worktrees": "false"}}),
     ]);
     assert_eq!(replies[0], json!({"id": 1, "result": {"version": 1}}));
     let status = &replies[1]["result"];
@@ -289,6 +299,11 @@ fn status_and_graph_use_workspace_repositories_and_canonical_git_logic() {
     let worktrees = status["worktrees"].as_array().unwrap();
     assert_eq!(worktrees.len(), 1);
     assert_eq!(worktrees[0]["branch"], "inside-branch");
+    assert_eq!(replies[5]["error"]["code"], "invalid_request");
+    assert_eq!(replies[4]["result"], *status);
+    let mut without_worktrees = status.clone();
+    without_worktrees["worktrees"] = json!([]);
+    assert_eq!(replies[3]["result"], without_worktrees);
     let graph = replies[2]["result"]["rows"].as_array().unwrap();
     let labels = graph
         .iter()
@@ -473,8 +488,11 @@ fn scoped_status_reports_a_linked_worktree_with_an_invalid_index() {
     let replies = exchange(&[
         json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
         json!({"id": 2, "method": "status", "params": {"repo": repo_path}}),
+        json!({"id": 3, "method": "status", "params": {"repo": repo_path, "include_worktrees": false}}),
     ]);
     assert_eq!(replies[1]["error"]["code"], "repository_error");
+    assert_eq!(replies[2]["result"]["worktrees"], json!([]));
+    assert_eq!(replies[2]["result"]["is_dirty"], false);
     assert!(crate::git::status::query_status(&repo_path, &SubmoduleConfig::default()).is_ok());
 }
 

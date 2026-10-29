@@ -21,29 +21,30 @@ class SubmoduleProvider {
     this.disposed = false;
   }
 
-  current(node, generation) {
-    if (this.disposed || generation !== this.generation) return undefined;
+  current(node, generation, token) {
+    if (this.disposed || generation !== this.generation || !this.tree.isCurrentRepository(node?.repo, token)) return undefined;
     const now = this.resolveChange(node);
     if (!now || !this.tree.isVisible(now.repo) || now.group !== node.group ||
       now.change.status !== node.change.status || now.change.uri.toString() !== node.change.uri.toString()) return undefined;
     return now;
   }
 
-  childCurrent(node, generation, childPath, childRepo) {
-    const current = this.current(node, generation);
+  childCurrent(node, generation, childPath, parentToken, childRepo, childToken) {
+    const current = this.current(node, generation, parentToken);
     if (!current || !this.tree.isPathInWorkspace(childPath)) return false;
     try {
       const original = fs.realpathSync.native(node.change.uri.fsPath);
       const resolved = fs.realpathSync.native(childPath);
       if (original !== resolved) return false;
-      return !childRepo || this.tree.isVisible(childRepo);
+      return !childRepo || this.tree.isCurrentRepository(childRepo, childToken);
     } catch { return false; }
   }
 
   async open(selected) {
     const generation = ++this.generation;
+    const parentToken = selected?.repo && this.tree.repositoryToken(selected.repo);
     try {
-      const node = this.current(selected, generation);
+      const node = this.current(selected, generation, parentToken);
       if (!node) throw new Error('The submodule is no longer in the workspace.');
       const relative = path.relative(node.repo.rootUri.fsPath, node.change.uri.fsPath);
       if (!safeRelative(relative) || !isSubmodule(node.repo.rootUri.fsPath, node.change.uri.fsPath, node.repo.state.submodules)) {
@@ -55,13 +56,24 @@ class SubmoduleProvider {
         !/^[a-f0-9]{40,64}$/.test(result.head_oid) || !Array.isArray(result.pointer_files)) {
         throw new Error('Gitpane returned invalid submodule details.');
       }
-      if (!this.childCurrent(node, generation, result.repo)) throw new Error('The submodule is no longer in the workspace.');
-      const child = await this.git.openRepository(this.vscode.Uri.file(result.repo));
-      if (!child || !this.childCurrent(node, generation, result.repo, child)) {
+      if (!this.childCurrent(node, generation, result.repo, parentToken)) throw new Error('The submodule is no longer in the workspace.');
+      const childUri = this.vscode.Uri.file(result.repo);
+      const childKey = childUri.toString();
+      const revision = this.tree.repositoryRevision(childUri);
+      const existingChild = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
+      const existingToken = existingChild && this.tree.repositoryToken(existingChild);
+      const opened = await this.git.openRepository(childUri);
+      const expectedRevision = revision + (existingToken === undefined ? 1 : 0);
+      const child = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
+      const childToken = child && this.tree.repositoryToken(child);
+      if (!opened || opened.rootUri.toString() !== childKey || !child ||
+          this.tree.repositoryRevision(childUri) !== expectedRevision ||
+          (existingToken !== undefined && existingToken !== childToken) ||
+          !this.childCurrent(node, generation, result.repo, parentToken, child, childToken)) {
         throw new Error('The submodule is unavailable or no longer in the workspace.');
       }
       await child.status();
-      if (!this.childCurrent(node, generation, result.repo, child)) throw new Error('The submodule is no longer in the workspace.');
+      if (!this.childCurrent(node, generation, result.repo, parentToken, child, childToken)) throw new Error('The submodule is no longer in the workspace.');
       if (child.state?.HEAD?.commit !== result.head_oid) throw new Error('The submodule HEAD changed; refresh and try again.');
       const choices = [{ label: 'Open Commit Graph', kind: 'graph' }];
       for (const file of result.pointer_files) {
@@ -80,10 +92,11 @@ class SubmoduleProvider {
       }
       const chosen = await this.vscode.window.showQuickPick(choices, { placeHolder: `Inspect ${relative}`, matchOnDescription: true });
       if (!chosen || !choices.includes(chosen)) return;
-      if (!this.childCurrent(node, generation, result.repo, child) || child.state?.HEAD?.commit !== result.head_oid) {
+      const currentChild = () => this.childCurrent(node, generation, result.repo, parentToken, child, childToken);
+      if (!currentChild() || child.state?.HEAD?.commit !== result.head_oid) {
         throw new Error('The submodule changed; refresh and try again.');
       }
-      if (chosen.kind === 'graph') return await this.openGraph(child);
+      if (chosen.kind === 'graph') return await this.openGraph(child, currentChild);
       if (chosen.kind === 'pointer') return await this.openPointer(child, result, chosen.file);
       const currentGroup = groups(child.state).find(group => group.id === chosen.group);
       const currentChange = currentGroup?.changes.find(change => change.uri.toString() === chosen.change.uri.toString() && change.status === chosen.change.status);

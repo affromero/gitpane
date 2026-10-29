@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const { isolatedGitEnv } = require('./integration/git-env');
 const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, visibleRepository } = require('../src/model');
 
 test('changed files retain their staged and unstaged groups', () => {
@@ -31,7 +33,63 @@ test('comparisons preserve staged, working, rename, addition and deletion sides'
     { left: { git: 'file', ref: '' }, right: { empty: true } });
   assert.deepEqual(comparison('untracked', { status: Status.UNTRACKED, uri: 'new' }),
     { left: { empty: true }, right: { file: 'new' } });
-  assert.deepEqual(comparison('merge', { uri: 'conflict' }), { open: 'conflict' });
+});
+
+test('conflict diffs compare available index stages even without a working file', () => {
+  const cases = [
+    [Status.ADDED_BY_US, null, ':2'],
+    [Status.ADDED_BY_THEM, null, ':3'],
+    [Status.DELETED_BY_US, ':1', ':3'],
+    [Status.DELETED_BY_THEM, ':1', ':2'],
+    [Status.BOTH_ADDED, ':2', ':3'],
+    [Status.BOTH_DELETED, ':1', null],
+    [Status.BOTH_MODIFIED, ':2', ':3']
+  ];
+  const side = ref => ref ? { git: 'conflict.txt', ref } : { empty: true };
+  for (const [status, left, right] of cases) {
+    assert.deepEqual(comparison('merge', { status, uri: 'conflict.txt' }),
+      { left: side(left), right: side(right) }, `conflict status ${status}`);
+  }
+  assert.throws(() => comparison('merge', { status: -1, uri: 'conflict.txt' }), /unsupported conflict status/i);
+});
+
+test('conflict comparisons resolve real Git index contents when the working file is missing', t => {
+  const version = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (version.error?.code === 'ENOENT') return t.skip('Git is not installed');
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, version.stderr);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-conflict-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const env = isolatedGitEnv();
+  const git = (args, input) => {
+    const result = spawnSync('git', ['-C', temporary, ...args], { env, input, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  git(['init', '-q']);
+  const contents = { 1: 'base\n', 2: 'ours\n', 3: 'theirs\n' };
+  const objects = Object.fromEntries(Object.entries(contents).map(([stage, value]) =>
+    [stage, git(['hash-object', '-w', '--stdin'], value).trim()]));
+  const cases = [
+    [Status.ADDED_BY_US, [2], '', contents[2]],
+    [Status.ADDED_BY_THEM, [3], '', contents[3]],
+    [Status.DELETED_BY_US, [1, 3], contents[1], contents[3]],
+    [Status.DELETED_BY_THEM, [1, 2], contents[1], contents[2]],
+    [Status.BOTH_ADDED, [2, 3], contents[2], contents[3]],
+    [Status.BOTH_DELETED, [1], contents[1], ''],
+    [Status.BOTH_MODIFIED, [1, 2, 3], contents[2], contents[3]]
+  ];
+  for (const [status, stages, expectedLeft, expectedRight] of cases) {
+    const file = `conflict-${status}.txt`;
+    const entries = stages.map(stage => `100644 ${objects[stage]} ${stage}\t${file}\n`).join('');
+    git(['update-index', '--index-info'], entries);
+    assert.equal(fs.existsSync(path.join(temporary, file)), false);
+    const plan = comparison('merge', { status, uri: file });
+    const read = side => side.empty ? '' : git(['show', `${side.ref}:${side.git}`]);
+    assert.equal(read(plan.left), expectedLeft, `left side for conflict status ${status}`);
+    assert.equal(read(plan.right), expectedRight, `right side for conflict status ${status}`);
+  }
 });
 
 test('repository visibility stays within workspace boundaries', () => {

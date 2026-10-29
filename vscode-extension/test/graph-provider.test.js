@@ -40,9 +40,13 @@ test('commit files open native diffs against the first parent and reject stale a
   const root = path.resolve('workspace/repo');
   const repo = { rootUri: uri(root) };
   let visible = true;
+  let linked = true;
+  let incarnation = 1;
   const tree = {
     git: { repositories: [repo] },
     isVisible: () => visible,
+    repositoryToken: () => incarnation,
+    isCurrentRepository: (_, token) => visible && token === incarnation,
     onDidChangeTreeData(handler) { onTreeChange = handler; return { dispose() {} }; }
   };
   const rootOid = 'a'.repeat(40);
@@ -68,7 +72,7 @@ test('commit files open native diffs against the first parent and reject stale a
       if (name === './graph/html') return { getHtml: () => '<html></html>' };
       return load.call(this, name, ...args);
     };
-    provider.open(repo);
+    provider.open(repo, () => linked);
   } finally { Module._load = load; }
 
   try {
@@ -103,10 +107,30 @@ test('commit files open native diffs against the first parent and reject stale a
     assert.equal(messages.at(-1).type, 'graph');
     assert.equal(messages.at(-1).rows.length, 2);
 
+    linked = false;
+    await receive({ type: 'openCommitFile', id: mergeFile.id });
+    assert.equal(commands.length, 3);
+    provider.open(repo);
+    await receive({ type: 'ready' });
+    await receive({ type: 'selectCommit', oid: mergeOid });
+    const reopenedFile = messages.at(-1).files[0];
+    await receive({ type: 'openCommitFile', id: reopenedFile.id });
+    assert.equal(commands.length, 4);
+
+    incarnation++;
+    await receive({ type: 'openCommitFile', id: reopenedFile.id });
+    assert.equal(commands.length, 4);
+    provider.open(repo);
+    await receive({ type: 'ready' });
+    await receive({ type: 'selectCommit', oid: mergeOid });
+    const newFile = messages.at(-1).files[0];
+    await receive({ type: 'openCommitFile', id: newFile.id });
+    assert.equal(commands.length, 5);
+
     visible = false;
     onTreeChange();
     await receive({ type: 'openCommitFile', id: mergeFile.id });
-    assert.equal(commands.length, 3);
+    assert.equal(commands.length, 5);
     assert.match(messages.at(-1).error, /workspace/);
   } finally { provider.dispose(); }
 });
@@ -147,6 +171,7 @@ test('graph filters retain catalog choices, distinguish all and none, and reject
     const repo = { rootUri: uri(root) };
     let visible = true;
     const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+      repositoryToken: () => 1, isCurrentRepository: (_, token) => visible && token === 1,
       onDidChangeTreeData() { return { dispose() {} }; } };
     const backend = {
       async graph(_root, firstParent, filters) {
@@ -242,6 +267,7 @@ test('graph collapses only visible side branches and does not open placeholder c
     let visible = true;
     let detailCalls = 0;
     const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+      repositoryToken: () => 1, isCurrentRepository: (_, token) => visible && token === 1,
       onDidChangeTreeData() { return { dispose() {} }; } };
     const backend = {
       async graph(_repo, firstParent, _filters, collapsed) {

@@ -138,6 +138,17 @@ function worktreeRow(worktree) {
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
   if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
+  if (worktree.available) {
+    const graph = element('button', 'graph-action', '●');
+    graph.type = 'button';
+    graph.title = `Open commit graph for ${worktree.name || worktree.branch}`;
+    graph.setAttribute('aria-label', graph.title);
+    graph.addEventListener('click', event => {
+      event.stopPropagation();
+      vscode.postMessage({ type: 'openWorktreeGraph', id: worktree.id });
+    });
+    tail.appendChild(graph);
+  } else add(tail, 'behind', '!', 'Worktree repository unavailable');
   tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
   row.appendChild(tail);
   return row;
@@ -155,6 +166,31 @@ function createItem(key, label, row, expandable, isExpanded, parent) {
   const data = { key, item, expandable, isExpanded, parent };
   visible.push(data);
   return data;
+}
+
+function renderGroups(parentElement, groups, parentKey, ownerId) {
+  for (const group of groups) {
+    const groupKey = `group:${JSON.stringify([ownerId, group.id])}`;
+    const files = Array.isArray(group.files) ? group.files : [];
+    const groupExpanded = !collapsedGroups.has(groupKey);
+    const row = element('div', 'row group-row');
+    add(row, 'subtree', groupExpanded ? '▾' : '▸');
+    add(row, '', `${group.label} [${files.length}]`);
+    const groupItem = createItem(groupKey, `${group.label}, ${files.length} ${files.length === 1 ? 'file' : 'files'}`,
+      row, files.length > 0, groupExpanded, parentKey);
+    parentElement.appendChild(groupItem.item);
+    if (!groupExpanded || !files.length) continue;
+    const filesGroup = element('div', 'children');
+    filesGroup.setAttribute('role', 'group');
+    groupItem.item.appendChild(filesGroup);
+    for (const file of files) {
+      const fileKey = `file:${file.id}`;
+      const fileItem = createItem(fileKey, `${file.status || 'changed'} ${file.path || file.name}`,
+        fileRow(file), false, false, groupKey);
+      fileItem.fileId = file.id;
+      filesGroup.appendChild(fileItem.item);
+    }
+  }
 }
 
 function renderMessages() {
@@ -200,38 +236,27 @@ function render() {
     const children = element('div', 'children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
-    for (const group of groups) {
-      const groupKey = `group:${JSON.stringify([repo.id, group.id])}`;
-      const files = Array.isArray(group.files) ? group.files : [];
-      const groupExpanded = !collapsedGroups.has(groupKey);
-      const row = element('div', 'row group-row');
-      add(row, 'subtree', groupExpanded ? '▾' : '▸');
-      add(row, '', `${group.label} [${files.length}]`);
-      const groupItem = createItem(groupKey, `${group.label}, ${files.length} ${files.length === 1 ? 'file' : 'files'}`,
-        row, files.length > 0, groupExpanded, key);
-      children.appendChild(groupItem.item);
-      if (!groupExpanded || !files.length) continue;
-      const filesGroup = element('div', 'children');
-      filesGroup.setAttribute('role', 'group');
-      groupItem.item.appendChild(filesGroup);
-      for (const file of files) {
-        const fileKey = `file:${file.id}`;
-        const fileItem = createItem(fileKey, `${file.status || 'changed'} ${file.path || file.name}`,
-          fileRow(file), false, false, groupKey);
-        fileItem.fileId = file.id;
-        filesGroup.appendChild(fileItem.item);
-      }
-    }
+    renderGroups(children, groups, key, repo.id);
     for (const worktree of worktrees) {
       const worktreeKey = `worktree:${worktree.id}`;
       const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.dirty ? 'has changes' : 'clean'];
       if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      if (!worktree.available) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
-      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree), false, false, key);
+      const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
+      const worktreeExpanded = expanded.has(worktreeKey);
+      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
+        worktreeGroups.length > 0, worktreeExpanded, key);
       worktreeItem.worktreeId = worktree.id;
       children.appendChild(worktreeItem.item);
+      if (worktreeExpanded && worktreeGroups.length) {
+        const files = element('div', 'children worktree-files');
+        files.setAttribute('role', 'group');
+        worktreeItem.item.appendChild(files);
+        renderGroups(files, worktreeGroups, worktreeKey, worktreeKey);
+      }
     }
     if (stashes.length) {
       const stashKey = `stash-group:${repo.id}`;
@@ -287,7 +312,7 @@ function select(item, focus = true) {
 
 function toggle(item) {
   if (!item.expandable) return;
-  if (item.key.startsWith('repo:')) {
+  if (item.key.startsWith('repo:') || item.key.startsWith('worktree:')) {
     if (item.isExpanded) expanded.delete(item.key);
     else expanded.add(item.key);
   } else if (item.key.startsWith('stash-group:')) {

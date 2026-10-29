@@ -55,6 +55,8 @@ function fixture() {
     openSession: async id => { calls.push(['openSession', id]); },
     openTerminal: async id => { calls.push(['openTerminal', id]); },
     openLauncher: async id => { calls.push(['openLauncher', id]); },
+    openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
+    reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
     previewFileAction: (...args) => preview(...args)
   });
   return {
@@ -85,6 +87,31 @@ test('file menu offers applicable actions and executes stage or unstage using th
   await f.actions.showMenu('file', 'file');
   assert.equal(f.calls[0][2].operation, 'unstage');
   assert.equal(f.calls[1][0], 'refresh');
+});
+
+test('submodule rows offer inspection but no file mutations', async () => {
+  const f = fixture();
+  for (const group of ['working', 'index', 'untracked', 'merge']) {
+    f.setFile({ ...f.getFile(), group, isSubmodule: true });
+    f.pick(choices => {
+      assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy']);
+      return choices.find(choice => choice.action === 'open');
+    });
+    await f.actions.showMenu('file', 'file');
+    for (const name of ['stage', 'unstage', 'discard']) await f.actions.handle(action(name, 'file'));
+  }
+  assert.deepEqual(f.calls, Array.from({ length: 4 }, () => ['gitpane.openChange', f.node]));
+});
+
+test('a file that becomes a submodule while its menu is open cannot be mutated', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), isSubmodule: false });
+  f.pick(choices => {
+    f.setFile({ ...f.getFile(), isSubmodule: true });
+    return choices.find(choice => choice.action === 'stage');
+  });
+  await f.actions.showMenu('file', 'file');
+  assert.deepEqual(f.calls, []);
 });
 
 test('discard and untracked deletion require confirmation describing their effects', async () => {
@@ -188,6 +215,67 @@ test('worktree creation and removal use current opaque targets and confirm remov
   await f.actions.showMenu('worktree', 'worktree');
   assert.match(f.calls[0][1], /remove worktree/i);
   assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.getWorktree().path }, f.commonDir]);
+});
+
+test('available worktrees offer graph and review only while their repository remains current', async () => {
+  const f = fixture();
+  f.setWorktree({ ...f.getWorktree(), available: true, childRepoKey: 'linked-repo', childRepoId: 'repo' });
+  f.pick(choices => choices.find(choice => choice.action === 'openWorktreeGraph'));
+  await f.actions.showMenu('worktree', 'worktree');
+  f.pick(choices => choices.find(choice => choice.action === 'reviewWorktree'));
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, [['openWorktreeGraph', 'worktree'], ['reviewWorktree', 'worktree']]);
+  f.calls.length = 0;
+  let menu = 0;
+  f.pick(choices => {
+    const selected = menu++ === 0 ? 'worktreeRepositoryActions' : 'copyRepo';
+    return choices.find(choice => choice.action === selected);
+  });
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, [['copy', f.root]]);
+  f.calls.length = 0;
+  f.pick(choices => {
+    f.setWorktree({ ...f.getWorktree(), available: false, childRepoKey: undefined });
+    return choices.find(choice => choice.action === 'openWorktreeGraph');
+  });
+  await f.actions.showMenu('worktree', 'worktree');
+  await f.actions.handle(action('reviewWorktree', 'worktree'));
+  assert.deepEqual(f.calls, []);
+  f.pick(choices => {
+    assert.deepEqual(choices.map(choice => choice.action), ['removeWorktree']);
+    return undefined;
+  });
+  await f.actions.showMenu('worktree', 'worktree');
+});
+
+test('delegated worktree repository actions stop when the worktree link disappears during selection', async () => {
+  const f = fixture();
+  f.setWorktree({ ...f.getWorktree(), available: true, childRepoKey: 'linked-repo', childRepoId: 'repo' });
+  f.setRepo({ ...f.getRepo(), branch: 'topic', head: 'a'.repeat(40) });
+  let menu = 0;
+  f.pick(choices => {
+    if (menu++ === 0) return choices.find(choice => choice.action === 'worktreeRepositoryActions');
+    f.setWorktree(undefined);
+    return choices.find(choice => choice.action === 'push');
+  });
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, []);
+});
+
+test('delegated worktree mutation rechecks the worktree link after the worker handshake', async () => {
+  const f = fixture();
+  f.setWorktree({ ...f.getWorktree(), available: true, childRepoKey: 'linked-repo', childRepoId: 'repo' });
+  f.setRepo({ ...f.getRepo(), branch: 'topic', head: 'a'.repeat(40) });
+  let menu = 0;
+  f.pick(choices => {
+    const selected = menu++ === 0 ? 'worktreeRepositoryActions' : 'push';
+    return choices.find(choice => choice.action === selected);
+  });
+  f.beforeValidation(() => f.setWorktree(undefined));
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.equal(f.calls.some(call => call[0] === 'mutation'), false);
+  assert.equal(f.calls.at(-1)[0], 'refresh');
+  assert.match(f.errors[0], /stale/);
 });
 
 test('repository sync runs only the selected action for the current branch', async () => {

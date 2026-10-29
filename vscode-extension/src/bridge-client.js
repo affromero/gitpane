@@ -79,8 +79,8 @@ class BridgeClient {
     return this.call(method, params);
   }
 
-  status(repo) {
-    return this.request('status', { repo });
+  status(repo, includeWorktrees) {
+    return this.request('status', { repo, ...(includeWorktrees === undefined ? {} : { include_worktrees: includeWorktrees }) });
   }
 
   sortRepositories(order, repositories) {

@@ -17,21 +17,23 @@ class BranchReviewProvider {
     this.disposed = false;
   }
 
-  current(repo, generation, head) {
+  current(repo, generation, head, guard = () => true) {
     const current = this.tree.git.repositories.find(item => item.rootUri.toString() === repo.rootUri.toString());
-    return !this.disposed && this.generation === generation && !!current && this.tree.isVisible(current) &&
+    return guard() && !this.disposed && this.generation === generation && !!current && this.tree.isVisible(current) &&
       (!head || current.state?.HEAD?.commit === head);
   }
 
-  async open(repo) {
+  async open(repo, guard = () => true) {
     const generation = ++this.generation;
-    if (!repo || !this.current(repo, generation)) {
+    const token = repo && this.tree.repositoryToken(repo);
+    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
+    if (!repo || !this.current(repo, generation, undefined, currentGuard)) {
       await this.vscode.window.showErrorMessage('Gitpane branch review: repository is no longer in the workspace.');
       return;
     }
     try {
       const result = await this.backend.branchReview(repo.rootUri.fsPath);
-      if (!this.current(repo, generation, result?.head_oid)) throw new Error('Repository or HEAD changed; refresh and try again.');
+      if (!this.current(repo, generation, result?.head_oid, currentGuard)) throw new Error('Repository or HEAD changed; refresh and try again.');
       if (!result || typeof result.base_ref !== 'string' || !/^[a-f0-9]{40,64}$/.test(result.base_oid) ||
         !/^[a-f0-9]{40,64}$/.test(result.head_oid) || !Array.isArray(result.files)) {
         throw new Error('Gitpane returned an invalid branch review.');
@@ -52,7 +54,7 @@ class BranchReviewProvider {
         matchOnDescription: true
       });
       if (!selected || !choices.includes(selected)) return;
-      if (!this.current(repo, generation, result.head_oid)) throw new Error('Repository or HEAD changed; refresh and try again.');
+      if (!this.current(repo, generation, result.head_oid, currentGuard)) throw new Error('Repository or HEAD changed; refresh and try again.');
       const file = selected.file;
       if (file.is_submodule) throw new Error('Submodule changes cannot be opened as a file diff yet.');
       const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));

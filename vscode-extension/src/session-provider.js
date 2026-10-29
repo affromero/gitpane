@@ -15,28 +15,30 @@ class SessionProvider {
     this.disposed = false;
   }
 
-  current(repo, generation) {
-    if (!repo?.rootUri || this.disposed || generation !== this.generation) return false;
+  current(repo, generation, guard = () => true) {
+    if (!guard() || !repo?.rootUri || this.disposed || generation !== this.generation) return false;
     const key = repo.rootUri.toString();
     const current = this.tree.git.repositories.find(item => item.rootUri.toString() === key);
     return !!current && this.tree.isVisible(current);
   }
 
-  requireCurrent(repo, generation) {
-    if (!this.current(repo, generation)) throw new Error('Repository or workspace changed; reopen sessions.');
+  requireCurrent(repo, generation, guard) {
+    if (!this.current(repo, generation, guard)) throw new Error('Repository or workspace changed; reopen sessions.');
   }
 
-  async open(repo) {
+  async open(repo, guard = () => true) {
     const generation = ++this.generation;
+    const token = repo && this.tree.repositoryToken(repo);
+    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
     try {
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr', kind: 'herdr' }];
       const selectedBackend = await this.vscode.window.showQuickPick(backends, { placeHolder: 'Choose a session type' });
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       if (!selectedBackend || !backends.includes(selectedBackend)) return;
 
       const result = await this.backend.listSessions(repo.rootUri.fsPath, selectedBackend.kind);
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       if (!result || !Array.isArray(result.sessions) ||
         result.sessions.some(session => typeof session !== 'string' || !session || session.includes('\0'))) {
         throw new Error('Gitpane returned an invalid session list.');
@@ -47,10 +49,10 @@ class SessionProvider {
       }
       const choices = result.sessions.map(session => ({ label: label(session), session }));
       const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a session to open' });
-      this.requireCurrent(repo, generation);
+      this.requireCurrent(repo, generation, currentGuard);
       if (!selected || !choices.includes(selected)) return;
       await this.backend.gotoSession(repo.rootUri.fsPath, selectedBackend.kind, selected.session,
-        () => this.current(repo, generation));
+        () => this.current(repo, generation, currentGuard));
     } catch (error) {
       await this.vscode.window.showErrorMessage(`Gitpane sessions: ${error?.message || String(error)}`);
     }
