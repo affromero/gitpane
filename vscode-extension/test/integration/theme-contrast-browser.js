@@ -189,7 +189,7 @@ function runGraph(mode) {
 <style nonce="test">:root {${colors}}\n${graphCss}</style></head><body class="${bodyClass}">
 <input id="search"><span id="search-status"></span><button id="search-prev"></button><button id="search-next"></button>
 <span id="graph-status"></span><div id="theme-status"></div><input id="first-parent" type="checkbox"><button id="filters"></button>
-<button id="refresh"></button><button id="collapse"></button><button id="expand-all"></button>
+<button id="refresh"></button><button id="collapse"></button><button id="expand-all"></button><button id="commit-actions"></button>
 <div id="graph" role="listbox" tabindex="0"></div><h2 id="files-heading"></h2><div id="files-status"></div>
 <ul id="files"></ul><input id="file-search"><script nonce="test">window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>
 <script nonce="test">${theme}</script><script nonce="test">${graphView}</script>

@@ -45,6 +45,7 @@ class GraphProvider {
     this.authors = new Set();
     this.graphGeneration = 0;
     this.detailGeneration = 0;
+    this.selectionEpoch = 0;
     this.selected = undefined;
     this.lastHead = undefined;
     this.revision = undefined;
@@ -54,6 +55,7 @@ class GraphProvider {
     this.pollEpoch = 0;
     this.ready = false;
     this.loading = false;
+    this.interactive = false;
     this.unstableLoads = 0;
     this.retryBackoff = false;
     this.subscription = tree.onDidChangeTreeData(() => {
@@ -109,6 +111,7 @@ class GraphProvider {
     this.collapsedSegments.clear();
     this.files.clear();
     this.selected = undefined;
+    this.interactive = false;
     this.graphGeneration++;
     this.detailGeneration++;
     if (this.panel) {
@@ -135,6 +138,7 @@ class GraphProvider {
         this.detailGeneration++;
         this.files.clear();
         this.loading = false;
+        this.interactive = false;
       } else this.schedulePoll(0);
     });
     panel.onDidDispose(() => {
@@ -142,6 +146,7 @@ class GraphProvider {
       this.panel = undefined;
       this.stopPolling();
       this.ready = false;
+      this.interactive = false;
       this.repoKey = undefined;
       this.guard = () => true;
       this.validateGuard = undefined;
@@ -260,6 +265,7 @@ class GraphProvider {
     const previousRows = preserve ? this.displayedRows : [];
     this.graphGeneration++;
     this.loading = false;
+    this.interactive = false;
     this.revision = undefined;
     this.pollAgain = false;
     this.detailGeneration++;
@@ -289,6 +295,7 @@ class GraphProvider {
     const previousRows = this.displayedRows;
     const previousSelection = this.selected;
     this.loading = true;
+    this.interactive = false;
     this.detailGeneration++;
     this.rows.clear();
     this.segments.clear();
@@ -343,12 +350,14 @@ class GraphProvider {
       this.retryBackoff = false;
       this.displayedRows = result.rows;
       this.selected = previousSelection && this.rows.has(previousSelection) && !this.rows.get(previousSelection).collapsed ? previousSelection : undefined;
+      this.interactive = true;
       this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
         labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
       if (this.selected) await this.loadCommit(this.selected);
     } catch (error) {
       if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || !this.isCurrentRepo(repo)) return;
       this.rows.clear();
+      this.interactive = false;
       this.segments.clear();
       this.revision = undefined;
       this.retryBackoff = true;
@@ -421,7 +430,9 @@ class GraphProvider {
     const repo = this.currentRepo();
     const row = this.rows.get(oid);
     if (!repo || !row || row.collapsed) return;
-    if (!await this.validateGraph(repo) || this.rows.get(oid) !== row || !this.isCurrentRepo(repo)) return;
+    const selection = this.selectionEpoch;
+    if (!await this.validateGraph(repo) || this.selectionEpoch !== selection ||
+        this.rows.get(oid) !== row || !this.isCurrentRepo(repo)) return;
     const generation = ++this.detailGeneration;
     this.selected = oid;
     this.files.clear();
@@ -486,6 +497,47 @@ class GraphProvider {
       title: `${path.basename(file.path)} (${file.oid.slice(0, 8)})` });
   }
 
+  async copyCommit(oid, summary = false) {
+    const repo = this.currentRepo();
+    const row = this.rows.get(oid);
+    const panel = this.panel;
+    if (!repo || !row || row.collapsed || !panel || panel.visible === false || !this.interactive || this.selected !== oid) return;
+    const graph = this.graphGeneration, owner = this.ownerEpoch, selection = this.selectionEpoch;
+    const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === owner &&
+      this.graphGeneration === graph && this.selectionEpoch === selection && this.interactive &&
+      this.selected === oid && this.rows.get(oid) === row && this.isCurrentRepo(repo);
+    if (!await this.validateGraph(repo) || !current()) return;
+    if (typeof row.short_id !== 'string' || !row.short_id || !oid.startsWith(row.short_id) ||
+        typeof row.message !== 'string') throw new Error('Gitpane returned invalid commit details.');
+    let value = `${row.short_id} ${row.message}`;
+    if (!summary) {
+      const choices = [
+        { label: 'Copy full commit hash', value: oid },
+        { label: 'Copy short commit hash', value: row.short_id },
+        { label: 'Copy commit subject', value: row.message }
+      ];
+      const selected = await vscode.window.showQuickPick(choices, { placeHolder: 'Choose a commit action' });
+      if (!selected || !choices.includes(selected) || !current()) return;
+      if (!await this.validateGraph(repo) || !current()) return;
+      value = selected.value;
+    }
+    if (!current()) return;
+    await vscode.env.clipboard.writeText(value);
+  }
+
+  async copyCommitFile(id) {
+    const repo = this.currentRepo();
+    const file = this.files.get(id);
+    const panel = this.panel;
+    if (!repo || !file || !panel || panel.visible === false || !this.interactive || file.oid !== this.selected) return;
+    const graph = this.graphGeneration, owner = this.ownerEpoch, detail = this.detailGeneration, selection = this.selectionEpoch;
+    const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === owner &&
+      this.graphGeneration === graph && this.detailGeneration === detail && this.selectionEpoch === selection &&
+      this.interactive && this.selected === file.oid && this.files.get(id) === file && this.isCurrentRepo(repo);
+    if (!await this.validateGraph(repo) || !current()) return;
+    await vscode.env.clipboard.writeText(file.path);
+  }
+
   async receive(message) {
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'ready') { this.ready = true; this.publishTheme(); return this.loadGraph(); }
@@ -510,7 +562,32 @@ class GraphProvider {
       this.collapsedSegments.clear();
       return this.loadGraph();
     }
-    if (message.type === 'selectCommit' && typeof message.oid === 'string') return this.loadCommit(message.oid);
+    if (message.type === 'selectCommit' && typeof message.oid === 'string') {
+      const row = this.rows.get(message.oid);
+      if (!row || row.collapsed || !this.currentRepo() || !this.panel || this.panel.visible === false || !this.interactive) return;
+      this.selectionEpoch++;
+      this.detailGeneration++;
+      this.selected = undefined;
+      this.files.clear();
+      return this.loadCommit(message.oid);
+    }
+    if (message.type === 'selectCollapsed' && typeof message.oid === 'string' && this.interactive && this.rows.get(message.oid)?.collapsed) {
+      this.selectionEpoch++;
+      this.detailGeneration++;
+      this.selected = undefined;
+      this.files.clear();
+      return;
+    }
+    if ((message.type === 'commitActions' || message.type === 'copyCommitSummary') && typeof message.oid === 'string') {
+      try { await this.copyCommit(message.oid, message.type === 'copyCommitSummary'); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane could not copy the commit: ${error.message}`); }
+      return;
+    }
+    if (message.type === 'copyCommitFile' && typeof message.id === 'string') {
+      try { await this.copyCommitFile(message.id); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane could not copy the file path: ${error.message}`); }
+      return;
+    }
     if (message.type === 'openCommitFile' && typeof message.id === 'string') {
       try { await this.openCommitFile(message.id); }
       catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the diff: ${error.message}`); }

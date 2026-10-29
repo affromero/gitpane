@@ -48,6 +48,9 @@ matches among the loaded commits, with next and previous navigation. The graph
 shows up to 200 commits and offers first-parent, branch, author and ref filters,
 and branch collapse. Author choices come from commits loaded so far. Select a
 commit and then a file to open its diff; the file list is searchable too.
+Use **Commit actions** or right-click a commit to copy its hash or subject.
+With the graph focused, `y` copies the short hash and subject. On a commit
+file, `y` copies its path.
 The graph uses Gitpane's `[graph]` settings for branch visibility, label length
 and diff statistics. Restart the VS Code extension host after changing them.
 The sidebar and graph use Gitpane's configured theme and adapt its colors for

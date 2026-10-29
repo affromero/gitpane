@@ -26,6 +26,7 @@ function getHtml(webview, extensionUri) {
     <button id="filters" type="button" aria-label="Filter commit graph">Filters</button>
     <button id="collapse" type="button" disabled>Collapse branch</button>
     <button id="expand-all" type="button" disabled>Expand all</button>
+    <button id="commit-actions" type="button" disabled>Commit actions</button>
     <button id="refresh" type="button" title="Refresh commit graph" aria-label="Refresh commit graph">↻</button>
   </header>
   <div id="search-status" class="search-status" role="status" aria-live="polite"></div>

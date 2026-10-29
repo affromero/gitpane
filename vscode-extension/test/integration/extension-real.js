@@ -31,6 +31,7 @@ const event = () => ({ dispose() {} });
 const commands = new Map();
 const documents = new Map();
 const diffs = [];
+const copied = [];
 const errors = [];
 const warnings = [];
 const snapshots = [];
@@ -86,6 +87,7 @@ async function main() {
   const vscode = {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
     FileType: { File: 1 }, FileChangeType: { Changed: 1 },
+    env: { clipboard: { async writeText(value) { copied.push(value); } } },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
       getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
@@ -740,6 +742,17 @@ async function main() {
   await graphReceive({ type: 'selectCommit', oid: pointerCommit });
   const committedPointer = graphMessages.at(-1).files.find(file => file.path === 'child');
   assert.ok(committedPointer, 'committed gitlink must be listed in the graph');
+  const commitSubject = git('show', '-s', '--format=%s', pointerCommit);
+  for (const [index, expected] of [[0, pointerCommit], [1, pointerCommit.slice(0, 7)], [2, commitSubject]]) {
+    pickChanges = choices => choices[index];
+    await graphReceive({ type: 'commitActions', oid: pointerCommit });
+    assert.equal(copied.at(-1), expected, errors.at(-1));
+  }
+  await graphReceive({ type: 'copyCommitSummary', oid: pointerCommit });
+  assert.equal(copied.at(-1), `${pointerCommit.slice(0, 7)} ${commitSubject}`);
+  await graphReceive({ type: 'copyCommitFile', id: committedPointer.id });
+  assert.equal(copied.at(-1), 'child');
+  console.log('PASS graph commit and file copy actions use actual Git values');
   const beforeGraphDiff = diffs.length, beforeGraphTerminals = terminals.length, beforeGraphRepos = api.repositories.length;
   await graphReceive({ type: 'openCommitFile', id: committedPointer.id });
   assert.equal(diffs.length, beforeGraphDiff + 1, errors.at(-1));

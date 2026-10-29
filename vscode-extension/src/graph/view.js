@@ -12,6 +12,7 @@ const filters = document.getElementById('filters');
 const refresh = document.getElementById('refresh');
 const collapse = document.getElementById('collapse');
 const expandAll = document.getElementById('expand-all');
+const commitActions = document.getElementById('commit-actions');
 const filesHeading = document.getElementById('files-heading');
 const filesStatus = document.getElementById('files-status');
 const files = document.getElementById('files');
@@ -22,6 +23,7 @@ let active = 0;
 let selected;
 let detail;
 let pendingSegment;
+let pendingCommitAction;
 let labelMaxLen = 24;
 let graphInteractive = false;
 
@@ -112,6 +114,7 @@ function renderGraph() {
   searchPrev.disabled = searchNext.disabled = !graphInteractive || !query || !matchCount;
   const selectedRow = rows.find(row => row.oid === selected);
   collapse.disabled = !graphInteractive || !selectedRow?.segment_id;
+  commitActions.disabled = !graphInteractive || !selectedRow || !!selectedRow.collapsed || detail?.oid !== selected;
   collapse.textContent = selectedRow?.collapsed ? 'Expand branch' : 'Collapse branch';
   searchStatus.textContent = query ? `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}` : '';
   graph.replaceChildren();
@@ -145,6 +148,12 @@ function renderGraph() {
       item.appendChild(stats);
     }
     item.addEventListener('click', () => select(index));
+    item.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      if (!graphInteractive || row.collapsed) return;
+      if (selected !== row.oid) select(index);
+      requestCommitAction('commitActions');
+    });
     graph.appendChild(item);
   });
   if (rows.length) graph.setAttribute('aria-activedescendant', `commit-${active}`);
@@ -194,6 +203,11 @@ function renderFiles() {
     const filePath = add(button, 'file-path', entry.path);
     filePath.title = entry.path;
     button.addEventListener('click', () => vscode.postMessage({ type: 'openCommitFile', id: entry.id }));
+    button.addEventListener('keydown', event => {
+      if (event.key !== 'y' || event.ctrlKey || event.altKey || event.metaKey) return;
+      event.preventDefault();
+      vscode.postMessage({ type: 'copyCommitFile', id: entry.id });
+    });
     listItem.appendChild(button);
     files.appendChild(listItem);
   }
@@ -202,6 +216,7 @@ function renderFiles() {
 function select(index, focus = true) {
   if (!graphInteractive || !rows[index]) return;
   if (selected !== rows[index].oid) fileSearch.value = '';
+  pendingCommitAction = undefined;
   active = index;
   selected = rows[index].oid;
   detail = undefined;
@@ -209,7 +224,15 @@ function select(index, focus = true) {
   renderFiles();
   if (focus) graph.focus();
   document.getElementById(`commit-${active}`)?.scrollIntoView({ block: 'nearest' });
-  if (!rows[index].collapsed) vscode.postMessage({ type: 'selectCommit', oid: selected });
+  if (rows[index].collapsed) vscode.postMessage({ type: 'selectCollapsed', oid: selected });
+  else vscode.postMessage({ type: 'selectCommit', oid: selected });
+}
+
+function requestCommitAction(type) {
+  const row = rows.find(item => item.oid === selected);
+  if (!graphInteractive || !row || row.collapsed) return;
+  if (detail?.oid === selected) vscode.postMessage({ type, oid: selected });
+  else pendingCommitAction = { type, oid: selected };
 }
 
 function navigateMatches(direction) {
@@ -225,6 +248,16 @@ function navigateMatches(direction) {
 
 graph.addEventListener('keydown', event => {
   if (!graphInteractive || !rows.length) return;
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault();
+    requestCommitAction('commitActions');
+    return;
+  }
+  if (event.key === 'y' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    event.preventDefault();
+    requestCommitAction('copyCommitSummary');
+    return;
+  }
   let index;
   if (event.key === 'ArrowDown') index = Math.min(active + 1, rows.length - 1);
   else if (event.key === 'ArrowUp') index = Math.max(active - 1, 0);
@@ -262,6 +295,7 @@ firstParent.addEventListener('change', () => {
 
 refresh.addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 filters.addEventListener('click', () => vscode.postMessage({ type: 'openFilters' }));
+commitActions.addEventListener('click', () => requestCommitAction('commitActions'));
 collapse.addEventListener('click', () => {
   if (!graphInteractive) return;
   const row = rows.find(item => item.oid === selected);
@@ -291,7 +325,7 @@ window.addEventListener('message', event => {
   }
   if (message?.type === 'graph') {
     graphInteractive = !message.loading && !message.error;
-    if (message.loading || message.error) detail = undefined;
+    if (message.loading || message.error) { detail = undefined; pendingCommitAction = undefined; }
     rows = Array.isArray(message.rows) ? message.rows : [];
     labelMaxLen = Number.isSafeInteger(message.labelMaxLen) && message.labelMaxLen >= 0 ? message.labelMaxLen : 24;
     expandAll.disabled = !message.collapsedCount || !graphInteractive;
@@ -328,7 +362,12 @@ window.addEventListener('message', event => {
     }
   } else if (message?.type === 'commitFiles' && message.oid === selected) {
     detail = message;
+    renderGraph();
     renderFiles();
+    if (pendingCommitAction?.oid === selected && graphInteractive) {
+      vscode.postMessage({ type: pendingCommitAction.type, oid: selected });
+      pendingCommitAction = undefined;
+    }
   }
 });
 

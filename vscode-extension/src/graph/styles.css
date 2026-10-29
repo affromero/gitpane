@@ -44,7 +44,7 @@ body {
 #search:focus-visible, #file-search:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .first-parent { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
 .first-parent input { accent-color: var(--vscode-focusBorder, var(--cyan)); }
-#filters, #refresh, #search-prev, #search-next, #collapse, #expand-all {
+#filters, #refresh, #search-prev, #search-next, #collapse, #expand-all, #commit-actions {
   padding: 2px 6px;
   border: 1px solid var(--vscode-contrastBorder, transparent);
   color: var(--muted);
@@ -52,9 +52,9 @@ body {
   font: inherit;
   cursor: pointer;
 }
-#filters:hover, #refresh:hover, #search-prev:hover, #search-next:hover, #collapse:hover, #expand-all:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--text); }
-#filters:focus-visible, #refresh:focus-visible, #search-prev:focus-visible, #search-next:focus-visible, #collapse:focus-visible, #expand-all:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-#search-prev:disabled, #search-next:disabled, #collapse:disabled, #expand-all:disabled { opacity: .5; cursor: default; }
+#filters:hover, #refresh:hover, #search-prev:hover, #search-next:hover, #collapse:hover, #expand-all:hover, #commit-actions:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--text); }
+#filters:focus-visible, #refresh:focus-visible, #search-prev:focus-visible, #search-next:focus-visible, #collapse:focus-visible, #expand-all:focus-visible, #commit-actions:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+#search-prev:disabled, #search-next:disabled, #collapse:disabled, #expand-all:disabled, #commit-actions:disabled { opacity: .5; cursor: default; }
 .search-status, .message { color: var(--muted); }
 .search-status:empty, .message:empty { display: none; }
 .message.error { color: var(--vscode-errorForeground, var(--red)); }
