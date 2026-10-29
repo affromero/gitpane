@@ -13,6 +13,11 @@ const saved = vscode.getState() || {};
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
 const expandedStashes = new Set(Array.isArray(saved.expandedStashes) ? saved.expandedStashes : []);
+const worktreeVisibility = new Map((Array.isArray(saved.worktreeVisibility) ? saved.worktreeVisibility : [])
+  .filter(item => Array.isArray(item) && typeof item[0] === 'string' && /^[a-f0-9]{64}$/.test(item[0]) && typeof item[1] === 'boolean').slice(-1024));
+const transientWorktreeVisibility = new Map();
+const appliedWorktreeReveals = new Set((Array.isArray(saved.appliedWorktreeReveals) ? saved.appliedWorktreeReveals : [])
+  .filter(id => typeof id === 'string' && id.length > 0 && id.length <= 128).slice(-128));
 let selected = typeof saved.selected === 'string' ? saved.selected : undefined;
 let snapshot = { repositories: [], errors: [], loading: true };
 let visible = [];
@@ -22,7 +27,37 @@ let searchOwner;
 let searchTimer;
 
 function save() {
-  vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes], selected });
+  vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
+    worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected });
+}
+
+function worktreesVisible(repo) {
+  const key = repo.worktreeStateKey;
+  if (key && transientWorktreeVisibility.has(repo.id)) {
+    setWorktreesVisible(repo, transientWorktreeVisibility.get(repo.id));
+    transientWorktreeVisibility.delete(repo.id);
+  }
+  return (key && worktreeVisibility.has(key) ? worktreeVisibility.get(key) : transientWorktreeVisibility.get(repo.id))
+    ?? snapshot.expandWorktrees === true;
+}
+
+function setWorktreesVisible(repo, show) {
+  if (repo.worktreeStateKey) {
+    worktreeVisibility.delete(repo.worktreeStateKey);
+    worktreeVisibility.set(repo.worktreeStateKey, show);
+    if (worktreeVisibility.size > 1024) worktreeVisibility.delete(worktreeVisibility.keys().next().value);
+  } else transientWorktreeVisibility.set(repo.id, show);
+}
+
+function toggleWorktrees(repo) {
+  if (!repo?.worktrees?.length) return;
+  const show = !worktreesVisible(repo);
+  const children = visible.filter(item => item.parent === `repo:${repo.id}` && item.worktreeId && item.isExpanded);
+  setWorktreesVisible(repo, show);
+  if (!show) {
+    for (const item of children) releaseChanges(item);
+  }
+  render();
 }
 
 function element(tag, className, text) {
@@ -126,7 +161,7 @@ function labelForRepo(repo, info) {
   return details.filter(Boolean).join(', ');
 }
 
-function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
+function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
   const name = add(row, 'name', '', repo.name);
@@ -142,7 +177,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
     if (repo.stashCount > 0) {
       if (hasStashes) {
         const key = `stash-group:${repo.id}`;
-        const open = isExpanded && expandedStashes.has(key);
+        const open = expandedStashes.has(key);
         const button = element('button', 'stash stash-action', `${open ? '▾' : '▸'}$${repo.stashCount}`);
         button.type = 'button';
         button.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} stashes for ${repo.name}`);
@@ -157,8 +192,14 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
       } else add(tail, 'stash', `$${repo.stashCount}`, `${repo.stashCount} stashes`);
     }
     if (repo.worktreeCount > 0) {
-      const indicator = hasWorktrees && !info.count ? (isExpanded ? '▾' : '▸') : '';
-      add(tail, 'worktree', `${indicator}⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
+      if (hasWorktrees) {
+        const button = element('button', 'worktree worktree-action', `${showWorktrees ? '▾' : '▸'}⎇${repo.worktreeCount}`);
+        button.type = 'button';
+        button.setAttribute('aria-label', `${showWorktrees ? 'Collapse' : 'Expand'} worktrees for ${repo.name}`);
+        button.setAttribute('aria-expanded', String(showWorktrees));
+        button.addEventListener('click', event => { event.stopPropagation(); toggleWorktrees(repo); });
+        tail.appendChild(button);
+      } else add(tail, 'worktree', `⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
     }
     if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
     if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
@@ -345,7 +386,8 @@ function renderMessages() {
 function render() {
   const hadFocus = tree.contains(document.activeElement);
   const previousSelection = visible.find(item => item.key === selected);
-  const focusedAction = document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
+  const focusedAction = document.activeElement.classList?.contains('worktree-action') ? 'worktree-action' :
+    document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
     document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
     document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
   const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
@@ -361,21 +403,31 @@ function render() {
     const groups = Array.isArray(repo.groups) ? repo.groups : [];
     const worktrees = !repo.statusUnavailable && Array.isArray(repo.worktrees) ? repo.worktrees : [];
     const stashes = !repo.statusUnavailable && Array.isArray(repo.stashes) ? repo.stashes : [];
-    const isExpanded = expanded.has(key);
+    const filesExpanded = expanded.has(key);
+    const showWorktrees = worktrees.length > 0 && worktreesVisible(repo);
+    const stashOpen = stashes.length > 0 && expandedStashes.has(`stash-group:${repo.id}`);
     const hasPage = !!repo.changesPage && (repo.dirty || repo.hasUnpushedSubmodules || repo.changesPage.state === 'loading' ||
       repo.changesPage.state === 'error' || repo.changesPage.previous || repo.changesPage.next);
-    const item = createItem(key, labelForRepo(repo, info), repoRow(repo, info, isExpanded, worktrees.length > 0, stashes.length > 0),
-      groups.length > 0 || worktrees.length > 0 || stashes.length > 0 || hasPage, isExpanded, undefined);
+    const fileExpandable = groups.length > 0 || hasPage;
+    const hasChildren = (filesExpanded && (fileExpandable || stashes.length > 0)) || showWorktrees || stashOpen;
+    const item = createItem(key, labelForRepo(repo, info), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
+      fileExpandable || worktrees.length > 0 || stashes.length > 0, hasChildren, undefined);
     item.owner = repo;
+    item.filesExpanded = filesExpanded;
+    item.fileExpandable = fileExpandable;
+    item.showWorktrees = showWorktrees;
+    item.stashOpen = stashOpen;
     tree.appendChild(item.item);
-    if (!isExpanded || (!groups.length && !worktrees.length && !stashes.length && !hasPage)) continue;
-    requestChanges(repo);
+    if (!hasChildren) continue;
     const children = element('div', 'children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
-    renderGroups(children, groups, key, repo.id, info.partial);
-    renderPage(children, repo, key);
-    for (const worktree of worktrees) {
+    if (filesExpanded && fileExpandable) {
+      requestChanges(repo);
+      renderGroups(children, groups, key, repo.id, info.partial);
+      renderPage(children, repo, key);
+    }
+    for (const worktree of showWorktrees ? worktrees : []) {
       owners.add(worktree.id);
       reconcilePending(worktree);
       const worktreeKey = `worktree:${worktree.id}`;
@@ -408,7 +460,7 @@ function render() {
         renderPage(files, worktree, worktreeKey);
       }
     }
-    if (stashes.length) {
+    if (stashes.length && (filesExpanded || stashOpen)) {
       const stashKey = `stash-group:${repo.id}`;
       const stashExpanded = expandedStashes.has(stashKey);
       const row = element('div', 'row group-row');
@@ -434,6 +486,7 @@ function render() {
   }
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);
   for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
+  for (const id of transientWorktreeVisibility.keys()) if (!owners.has(id)) transientWorktreeVisibility.delete(id);
   syncSearch();
   if (!visible.some(item => item.key === selected)) {
     const alternate = previousSelection?.pageOwner && visible.find(item =>
@@ -472,6 +525,11 @@ function searchOwnerItem(item) {
   return item;
 }
 
+function parentRepository(item) {
+  while (item && !item.key.startsWith('repo:')) item = visible.find(candidate => candidate.key === item.parent);
+  return item;
+}
+
 function sendSearch(direction = 'first') {
   if (!searchOwner) return;
   if (new TextEncoder().encode(searchInput.value).length > 512) {
@@ -495,9 +553,10 @@ function closeSearch() {
 function beginSearch() {
   const item = searchOwnerItem(visible.find(value => value.key === selected));
   if (!item?.owner?.changesPage || !item.expandable) return;
+  if (item.key.startsWith('repo:') && !item.fileExpandable) return;
   if (searchOwner && searchOwner !== item.owner.id) closeSearch();
   searchOwner = item.owner.id;
-  if (!item.isExpanded) toggle(item);
+  if (item.key.startsWith('repo:') ? !item.filesExpanded : !item.isExpanded) toggle(item);
   searchBox.hidden = false;
   searchInput.placeholder = `Search ${item.owner.name || item.owner.branch}`;
   searchInput.focus();
@@ -578,7 +637,24 @@ function releaseDescendants(item) {
 
 function toggle(item) {
   if (!item.expandable) return;
-  if (item.key.startsWith('repo:') || item.key.startsWith('worktree:')) {
+  if (item.key.startsWith('repo:')) {
+    if (item.filesExpanded) {
+      expanded.delete(item.key);
+      releaseChanges(item);
+      render();
+      return;
+    }
+    if (!item.fileExpandable && item.owner.worktrees?.length) { toggleWorktrees(item.owner); return; }
+    if (!item.fileExpandable && item.owner.stashes?.length) {
+      const stashKey = `stash-group:${item.owner.id}`;
+      if (expandedStashes.has(stashKey)) expandedStashes.delete(stashKey);
+      else expandedStashes.add(stashKey);
+      render();
+      return;
+    }
+    expanded.add(item.key);
+    requestChanges(item.owner, true);
+  } else if (item.key.startsWith('worktree:')) {
     if (item.isExpanded) {
       expanded.delete(item.key);
       releaseDescendants(item);
@@ -629,7 +705,7 @@ tree.addEventListener('click', event => {
 
 tree.addEventListener('keydown', event => {
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
-      event.target.classList?.contains('stash-action')) &&
+      event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action')) &&
       (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
@@ -637,16 +713,32 @@ tree.addEventListener('keydown', event => {
   let handled = true;
   switch (event.key) {
     case '/': beginSearch(); break;
+    case 'w': {
+      const repo = parentRepository(current);
+      if (!repo?.owner?.worktrees?.length) { handled = false; break; }
+      let child = current;
+      while (child && child.parent !== repo.key) child = visible.find(item => item.key === child.parent);
+      if (repo.showWorktrees && child?.worktreeId) select(repo);
+      toggleWorktrees(repo.owner);
+      break;
+    }
     case 'ArrowDown': select(visible[Math.min(index + 1, visible.length - 1)]); break;
     case 'ArrowUp': select(visible[Math.max(index - 1, 0)]); break;
     case 'Home': select(visible[0]); break;
     case 'End': select(visible[visible.length - 1]); break;
     case 'ArrowRight':
-      if (current.expandable && !current.isExpanded) toggle(current);
+      if (current.key.startsWith('repo:') && current.fileExpandable && !current.filesExpanded) toggle(current);
+      else if (current.expandable && !current.isExpanded) toggle(current);
       else if (visible[index + 1]?.parent === current.key) select(visible[index + 1]);
       break;
     case 'ArrowLeft':
-      if (current.expandable && current.isExpanded) toggle(current);
+      if (current.key.startsWith('repo:') && current.filesExpanded) toggle(current);
+      else if (current.key.startsWith('repo:') && current.showWorktrees) toggleWorktrees(current.owner);
+      else if (current.key.startsWith('repo:') && current.stashOpen) {
+        expandedStashes.delete(`stash-group:${current.owner.id}`);
+        render();
+      }
+      else if (current.expandable && current.isExpanded) toggle(current);
       else select(visible.find(item => item.key === current.parent));
       break;
     case 'Enter':
@@ -663,6 +755,19 @@ window.addEventListener('message', event => {
     event.data.errors = [...(event.data.errors || []), 'Gitpane returned an invalid theme.'];
   }
   snapshot = { ...event.data, repositories: Array.isArray(event.data.repositories) ? event.data.repositories : [] };
+  for (const reveal of Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
+    if (!reveal || typeof reveal.id !== 'string' || reveal.id.length > 128 ||
+        typeof reveal.identity !== 'string' || !/^[a-f0-9]{64}$/.test(reveal.identity)) continue;
+    const repo = snapshot.repositories.find(item => item.worktreeStateKey === reveal.identity);
+    if (!repo) continue;
+    if (!appliedWorktreeReveals.has(reveal.id)) {
+      setWorktreesVisible(repo, true);
+      appliedWorktreeReveals.add(reveal.id);
+      if (appliedWorktreeReveals.size > 128) appliedWorktreeReveals.delete(appliedWorktreeReveals.values().next().value);
+    }
+    save();
+    vscode.postMessage({ type: 'ackWorktreeReveal', id: reveal.id });
+  }
   render();
 });
 

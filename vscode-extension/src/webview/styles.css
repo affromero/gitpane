@@ -127,7 +127,7 @@ body {
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
 .pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
 .tail { display: flex; gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
-.graph-action, .menu-action, .stash-action {
+.graph-action, .menu-action, .stash-action, .worktree-action {
   flex: none;
   padding: 0;
   border: 0;
@@ -137,7 +137,7 @@ body {
 }
 .graph-action { color: var(--branch); }
 .menu-action { color: var(--muted); }
-.graph-action:focus-visible, .menu-action:focus-visible, .stash-action:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.graph-action:focus-visible, .menu-action:focus-visible, .stash-action:focus-visible, .worktree-action:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .subtree { color: var(--muted); }
 .worktree-row .subtree { color: var(--gitpane-repo-list-worktree-subtree-icon, var(--muted)); }
 
@@ -174,6 +174,6 @@ body {
 @media (forced-colors: active) {
   .dirty, .count, .branch, .ahead, .behind, .worktree, .modified,
   .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule, .live, .pin,
-  .graph-action, .menu-action { color: CanvasText; }
+  .graph-action, .menu-action, .worktree-action { color: CanvasText; }
   .treeitem:focus > .row { outline: 1px solid Highlight; }
 }

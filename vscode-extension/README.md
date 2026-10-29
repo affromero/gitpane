@@ -21,6 +21,11 @@ under their repository, with their own changed files and actions. A worktree
 added as a workspace folder appears at the top level. Repositories outside the
 workspace are not included.
 
+Worktree rows are shown by default, following Gitpane's `[ui] expand_worktrees`
+setting. Use the worktree count or press `w` on a repository to show or hide
+its worktrees without opening the repository's file list. Gitpane remembers that
+choice for the workspace. Restart the extension host after editing the setting.
+
 The view updates as workspace folders and detected repositories change. While
 visible, it also refreshes local Git status periodically. The `$` indicator
 opens a repository's stash list. Stash entries are view-only.

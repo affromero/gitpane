@@ -217,6 +217,10 @@ fn process(
             let _: EmptyRequest = params(request.params)?;
             theme::query(options.theme)
         }
+        "ui_config" => {
+            let _: EmptyRequest = params(request.params)?;
+            Ok(json!({"expand_worktrees": options.theme.ui.expand_worktrees}))
+        }
         "themes_list" => {
             let _: EmptyRequest = params(request.params)?;
             theme::list(options.theme)

@@ -31,9 +31,10 @@ const scenario = String.raw`
   try {
     const forced = matchMedia('(forced-colors: active)').matches;
     check('forced colors mode matches requested environment', forced === EXPECT_FORCED);
-    window.postMessage({ type: 'snapshot', errors: [], repositories: [{
-      id: 'repo', name: 'repo', branch: 'feature', dirty: true, stashCount: 1,
-      stashes: [{ id: 'stash', index: 0, message: 'saved' }], groups: []
+    window.postMessage({ type: 'snapshot', errors: [], expandWorktrees: true, repositories: [{
+      id: 'repo', name: 'repo', branch: 'feature', dirty: true, stashCount: 1, worktreeCount: 1,
+      stashes: [{ id: 'stash', index: 0, message: 'saved' }], groups: [],
+      worktrees: [{ id: 'child', name: 'child', branch: 'topic', dirty: false, available: true, groups: [] }]
     }], theme: { name: 'custom', values: {
       'repo-list-stash': 'rgb(240, 40, 120)', 'repo-list-branch': 'rgb(20, 180, 210)',
       'repo-list-dirty-marker': 'rgb(220, 180, 0)', 'repo-list-repo-name': 'rgb(140, 80, 240)'
@@ -44,7 +45,7 @@ const scenario = String.raw`
     await tick();
     const row = treeitem.querySelector('.repo-row');
     const background = getComputedStyle(row).backgroundColor;
-    for (const selector of ['.name', '.branch', '.dirty', '.stash-action', '.graph-action', '.menu-action']) {
+    for (const selector of ['.name', '.branch', '.dirty', '.stash-action', '.worktree-action', '.graph-action', '.menu-action']) {
       const node = row.querySelector(selector);
       check('selected ' + selector + ' is readable', !!node && contrast(getComputedStyle(node).color, background) >= 4.5);
     }

@@ -267,6 +267,118 @@ const scenario = String.raw`
     check('unavailable worktree is reported without stale file or graph actions',
       worktree.getAttribute('aria-label').includes('repository unavailable') && !worktree.querySelector('.graph-action') &&
       !items().some(item => item.getAttribute('aria-label') === 'M working.txt'));
+    const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
+      id: 'overview-parent', name: 'overview-parent', branch: 'main', dirty: false, groups: [],
+      worktreeStateKey: 'a'.repeat(64), worktreeCount: 1,
+      changesPage: { state: 'idle', page: 0, previous: false, next: false },
+      worktrees: [{ id: 'overview-child', name: 'overview-child', branch: 'topic', dirty: true,
+        changeCountLowerBound: 1, available: true, groups: [],
+        changesPage: { state: 'idle', page: 0, previous: false, next: false } }]
+    }] };
+    const beforeOverview = window.posted.length;
+    window.postMessage(overview, '*');
+    await tick();
+    let overviewParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    let overviewChild = items().find(item => item.getAttribute('aria-label').startsWith('overview-child, worktree'));
+    check('configured default shows a dirty worktree under a clean parent', !!overviewChild &&
+      overviewChild.getAttribute('aria-label').includes('has changes') && overviewParent.getAttribute('aria-expanded') === 'true');
+    check('showing worktrees does not load file pages', !window.posted.slice(beforeOverview).some(message => message.type === 'loadChanges'));
+    let overviewButton = overviewParent.querySelector('.worktree-action');
+    check('worktree toggle is accessible', overviewButton.getAttribute('aria-expanded') === 'true' &&
+      overviewButton.getAttribute('aria-label') === 'Collapse worktrees for overview-parent');
+    overviewChild.querySelector('.row').click();
+    check('expanding a worktree loads only that worktree', window.posted.slice(beforeOverview).some(message =>
+      message.type === 'loadChanges' && message.id === 'overview-child') && !window.posted.slice(beforeOverview).some(message =>
+      message.type === 'loadChanges' && message.id === 'overview-parent'));
+    overviewParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    overviewParent.querySelector('.worktree-action').click();
+    check('hiding worktrees releases their loaded pages', !items().some(item => item.getAttribute('aria-label').startsWith('overview-child, worktree')) &&
+      window.posted.slice(beforeOverview).some(message => message.type === 'releaseChanges' && message.id === 'overview-child'));
+    overviewParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    overviewParent.focus();
+    overviewParent.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', bubbles: true }));
+    overviewChild = items().find(item => item.getAttribute('aria-label').startsWith('overview-child, worktree'));
+    check('keyboard restores remembered worktree expansion', !!overviewChild && overviewChild.getAttribute('aria-expanded') === 'true' &&
+      window.posted.slice(beforeOverview).filter(message => message.type === 'loadChanges' && message.id === 'overview-child').length === 2);
+    overviewChild.focus();
+    overviewChild.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', bubbles: true }));
+    check('worktree shortcut works from a worktree row and restores focus to its parent',
+      !items().some(item => item.getAttribute('aria-label').startsWith('overview-child, worktree')) &&
+      document.activeElement.getAttribute('aria-label').startsWith('overview-parent'));
+    overviewParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    overviewParent.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', bubbles: true }));
+    const changedId = structuredClone(overview);
+    changedId.repositories[0].id = 'overview-parent-reopened';
+    changedId.expandWorktrees = false;
+    window.postMessage(changedId, '*');
+    await tick();
+    check('user preference survives provider IDs and a late config change',
+      !!items().find(item => item.getAttribute('aria-label').startsWith('overview-child, worktree')));
+    changedId.repositories[0].worktrees.push({ id: 'new-worktree', name: 'new-worktree', branch: 'new', dirty: false,
+      available: true, groups: [], changesPage: { state: 'idle', page: 0, previous: false, next: false } });
+    changedId.repositories[0].worktreeCount = 2;
+    window.postMessage(changedId, '*');
+    await tick();
+    check('a newly discovered workspace worktree appears automatically', !!items().find(item =>
+      item.getAttribute('aria-label').startsWith('new-worktree, worktree')));
+    const disabled = structuredClone(overview);
+    disabled.expandWorktrees = false;
+    disabled.repositories[0].id = 'default-off-parent';
+    disabled.repositories[0].worktreeStateKey = 'b'.repeat(64);
+    disabled.repositories[0].worktrees[0].id = 'default-off-child';
+    window.postMessage(disabled, '*');
+    await tick();
+    let disabledParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    check('disabled native default starts with worktrees hidden', disabledParent.getAttribute('aria-expanded') === 'false' &&
+      !items().some(item => item.getAttribute('aria-label').startsWith('overview-child, worktree')));
+    disabledParent.querySelector('.worktree-action').click();
+    check('user can expand worktrees when the native default is disabled', !!items().find(item =>
+      item.getAttribute('aria-label').startsWith('overview-child, worktree')));
+    disabledParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    disabledParent.querySelector('.worktree-action').click();
+    const created = structuredClone(disabled);
+    created.revealWorktrees = [{ id: 'created-worktree', identity: 'b'.repeat(64) }];
+    window.postMessage(created, '*');
+    await tick();
+    check('a created worktree is revealed and acknowledged', !!items().find(item =>
+      item.getAttribute('aria-label').startsWith('overview-child, worktree')) &&
+      window.posted.some(message => message.type === 'ackWorktreeReveal' && message.id === 'created-worktree') &&
+      window.savedState.appliedWorktreeReveals.includes('created-worktree') &&
+      window.ackStates.some(state => state.appliedWorktreeReveals.includes('created-worktree')));
+    disabledParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    disabledParent.querySelector('.worktree-action').click();
+    window.postMessage(created, '*');
+    await tick();
+    check('a duplicate reveal does not override a later user collapse', !items().some(item =>
+      item.getAttribute('aria-label').startsWith('overview-child, worktree')) &&
+      window.posted.filter(message => message.type === 'ackWorktreeReveal' && message.id === 'created-worktree').length === 2);
+    const mixed = structuredClone(disabled);
+    mixed.repositories[0].id = 'mixed-parent';
+    mixed.repositories[0].worktreeStateKey = 'c'.repeat(64);
+    mixed.repositories[0].stashCount = 1;
+    mixed.repositories[0].stashes = [{ id: 'mixed-stash', index: 0, message: 'saved' }];
+    window.postMessage(mixed, '*');
+    await tick();
+    let mixedParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    mixedParent.querySelector('.stash-action').click();
+    mixedParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    mixedParent.focus();
+    mixedParent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    mixedParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    mixedParent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    check('left closes stashes without reopening hidden worktrees', !items().some(item =>
+      item.getAttribute('aria-label').startsWith('overview-child, worktree')) &&
+      !items().some(item => item.getAttribute('aria-label').startsWith('stash@{0}')));
+    mixedParent = items().find(item => item.getAttribute('aria-label').startsWith('overview-parent'));
+    mixedParent.querySelector('.stash-action').click();
+    const mixedStash = items().find(item => item.getAttribute('aria-label').startsWith('stash@{0}'));
+    mixedStash.focus();
+    mixedStash.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', bubbles: true }));
+    check('worktree shortcut resolves a stash row to its parent repository', !!items().find(item =>
+      item.getAttribute('aria-label').startsWith('overview-child, worktree')));
+    window.postMessage({ type: 'snapshot', repositories: [], errors: [], loading: false, expandWorktrees: true }, '*');
+    await tick();
+    check('removed workspace worktrees disappear', !items().some(item => item.getAttribute('aria-label').includes('worktree')));
     window.postMessage(snapshot, '*');
     await tick();
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
@@ -449,11 +561,15 @@ const scenario = String.raw`
     items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
     check('collapsing a parent releases its expanded worktree', window.posted.some(message =>
       message.type === 'releaseChanges' && message.id === 'page-child'));
+    pagedWorktree.repositories[0].worktrees[0].changesPage = { state: 'idle', page: 0, previous: false, next: false };
+    pagedWorktree.repositories[0].worktrees[0].groups = [];
+    window.postMessage(pagedWorktree, '*');
+    await tick();
     const childLoads = window.posted.filter(message => message.type === 'loadChanges' && message.id === 'page-child').length;
     items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
     check('reopening a parent reloads its restored expanded worktree', window.posted.filter(message =>
       message.type === 'loadChanges' && message.id === 'page-child').length === childLoads + 1);
-    const attention = { type: 'snapshot', errors: [], repositories: [{
+    const attention = { type: 'snapshot', errors: [], expandWorktrees: true, repositories: [{
       id: 'attention-parent', name: 'warning-parent', branch: 'main', dirty: false, hasUnpushedSubmodules: true,
       changeCountLowerBound: 0, groups: [], changesPage: { state: 'idle', page: 0, previous: false, next: false },
       worktreeCount: 1, worktrees: [{ id: 'attention-child', name: 'warning-child', branch: 'topic', dirty: false,
@@ -463,8 +579,8 @@ const scenario = String.raw`
     window.postMessage(attention, '*');
     await tick();
     let warningParent = items().find(item => item.getAttribute('aria-label').startsWith('warning-parent'));
-    check('clean repository with submodule warning can expand without a changed file count',
-      warningParent.getAttribute('aria-expanded') === 'false' && !warningParent.querySelector('.count'));
+    check('clean repository exposes its worktree without a changed file count',
+      warningParent.getAttribute('aria-expanded') === 'true' && !warningParent.querySelector('.count'));
     warningParent.querySelector('.row').click();
     let warningChild = items().find(item => item.getAttribute('aria-label').startsWith('warning-child, worktree'));
     check('clean linked worktree exposes its submodule warning', warningChild.getAttribute('aria-expanded') === 'false' &&
@@ -550,6 +666,8 @@ const scenario = String.raw`
     searchable.repositories[0].worktrees = [{ id: 'search-child', name: 'linked', branch: 'topic', dirty: true, available: true,
       groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'child-file', path: 'child.txt', status: 'M' }] }],
       changesPage: { state: 'ready', page: 0, previous: false, next: false } }];
+    searchable.repositories[0].worktreeCount = 1;
+    searchable.expandWorktrees = true;
     window.postMessage(searchable, '*');
     await tick();
     let searchChild = items().find(item => item.getAttribute('aria-label').includes('linked, worktree'));
@@ -588,21 +706,41 @@ const restoreScenario = String.raw`
     await tick();
     const items = () => [...document.querySelectorAll('[role="treeitem"]')];
     let repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
-    const child = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
-    check('saved repository and worktree expansion is restored', repo.getAttribute('aria-expanded') === 'true' &&
-      child.getAttribute('aria-expanded') === 'true');
     const requests = id => window.posted.filter(message => message.type === 'loadChanges' && message.id === id).length;
+    check('pending config does not infer the worktree default', repo.getAttribute('aria-expanded') === 'true' &&
+      !items().some(item => item.getAttribute('aria-label').includes('child, worktree')) && requests('restored') === 1 && requests('restored-child') === 0);
+    fixture.expandWorktrees = true;
+    window.postMessage(fixture, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
+    const child = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
+    check('saved repository and worktree expansion is restored after config loads', repo.getAttribute('aria-expanded') === 'true' &&
+      child.getAttribute('aria-expanded') === 'true');
     check('restored owners each load once', requests('restored') === 1 && requests('restored-child') === 1);
     window.postMessage(fixture, '*');
     await tick();
     check('repeated restore snapshot does not duplicate loads', requests('restored') === 1 && requests('restored-child') === 1);
     repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
     repo.querySelector('.row').click();
-    check('collapsing restored parent releases both owners', ['restored', 'restored-child'].every(id =>
-      window.posted.some(message => message.type === 'releaseChanges' && message.id === id)));
+    check('collapsing parent files preserves its visible worktree', window.posted.some(message =>
+      message.type === 'releaseChanges' && message.id === 'restored') && !window.posted.some(message =>
+      message.type === 'releaseChanges' && message.id === 'restored-child') &&
+      items().some(item => item.getAttribute('aria-label').includes('child, worktree')));
+    repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
+    repo.querySelector('.worktree-action').click();
+    check('hiding worktrees releases the child page', window.posted.some(message =>
+      message.type === 'releaseChanges' && message.id === 'restored-child'));
     window.postMessage(fixture, '*');
     await tick();
     check('collapsed restored owners stay unloaded', requests('restored') === 1 && requests('restored-child') === 1);
+    const resent = structuredClone(fixture);
+    resent.repositories[0].worktreeStateKey = 'd'.repeat(64);
+    resent.revealWorktrees = [{ id: 'already-revealed', identity: 'd'.repeat(64) }];
+    window.postMessage(resent, '*');
+    await tick();
+    check('a duplicate reveal after recreation preserves the saved collapse',
+      !items().some(item => item.getAttribute('aria-label').includes('child, worktree')) &&
+      window.posted.some(message => message.type === 'ackWorktreeReveal' && message.id === 'already-revealed'));
     document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks, background: getComputedStyle(document.body).backgroundColor }));
   } catch (error) {
     document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: error.stack || String(error) }));
@@ -616,7 +754,7 @@ function documentFor(theme, restored = false) {
     : '--vscode-sideBar-background:#1e1e1e;--vscode-sideBar-foreground:#ddd;--vscode-list-inactiveSelectionBackground:#383838;--vscode-focusBorder:#007acc;';
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
-<script nonce="gitpane-test">window.posted=[];window.savedState=${restored ? '{expanded:["repo:restored","worktree:restored-child"]}' : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
+<script nonce="gitpane-test">window.posted=[];window.ackStates=[];window.savedState=${restored ? JSON.stringify({ expanded: ['repo:restored', 'worktree:restored-child'], worktreeVisibility: [['d'.repeat(64), false]], appliedWorktreeReveals: ['already-revealed'] }) : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>{window.posted.push(m);if(m.type==='ackWorktreeReveal')window.ackStates.push(structuredClone(window.savedState));},getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
 <script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 

@@ -277,6 +277,7 @@ class BackendManager {
       else if (method === 'submodule_pointer_content') result = await client.submodulePointerContent(repo, argument.record, argument.identity, argument.headOid, argument.sides, argument.side);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
+      else if (method === 'ui_config') result = await client.uiConfig();
       else if (method === 'theme') result = await client.theme();
       else if (method === 'themes_list') result = await client.themesList();
       else if (method === 'theme_preview') result = await client.themePreview(argument);
@@ -309,7 +310,8 @@ class BackendManager {
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = ['theme', 'themes_list', 'theme_preview'].includes(method) && ['theme_error', 'invalid_request', 'unsupported_backend', 'stale_target'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme) {
+      const invalidUiConfig = method === 'ui_config' && ['invalid_request', 'unsupported_backend'].includes(error?.code);
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig) {
         this.setState('error', error);
       }
       throw error;
@@ -722,6 +724,8 @@ class BackendManager {
   graph(repo, firstParent = false, filters, collapsedSegments) { return this.request('graph', repo, firstParent, filters, collapsedSegments); }
 
   graphRevision(repo) { return this.request('graph_revision', repo); }
+
+  uiConfig() { return this.request('ui_config'); }
 
   theme() { return this.request('theme'); }
 

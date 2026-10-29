@@ -270,6 +270,16 @@ class BridgeClient {
     }
   }
 
+  async uiConfig() {
+    try { return await this.request('ui_config', {}); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support worktree display settings. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async theme() {
     try { return await this.request('theme', {}); }
     catch (error) {

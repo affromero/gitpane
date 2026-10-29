@@ -47,6 +47,7 @@ class SidebarActions {
     this.resolveWorktree = options.resolveWorktree;
     this.refresh = options.refresh;
     this.onWorktreeCreated = options.onWorktreeCreated;
+    this.captureWorktreeReveal = options.captureWorktreeReveal;
     this.reviewBranch = options.reviewBranch;
     this.openGithub = options.openGithub;
     this.openSession = options.openSession;
@@ -324,6 +325,7 @@ class SidebarActions {
         params = { repo: item.repoPath, branch, path: target };
       } else return;
       if (!current()) return;
+      const reveal = method === 'worktree_create' ? this.captureWorktreeReveal?.(message.id) : undefined;
       let actionError;
       try {
         const result = await this.mutations.execute(method, params, {
@@ -343,7 +345,7 @@ class SidebarActions {
           await this.vscode.window.showInformationMessage(message);
         }
         if (method === 'worktree_create' && this.onWorktreeCreated) {
-          await this.onWorktreeCreated(params.path);
+          await this.onWorktreeCreated(params.path, reveal);
         }
       } catch (error) {
         actionError = error;

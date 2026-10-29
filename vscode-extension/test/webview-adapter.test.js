@@ -133,8 +133,19 @@ test('webview shows workspace state and opens only currently visible changes', a
     const worktree = first.repositories[0].worktrees[0];
     assert.equal(provider.resolveWorktree(worktree.id).branch, 'worktree-branch');
     assert.equal(worktree.available, true);
-    const childFile = worktree.groups[0].files[0];
+    let childFile = worktree.groups[0].files[0];
     assert.equal(childFile.path, 'child.txt');
+    const oldChildFileId = childFile.id;
+    await onMessage({ type: 'releaseChanges', id: worktree.id });
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].changesPage.state, 'idle');
+    assert.equal(provider.resolveChange(oldChildFileId), undefined, 'a released file ID cannot be reused');
+    await onMessage({ type: 'openChange', id: oldChildFileId });
+    assert.deepEqual(calls, [], 'a released file ID cannot open an old diff');
+    await onMessage({ type: 'loadChanges', id: worktree.id });
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].changesPage.state, 'ready');
+    assert.equal(snapshots.at(-1).repositories[0].worktrees[0].groups[0].files[0].path, 'child.txt');
+    childFile = snapshots.at(-1).repositories[0].worktrees[0].groups[0].files[0];
+    assert.notEqual(childFile.id, oldChildFileId);
     await onMessage({ type: 'searchChanges', id: worktree.id, query: 'child', direction: 'first' });
     assert.equal(snapshots.at(-1).repositories[0].worktrees[0].changesPage.search.path, 'child.txt');
     assert.equal(provider.resolveChange(childFile.id).repoPath, worktreePath);
@@ -215,6 +226,12 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls.at(-1)[1].record.kind, 'submodule_attention');
     calls.pop();
 
+    const rootStatus = tree.backendStatuses.get(root);
+    rootStatus.repo_identity = 'a'.repeat(64);
+    tree.backendGeneration = 1;
+    provider.snapshot();
+    const queuedReveal = provider.captureWorktreeReveal(first.repositories[0].id);
+    assert.ok(queuedReveal, 'current repository can be captured before creating a worktree');
     view.visible = false;
     onVisibility();
     assert.equal(visible, false);
@@ -223,6 +240,47 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls.length, 2);
     onDispose();
     assert.equal(visible, false);
+    tree.isCurrentRepository = (target, token) => tree.repositoryToken(target) === token;
+    tree.backendStatuses.delete(root);
+    provider.revealWorktrees(worktreePath, queuedReveal);
+    assert.equal(provider.worktreeReveals.size, 1, 'missing status keeps the reveal pending');
+    tree.backendStatuses.set(root, rootStatus);
+    view.visible = true;
+    try {
+      Module._load = function (name, ...args) {
+        if (name === './webview/html') return { getHtml: () => '<html></html>' };
+        return load.call(this, name, ...args);
+      };
+      provider.resolveWebviewView(view);
+    } finally { Module._load = load; }
+    await onMessage({ type: 'ready' });
+    const reveal = snapshots.at(-1).revealWorktrees[0];
+    assert.equal(reveal.identity, rootStatus.repo_identity);
+    onChange();
+    assert.equal(snapshots.at(-1).revealWorktrees[0].id, reveal.id, 'a lost acknowledgement causes redelivery');
+    await onMessage({ type: 'ackWorktreeReveal', id: reveal.id });
+    assert.equal(provider.snapshot().revealWorktrees, undefined);
+    tree.backendStatuses.get(worktreePath).repo_identity = 'c'.repeat(64);
+    const childId = provider.resolveWorktree(worktree.id).childRepoId;
+    const nestedReveal = provider.captureWorktreeReveal(childId);
+    assert.equal(nestedReveal.identity, rootStatus.repo_identity, 'nested creation reveals the displayed parent anchor');
+    provider.revealWorktrees(worktreePath, nestedReveal);
+    assert.equal(provider.snapshot().revealWorktrees[0].identity, rootStatus.repo_identity);
+    const removedLink = rootStatus.worktrees.shift();
+    provider.snapshot();
+    assert.equal(provider.worktreeReveals.size, 0, 'reparented or removed worktrees cannot reveal an old anchor');
+    rootStatus.worktrees.unshift(removedLink);
+    provider.snapshot();
+    const staleReveal = provider.captureWorktreeReveal(first.repositories[0].id);
+    tree.backendGeneration++;
+    provider.revealWorktrees(worktreePath, staleReveal);
+    assert.equal(provider.worktreeReveals.size, 0, 'a workspace change cancels the old reveal');
+    provider.snapshot();
+    const replacedReveal = provider.captureWorktreeReveal(first.repositories[0].id);
+    provider.revealWorktrees(worktreePath, replacedReveal);
+    rootStatus.repo_identity = 'b'.repeat(64);
+    provider.snapshot();
+    assert.equal(provider.worktreeReveals.size, 0, 'a replaced repository cancels its pending reveal');
   } finally {
     provider.dispose();
   }

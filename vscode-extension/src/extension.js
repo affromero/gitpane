@@ -20,6 +20,7 @@ const { ChangePager, scopedFile, validRecord, validatePage } = require('./change
 const { LinkDocuments, statusRevision } = require('./link-documents');
 const { ThemeController } = require('./theme');
 const { ThemePicker } = require('./theme-picker');
+const { WorktreeDisplay } = require('./worktree-display');
 const { WorkspaceFetch } = require('./workspace-fetch');
 const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
@@ -36,10 +37,12 @@ const RICH_STATUS = {
 };
 
 class GitpaneViewProvider {
-  constructor(tree, extensionUri, theme) {
+  constructor(tree, extensionUri, theme, worktreeDisplay) {
     this.tree = tree;
     this.theme = theme;
     this.themeSubscription = theme?.onDidChange(() => this.publish());
+    this.worktreeDisplay = worktreeDisplay;
+    this.worktreeDisplaySubscription = worktreeDisplay?.onDidChange(() => this.publish());
     this.extensionUri = extensionUri;
     this.view = undefined;
     this.ready = false;
@@ -50,6 +53,9 @@ class GitpaneViewProvider {
     this.changes = new Map();
     this.worktrees = new Map();
     this.searchRequests = new Map();
+    this.worktreeReveals = new Map();
+    this.worktreeRevealError = undefined;
+    this.disposed = false;
     this.nextSearchRequest = 0;
     this.viewDisposables = [];
     this.pager = new ChangePager(tree.backend, () => this.publish(), error => tree.output?.appendLine(`Could not release changes: ${error.message}`));
@@ -144,6 +150,7 @@ class GitpaneViewProvider {
         pinned: this.pins?.isPinned(repo) || false,
         live: this.tree.sessionLive?.(root) || false,
         statusUnavailable: !status,
+        ...(/^[a-f0-9]{64}$/.test(status?.repo_identity || '') ? { worktreeStateKey: status.repo_identity } : {}),
         stashCount: status?.stashes.length || 0,
         stashes,
         worktreeCount: worktreeData.length,
@@ -157,9 +164,20 @@ class GitpaneViewProvider {
     this.changes = changes;
     this.worktrees = worktrees;
     this.repositories = repositoriesById;
+    const reveals = [];
+    for (const [id, entry] of this.worktreeReveals) {
+      const current = entry.current();
+      if (current === false) this.worktreeReveals.delete(id);
+      else if (current === true && repositories.some(repo => repo.worktreeStateKey === entry.identity)) {
+        reveals.push({ id, identity: entry.identity });
+      }
+    }
     return {
       type: 'snapshot', repositories,
-      errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : [])],
+      errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
+        ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : [])],
+      ...(reveals.length ? { revealWorktrees: reveals } : {}),
+      ...(typeof this.worktreeDisplay?.value === 'boolean' ? { expandWorktrees: this.worktreeDisplay.value } : {}),
       ...(this.theme?.value ? { theme: this.theme.payload() } : {}),
       ...(this.theme && !this.theme.value ? { themeClear: true } : {}),
       emptyMessage: children.find(node => node.type === 'info')?.message,
@@ -170,6 +188,46 @@ class GitpaneViewProvider {
   publish() {
     if (!this.view || !this.ready) return;
     this.view.webview.postMessage(this.snapshot());
+  }
+
+  captureWorktreeReveal(id) {
+    const selected = this.repositories.get(id);
+    const repo = this.currentRepository(id);
+    const status = repo && this.tree.backendStatuses.get(selected?.repoKey);
+    const childIdentity = status?.repo_identity;
+    const link = [...this.worktrees.values()].find(item => item.childRepoId === id);
+    const anchor = link && this.tree.git.repositories.find(item => item.rootUri.toString() === link.repoKey);
+    const anchorStatus = anchor && this.tree.backendStatuses.get(link.repoKey);
+    const identity = link ? anchorStatus?.repo_identity : childIdentity;
+    if (!repo || !selected || !/^[a-f0-9]{64}$/.test(childIdentity || '') ||
+        !/^[a-f0-9]{64}$/.test(identity || '') || (link && (!anchor || !this.tree.isCurrentRepository(anchor, link.repoToken)))) return undefined;
+    const generation = this.tree.backendGeneration;
+    return { identity, current: () => {
+      if (this.disposed || this.tree.backendGeneration !== generation || !this.tree.isCurrentRepository(repo, selected.repoToken)) return false;
+      if (link && !this.tree.isCurrentRepository(anchor, link.repoToken)) return false;
+      const latest = this.tree.backendStatuses.get(selected.repoKey);
+      const latestAnchor = link && this.tree.backendStatuses.get(link.repoKey);
+      if (!latest?.repo_identity || (link && !latestAnchor?.repo_identity)) return undefined;
+      if (latest.repo_identity !== childIdentity || (link && latestAnchor.repo_identity !== identity)) return false;
+      if (!link) return true;
+      const child = this.tree.worktreeRepository(anchor, link.path);
+      return this.tree.workspaceWorktrees(anchor).some(item => item.path === link.path) && !!child &&
+        child.rootUri.toString() === selected.repoKey && this.tree.isCurrentRepository(child, selected.repoToken);
+    } };
+  }
+
+  revealWorktrees(target, reveal) {
+    if (!reveal || reveal.current() === false || !this.tree.isPathInWorkspace(target)) return;
+    for (const [id, entry] of this.worktreeReveals) if (entry.current() === false) this.worktreeReveals.delete(id);
+    if (this.worktreeReveals.size >= 128) {
+      this.worktreeRevealError = 'Gitpane could not reveal a newly created worktree. Expand its repository manually.';
+      this.publish();
+      return;
+    }
+    const id = randomUUID();
+    this.worktreeReveals.set(id, { identity: reveal.identity,
+      current: () => this.tree.isPathInWorkspace(target) ? reveal.current() : false });
+    this.publish();
   }
 
   currentOwner(id) {
@@ -234,8 +292,10 @@ class GitpaneViewProvider {
   }
 
   async refresh(retryBackend = false) {
+    if (retryBackend) this.worktreeRevealError = undefined;
     await this.tree.refresh(retryBackend);
     if (retryBackend && this.theme?.error) await this.theme.retry();
+    if (retryBackend && this.worktreeDisplay?.error) await this.worktreeDisplay.retry();
     for (const id of [...this.pager.entries.keys()]) {
       const pending = this.pager.get(id)?.pending;
       if (pending) await pending;
@@ -367,6 +427,9 @@ class GitpaneViewProvider {
         if (message?.type === 'ready') {
           this.ready = true;
           this.publish();
+        } else if (message?.type === 'ackWorktreeReveal' && typeof message.id === 'string') {
+          this.worktreeReveals.delete(message.id);
+          if (this.worktreeRevealError && this.worktreeReveals.size < 128) { this.worktreeRevealError = undefined; this.publish(); }
         } else if (message?.type === 'refresh') {
           try { await this.refresh(true); }
           catch (error) {
@@ -442,7 +505,9 @@ class GitpaneViewProvider {
   }
 
   dispose() {
+    this.disposed = true;
     this.themeSubscription?.dispose();
+    this.worktreeDisplaySubscription?.dispose();
     this.tree.setVisible(false);
     if (this.refreshChangesTimer !== undefined) clearTimeout(this.refreshChangesTimer);
     this.pager.dispose();
@@ -454,6 +519,7 @@ class GitpaneViewProvider {
     this.repositories.clear();
     this.changes.clear();
     this.worktrees.clear();
+    this.worktreeReveals.clear();
   }
 }
 
@@ -473,11 +539,12 @@ async function activate(context) {
   const api = git.getAPI(1);
   const backend = new BackendManager(context, { output });
   const theme = new ThemeController(backend, vscode.window.onDidChangeActiveColorTheme);
+  const worktreeDisplay = new WorktreeDisplay(backend);
   const themePicker = new ThemePicker(vscode, backend, theme);
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
   const hidden = new HiddenRepositories(tree, backend, context.workspaceState, vscode);
   tree.hiddenRepositories = hidden;
-  const provider = new GitpaneViewProvider(tree, context.extensionUri, theme);
+  const provider = new GitpaneViewProvider(tree, context.extensionUri, theme, worktreeDisplay);
   const pins = new SubmodulePins(tree, backend, api, context.workspaceState, vscode);
   const workspaceRepositories = new WorkspaceRepositories(tree, backend, api, context.workspaceState, vscode, pins);
   tree.pins = pins;
@@ -578,16 +645,23 @@ async function activate(context) {
       const repo = provider.currentWorktreeRepository(id);
       if (repo && guard()) await review.open(repo, guard);
     },
-    onWorktreeCreated: async target => {
-      if (!tree.isPathInWorkspace(target)) return;
+    onWorktreeCreated: async (target, reveal) => {
+      if (!tree.isPathInWorkspace(target) || reveal?.current() === false) return;
       try {
         const opened = await api.openRepository(vscode.Uri.file(target));
         if (!opened) throw new Error('VS Code did not open the repository.');
+        if (!tree.isPathInWorkspace(target) || reveal?.current() === false) return;
+        if (reveal) provider.revealWorktrees(target, reveal);
+        else {
+          provider.worktreeRevealError = 'Worktree created, but Gitpane could not reveal it. Expand its repository manually.';
+          provider.publish();
+        }
       }
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
+    captureWorktreeReveal: id => provider.captureWorktreeReveal(id),
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, theme, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
+  context.subscriptions.push(backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),

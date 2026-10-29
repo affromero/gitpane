@@ -147,6 +147,7 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(compact.watched_paths, ['link']);
   const graph = await manager.graph(path.join(root, 'repo'), true);
   assert.equal((await manager.graphRevision(path.join(root, 'repo'))).method, 'graph_revision');
+  assert.equal((await manager.uiConfig()).method, 'ui_config');
   assert.equal((await manager.theme()).method, 'theme');
   assert.equal(graph.method, 'graph');
   assert.equal(graph.first_parent, true);
@@ -174,12 +175,15 @@ test('backend initializes workspace roots and reads status and graph', async t =
   });
 });
 
-test('theme configuration errors do not mark the repository backend unavailable', async t => {
+test('display configuration errors do not mark the repository backend unavailable', async t => {
   const { manager } = fixture();
   t.after(() => manager.dispose());
   await manager.ready();
   manager.client.theme = async () => { throw Object.assign(new Error('theme missing'), { code: 'theme_error' }); };
   await assert.rejects(manager.theme(), /theme missing/);
+  assert.equal(manager.state.status, 'ready');
+  manager.client.uiConfig = async () => { throw Object.assign(new Error('update backend'), { code: 'unsupported_backend' }); };
+  await assert.rejects(manager.uiConfig(), /update backend/);
   assert.equal(manager.state.status, 'ready');
 });
 
