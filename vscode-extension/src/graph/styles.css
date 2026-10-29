@@ -79,18 +79,34 @@ body {
 .commit[aria-selected="true"] { background: var(--vscode-list-inactiveSelectionBackground); }
 .graph:focus .commit.active { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .lane { display: inline-block; width: 2ch; white-space: pre; flex: none; }
-.lane-0, .remote, .deleted, .conflicted { color: var(--red); }
-.lane-1, .head, .added, .addition { color: var(--green); }
-.lane-2, .hash, .modified { color: var(--yellow); }
-.lane-3, .renamed { color: var(--blue); }
-.lane-4, .stash { color: var(--magenta); }
-.lane-5, .local { color: var(--cyan); }
-.worktree, .tag { color: var(--yellow); }
+.lane-0 { color: var(--red); }
+.lane-1 { color: var(--green); }
+.lane-2 { color: var(--yellow); }
+.lane-3 { color: var(--blue); }
+.lane-4 { color: var(--magenta); }
+.lane-5 { color: var(--cyan); }
+.remote { color: var(--gitpane-graph-remote-label, var(--red)); }
+.deleted, .conflicted { color: var(--gitpane-graph-commit-files-status-deleted, var(--red)); }
+.head { color: var(--gitpane-graph-head-marker, var(--green)); }
+.added { color: var(--gitpane-graph-commit-files-status-added, var(--green)); }
+.addition { color: var(--gitpane-graph-addition, var(--green)); }
+.hash { color: var(--gitpane-graph-commit-id, var(--yellow)); }
+.modified { color: var(--gitpane-graph-commit-files-status-modified, var(--yellow)); }
+.renamed { color: var(--gitpane-graph-commit-files-status-renamed, var(--blue)); }
+.stash { color: var(--gitpane-graph-stash-label, var(--magenta)); }
+.local { color: var(--gitpane-graph-local-branch-label, var(--cyan)); }
+.worktree { color: var(--gitpane-graph-worktree-marker, var(--yellow)); }
+.tag { color: var(--gitpane-graph-tag-label, var(--yellow)); }
 .labels { white-space: nowrap; }
-.parenthesis, .time, .nonmatch .summary, .nonmatch .author, .untracked { color: var(--muted); }
-.summary { white-space: pre; }
+.parenthesis { color: var(--gitpane-graph-paren, var(--muted)); }
+.time { color: var(--gitpane-graph-time, var(--muted)); }
+.nonmatch .summary, .nonmatch .author { color: var(--gitpane-graph-dimmed, var(--muted)) !important; }
+.untracked { color: var(--gitpane-graph-commit-files-status-other, var(--muted)); }
+.summary { white-space: pre; color: var(--gitpane-graph-commit-message, inherit); }
+.summary.merge { color: var(--gitpane-graph-merge-message, inherit); }
 .author, .time, .stats { white-space: nowrap; }
-.deletion { color: var(--red); }
+.deletion { color: var(--gitpane-graph-deletion, var(--red)); }
+.commit[aria-selected="true"] span { color: var(--vscode-list-inactiveSelectionForeground, var(--text)) !important; }
 
 .details { margin-top: 16px; border-top: 1px solid var(--vscode-panel-border, var(--muted)); }
 .details h2 { margin: 8px 0 4px; color: var(--cyan); font: inherit; }
@@ -110,9 +126,9 @@ body {
 }
 .file:hover { background: var(--vscode-list-hoverBackground); }
 .file:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-.file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gitpane-graph-commit-files-path, inherit); }
 
 @media (forced-colors: active) {
-  .lane, .hash, .labels span, .addition, .deletion, .file-status { color: CanvasText; }
+  .lane, .lane span, .hash, .labels span, .addition, .deletion, .file-status { color: CanvasText !important; }
   .graph:focus .commit.active, .file:focus-visible { outline: 1px solid Highlight; }
 }

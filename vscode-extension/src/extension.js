@@ -18,6 +18,7 @@ const { Status, isSubmodule, richComparison, statusLabel } = require('./model');
 const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
+const { ThemeController } = require('./theme');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -29,8 +30,10 @@ const RICH_STATUS = {
 };
 
 class GitpaneViewProvider {
-  constructor(tree, extensionUri) {
+  constructor(tree, extensionUri, theme) {
     this.tree = tree;
+    this.theme = theme;
+    this.themeSubscription = theme?.onDidChange(() => this.publish());
     this.extensionUri = extensionUri;
     this.view = undefined;
     this.ready = false;
@@ -76,7 +79,7 @@ class GitpaneViewProvider {
         if (!grouped.has(record.group)) grouped.set(record.group, { id: record.group, label: labels[record.group], files: [] });
         grouped.get(record.group).files.push({ id: fileId, name: path.basename(uri.fsPath),
           path: directory ? `${record.path}/` : record.path, status: record.group === 'attention' ? '!' : statusLabel(change.status),
-          ...(directory ? { directory: true } : {}) });
+          ...(directory ? { directory: true } : {}), ...(record.is_submodule ? { submodule: true } : {}) });
       }
       return ['merge', 'index', 'working', 'untracked', 'attention'].flatMap(group => grouped.has(group) ? [grouped.get(group)] : []);
     };
@@ -145,7 +148,9 @@ class GitpaneViewProvider {
     this.repositories = repositoriesById;
     return {
       type: 'snapshot', repositories,
-      errors: children.filter(node => node.type === 'error').map(node => node.message),
+      errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : [])],
+      ...(this.theme?.value ? { theme: this.theme.payload() } : {}),
+      ...(this.theme && !this.theme.value ? { themeClear: true } : {}),
       emptyMessage: children.find(node => node.type === 'info')?.message,
       loading: this.tree.busy
     };
@@ -218,6 +223,7 @@ class GitpaneViewProvider {
 
   async refresh(retryBackend = false) {
     await this.tree.refresh(retryBackend);
+    if (retryBackend && this.theme?.error) await this.theme.retry();
     for (const id of [...this.pager.entries.keys()]) {
       const pending = this.pager.get(id)?.pending;
       if (pending) await pending;
@@ -316,7 +322,7 @@ class GitpaneViewProvider {
     this.ready = false;
     view.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src', 'webview')]
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src')]
     };
     const { getHtml } = require('./webview/html');
     view.webview.html = getHtml(view.webview, this.extensionUri);
@@ -384,6 +390,7 @@ class GitpaneViewProvider {
   }
 
   dispose() {
+    this.themeSubscription?.dispose();
     this.tree.setVisible(false);
     if (this.refreshChangesTimer !== undefined) clearTimeout(this.refreshChangesTimer);
     this.pager.dispose();
@@ -412,12 +419,13 @@ async function activate(context) {
   }
   const api = git.getAPI(1);
   const backend = new BackendManager(context, { output });
+  const theme = new ThemeController(backend, vscode.window.onDidChangeActiveColorTheme);
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
-  const provider = new GitpaneViewProvider(tree, context.extensionUri);
+  const provider = new GitpaneViewProvider(tree, context.extensionUri, theme);
   const links = new LinkDocuments(vscode, tree, backend);
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
-  const graph = new GraphProvider(tree, backend, api, context.extensionUri);
+  const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme);
   const review = new BranchReviewProvider(tree, backend, api);
   const github = new GithubProvider(tree, backend);
   const sessions = new SessionProvider(tree, backend);
@@ -484,7 +492,7 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, mutations,
+  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),

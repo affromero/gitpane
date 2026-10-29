@@ -151,7 +151,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
     if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
     if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
     if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
-    if (repo.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Submodules need attention');
+    if (repo.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
     if (info.count || (info.unknown && repo.dirty)) {
       const value = info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`;
       add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
@@ -178,7 +178,7 @@ function statusClass(status) {
 function fileRow(file) {
   const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}`);
   add(row, statusClass(file.status), file.status || ' ');
-  add(row, 'file-path', file.path || file.name, file.path || file.name);
+  add(row, `file-path${file.submodule ? ' submodule-path' : ''}`, file.path || file.name, file.path || file.name);
   if (file.directory) add(row, 'muted', 'directory', 'Untracked directory');
   else row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
   return row;
@@ -193,7 +193,7 @@ function worktreeRow(worktree) {
   const tail = element('span', 'tail');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
-  if (worktree.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Submodules need attention');
+  if (worktree.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
   if (worktree.changesPage) {
     const info = countInfo(worktree);
     if (info.count || (info.unknown && worktree.dirty)) {
@@ -541,6 +541,10 @@ tree.addEventListener('keydown', event => {
 
 window.addEventListener('message', event => {
   if (event.data?.type !== 'snapshot') return;
+  if (event.data.themeClear) window.GitpaneTheme?.clear();
+  if (event.data.theme && !window.GitpaneTheme?.set(event.data.theme)) {
+    event.data.errors = [...(event.data.errors || []), 'Gitpane returned an invalid theme.'];
+  }
   snapshot = { ...event.data, repositories: Array.isArray(event.data.repositories) ? event.data.repositories : [] };
   render();
 });

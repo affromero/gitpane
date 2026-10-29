@@ -74,6 +74,7 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.graph(repo, false, filters), { method: 'graph', repo, roots: [root], first_parent: false, filters });
   assert.deepEqual(await client.graph(repo, false, filters, ['abc']), { method: 'graph', repo, roots: [root], first_parent: false, filters, collapsed_segments: ['abc'] });
   assert.deepEqual(await client.graphRevision(repo), { method: 'graph_revision', repo, roots: [root] });
+  assert.deepEqual(await client.theme(), { method: 'theme', roots: [root] });
   assert.deepEqual(await client.commitFiles(repo, 'abc123'), { method: 'commit_files', repo, roots: [root], oid: 'abc123' });
   assert.deepEqual(await client.branchReview(repo), { method: 'branch_review', repo, roots: [root] });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child'), { method: 'submodule_inspect', repo, path: 'child', roots: [root] });

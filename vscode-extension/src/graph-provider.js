@@ -23,11 +23,13 @@ function validFilePath(value) {
 }
 
 class GraphProvider {
-  constructor(tree, backend, git, extensionUri) {
+  constructor(tree, backend, git, extensionUri, theme) {
     this.tree = tree;
     this.backend = backend;
     this.git = git;
     this.extensionUri = extensionUri;
+    this.theme = theme;
+    this.themeSubscription = theme?.onDidChange(() => this.publishTheme());
     this.panel = undefined;
     this.repoKey = undefined;
     this.guard = () => true;
@@ -112,7 +114,7 @@ class GraphProvider {
     const panel = vscode.window.createWebviewPanel('gitpane.graph',
       `Gitpane: ${path.basename(repo.rootUri.fsPath)}`, vscode.ViewColumn.Active, {
         enableScripts: true,
-        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src', 'graph')]
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src')]
       });
     this.panel = panel;
     panel.webview.html = require('./graph/html').getHtml(panel.webview, this.extensionUri);
@@ -146,6 +148,12 @@ class GraphProvider {
 
   post(message) {
     if (this.panel) this.panel.webview.postMessage(message);
+  }
+
+  publishTheme() {
+    if (this.theme?.error) this.post({ type: 'themeError', error: this.theme.error });
+    else if (this.theme?.value) this.post({ type: 'theme', theme: this.theme.payload() });
+    else if (this.theme) this.post({ type: 'themeReset' });
   }
 
   stopPolling() {
@@ -410,7 +418,7 @@ class GraphProvider {
 
   async receive(message) {
     if (!message || typeof message.type !== 'string') return;
-    if (message.type === 'ready') { this.ready = true; return this.loadGraph(); }
+    if (message.type === 'ready') { this.ready = true; this.publishTheme(); return this.loadGraph(); }
     if (message.type === 'refresh') return this.loadGraph();
     if (message.type === 'openFilters') {
       try { return await this.openFilters(); }
@@ -440,6 +448,7 @@ class GraphProvider {
   }
 
   dispose() {
+    this.themeSubscription?.dispose();
     this.ready = false;
     this.stopPolling();
     this.subscription.dispose();

@@ -161,13 +161,7 @@ async fn run() -> Result<()> {
         Some(Command::Serve { mutation_once }) => {
             let config = config::Config::load()?;
             apply_libgit2_limits(&config.git2);
-            return bridge::run(
-                &config.submodules,
-                &config.graph,
-                &config.worktree,
-                config.review.base.as_deref(),
-                mutation_once,
-            );
+            return bridge::run(&config, mutation_once);
         }
         None => {}
     }

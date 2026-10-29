@@ -742,10 +742,13 @@ fn reinitialization_invalidates_snapshot_tokens_even_for_the_same_workspace() {
             &mut scope,
             &mut snapshots,
             serde_json::from_value(json!({"id": 1, "method": method, "params": params})).unwrap(),
-            &SubmoduleConfig::default(),
-            &GraphConfig::default(),
-            &WorktreeConfig::default(),
-            None,
+            &crate::bridge::BridgeOptions {
+                submodules: &SubmoduleConfig::default(),
+                graph: &GraphConfig::default(),
+                worktree: &WorktreeConfig::default(),
+                review_base: None,
+                theme: &crate::config::Config::default(),
+            },
         )
     };
     let initialize = json!({"version": 1, "workspace_roots": [temporary.path()]});

@@ -11,7 +11,7 @@ test('commit files open native diffs against the first parent and reject stale a
   const messages = [];
   const commands = [];
   const errors = [];
-  let receive, onDispose, onTreeChange;
+  let receive, onDispose, onTreeChange, panelOptions;
   const panel = {
     webview: {
       postMessage(message) { messages.push(message); },
@@ -26,7 +26,7 @@ test('commit files open native diffs against the first parent and reject stale a
   const vscode = {
     Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
     ViewColumn: { Active: 1 },
-    window: { createWebviewPanel: () => panel, showErrorMessage: message => { errors.push(message); } },
+    window: { createWebviewPanel: (_type, _title, _column, options) => { panelOptions = options; return panel; }, showErrorMessage: message => { errors.push(message); } },
     commands: { async executeCommand(...args) { commands.push(args); } }
   };
   const load = Module._load;
@@ -77,6 +77,7 @@ test('commit files open native diffs against the first parent and reject stale a
       return load.call(this, name, ...args);
     };
     provider.open(repo, () => linked);
+    assert.deepEqual(panelOptions.localResourceRoots, ['/extension/src']);
   } finally { Module._load = load; }
 
   try {

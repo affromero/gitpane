@@ -99,6 +99,7 @@ test('webview shows workspace state and opens only currently visible changes', a
       return load.call(this, name, ...args);
     };
     provider.resolveWebviewView(view);
+    assert.deepEqual(view.webview.options.localResourceRoots, ['/extension/src']);
   } finally {
     Module._load = load;
   }

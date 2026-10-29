@@ -146,6 +146,16 @@ class BridgeClient {
     }
   }
 
+  async theme() {
+    try { return await this.request('theme', {}); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support themes. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   commitFiles(repo, oid) {
     return this.request('commit_files', { repo, oid });
   }

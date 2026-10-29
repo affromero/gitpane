@@ -12,6 +12,7 @@ const browser = process.env.CHROME_EXECUTABLE || (process.platform === 'darwin'
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-browser-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/webview/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
+const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
   repositories: [
@@ -56,6 +57,28 @@ const scenario = String.raw`
   };
   const snapshot = JSON.parse(atob('SNAPSHOT_BASE64'));
   try {
+    window.postMessage(snapshot, '*');
+    await tick();
+    const themed = JSON.parse(JSON.stringify(snapshot));
+    themed.theme = { name: 'custom', values: { 'repo-list-stash': 'rgb(255, 0, 120)',
+      'repo-list-worktree-count': 'rgb(240, 150, 0)', 'repo-list-repo-name': 'rgb(0, 180, 180)',
+      'repo-list-worktree-subtree-icon': 'rgb(160, 80, 240)', 'file-list-regular-path': 'rgb(0, 180, 0)',
+      'file-list-submodule-path': 'rgb(255, 100, 0)' }, lanes: [], authors: [] };
+    window.postMessage(themed, '*');
+    await tick();
+    check('workspace semantic theme applies under CSP',
+      !!document.documentElement.style.getPropertyValue('--gitpane-repo-list-stash') &&
+      document.documentElement.style.getPropertyValue('--gitpane-repo-list-stash') !==
+        document.documentElement.style.getPropertyValue('--gitpane-repo-list-worktree-count'));
+    const webName = items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name');
+    check('repository names use native semantic color', getComputedStyle(webName).color ===
+      document.documentElement.style.getPropertyValue('--gitpane-repo-list-repo-name'));
+    const badTheme = JSON.parse(JSON.stringify(themed));
+    badTheme.theme.values['repo-list-stash'] = 'red; display: none';
+    window.postMessage(badTheme, '*');
+    await tick();
+    check('invalid workspace theme is visible as an error', [...document.querySelectorAll('[role="alert"]')]
+      .some(node => node.textContent.includes('invalid theme')));
     window.postMessage(snapshot, '*');
     await tick();
     const root = document.querySelector('[role="tree"]');
@@ -151,6 +174,8 @@ const scenario = String.raw`
     check('stash toggle is accessible', stashButton.getAttribute('aria-label') === 'Expand stashes for web-app' &&
       stashButton.getAttribute('aria-expanded') === 'false');
     stashButton.focus();
+    check('selected stash action uses selection foreground', getComputedStyle(stashButton).color ===
+      getComputedStyle(stashRepo.querySelector('.repo-row')).color);
     stashButton.click();
     stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     stashButton = stashRepo.querySelector('.stash-action');
@@ -181,7 +206,7 @@ const scenario = String.raw`
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
       name: 'web-review', branch: 'review', dirty: true, fileCount: 2, ahead: 1, behind: 0, available: true,
       groups: [
-        { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt' }] },
+        { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt', submodule: true }] },
         { id: 'working', label: 'Unstaged', files: [{ id: 'worktree-working', status: 'M', path: 'working.txt' }] }
       ] }] });
     window.postMessage(withWorktree, '*');
@@ -191,6 +216,8 @@ const scenario = String.raw`
     cleanRepo.querySelector('.row').click();
     cleanRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     let worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('worktree subtree icon uses native semantic color', getComputedStyle(worktree.querySelector('.subtree')).color ===
+      document.documentElement.style.getPropertyValue('--gitpane-repo-list-worktree-subtree-icon'));
     check('workspace worktree status is visible', !!worktree && ['⎇', '*', 'review', '[2]', '↑1'].every(value => worktree.textContent.includes(value)));
     check('worktree status has accessible meaning', ['has changes', '2 files', '1 ahead'].every(value => worktree.getAttribute('aria-label').includes(value)));
     check('dirty worktree is collapsed and expandable', worktree.getAttribute('aria-expanded') === 'false');
@@ -209,6 +236,10 @@ const scenario = String.raw`
     check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&
       worktree.textContent.includes('staged.txt') && worktree.textContent.includes('working.txt'));
     const nestedFile = items().find(item => item.getAttribute('aria-label') === 'M working.txt');
+    const submoduleFile = items().find(item => item.getAttribute('aria-label') === 'M staged.txt');
+    check('regular and submodule paths use their native semantic colors',
+      getComputedStyle(nestedFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-regular-path') &&
+      getComputedStyle(submoduleFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-path'));
     nestedFile.querySelector('.row').click();
     check('clicking a worktree file opens its native change', window.posted.some(message =>
       message.type === 'openChange' && message.id === 'worktree-working' && !('path' in message)));
@@ -519,10 +550,10 @@ function documentFor(theme, restored = false) {
   const colors = light
     ? '--vscode-sideBar-background:#fff;--vscode-sideBar-foreground:#333;--vscode-list-inactiveSelectionBackground:#ddd;--vscode-focusBorder:#007acc;'
     : '--vscode-sideBar-background:#1e1e1e;--vscode-sideBar-foreground:#ddd;--vscode-list-inactiveSelectionBackground:#383838;--vscode-focusBorder:#007acc;';
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><style>:root {${colors}}\n${stylesheet}</style></head>
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
-<script>window.posted=[];window.savedState=${restored ? '{expanded:["repo:restored","worktree:restored-child"]}' : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script>${client}</script><script>${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">window.posted=[];window.savedState=${restored ? '{expanded:["repo:restored","worktree:restored-child"]}' : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme, restored = false) {

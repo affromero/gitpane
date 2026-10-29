@@ -63,9 +63,11 @@ function addLanes(container, row) {
     const crossing = horizontal.has(segment) ? spanAt(row, column, true) : undefined;
     const color = crossing ? crossing[2] : column;
     const lane = element('span', 'lane');
-    add(lane, `lane-${color % 6}`, glyphs[segment] || ' ');
+    const glyph = add(lane, `lane-${color % 6}`, glyphs[segment] || ' ');
+    if (window.GitpaneTheme) glyph.style.color = window.GitpaneTheme.lane(color);
     const continuation = spanAt(row, column, false);
-    add(lane, continuation ? `lane-${continuation[2] % 6}` : '', continuation ? '─' : ' ');
+    const connector = add(lane, continuation ? `lane-${continuation[2] % 6}` : '', continuation ? '─' : ' ');
+    if (continuation && window.GitpaneTheme) connector.style.color = window.GitpaneTheme.lane(continuation[2]);
     laneGroup.appendChild(lane);
   }
   container.appendChild(laneGroup);
@@ -123,8 +125,11 @@ function renderGraph() {
     if (row.segment_id) add(item, 'branch-toggle', row.collapsed ? '▸' : '▾');
     add(item, 'hash', row.short_id);
     addLabels(item, row);
-    add(item, 'summary', row.message);
-    if (row.author) add(item, 'author', `· ${row.author}`);
+    add(item, row.is_merge ? 'summary merge' : 'summary', row.message);
+    if (row.author) {
+      const author = add(item, 'author', `· ${row.author}`);
+      if (window.GitpaneTheme) author.style.color = window.GitpaneTheme.author(row.author);
+    }
     if (Number.isFinite(row.time)) {
       const time = new Date(row.time * 1000);
       if (!Number.isNaN(time.valueOf())) {
@@ -273,6 +278,17 @@ expandAll.addEventListener('click', () => {
 
 window.addEventListener('message', event => {
   const message = event.data;
+  if (message?.type === 'theme') {
+    const error = document.getElementById('theme-status');
+    if (error) error.textContent = window.GitpaneTheme?.set(message.theme) ? '' : 'Gitpane returned an invalid theme.';
+    return;
+  }
+  if (message?.type === 'themeError' || message?.type === 'themeReset') {
+    window.GitpaneTheme?.clear();
+    const error = document.getElementById('theme-status');
+    if (error) error.textContent = message.error || '';
+    return;
+  }
   if (message?.type === 'graph') {
     graphInteractive = !message.loading && !message.error;
     if (message.loading || message.error) detail = undefined;
@@ -315,6 +331,8 @@ window.addEventListener('message', event => {
     renderFiles();
   }
 });
+
+window.addEventListener('gitpane-theme', renderGraph);
 
 renderGraph();
 renderFiles();

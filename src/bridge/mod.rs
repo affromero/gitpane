@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::{GraphConfig, SubmoduleConfig, WorktreeConfig};
+use crate::config::{Config, GraphConfig, SubmoduleConfig, WorktreeConfig};
 
 mod changes;
 mod file_identity;
@@ -21,6 +21,7 @@ mod status;
 mod submodule;
 #[cfg(test)]
 mod tests;
+mod theme;
 mod worktree_plan;
 
 use scope::Scope;
@@ -116,14 +117,23 @@ fn commit_file_json(file: crate::git::commit_files::CommitFile) -> Value {
     result
 }
 
+struct BridgeOptions<'a> {
+    submodules: &'a SubmoduleConfig,
+    graph: &'a GraphConfig,
+    worktree: &'a WorktreeConfig,
+    review_base: Option<&'a str>,
+    theme: &'a Config,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyRequest {}
+
 fn process(
     scope: &mut Option<Scope>,
     snapshots: &mut changes::Snapshots,
     request: Request,
-    sub_cfg: &SubmoduleConfig,
-    graph_cfg: &GraphConfig,
-    worktree_cfg: &WorktreeConfig,
-    review_base: Option<&str>,
+    options: &BridgeOptions<'_>,
 ) -> Result<Value, BridgeError> {
     if request.method == "initialize" {
         let init: Initialize = params(request.params)?;
@@ -144,7 +154,15 @@ fn process(
             "initialize the bridge before making requests",
         )
     })?;
+    let sub_cfg = options.submodules;
+    let graph_cfg = options.graph;
+    let worktree_cfg = options.worktree;
+    let review_base = options.review_base;
     match request.method.as_str() {
+        "theme" => {
+            let _: EmptyRequest = params(request.params)?;
+            theme::query(options.theme)
+        }
         "changes_begin" => snapshots.begin(scope, params(request.params)?, sub_cfg),
         "changes_next" => snapshots.page(scope, params(request.params)?),
         "changes_find" => snapshots.find(scope, params(request.params)?),
@@ -266,13 +284,10 @@ fn write_reply(
     writer.flush()
 }
 
-fn serve(
+fn serve_inner(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
-    sub_cfg: &SubmoduleConfig,
-    graph_cfg: &GraphConfig,
-    worktree_cfg: &WorktreeConfig,
-    review_base: Option<&str>,
+    options: &BridgeOptions<'_>,
     mutation_once: bool,
 ) -> io::Result<()> {
     let mut scope = None;
@@ -315,15 +330,7 @@ fn serve(
                     )?;
                     return Ok(());
                 }
-                let result = process(
-                    &mut scope,
-                    &mut snapshots,
-                    request,
-                    sub_cfg,
-                    graph_cfg,
-                    worktree_cfg,
-                    review_base,
-                );
+                let result = process(&mut scope, &mut snapshots, request, options);
                 let failed = result.is_err();
                 write_reply(writer, Some(id), result)?;
                 if mutation_once && failed {
@@ -344,22 +351,43 @@ fn serve(
     }
 }
 
-pub(crate) fn run(
+#[cfg(test)]
+fn serve(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
     sub_cfg: &SubmoduleConfig,
     graph_cfg: &GraphConfig,
     worktree_cfg: &WorktreeConfig,
     review_base: Option<&str>,
     mutation_once: bool,
-) -> color_eyre::Result<()> {
+) -> io::Result<()> {
+    serve_inner(
+        reader,
+        writer,
+        &BridgeOptions {
+            submodules: sub_cfg,
+            graph: graph_cfg,
+            worktree: worktree_cfg,
+            review_base,
+            theme: &Config::default(),
+        },
+        mutation_once,
+    )
+}
+
+pub(crate) fn run(config: &Config, mutation_once: bool) -> color_eyre::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
-    serve(
+    serve_inner(
         &mut stdin.lock(),
         &mut stdout.lock(),
-        sub_cfg,
-        graph_cfg,
-        worktree_cfg,
-        review_base,
+        &BridgeOptions {
+            submodules: &config.submodules,
+            graph: &config.graph,
+            worktree: &config.worktree,
+            review_base: config.review.base.as_deref(),
+            theme: config,
+        },
         mutation_once,
     )?;
     Ok(())

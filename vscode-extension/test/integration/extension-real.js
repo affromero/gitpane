@@ -120,6 +120,13 @@ async function main() {
     provider.resolveWebviewView(view);
   } finally { Module._load = load; }
   await receive({ type: 'ready' });
+  for (let attempt = 0; attempt < 100 && !provider.theme.value && !provider.theme.error; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(provider.theme.error, undefined, provider.theme.error);
+  assert.equal(provider.theme.value?.name, 'default');
+  assert.equal(provider.theme.value.values['repo-list-worktree-count'], 'rgb(255, 175, 0)');
+  assert.ok(provider.theme.value.lanes.length > 0);
   const owner = snapshots.at(-1).repositories[0];
   assert.equal(repo.state.workingTreeChanges.length, 0);
   assert.equal(owner.dirty, true);

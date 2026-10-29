@@ -105,6 +105,7 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(compact.watched_paths, ['link']);
   const graph = await manager.graph(path.join(root, 'repo'), true);
   assert.equal((await manager.graphRevision(path.join(root, 'repo'))).method, 'graph_revision');
+  assert.equal((await manager.theme()).method, 'theme');
   assert.equal(graph.method, 'graph');
   assert.equal(graph.first_parent, true);
   const filters = { branches: ['topic'], authors: ['Alice'], refs: ['v1'] };
@@ -123,6 +124,15 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(await manager.planWorktree(path.join(root, 'repo'), 'feature/a'), {
     roots: [root], method: 'worktree_plan', branch: 'feature/a'
   });
+});
+
+test('theme configuration errors do not mark the repository backend unavailable', async t => {
+  const { manager } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  manager.client.theme = async () => { throw Object.assign(new Error('theme missing'), { code: 'theme_error' }); };
+  await assert.rejects(manager.theme(), /theme missing/);
+  assert.equal(manager.state.status, 'ready');
 });
 
 test('session discovery is limited to current workspace repositories', async t => {

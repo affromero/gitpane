@@ -12,6 +12,7 @@ const browser = process.env.CHROME_EXECUTABLE || (process.platform === 'darwin'
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-graph-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/graph/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/graph/view.js'), 'utf8');
+const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'graph', loading: false, firstParent: false, limit: 2,
   filters: { branches: [], authors: null, refs: { local: true, remote: false, tags: true, stashes: true } },
@@ -32,6 +33,14 @@ const scenario = String.raw`
   const checks = [];
   const check = (name, condition) => { if (!condition) throw new Error(name); checks.push(name); };
   const tick = () => new Promise(resolve => setTimeout(resolve, 30));
+  const luminance = color => color.match(/\d+/g).slice(0, 3).map(Number).map(value => {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const contrast = (a, b) => {
+    const x = luminance(a), y = luminance(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
   const snapshot = JSON.parse(atob('SNAPSHOT_BASE64'));
   try {
     check('webview requests initial graph', window.posted.some(message => message.type === 'ready'));
@@ -41,6 +50,50 @@ const scenario = String.raw`
     const options = () => [...graph.querySelectorAll('[role="option"]')];
     check('graph is keyboard accessible', graph.getAttribute('role') === 'listbox' && graph.tabIndex === 0);
     check('service rows shown', options().length === 2);
+    document.documentElement.style.setProperty('--vscode-terminal-ansiRed', 'rgb(255, 0, 0)');
+    const theme = { name: 'custom', values: { 'graph-head-marker': 'rgb(255, 0, 0)',
+      'graph-tag-label': 'var(--vscode-terminal-ansiRed)', 'graph-commit-message': 'rgb(0, 180, 180)',
+      'graph-merge-message': 'rgb(255, 100, 0)', 'graph-commit-files-path': 'rgb(160, 80, 240)' },
+      lanes: ['rgb(255, 0, 0)', 'rgb(0, 255, 0)', 'rgb(0, 0, 255)'],
+      authors: ['rgb(255, 100, 0)', 'rgb(0, 180, 180)', 'rgb(160, 80, 240)'] };
+    window.postMessage({ type: 'theme', theme }, '*');
+    await tick();
+    const originalClass = document.body.className;
+    document.body.className = 'vscode-high-contrast-light';
+    await tick();
+    check('high contrast uses VS Code foreground', window.GitpaneTheme.lane(0) === 'currentColor' && window.GitpaneTheme.author('Andres') === 'currentColor');
+    document.body.className = originalClass;
+    await tick();
+    check('theme applies semantic CSS variables under CSP', !!document.documentElement.style.getPropertyValue('--gitpane-graph-head-marker'));
+    check('merge and regular commit text use distinct theme colors',
+      getComputedStyle(options()[0].querySelector('.summary')).color !== getComputedStyle(options()[1].querySelector('.summary')).color);
+    const previousTagColor = document.documentElement.style.getPropertyValue('--gitpane-graph-tag-label');
+    document.documentElement.style.setProperty('--vscode-terminal-ansiRed', 'rgb(0, 200, 0)');
+    window.postMessage({ type: 'theme', theme: { ...theme, appearance: 1 } }, '*');
+    await tick();
+    check('same-class VS Code theme changes reapply ANSI colors',
+      previousTagColor !== document.documentElement.style.getPropertyValue('--gitpane-graph-tag-label'));
+    check('three-color lane palette follows native six-column mapping', window.GitpaneTheme.lane(0) === window.GitpaneTheme.lane(6) &&
+      window.GitpaneTheme.lane(1) === window.GitpaneTheme.lane(4) && window.GitpaneTheme.lane(0) !== window.GitpaneTheme.lane(1));
+    const firstAuthorColor = window.GitpaneTheme.author('Another Author');
+    const andresColor = window.GitpaneTheme.author('Andres');
+    window.postMessage({ type: 'theme', theme: { ...theme, authors: [theme.authors[1], theme.authors[0], theme.authors[2]] } }, '*');
+    await tick();
+    check('author palette follows native FNV-1a mapping', window.GitpaneTheme.author('Andres') === firstAuthorColor &&
+      window.GitpaneTheme.author('Another Author') === andresColor);
+    window.postMessage({ type: 'theme', theme }, '*');
+    await tick();
+    check('palette colors meet contrast', contrast(getComputedStyle(options()[0].querySelector('.head')).color,
+      getComputedStyle(document.body).backgroundColor) >= 4.5);
+    const oldColor = document.documentElement.style.getPropertyValue('--gitpane-graph-head-marker');
+    window.postMessage({ type: 'theme', theme: { ...theme, values: { 'graph-head-marker': 'red; display:none' } } }, '*');
+    await tick();
+    check('malformed theme cannot inject CSS', document.documentElement.style.getPropertyValue('--gitpane-graph-head-marker') === oldColor);
+    window.postMessage({ type: 'theme', theme: { ...theme, lanes: [], authors: [] } }, '*');
+    await tick();
+    check('empty palettes use inherited color', window.GitpaneTheme.lane(0) === 'currentColor' && window.GitpaneTheme.author('Andres') === 'currentColor');
+    window.postMessage({ type: 'theme', theme }, '*');
+    await tick();
     check('commit limit disclosed', document.getElementById('graph-status').textContent === 'Showing up to 2 commits.');
     check('active filters disclosed accessibly', document.getElementById('filters').getAttribute('aria-label') === 'Filter commit graph, 2 active');
     document.getElementById('filters').click();
@@ -105,6 +158,8 @@ const scenario = String.raw`
     ] }, '*');
     await tick();
     check('commit file path rendered safely', document.getElementById('files').textContent.includes('<img src=x>') && !document.querySelector('img'));
+    check('commit file path uses native semantic color', getComputedStyle(document.querySelector('.file-path')).color ===
+      document.documentElement.style.getPropertyValue('--gitpane-graph-commit-files-path'));
     document.querySelector('.file').click();
     check('file opens diff', window.posted.some(message => message.type === 'openCommitFile' && message.id === 'safe-id'));
     const selectedBeforeRefresh = window.posted.filter(message => message.type === 'selectCommit').length;
@@ -196,12 +251,12 @@ function documentFor(theme) {
   const colors = light
     ? '--vscode-editor-background:#fff;--vscode-editor-foreground:#333;--vscode-list-inactiveSelectionBackground:#ddd;--vscode-focusBorder:#007acc;'
     : '--vscode-editor-background:#1e1e1e;--vscode-editor-foreground:#ddd;--vscode-list-inactiveSelectionBackground:#383838;--vscode-focusBorder:#007acc;';
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><style>:root {${colors}}\n${stylesheet}</style></head>
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><header class="toolbar"><label class="search-label" for="search">Search commits</label><input id="search" type="search" placeholder="Search commits" autocomplete="off" spellcheck="false"><button id="search-prev" type="button" title="Previous match" aria-label="Previous commit match">↑</button><button id="search-next" type="button" title="Next match" aria-label="Next commit match">↓</button><label class="first-parent"><input id="first-parent" type="checkbox"> First parent</label><button id="filters" type="button" aria-label="Filter commit graph">Filters</button><button id="collapse" type="button" disabled>Collapse branch</button><button id="expand-all" type="button" disabled>Expand all</button><button id="refresh" type="button" title="Refresh commit graph" aria-label="Refresh commit graph">↻</button></header>
-<div id="search-status" class="search-status" role="status" aria-live="polite"></div><div id="graph-status" class="message" role="status" aria-live="polite"></div><div id="graph" class="graph" role="listbox" aria-label="Commit graph" tabindex="0"></div>
+<div id="search-status" class="search-status" role="status" aria-live="polite"></div><div id="graph-status" class="message" role="status" aria-live="polite"></div><div id="theme-status" role="alert"></div><div id="graph" class="graph" role="listbox" aria-label="Commit graph" tabindex="0"></div>
 <section class="details" aria-label="Commit files"><h2 id="files-heading">Commit files</h2><label class="search-label" for="file-search">Search commit files</label><input id="file-search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false" disabled><div id="files-status" class="message" role="status" aria-live="polite">Select a commit to see its files.</div><ul id="files" class="files" aria-labelledby="files-heading"></ul></section>
-<script>window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script>${client}</script><script>${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme) {

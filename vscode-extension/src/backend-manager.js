@@ -149,6 +149,7 @@ class BackendManager {
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument, true);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
+      else if (method === 'theme') result = await client.theme();
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
       else if (method === 'launchers_list') result = await client.listLaunchers(repo);
       else if (method === 'launcher_plan') result = await client.planLauncher(repo, argument.id, argument.fingerprint);
@@ -168,7 +169,8 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'file_changed', 'file_too_large'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidLink && !staleChanges && !obsoleteRelease) {
+      const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidLink && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
       throw error;
@@ -316,6 +318,8 @@ class BackendManager {
   graph(repo, firstParent = false, filters, collapsedSegments) { return this.request('graph', repo, firstParent, filters, collapsedSegments); }
 
   graphRevision(repo) { return this.request('graph_revision', repo); }
+
+  theme() { return this.request('theme'); }
 
   commitFiles(repo, oid) { return this.request('commit_files', repo, oid); }
 

@@ -6,6 +6,7 @@ function getHtml(webview, extensionUri) {
   const resource = name => webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'src', 'graph', name)
   );
+  const theme = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'src', 'theme-webview.js'));
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -29,6 +30,7 @@ function getHtml(webview, extensionUri) {
   </header>
   <div id="search-status" class="search-status" role="status" aria-live="polite"></div>
   <div id="graph-status" class="message" role="status" aria-live="polite"></div>
+  <div id="theme-status" class="message error" role="alert"></div>
   <div id="graph" class="graph" role="listbox" aria-label="Commit graph" tabindex="0"></div>
   <section class="details" aria-label="Commit files">
     <h2 id="files-heading">Commit files</h2>
@@ -37,6 +39,7 @@ function getHtml(webview, extensionUri) {
     <div id="files-status" class="message" role="status" aria-live="polite">Select a commit to see its files.</div>
     <ul id="files" class="files" aria-labelledby="files-heading"></ul>
   </section>
+  <script src="${theme}"></script>
   <script src="${resource('view.js')}"></script>
 </body>
 </html>`;

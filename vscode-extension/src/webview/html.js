@@ -8,6 +8,7 @@ function getHtml(webview, extensionUri) {
   );
   const stylesheet = resource('styles.css');
   const script = resource('view.js');
+  const theme = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'src', 'theme-webview.js'));
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,6 +21,7 @@ function getHtml(webview, extensionUri) {
 <body>
   <div id="messages" aria-live="polite"></div>
   <div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
+  <script src="${theme}"></script>
   <script src="${script}"></script>
 </body>
 </html>`;

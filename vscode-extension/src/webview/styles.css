@@ -95,14 +95,25 @@ body {
 }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dirty, .count, .modified { color: var(--dirty); }
-.branch { color: var(--branch); }
-.branch.default, .muted, .untracked { color: var(--muted); }
-.ahead, .added { color: var(--ahead); }
-.behind, .deleted, .conflicted { color: var(--behind); }
-.renamed { color: var(--vscode-terminal-ansiBlue, var(--branch)); }
-.worktree { color: var(--worktree); }
-.stash, .dirty-submodule { color: var(--submodule); }
+.repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+.dirty { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }
+.count { color: var(--gitpane-repo-list-file-count, var(--dirty)); }
+.modified { color: var(--gitpane-file-list-status-modified, var(--dirty)); }
+.branch { color: var(--gitpane-repo-list-branch, var(--branch)); }
+.branch.default { color: var(--gitpane-repo-list-branch-default, var(--muted)); }
+.muted { color: var(--muted); }
+.untracked { color: var(--gitpane-file-list-status-untracked, var(--muted)); }
+.ahead { color: var(--gitpane-repo-list-ahead, var(--ahead)); }
+.added { color: var(--gitpane-file-list-status-added, var(--ahead)); }
+.behind { color: var(--gitpane-repo-list-behind, var(--behind)); }
+.deleted { color: var(--gitpane-file-list-status-deleted, var(--behind)); }
+.conflicted { color: var(--gitpane-file-list-status-conflicted, var(--behind)); }
+.renamed { color: var(--gitpane-file-list-status-renamed, var(--vscode-terminal-ansiBlue, var(--branch))); }
+.worktree { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); }
+.worktree-row .worktree { color: var(--gitpane-repo-list-worktree-subtree-branch, var(--worktree)); }
+.stash { color: var(--gitpane-repo-list-stash, var(--submodule)); }
+.dirty-submodule { color: var(--gitpane-repo-list-dirty-submodule, var(--submodule)); }
+.unpushed-submodule { color: var(--gitpane-repo-list-unpushed-submodule, var(--behind)); }
 .tail { display: flex; gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
 .graph-action, .menu-action, .stash-action {
   flex: none;
@@ -116,6 +127,7 @@ body {
 .menu-action { color: var(--muted); }
 .graph-action:focus-visible, .menu-action:focus-visible, .stash-action:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .subtree { color: var(--muted); }
+.worktree-row .subtree { color: var(--gitpane-repo-list-worktree-subtree-icon, var(--muted)); }
 
 .group-row, .file-row, .worktree-row, .stash-row {
   display: grid;
@@ -130,12 +142,16 @@ body {
 .worktree-row { grid-template-columns: 1ch 1ch minmax(3ch, 1fr) minmax(4ch, 1fr) auto; padding-left: 2.7ch; }
 .stash-row { grid-template-columns: auto minmax(0, 1fr); padding-left: 4.7ch; }
 .stash-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-path { color: inherit; }
+.file-path { color: var(--gitpane-file-list-regular-path, inherit); }
+.file-path.submodule-path { color: var(--gitpane-file-list-submodule-path, inherit); }
 .page-row, .page-status { padding-left: 2.7ch; color: var(--muted); }
 .page-status { padding-top: 2px; padding-bottom: 2px; overflow-wrap: anywhere; }
 .page-status.error { color: var(--vscode-errorForeground, var(--behind)); }
 .worktree-files .page-row, .worktree-files .page-status { padding-left: 4.7ch; }
 .treeitem[aria-disabled="true"] > .page-row { opacity: .65; cursor: default; }
+
+.treeitem[aria-selected="true"] > .row span,
+.treeitem[aria-selected="true"] > .row button { color: inherit; }
 
 @media (max-width: 230px) {
   #repositories { grid-template-columns: 2.5ch minmax(4ch, 1fr) minmax(3ch, .75fr) minmax(0, max-content); column-gap: .6ch; }
@@ -145,7 +161,7 @@ body {
 
 @media (forced-colors: active) {
   .dirty, .count, .branch, .ahead, .behind, .worktree, .modified,
-  .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule,
+  .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule,
   .graph-action, .menu-action { color: CanvasText; }
   .treeitem:focus > .row { outline: 1px solid Highlight; }
 }
