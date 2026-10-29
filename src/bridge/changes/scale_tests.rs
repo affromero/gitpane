@@ -29,7 +29,7 @@ fn begin(store: &mut Snapshots, scope: &Scope, path: &Path) -> Value {
 }
 
 #[test]
-fn failed_new_repository_reservation_reclaims_bucket_capacity() {
+fn failed_new_repository_reservation_preserves_the_live_table() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let scope = Scope::new(vec![root.clone()]).unwrap();
@@ -44,6 +44,7 @@ fn failed_new_repository_reservation_reclaims_bucket_capacity() {
         }
     }
     let extra = repo(&root, opened.len());
+    let capacity = store.entries.capacity();
     let (last_path, _) = opened.last().unwrap();
     // Model retained records that consume the remaining budget without
     // constructing thousands of long Git index entries in this boundary test.
@@ -54,6 +55,7 @@ fn failed_new_repository_reservation_reclaims_bucket_capacity() {
         .begin(&scope, Begin { repo: extra }, &SubmoduleConfig::default())
         .unwrap_err();
     assert_eq!(error.code, "snapshot_capacity");
+    assert_eq!(store.entries.capacity(), capacity);
     assert!(store.bytes + table_size(store.entries.capacity()) <= MAX_CACHE_BYTES);
     let (first, token) = &opened[0];
     let page = store

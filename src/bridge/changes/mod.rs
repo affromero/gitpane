@@ -383,13 +383,38 @@ impl Snapshots {
         Ok(snapshot)
     }
 
-    fn fits(&self, repo: &Path, bytes: usize) -> bool {
+    fn fits_capacity(&self, repo: &Path, bytes: usize, capacity: usize) -> bool {
         let replaced = self.entries.get(repo).map_or(0, |entry| entry.bytes);
         self.bytes
             .saturating_sub(replaced)
             .saturating_add(bytes)
-            .saturating_add(table_size(self.entries.capacity()))
+            .saturating_add(table_size(capacity))
             <= MAX_CACHE_BYTES
+    }
+
+    fn growth_table(&self, repo: &Path) -> Result<Option<HashMap<PathBuf, Snapshot>>, BridgeError> {
+        if self.entries.contains_key(repo) || self.entries.len() < self.entries.capacity() {
+            return Ok(None);
+        }
+        let mut table = HashMap::new();
+        table
+            .try_reserve(self.entries.len().saturating_add(1))
+            .map_err(|_| {
+                BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
+            })?;
+        Ok(Some(table))
+    }
+
+    fn fits_table(
+        &self,
+        repo: &Path,
+        bytes: usize,
+        table: &Option<HashMap<PathBuf, Snapshot>>,
+    ) -> bool {
+        let capacity = table
+            .as_ref()
+            .map_or(self.entries.capacity(), HashMap::capacity);
+        self.fits_capacity(repo, bytes, capacity)
     }
 
     pub(super) fn begin(
@@ -453,12 +478,9 @@ impl Snapshots {
                 "The repository change snapshot exceeds the memory limit.",
             ));
         }
-        if !self.entries.contains_key(&repo) {
-            self.entries.try_reserve(1).map_err(|_| {
-                BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
-            })?;
-        }
-        if !self.fits(&repo, snapshot.bytes) {
+        let mut table = self.growth_table(&repo)?;
+        if !self.fits_table(&repo, snapshot.bytes, &table) {
+            drop(table.take());
             self.expire_if_due(true);
             snapshot.bytes = bytes;
             let key = self
@@ -472,34 +494,25 @@ impl Snapshots {
                     "The repository change snapshot exceeds the memory limit.",
                 ));
             }
-            if !self.entries.contains_key(&repo) {
-                self.entries.try_reserve(1).map_err(|_| {
-                    BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
-                })?;
-            }
-            if !self.fits(&repo, snapshot.bytes) {
-                self.entries.shrink_to_fit();
-                if !self.entries.contains_key(&repo) {
-                    self.entries.try_reserve(1).map_err(|_| {
-                        BridgeError::new("snapshot_capacity", "Cannot allocate a change snapshot.")
-                    })?;
-                }
-                if !self.fits(&repo, snapshot.bytes) {
-                    self.entries.shrink_to_fit();
-                    if self.entries.is_empty()
-                        || (self.entries.len() == 1 && self.entries.contains_key(&repo))
-                    {
-                        return Err(BridgeError::new(
-                            "snapshot_too_large",
-                            "The repository change snapshot exceeds the memory limit.",
-                        ));
-                    }
+            table = self.growth_table(&repo)?;
+            if !self.fits_table(&repo, snapshot.bytes, &table) {
+                if self.entries.is_empty()
+                    || (self.entries.len() == 1 && self.entries.contains_key(&repo))
+                {
                     return Err(BridgeError::new(
-                        "snapshot_capacity",
-                        "Too many change snapshots are open; close one and retry.",
+                        "snapshot_too_large",
+                        "The repository change snapshot exceeds the memory limit.",
                     ));
                 }
+                return Err(BridgeError::new(
+                    "snapshot_capacity",
+                    "Too many change snapshots are open; close one and retry.",
+                ));
             }
+        }
+        if let Some(mut table) = table {
+            table.extend(self.entries.drain());
+            self.entries = table;
         }
         self.sequence = sequence;
         let added = snapshot.bytes;

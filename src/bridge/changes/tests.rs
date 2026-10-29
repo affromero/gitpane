@@ -869,7 +869,7 @@ fn cache_accounting_charges_empty_snapshots_paths_and_retained_table_capacity() 
     store.entries.reserve(128);
     let retained_table = super::table_size(store.entries.capacity());
     assert!(retained_table > 0);
-    assert!(!store.fits(&path, super::MAX_CACHE_BYTES));
+    assert!(!store.fits_capacity(&path, super::MAX_CACHE_BYTES, store.entries.capacity()));
     store.clear();
     assert_eq!(super::table_size(store.entries.capacity()), 0);
 }
