@@ -3,6 +3,40 @@ use super::*;
 use git2::Repository;
 use std::{fs, path::Path};
 
+#[cfg(unix)]
+#[test]
+fn replaced_submodule_symlinks_leave_unrelated_changes_visible() {
+    for dangling in [false, true] {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        let outside = tempfile::TempDir::new().unwrap();
+        let destination = if dangling {
+            outside.path().join("missing")
+        } else {
+            outside.path().to_path_buf()
+        };
+        let parent = Repository::open(tmp.path()).unwrap();
+        fs::write(tmp.path().join("other.txt"), "original\n").unwrap();
+        let mut index = parent.index().unwrap();
+        index.add_path(Path::new("other.txt")).unwrap();
+        index.write().unwrap();
+        commit_index(&parent, "Track unrelated file");
+        fs::write(tmp.path().join("other.txt"), "changed\n").unwrap();
+        fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
+        std::os::unix::fs::symlink(&destination, tmp.path().join("my-sub")).unwrap();
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let file = status
+            .files
+            .iter()
+            .find(|entry| entry.path == Path::new("other.txt"))
+            .expect("unrelated changes must remain visible when a submodule is replaced");
+        assert_eq!(file.status, FileStatus::Modified);
+        assert!(file.unstaged);
+        assert!(!file.staged);
+        assert!(status.is_dirty);
+    }
+}
+
 #[test]
 fn test_dirty_submodule_with_real_git_submodule() {
     let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
