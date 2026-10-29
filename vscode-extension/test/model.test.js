@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const { isolatedGitEnv } = require('./integration/git-env');
-const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, visibleRepository } = require('../src/model');
+const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, visibleRepository } = require('../src/model');
 
 test('changed files retain their staged and unstaged groups', () => {
   const staged = { status: Status.INDEX_MODIFIED, uri: 'file' };
@@ -33,6 +33,25 @@ test('comparisons preserve staged, working, rename, addition and deletion sides'
     { left: { git: 'file', ref: '' }, right: { empty: true } });
   assert.deepEqual(comparison('untracked', { status: Status.UNTRACKED, uri: 'new' }),
     { left: { empty: true }, right: { file: 'new' } });
+});
+
+test('rich comparisons retain distinct rename and conflict-stage paths', () => {
+  const empty = { empty: true };
+  const git = (gitPath, ref) => ({ gitPath, ref });
+  const file = filePath => ({ filePath });
+  assert.deepEqual(richComparison({ group: 'index', kind: 'index_renamed', path: 'new', original_path: 'old' }),
+    { left: git('old', 'HEAD'), right: git('new', '') });
+  assert.deepEqual(richComparison({ group: 'working', kind: 'working_renamed', path: 'new', original_path: 'old' }),
+    { left: git('old', ''), right: file('new') });
+  assert.deepEqual(richComparison({ group: 'working', kind: 'intent_to_add', path: 'new' }),
+    { left: empty, right: file('new') });
+  assert.deepEqual(richComparison({ group: 'index', kind: 'index_deleted', path: 'old' }),
+    { left: git('old', 'HEAD'), right: empty });
+  const stages = { base: 'base-name', ours: 'ours-name', theirs: 'theirs-name' };
+  assert.deepEqual(richComparison({ group: 'merge', path: 'ours-name', conflict_stages: stages }),
+    { left: git('ours-name', ':2'), right: git('theirs-name', ':3') });
+  assert.deepEqual(richComparison({ group: 'merge', path: 'base-name', conflict_stages: { base: 'base-name', ours: null, theirs: null } }),
+    { left: git('base-name', ':1'), right: empty });
 });
 
 test('conflict diffs compare available index stages even without a working file', () => {

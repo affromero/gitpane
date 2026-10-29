@@ -271,6 +271,134 @@ const scenario = String.raw`
     await tick();
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('expansion survives updates', repo.getAttribute('aria-expanded') === 'true');
+    const paged = { type: 'snapshot', errors: [], loading: false, repositories: [{
+      id: 'paged', name: 'paged-repo', branch: 'main', dirty: true, groups: [],
+      changeCountLowerBound: 3,
+      changesPage: { state: 'idle', page: 0, previous: false, next: false, count: 0 }
+    }] };
+    window.postMessage(paged, '*');
+    await tick();
+    let pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    check('unloaded repository displays a lower bound without claiming a total', pagedRepo.getAttribute('aria-expanded') === 'false' &&
+      pagedRepo.textContent.includes('[3+]') && pagedRepo.getAttribute('aria-label').includes('at least 3 files'));
+    const initialRequests = window.posted.filter(message => message.type === 'loadChanges' && message.id === 'paged').length;
+    pagedRepo.querySelector('.row').click();
+    check('expansion requests the selected owner using only its opaque id', window.posted.filter(message =>
+      message.type === 'loadChanges' && message.id === 'paged').length === initialRequests + 1 &&
+      !('path' in window.posted.at(-1)));
+    window.postMessage(paged, '*');
+    await tick();
+    check('repeated idle snapshots do not duplicate pending loads', window.posted.filter(message =>
+      message.type === 'loadChanges' && message.id === 'paged').length === initialRequests + 1);
+    paged.repositories[0].changesPage.state = 'loading';
+    window.postMessage(paged, '*');
+    await tick();
+    check('loading is announced', [...document.querySelectorAll('[role="status"]')].some(node => node.textContent === 'Loading changes…'));
+    pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    check('loading keeps the compact-status count as a lower bound', pagedRepo.textContent.includes('[3+]') &&
+      pagedRepo.getAttribute('aria-label').includes('at least 3 files'));
+    paged.repositories[0].changesPage = { state: 'ready', page: 0, previous: false, next: true, count: 1 };
+    paged.repositories[0].groups = [{ id: 'index', label: 'Staged', files: [{ id: 'page-a', status: 'A', path: 'a.txt' }] }];
+    window.postMessage(paged, '*');
+    await tick();
+    pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    check('partial count is not presented as a total', pagedRepo.textContent.includes('[1+]') && pagedRepo.getAttribute('aria-label').includes('at least 1 file'));
+    const withDirectory = structuredClone(paged);
+    withDirectory.repositories[0].groups.push({ id: 'untracked', label: 'Untracked', files: [
+      { id: 'nested-directory', status: '?', path: 'nested-repo/', directory: true }
+    ] });
+    window.postMessage(withDirectory, '*');
+    await tick();
+    const directory = items().find(item => item.getAttribute('aria-label') === '? nested-repo/, untracked directory');
+    check('untracked directory is visibly identified without a file menu',
+      directory && directory.textContent.includes('directory') && !directory.querySelector('.menu-action'));
+    const beforeDirectoryClick = window.posted.length;
+    directory.querySelector('.row').click();
+    directory.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('untracked directory never opens a diff or action', window.posted.length === beforeDirectoryClick);
+    window.postMessage(paged, '*');
+    await tick();
+    let nextPage = items().find(item => item.getAttribute('aria-label') === 'Next changes for paged-repo');
+    check('next page is a keyboard tree item', !!nextPage && nextPage.getAttribute('tabindex') === '-1');
+    nextPage.querySelector('.row').click();
+    check('next page requests only the owner and direction', window.posted.some(message => message.type === 'changesPage' &&
+      message.id === 'paged' && message.direction === 'next' && !('cursor' in message) && !('path' in message)));
+    nextPage = items().find(item => item.getAttribute('aria-label') === 'Next changes for paged-repo');
+    const pageRequests = window.posted.filter(message => message.type === 'changesPage' && message.id === 'paged').length;
+    nextPage.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('pending page request is disabled without losing focus', nextPage.getAttribute('aria-disabled') === 'true' &&
+      document.activeElement === nextPage && window.posted.filter(message => message.type === 'changesPage' && message.id === 'paged').length === pageRequests);
+    paged.repositories[0].changesPage.state = 'loading';
+    window.postMessage(paged, '*');
+    await tick();
+    paged.repositories[0].changesPage = { state: 'ready', page: 1, previous: true, next: false, count: 1 };
+    paged.repositories[0].groups = [{ id: 'working', label: 'Unstaged', files: [{ id: 'page-b', status: 'M', path: 'b.txt' }] }];
+    window.postMessage(paged, '*');
+    await tick();
+    let previousPage = items().find(item => item.getAttribute('aria-label') === 'Previous changes for paged-repo');
+    check('page transition keeps focus near navigation', document.activeElement === previousPage && !!items().find(item => item.getAttribute('aria-label') === 'M b.txt'));
+    previousPage.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('keyboard returns to previous page', window.posted.some(message => message.type === 'changesPage' &&
+      message.id === 'paged' && message.direction === 'previous'));
+    paged.repositories[0].changesPage.state = 'loading';
+    window.postMessage(paged, '*');
+    await tick();
+    paged.repositories[0].changesPage = { state: 'error', page: 1, previous: true, next: false, count: 1, error: 'Page <bad>' };
+    window.postMessage(paged, '*');
+    await tick();
+    check('page error is announced as text', [...document.querySelectorAll('[role="alert"]')].some(node => node.textContent === 'Page <bad>') && !document.querySelector('bad'));
+    let retryPage = items().find(item => item.getAttribute('aria-label') === 'Retry loading changes for paged-repo');
+    retryPage.querySelector('.row').click();
+    const retryRequests = window.posted.filter(message => message.type === 'loadChanges' && message.id === 'paged').length;
+    retryPage = items().find(item => item.getAttribute('aria-label') === 'Retry loading changes for paged-repo');
+    retryPage.querySelector('.row').click();
+    check('retry is accessible and does not duplicate pending requests', retryPage.getAttribute('aria-disabled') === 'true' &&
+      window.posted.filter(message => message.type === 'loadChanges' && message.id === 'paged').length === retryRequests);
+    pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    pagedRepo.querySelector('.row').click();
+    check('collapsing releases the owner using only its opaque id', window.posted.some(message =>
+      message.type === 'releaseChanges' && message.id === 'paged' && !('path' in message) && !('snapshot' in message)));
+    paged.repositories[0].changesPage = { state: 'idle', page: 0, previous: false, next: false, count: 0 };
+    paged.repositories[0].groups = [];
+    window.postMessage(paged, '*');
+    await tick();
+    check('collapsed owner does not restart loading', window.posted.filter(message =>
+      message.type === 'loadChanges' && message.id === 'paged').length === retryRequests);
+    items().find(item => item.getAttribute('aria-label').includes('paged-repo')).querySelector('.row').click();
+    check('reopening a released owner starts one new load', window.posted.filter(message =>
+      message.type === 'loadChanges' && message.id === 'paged').length === retryRequests + 1);
+    const pagedWorktree = { type: 'snapshot', errors: [], loading: false, repositories: [{
+      id: 'page-parent', name: 'parent', branch: 'main', dirty: false, groups: [], worktreeCount: 1,
+      worktrees: [{ id: 'page-child', name: 'child', branch: 'topic', dirty: true, available: true, groups: [],
+        changesPage: { state: 'idle', page: 0, previous: false, next: false, count: 0 } }]
+    }] };
+    window.postMessage(pagedWorktree, '*');
+    await tick();
+    items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
+    let pagedChild = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
+    check('unloaded dirty worktree can expand', pagedChild.getAttribute('aria-expanded') === 'false' && pagedChild.textContent.includes('[?]'));
+    pagedChild.querySelector('.row').click();
+    check('worktree loads through its opaque owner id', window.posted.some(message => message.type === 'loadChanges' &&
+      message.id === 'page-child' && !('path' in message)));
+    pagedWorktree.repositories[0].worktrees[0].changesPage = { state: 'ready', page: 0, previous: false, next: true, count: 1 };
+    pagedWorktree.repositories[0].worktrees[0].groups = [{ id: 'working', label: 'Unstaged',
+      files: [{ id: 'child-page-file', status: '?', path: 'nested.txt' }] }];
+    window.postMessage(pagedWorktree, '*');
+    await tick();
+    pagedChild = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
+    check('worktree page reports a partial count', pagedChild.textContent.includes('[1+]') && pagedChild.getAttribute('aria-label').includes('at least 1 file'));
+    items().find(item => item.getAttribute('aria-label') === 'Next changes for child').querySelector('.row').click();
+    check('worktree paging uses its owner id', window.posted.some(message => message.type === 'changesPage' &&
+      message.id === 'page-child' && message.direction === 'next'));
+    items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
+    check('collapsing a parent releases its expanded worktree', window.posted.some(message =>
+      message.type === 'releaseChanges' && message.id === 'page-child'));
+    const childLoads = window.posted.filter(message => message.type === 'loadChanges' && message.id === 'page-child').length;
+    items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
+    check('reopening a parent reloads its restored expanded worktree', window.posted.filter(message =>
+      message.type === 'loadChanges' && message.id === 'page-child').length === childLoads + 1);
+    window.postMessage(snapshot, '*');
+    await tick();
     check('theme background applied', getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');
     const background = getComputedStyle(document.body).backgroundColor;
     for (const selector of ['.dirty', '.branch.default', '.branch:not(.default)', '.ahead', '.behind', '.untracked']) {
@@ -284,22 +412,60 @@ const scenario = String.raw`
   }
 })();`;
 
-function documentFor(theme) {
+const restoreScenario = String.raw`
+(async () => {
+  const checks = [];
+  const check = (name, value) => { if (!value) throw new Error(name); checks.push(name); };
+  const tick = () => new Promise(resolve => setTimeout(resolve, 30));
+  const fixture = { type: 'snapshot', errors: [], loading: false, repositories: [{
+    id: 'restored', name: 'restored', branch: 'main', dirty: true, groups: [], worktreeCount: 1,
+    changesPage: { state: 'idle', page: 0, previous: false, next: false, count: 0 },
+    worktrees: [{ id: 'restored-child', name: 'child', branch: 'topic', dirty: true, available: true,
+      groups: [], changesPage: { state: 'idle', page: 0, previous: false, next: false, count: 0 } }]
+  }] };
+  try {
+    window.postMessage(fixture, '*');
+    await tick();
+    const items = () => [...document.querySelectorAll('[role="treeitem"]')];
+    let repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
+    const child = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
+    check('saved repository and worktree expansion is restored', repo.getAttribute('aria-expanded') === 'true' &&
+      child.getAttribute('aria-expanded') === 'true');
+    const requests = id => window.posted.filter(message => message.type === 'loadChanges' && message.id === id).length;
+    check('restored owners each load once', requests('restored') === 1 && requests('restored-child') === 1);
+    window.postMessage(fixture, '*');
+    await tick();
+    check('repeated restore snapshot does not duplicate loads', requests('restored') === 1 && requests('restored-child') === 1);
+    repo = items().find(item => item.getAttribute('aria-label').includes('restored'));
+    repo.querySelector('.row').click();
+    check('collapsing restored parent releases both owners', ['restored', 'restored-child'].every(id =>
+      window.posted.some(message => message.type === 'releaseChanges' && message.id === id)));
+    window.postMessage(fixture, '*');
+    await tick();
+    check('collapsed restored owners stay unloaded', requests('restored') === 1 && requests('restored-child') === 1);
+    document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks, background: getComputedStyle(document.body).backgroundColor }));
+  } catch (error) {
+    document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: error.stack || String(error) }));
+  }
+})();`;
+
+function documentFor(theme, restored = false) {
   const light = theme === 'light';
   const colors = light
     ? '--vscode-sideBar-background:#fff;--vscode-sideBar-foreground:#333;--vscode-list-inactiveSelectionBackground:#ddd;--vscode-focusBorder:#007acc;'
     : '--vscode-sideBar-background:#1e1e1e;--vscode-sideBar-foreground:#ddd;--vscode-list-inactiveSelectionBackground:#383838;--vscode-focusBorder:#007acc;';
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><style>:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
-<script>window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script>${client}</script><script>${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script>window.posted=[];window.savedState=${restored ? '{expanded:["repo:restored","worktree:restored-child"]}' : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
+<script>${client}</script><script>${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
-function run(theme) {
-  const fixture = path.join(temporary, `${theme}.html`);
-  const profile = path.join(temporary, `profile-${theme}`);
+function run(theme, restored = false) {
+  const label = `${theme}${restored ? '-restored' : ''}`;
+  const fixture = path.join(temporary, `${label}.html`);
+  const profile = path.join(temporary, `profile-${label}`);
   const screenshot = path.join(os.tmpdir(), `gitpane-webview-${theme}.png`);
-  fs.writeFileSync(fixture, documentFor(theme));
+  fs.writeFileSync(fixture, documentFor(theme, restored));
   const args = ['--headless', '--disable-gpu', '--disable-background-networking', '--no-first-run',
     '--disable-extensions', `--user-data-dir=${profile}`, '--window-size=500,650', '--virtual-time-budget=4000'];
   const dom = spawnSync(browser, [...args, '--dump-dom', pathToFileURL(fixture).href], { encoding: 'utf8', timeout: 30000 });
@@ -308,9 +474,11 @@ function run(theme) {
   if (!encoded) throw new Error(`Chrome ${theme} did not report test results:\n${dom.stdout}\n${dom.stderr}`);
   const result = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
   if (!result.ok) throw new Error(`Chrome ${theme} behavior failed: ${result.error}`);
-  const image = spawnSync(browser, [...args, `--screenshot=${screenshot}`, pathToFileURL(fixture).href], { encoding: 'utf8', timeout: 30000 });
-  if (image.error || image.status !== 0 || !fs.existsSync(screenshot)) throw new Error(`Chrome ${theme} screenshot failed: ${image.error?.stack || image.stderr}`);
-  console.log(`${theme}: ${result.checks.length} checks passed; background ${result.background}; screenshot ${screenshot}`);
+  if (!restored) {
+    const image = spawnSync(browser, [...args, `--screenshot=${screenshot}`, pathToFileURL(fixture).href], { encoding: 'utf8', timeout: 30000 });
+    if (image.error || image.status !== 0 || !fs.existsSync(screenshot)) throw new Error(`Chrome ${theme} screenshot failed: ${image.error?.stack || image.stderr}`);
+  }
+  console.log(`${label}: ${result.checks.length} checks passed; background ${result.background}${restored ? '' : `; screenshot ${screenshot}`}`);
   return result;
 }
 
@@ -318,6 +486,7 @@ try {
   const dark = run('dark');
   const light = run('light');
   if (dark.background === light.background) throw new Error('Light and dark theme backgrounds should differ.');
+  run('dark', true);
 } catch (error) {
   console.error(error.stack || String(error));
   process.exitCode = 1;

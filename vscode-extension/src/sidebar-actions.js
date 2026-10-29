@@ -10,14 +10,14 @@ function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir];
   if (kind === 'repo') fields.push(item.branch, item.head);
-  if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule);
+  if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId);
   return JSON.stringify(fields);
 }
 
 function validFile(item) {
   if (!item || typeof item.path !== 'string' || !item.path || path.isAbsolute(item.path)) return false;
-  const parts = item.path.split(/[\\/]/);
+  const parts = item.path.split(process.platform === 'win32' ? /[\\/]/ : /\//);
   return !parts.some(part => part === '..' || part === '.' || part === '');
 }
 
@@ -56,6 +56,8 @@ class SidebarActions {
     this.reviewWorktree = options.reviewWorktree;
     this.previewFileAction = options.previewFileAction;
     this.planWorktree = options.planWorktree;
+    this.revalidateChange = options.revalidateChange;
+    this.validateChangePath = options.validateChangePath;
   }
 
   resolve(kind, id) {
@@ -127,6 +129,10 @@ class SidebarActions {
       if (!original || (expected && original !== expected) || !guard()) return;
       const current = () => guard() && this.current(kind, message.id, original);
       if (kind === 'file' && !fileOptions(item).some(choice => choice.action === action)) return;
+      if (kind === 'file' && action !== 'open' && this.revalidateChange) {
+        if (!await this.revalidateChange(message.id) || !current()) return;
+        if (this.validateChangePath) this.validateChangePath(item);
+      }
       if (kind === 'worktree' && action !== 'removeWorktree' && !item.available) return;
       if (action === 'worktreeRepositoryActions') {
         if (typeof item.childRepoId === 'string') await this.showMenu('repo', item.childRepoId, current);

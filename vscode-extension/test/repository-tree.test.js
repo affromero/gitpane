@@ -7,8 +7,83 @@ const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { isolatedGitEnv } = require('./integration/git-env');
 const { SidebarActions } = require('../src/sidebar-actions');
+
+function change(group, file, kind) {
+  return { group, path: file, kind, original_path: null, conflict_stages: null, is_submodule: false };
+}
+
+function changesPage(changes) {
+  return { snapshot: 'fixture-snapshot', revision: createHash('sha256').update(JSON.stringify(changes)).digest('hex'), cursor: 0,
+    previous_cursor: null, next_cursor: null, changes };
+}
+
+test('slow detailed refresh finishes one sweep before scheduling another', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-page-sweep-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const roots = ['a', 'b'].map(name => path.join(temporary, name));
+  for (const root of roots) fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const repos = roots.map(root => ({ rootUri: uri(root), state: { HEAD: { name: 'main' }, onDidChange: event },
+    async status() {} }));
+  let hold = false;
+  let release;
+  const calls = [];
+  const backend = { state: { status: 'ready' }, onDidChange: event,
+    async status(root) { return { common_dir: path.join(root, '.git'), branch: 'main', is_dirty: false,
+      stashes: [], worktrees: [], ahead: 0, behind: 0, has_dirty_submodules: false, has_unpushed_submodules: false }; },
+    async beginChanges(root) {
+    calls.push(root);
+    if (hold && root === roots[0]) await new Promise(resolve => { release = resolve; });
+    return changesPage([]);
+  }, async releaseChanges() {} };
+  const git = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event };
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
+    workspace: { workspaceFolders: [{ uri: uri(temporary) }], onDidChangeWorkspaceFolders: event } };
+  const load = Module._load;
+  let GitpaneViewProvider, RepositoryTree;
+  delete require.cache[require.resolve('../src/extension')];
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    ({ GitpaneViewProvider, RepositoryTree } = require('../src/extension'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(git, { appendLine() {} }, backend);
+  const provider = new GitpaneViewProvider(tree, '/extension');
+  let receive;
+  const view = { visible: true, webview: { postMessage() {}, onDidReceiveMessage(handler) { receive = handler; return event(); } },
+    onDidChangeVisibility: event, onDidDispose: event };
+  try {
+    Module._load = function(name, ...args) {
+      if (name === './webview/html') return { getHtml: () => '' };
+      return load.call(this, name, ...args);
+    };
+    provider.resolveWebviewView(view);
+  } finally { Module._load = load; }
+  try {
+    await tree.refresh();
+    await receive({ type: 'ready' });
+    const owners = provider.snapshot().repositories.map(repo => repo.id);
+    for (const owner of owners) await provider.loadChanges(owner);
+    calls.length = 0;
+    hold = true;
+    t.mock.timers.tick(5000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, [roots[0]]);
+    t.mock.timers.tick(10000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, [roots[0]]);
+    hold = false;
+    release();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, roots);
+  } finally { provider.dispose(); tree.dispose(); }
+});
 
 test('reopening a repository invalidates pending status, selections, and menus', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -29,14 +104,16 @@ test('reopening a repository invalidates pending status, selections, and menus',
   const api = { repositories: [makeRepo()],
     onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
     onDidCloseRepository(handler) { onClose = handler; return { dispose() {} }; } };
-  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} }, Uri: { file: uri },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event },
     window: { showQuickPick: choices => new Promise(resolve => { releaseMenu = () => resolve(choices.find(item => item.action === 'copyRepo')); }),
       showErrorMessage: async message => { throw new Error(message); } },
     env: { clipboard: { writeText: async value => copied.push(value) } } };
   const copied = [];
   const backend = { state: { status: 'ready' }, onDidChange: event,
-    async status() { if (holdStatus) return new Promise(resolve => { releaseStatus = () => resolve(status('old-response')); }); return status('main'); } };
+    async status() { if (holdStatus) return new Promise(resolve => { releaseStatus = () => resolve(status('old-response')); }); return status('main'); },
+    async beginChanges() { return changesPage([change('working', 'file.txt', 'working_modified')]); },
+    async releaseChanges() {} };
   const load = Module._load;
   let RepositoryTree, GitpaneViewProvider;
   delete require.cache[require.resolve('../src/extension')];
@@ -51,6 +128,7 @@ test('reopening a repository invalidates pending status, selections, and menus',
     resolveChange: id => provider.resolveChange(id), resolveWorktree: id => provider.resolveWorktree(id) });
   try {
     await tree.refresh();
+    await provider.loadChanges(provider.snapshot().repositories[0].id);
     for (const replaceDirectory of [false, true]) {
       const before = provider.snapshot().repositories[0];
       const fileId = before.groups[0].files[0].id;
@@ -81,6 +159,8 @@ test('reopening a repository invalidates pending status, selections, and menus',
       assert.equal(provider.currentRepository(before.id), undefined);
       assert.deepEqual(copied, []);
       await tree.refresh();
+      const refreshed = provider.snapshot().repositories[0];
+      await provider.loadChanges(refreshed.id);
       const after = provider.snapshot().repositories[0];
       assert.equal(after.branch, 'main');
       assert.notEqual(after.id, before.id);
@@ -146,6 +226,7 @@ test('workspace repositories appear automatically and reconcile while visible', 
   };
   const vscode = {
     EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    Uri: { file: uri },
     workspace: {
       workspaceFolders: [{ uri: uri(workspace) }],
       onDidChangeWorkspaceFolders(handler) { onWorkspaceChange = handler; return { dispose() {} }; }
@@ -154,6 +235,13 @@ test('workspace repositories appear automatically and reconcile while visible', 
   const backend = {
     state: { status: 'ready' },
     onDidChange: event,
+    async beginChanges(repoPath) {
+      if (repoPath !== root) return changesPage([]);
+      const files = [change('index', 'file', 'index_modified'), change('working', 'file', 'working_modified')];
+      if (addedFile) files.push(change('untracked', 'new', 'untracked'));
+      return changesPage(files);
+    },
+    async releaseChanges() {},
     async status(repoPath, includeWorktrees = true) {
       if (backendFailed) throw new Error('backend status failed');
       return {
@@ -190,6 +278,7 @@ test('workspace repositories appear automatically and reconcile while visible', 
   try {
     await tree.refresh();
     assert.deepEqual(tree.getChildren().filter(node => node.type === 'repo').map(node => node.repo.rootUri.fsPath), [root]);
+    await provider.loadChanges(provider.snapshot().repositories[0].id);
     assert.equal(countFiles(provider.snapshot().repositories[0]), 1);
     const initial = provider.snapshot().repositories[0];
     assert.equal(initial.ahead, 2);
@@ -253,12 +342,14 @@ test('workspace repositories appear automatically and reconcile while visible', 
     await settle();
     const failure = provider.snapshot();
     assert.match(failure.errors[0], /status failed/);
-    assert.equal(failure.repositories.find(node => node.branch === 'main').statusUnavailable, true);
+    assert.equal(failure.repositories.find(node => node.branch === 'main').statusUnavailable, false);
+    assert.equal(countFiles(failure.repositories.find(node => node.branch === 'main')), 1);
 
     failed = false;
     addedFile = true;
     t.mock.timers.tick(5000);
     await settle();
+    await provider.loadChanges(provider.snapshot().repositories.find(node => node.branch === 'main').id);
     const recovered = provider.snapshot();
     assert.deepEqual(recovered.errors, []);
     assert.equal(countFiles(recovered.repositories.find(node => node.branch === 'main')), 2);
@@ -319,6 +410,10 @@ test('workspace worktrees are opened automatically and expose their current file
     workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event }
   };
   const backend = { state: { status: 'ready' }, onDidChange: event,
+    async beginChanges(value) { return changesPage(value === linked ? [
+      change('index', 'staged.txt', 'index_modified'), change('working', 'working.txt', 'working_modified')
+    ] : []); },
+    async releaseChanges() {},
     async status(value, includeWorktrees = true) { return { common_dir: common, branch: value === root ? 'main' : 'topic',
       is_dirty: value === linked, ahead: 0, behind: 0, stashes: [],
       worktrees: includeWorktrees && value === root && linkedExists ? [{ path: linked, branch: 'topic', is_dirty: true, file_count: 2 },
@@ -350,6 +445,8 @@ test('workspace worktrees are opened automatically and expose their current file
     const snapshot = provider.snapshot();
     worktree = snapshot.repositories.find(item => item.name === 'parent').worktrees[0];
     assert.equal(worktree.available, true);
+    await provider.loadChanges(worktree.id);
+    worktree = provider.snapshot().repositories.find(item => item.name === 'parent').worktrees[0];
     assert.deepEqual(worktree.groups.map(group => [group.id, group.files.map(file => file.path)]), [
       ['index', ['staged.txt']], ['working', ['working.txt']]
     ]);
@@ -501,14 +598,18 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   fs.symlinkSync(realRepo, path.join(realWorkspace, 'repo'));
   fs.symlinkSync(realRepo, path.join(otherWorkspace, 'repo'));
   fs.writeFileSync(path.join(realRepo, 'file.txt'), 'inside');
-  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value,
-    with: change => ({ fsPath: value, ...change }) });
+  const uri = value => {
+    const make = (scheme, query) => ({ scheme, fsPath: value, query,
+      toString: () => scheme === 'file' && !query ? value : `${scheme}:${value}?${query}`,
+      with: change => make(change.scheme ?? scheme, change.query ?? query) });
+    return make('file', '');
+  };
   const event = () => ({ dispose() {} });
   let statusCalls = 0;
   let backendCalls = 0;
-  const change = { uri: uri(path.join(repoPath, 'file.txt')), status: 7 };
+  const apiChange = { uri: uri(path.join(repoPath, 'file.txt')), status: 7 };
   const repo = { rootUri: uri(repoPath), state: { HEAD: { name: 'main' }, onDidChange: event,
-    workingTreeChanges: [change] }, async status() { statusCalls++; } };
+    workingTreeChanges: [apiChange] }, async status() { statusCalls++; } };
   let onOpen, onClose;
   const api = { repositories: [repo],
     onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
@@ -526,12 +627,23 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     onDidDispose(handler) { disposeGraph = handler; },
     dispose() { disposeGraph(); }, reveal() {} };
   let provider;
+  let holdChanges = false;
+  let releaseChanges;
   class Backend {
     constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
     async status() { backendCalls++; return { common_dir: path.join(realRepo, '.git'), branch: 'main',
       is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
       has_dirty_submodules: false, has_unpushed_submodules: false }; }
     async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
+    async beginChanges() {
+      if (holdChanges) await new Promise(resolve => { releaseChanges = resolve; });
+      return changesPage([change('untracked', 'file.txt', 'untracked')]);
+    }
+    async verifyChanges() {
+      const record = change('untracked', 'file.txt', 'untracked');
+      return { page: changesPage([record]), change: record };
+    }
+    async releaseChanges() {}
     dispose() {}
   }
   const vscode = {
@@ -588,10 +700,20 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     assert.notEqual(repoId, previousId);
     handlers.get('gitpane.openGraph')(repoId);
     assert.deepEqual(graphRequests, [repoPath, repoPath]);
-    const fileId = current.groups[0].files[0].id;
+    await provider.loadChanges(repoId);
+    const fileId = provider.snapshot().repositories[0].groups[0].files[0].id;
     const node = provider.changes.get(fileId);
     await handlers.get('gitpane.openChange')(node);
     assert.equal(calls[0][0], 'vscode.diff');
+    holdChanges = true;
+    const refreshing = provider.loadChanges(repoId);
+    while (!releaseChanges) await new Promise(resolve => setImmediate(resolve));
+    const clickDuringRefresh = handlers.get('gitpane.openChange')(node);
+    holdChanges = false;
+    releaseChanges();
+    await Promise.all([refreshing, clickDuringRefresh]);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1][0], 'vscode.diff');
     const beforeStatus = statusCalls;
     const beforeBackend = backendCalls;
     fs.unlinkSync(path.join(realWorkspace, 'repo'));
@@ -600,7 +722,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     assert.equal(provider.currentChange(node), undefined);
     assert.deepEqual(provider.snapshot().repositories, []);
     await handlers.get('gitpane.openChange')(node);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.match(errors.at(-1), /no longer in the workspace/i);
     handlers.get('gitpane.openGraph')(repo);
     assert.match(errors.at(-1), /no longer in the workspace/i);
@@ -617,7 +739,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     assert.equal(provider.tree.isVisible(repo), false);
     assert.deepEqual(provider.snapshot().repositories, []);
     await handlers.get('gitpane.openChange')(node);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.match(errors.at(-1), /no longer in the workspace/i);
   } finally {
     for (const disposable of context.subscriptions) disposable.dispose();

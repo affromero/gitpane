@@ -4,11 +4,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 test('webview shows workspace state and opens only currently visible changes', async () => {
   const calls = [];
+  const errors = [];
   const vscode = {
     Uri: { joinPath: (...parts) => parts.join('/') },
+    window: { async showErrorMessage(message) { errors.push(message); } },
     commands: { async executeCommand(...args) { calls.push(args); } }
   };
   const load = Module._load;
@@ -24,14 +27,27 @@ test('webview shows workspace state and opens only currently visible changes', a
   }
   const root = path.resolve('workspace/repo');
   const worktreePath = path.join(path.dirname(root), 'worktree');
-  const uri = value => ({ fsPath: value, toString: () => value });
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  vscode.Uri.file = uri;
   const repo = { rootUri: uri(root), state: { HEAD: { name: 'topic', ahead: 2 }, indexChanges: [] } };
   const child = { rootUri: uri(worktreePath), state: { HEAD: { name: 'worktree-branch' }, indexChanges: [] } };
   let current = { uri: uri(path.join(root, 'file.txt')), status: 0 };
   let childCurrent = { uri: uri(path.join(worktreePath, 'child.txt')), status: 5 };
   let visible = true;
   let onChange;
+  const page = records => ({ snapshot: 'fixture-snapshot', revision: createHash('sha256').update(JSON.stringify(records)).digest('hex'), cursor: 0,
+    previous_cursor: null, next_cursor: null, changes: records });
+  const record = (group, file, kind) => ({ group, path: file, kind,
+    original_path: null, conflict_stages: null, is_submodule: false });
+  const backend = {
+    async beginChanges(value) {
+      if (value === worktreePath) return page(childCurrent ? [record('working', 'child.txt', 'working_modified')] : []);
+      return page(current ? [record('index', 'file.txt', current.status === 2 ? 'index_deleted' : 'index_modified')] : []);
+    },
+    async releaseChanges() {}
+  };
   const tree = {
+    backend,
     git: { repositories: [repo, child] }, busy: false, failedStatuses: new Set(),
     workspacePaths: [path.dirname(root)], isPathInWorkspace(value) { return value.startsWith(`${path.dirname(root)}${path.sep}`); },
     backendStatuses: new Map([[root, {
@@ -88,6 +104,9 @@ test('webview shows workspace state and opens only currently visible changes', a
   }
   try {
     await onMessage({ type: 'ready' });
+    const initial = snapshots.at(-1).repositories[0];
+    await onMessage({ type: 'loadChanges', id: initial.id });
+    await onMessage({ type: 'loadChanges', id: initial.worktrees[0].id });
     const first = snapshots.at(-1);
     assert.equal(first.repositories[0].name, 'repo');
     assert.equal(first.repositories[0].branch, 'topic');
@@ -113,6 +132,7 @@ test('webview shows workspace state and opens only currently visible changes', a
     const linked = tree.backendStatuses.get(root).worktrees.shift();
     await onMessage({ type: 'openChange', id: childFile.id });
     assert.equal(calls.length, 1);
+    assert.match(errors.at(-1), /no longer available/i);
     tree.backendStatuses.get(root).worktrees.unshift(linked);
     calls.length = 0;
     assert.equal(provider.resolveChange(file.id).path, 'file.txt');
@@ -146,10 +166,12 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.deepEqual(calls, []);
 
     current = { uri: uri(path.join(root, 'file.txt')), status: 2 };
+    await onMessage({ type: 'loadChanges', id: first.repositories[0].id });
     await onMessage({ type: 'openChange', id: file.id });
     assert.equal(calls[0][0], 'gitpane.openChange');
     assert.equal(calls[0][1].change.status, 2);
     current = undefined;
+    await onMessage({ type: 'loadChanges', id: first.repositories[0].id });
     assert.equal(provider.resolveChange(file.id), undefined);
     await onMessage({ type: 'openChange', id: file.id });
     assert.equal(calls.length, 1);

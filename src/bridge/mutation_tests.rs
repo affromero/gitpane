@@ -77,6 +77,77 @@ fn preview(workspace: &Path, params: Value) -> Value {
     replies[1].clone()
 }
 
+#[cfg(unix)]
+fn read_symlink(workspace: &Path, repo: &Path, path: &str) -> Value {
+    let input = format!(
+        "{}\n{}\n",
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [workspace]}}),
+        json!({"id": 2, "method": "working_symlink", "params": {"repo": repo, "path": path}})
+    );
+    let mut output = Vec::new();
+    serve(
+        &mut Cursor::new(input),
+        &mut output,
+        &SubmoduleConfig::default(),
+        &GraphConfig::default(),
+        &WorktreeConfig::default(),
+        None,
+        false,
+    )
+    .unwrap();
+    String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .nth(1)
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_diff_reads_link_text_without_following_targets() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = TempDir::new().unwrap();
+    let repo_path = temporary.path().join("repo");
+    let outside = temporary.path().join("outside");
+    let repo = repo_with_files(&repo_path);
+    std::fs::write(&outside, "outside contents").unwrap();
+    symlink(&outside, repo_path.join("link")).unwrap();
+    let result = read_symlink(&repo_path, &repo_path, "link");
+    assert_eq!(result["result"]["target"], outside.to_str().unwrap());
+
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("link")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let signature = Signature::now("Test", "test@example.invalid").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "link",
+        &tree,
+        &[&parent],
+    )
+    .unwrap();
+    std::fs::remove_file(repo_path.join("link")).unwrap();
+    symlink("missing-target", repo_path.join("link")).unwrap();
+    let result = read_symlink(&repo_path, &repo_path, "link");
+    assert_eq!(result["result"]["target"], "missing-target");
+
+    std::fs::remove_file(repo_path.join("link")).unwrap();
+    std::fs::write(repo_path.join("link"), "ordinary file").unwrap();
+    let result = read_symlink(&repo_path, &repo_path, "link");
+    assert!(result.get("error").is_some());
+    let result = read_symlink(&repo_path, &repo_path, "../outside");
+    assert_eq!(result["error"]["code"], "invalid_request");
+    symlink(temporary.path(), repo_path.join("escape")).unwrap();
+    let result = read_symlink(&repo_path, &repo_path, "escape/outside");
+    assert!(result.get("error").is_some());
+}
+
 fn confirmed_mutation(workspace: &Path, method: &str, mut params: Value) -> Value {
     if method == "file_action"
         && matches!(

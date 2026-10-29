@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::config::{GraphConfig, SubmoduleConfig, WorktreeConfig};
 
+mod changes;
 mod file_identity;
 mod github;
 mod graph;
@@ -111,6 +112,7 @@ fn commit_file_json(file: crate::git::commit_files::CommitFile) -> Value {
 
 fn process(
     scope: &mut Option<Scope>,
+    snapshots: &mut changes::Snapshots,
     request: Request,
     sub_cfg: &SubmoduleConfig,
     graph_cfg: &GraphConfig,
@@ -125,7 +127,9 @@ fn process(
                 "unsupported bridge protocol version",
             ));
         }
-        *scope = Some(Scope::new(init.workspace_roots)?);
+        let updated = Scope::new(init.workspace_roots)?;
+        snapshots.clear();
+        *scope = Some(updated);
         return Ok(json!({ "version": PROTOCOL_VERSION }));
     }
     let scope = scope.as_ref().ok_or_else(|| {
@@ -135,10 +139,15 @@ fn process(
         )
     })?;
     match request.method.as_str() {
+        "changes_begin" => snapshots.begin(scope, params(request.params)?, sub_cfg),
+        "changes_next" => snapshots.page(scope, params(request.params)?),
+        "changes_find" => snapshots.find(scope, params(request.params)?),
+        "changes_release" => snapshots.release(scope, params(request.params)?),
         "file_action_preview" => {
             let input = params(request.params)?;
             mutation::file_action_preview(scope, input)
         }
+        "working_symlink" => mutation::working_symlink(scope, params(request.params)?),
         "status" => {
             let input: StatusRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
@@ -238,6 +247,7 @@ fn serve(
     mutation_once: bool,
 ) -> io::Result<()> {
     let mut scope = None;
+    let mut snapshots = changes::Snapshots::default();
     loop {
         let mut line = Vec::new();
         let count = (&mut *reader)
@@ -278,6 +288,7 @@ fn serve(
                 }
                 let result = process(
                     &mut scope,
+                    &mut snapshots,
                     request,
                     sub_cfg,
                     graph_cfg,

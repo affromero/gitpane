@@ -3,6 +3,7 @@ use git2::Repository;
 use std::path::{Path, PathBuf};
 
 mod change_summary;
+mod changes;
 mod submodule;
 #[cfg(test)]
 mod test_support;
@@ -17,6 +18,7 @@ mod tests_submodule;
 mod worktree;
 
 use change_summary::{ChangeSummary, collect_change_summary};
+pub(crate) use changes::{ChangeError, collect_changes};
 use worktree::{collect_worktree_info, compute_ahead_behind, fetch_remote_silent};
 
 #[derive(Clone, Debug)]

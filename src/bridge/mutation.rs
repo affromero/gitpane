@@ -195,6 +195,41 @@ fn validate_file_path(scope: &Scope, repo: &Path, path: &Path) -> Result<(), Bri
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WorkingSymlink {
+    repo: PathBuf,
+    path: PathBuf,
+}
+
+pub(super) fn working_symlink(scope: &Scope, input: WorkingSymlink) -> Result<Value, BridgeError> {
+    let repo_path = scope.repository(&input.repo)?;
+    validate_file_path(scope, &repo_path, &input.path)?;
+    let repo = git2::Repository::open(&repo_path).map_err(repo_error)?;
+    let status = repo.status_file(&input.path).map_err(repo_error)?;
+    let working = git2::Status::WT_NEW
+        | git2::Status::WT_MODIFIED
+        | git2::Status::WT_TYPECHANGE
+        | git2::Status::WT_RENAMED;
+    if !status.intersects(working) {
+        return Err(BridgeError::new(
+            "stale_target",
+            "The symlink change is no longer available.",
+        ));
+    }
+    let target = file_identity::link_target(&repo_path.join(&input.path))?;
+    if scope.repository(&input.repo)? != repo_path
+        || repo.status_file(&input.path).map_err(repo_error)? != status
+    {
+        return Err(BridgeError::new(
+            "stale_target",
+            "The symlink change is no longer available.",
+        ));
+    }
+    validate_file_path(scope, &repo_path, &input.path)?;
+    Ok(json!({ "target": target }))
+}
+
 fn prepare_file_action(
     scope: &Scope,
     input: &FileAction,

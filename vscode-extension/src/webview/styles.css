@@ -124,12 +124,18 @@ body {
 }
 .group-row { grid-template-columns: 1ch 1fr; padding-left: 2.7ch; color: var(--muted); }
 .file-row { grid-template-columns: 1ch minmax(0, 1fr) auto; padding-left: 4.7ch; }
+.directory-row { cursor: default; }
 .worktree-files .group-row { padding-left: 4.7ch; }
 .worktree-files .file-row { padding-left: 6.7ch; }
 .worktree-row { grid-template-columns: 1ch 1ch minmax(3ch, 1fr) minmax(4ch, 1fr) auto; padding-left: 2.7ch; }
 .stash-row { grid-template-columns: auto minmax(0, 1fr); padding-left: 4.7ch; }
 .stash-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-path { color: inherit; }
+.page-row, .page-status { padding-left: 2.7ch; color: var(--muted); }
+.page-status { padding-top: 2px; padding-bottom: 2px; overflow-wrap: anywhere; }
+.page-status.error { color: var(--vscode-errorForeground, var(--behind)); }
+.worktree-files .page-row, .worktree-files .page-status { padding-left: 4.7ch; }
+.treeitem[aria-disabled="true"] > .page-row { opacity: .65; cursor: default; }
 
 @media (max-width: 230px) {
   #repositories { grid-template-columns: 2.5ch minmax(4ch, 1fr) minmax(3ch, .75fr) minmax(0, max-content); column-gap: .6ch; }

@@ -25,6 +25,16 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'invalid_request', message: 'invalid branch name'}});
   } else if (request.method === 'worktree_plan' && request.params.branch === 'offline') {
     process.exit(1);
+  } else if (request.method === 'changes_begin') {
+    const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
+      previous_cursor: null, next_cursor: 1, changes: []};
+    if (request.params.repo.endsWith('slow')) setTimeout(() => send({id: request.id, result}), 300);
+    else send({id: request.id, result});
+  } else if (request.method === 'changes_next') {
+    send({id: request.id, result: {snapshot: request.params.snapshot, revision: 'a'.repeat(64),
+      cursor: request.params.cursor, previous_cursor: 0, next_cursor: null, changes: []}});
+  } else if (request.method === 'changes_find') {
+    send({id: request.id, result: {change: {path: request.params.path, group: request.params.group}}});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else {
@@ -197,6 +207,37 @@ test('invalid worktree branches remain action errors while backend failures stay
   await assert.rejects(manager.planWorktree(repo, 'offline'), error => error.code === 'service_exited');
   assert.equal(manager.state.status, 'error');
   assert.equal(manager.state.error.code, 'service_exited');
+});
+
+test('detailed change scans do not block status and file checks preserve the visible snapshot', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'slow');
+  let completed = false;
+  const pending = manager.beginChanges(repo).then(value => { completed = true; return value; });
+  assert.equal((await manager.status(path.join(root, 'repo'))).method, 'status');
+  assert.equal(completed, false);
+  const first = await pending;
+  const verification = await manager.verifyChanges(repo, {path: 'one', group: 'untracked'});
+  assert.equal(verification.page.revision, first.revision);
+  assert.deepEqual(verification.change, {path: 'one', group: 'untracked'});
+  const next = await manager.nextChanges(repo, first.snapshot, 1);
+  assert.equal(next.snapshot, first.snapshot);
+  assert.equal(next.cursor, 1);
+});
+
+test('cancelling a pending change scan does not start a worker and allows a later scan', async t => {
+  const { manager, root, executed } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo');
+  const pending = manager.beginChanges(repo);
+  manager.cancelChanges();
+  await assert.rejects(pending, error => error.code === 'workspace_changed');
+  assert.equal(executed.length, 1);
+  assert.equal((await manager.beginChanges(repo)).snapshot, 'sample');
+  assert.equal(executed.length, 2);
 });
 
 test('disposal rejects pending requests and prevents further reads', async () => {

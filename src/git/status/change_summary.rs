@@ -14,6 +14,21 @@ pub(super) struct ChangeSummary {
     pub(super) has_unpushed_submodules: bool,
 }
 
+pub(super) fn status_options(
+    recurse_untracked_dirs: bool,
+    sub_cfg: &SubmoduleConfig,
+) -> StatusOptions {
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(recurse_untracked_dirs)
+        .renames_head_to_index(true);
+    if sub_cfg.ignore_dirty {
+        options.exclude_submodules(true);
+    }
+    options
+}
+
 pub(super) fn collect_change_summary(
     repo: &Repository,
     path: &Path,
@@ -31,14 +46,7 @@ pub(super) fn collect_change_summary(
             has_unpushed_submodules: false,
         });
     }
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(recurse_untracked_dirs)
-        .renames_head_to_index(true);
-
-    if sub_cfg.ignore_dirty {
-        opts.exclude_submodules(true);
-    }
+    let mut opts = status_options(recurse_untracked_dirs, sub_cfg);
 
     let statuses = repo.statuses(Some(&mut opts))?;
     let mut files = Vec::new();

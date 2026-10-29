@@ -5,6 +5,13 @@ and changed files across the repositories in your current workspace. Expand a
 repository to see staged, unstaged, untracked and conflicted files. Select a
 change to open it in the editor.
 
+Gitpane reads changes from Git, including untracked files that VS Code's Git
+settings hide. Large change lists are shown one page at a time. When the list
+is not fully loaded, the repository's file count is a lower bound. Symlink
+diffs show the link target text stored by Git. A repository with more than
+200,000 change records, or a snapshot exceeding the 64 MiB cache limit, shows
+an error instead of an incomplete list.
+
 The view includes detected repositories inside the open workspace folders,
 including multi-root workspaces. Linked worktrees inside the workspace appear
 under their repository, with their own changed files and actions. A worktree

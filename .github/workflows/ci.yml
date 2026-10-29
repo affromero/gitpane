@@ -121,5 +121,10 @@ jobs:
           GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane${{ runner.os == 'Windows' && '.exe' || '' }}
         run: node vscode-extension/test/integration/bridge-real.js
 
+      - name: Test VS Code extension against release binary
+        env:
+          GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: node vscode-extension/test/integration/extension-real.js
+
       - name: Test distributed source package
         run: python3 scripts/check_source_package.py

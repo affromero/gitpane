@@ -10,6 +10,8 @@ const expandedStashes = new Set(Array.isArray(saved.expandedStashes) ? saved.exp
 let selected = typeof saved.selected === 'string' ? saved.selected : undefined;
 let snapshot = { repositories: [], errors: [], loading: true };
 let visible = [];
+const pendingLoads = new Map();
+const pendingPages = new Map();
 
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes], selected });
@@ -49,10 +51,55 @@ function fileCount(repo) {
   return paths.size;
 }
 
-function labelForRepo(repo, count) {
+function countInfo(owner) {
+  const page = owner.changesPage;
+  const loaded = fileCount(owner);
+  const pending = !!page && page.state !== 'ready';
+  const lower = Number.isSafeInteger(owner.changeCountLowerBound) && owner.changeCountLowerBound >= 0
+    ? owner.changeCountLowerBound : 0;
+  const count = pending ? Math.max(loaded, lower) : loaded;
+  return { count, unknown: !!page && page.state !== 'ready' && !count && !!owner.dirty,
+    partial: !!page && ((pending && count > 0) || page.previous || page.next || page.page > 0) };
+}
+
+function countText(info) {
+  if (info.unknown) return 'changes available';
+  return `${info.partial ? 'at least ' : ''}${info.count} ${info.count === 1 ? 'file' : 'files'}`;
+}
+
+function requestChanges(owner, force = false) {
+  if (!owner?.changesPage || owner.changesPage.state === 'loading' || pendingLoads.has(owner.id)) return;
+  if (!force && owner.changesPage.state !== 'idle') return;
+  pendingLoads.set(owner.id, { state: owner.changesPage.state, acknowledged: false });
+  vscode.postMessage({ type: 'loadChanges', id: owner.id });
+}
+
+function requestPage(ownerId, direction, page) {
+  if (pendingPages.has(ownerId)) return;
+  pendingPages.set(ownerId, { page, acknowledged: false });
+  vscode.postMessage({ type: 'changesPage', id: ownerId, direction });
+}
+
+function reconcilePending(owner) {
+  const page = owner.changesPage;
+  if (!page) return;
+  const load = pendingLoads.get(owner.id);
+  if (load) {
+    if (page.state === 'loading') load.acknowledged = true;
+    else if ((page.state === 'ready' || page.state === 'error') &&
+      (load.acknowledged || page.state !== load.state)) pendingLoads.delete(owner.id);
+  }
+  const pending = pendingPages.get(owner.id);
+  if (!pending) return;
+  if (page.state === 'loading') pending.acknowledged = true;
+  else if (page.state === 'error' || (page.state === 'ready' &&
+    (pending.acknowledged || page.page !== pending.page))) pendingPages.delete(owner.id);
+}
+
+function labelForRepo(repo, info) {
   const details = [repo.name, repo.worktree ? 'worktree' : '', repo.branch || 'unknown branch',
     repo.statusUnavailable ? 'status unavailable' : repo.dirty ? 'has changes' : 'clean',
-    repo.statusUnavailable ? '' : `${count} ${count === 1 ? 'file' : 'files'}`];
+    repo.statusUnavailable ? '' : countText(info)];
   if (!repo.statusUnavailable) {
     if (repo.stashCount > 0) details.push(`${repo.stashCount} ${repo.stashCount === 1 ? 'stash' : 'stashes'}`);
     if (repo.worktreeCount > 0) details.push(`${repo.worktreeCount} ${repo.worktreeCount === 1 ? 'worktree' : 'worktrees'}`);
@@ -64,7 +111,7 @@ function labelForRepo(repo, count) {
   return details.filter(Boolean).join(', ');
 }
 
-function repoRow(repo, count, isExpanded, hasWorktrees, hasStashes) {
+function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
   const name = add(row, 'name', '', repo.name);
@@ -86,21 +133,24 @@ function repoRow(repo, count, isExpanded, hasWorktrees, hasStashes) {
         button.addEventListener('click', event => {
           event.stopPropagation();
           if (open) expandedStashes.delete(key);
-          else { expanded.add(`repo:${repo.id}`); expandedStashes.add(key); }
+          else { expanded.add(`repo:${repo.id}`); expandedStashes.add(key); requestChanges(repo); }
           render();
         });
         tail.appendChild(button);
       } else add(tail, 'stash', `$${repo.stashCount}`, `${repo.stashCount} stashes`);
     }
     if (repo.worktreeCount > 0) {
-      const indicator = hasWorktrees && !count ? (isExpanded ? '▾' : '▸') : '';
+      const indicator = hasWorktrees && !info.count ? (isExpanded ? '▾' : '▸') : '';
       add(tail, 'worktree', `${indicator}⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
     }
     if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
     if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
     if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
     if (repo.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Unpushed submodule commits');
-    if (count) add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${count}]`);
+    if (info.count || (info.unknown && repo.dirty)) {
+      const value = info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`;
+      add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
+    }
   }
   const graphButton = element('button', 'graph-action', '●');
   graphButton.type = 'button';
@@ -121,10 +171,11 @@ function statusClass(status) {
 }
 
 function fileRow(file) {
-  const row = element('div', 'row file-row');
+  const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}`);
   add(row, statusClass(file.status), file.status || ' ');
   add(row, 'file-path', file.path || file.name, file.path || file.name);
-  row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
+  if (file.directory) add(row, 'muted', 'directory', 'Untracked directory');
+  else row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
   return row;
 }
 
@@ -137,7 +188,12 @@ function worktreeRow(worktree) {
   const tail = element('span', 'tail');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
-  if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
+  if (worktree.changesPage) {
+    const info = countInfo(worktree);
+    if (info.count || (info.unknown && worktree.dirty)) {
+      add(tail, 'count', `[${info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`}]`, countText(info));
+    }
+  } else if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
   if (worktree.available) {
     const graph = element('button', 'graph-action', '●');
     graph.type = 'button';
@@ -168,7 +224,7 @@ function createItem(key, label, row, expandable, isExpanded, parent) {
   return data;
 }
 
-function renderGroups(parentElement, groups, parentKey, ownerId) {
+function renderGroups(parentElement, groups, parentKey, ownerId, partial = false) {
   for (const group of groups) {
     const groupKey = `group:${JSON.stringify([ownerId, group.id])}`;
     const files = Array.isArray(group.files) ? group.files : [];
@@ -176,7 +232,7 @@ function renderGroups(parentElement, groups, parentKey, ownerId) {
     const row = element('div', 'row group-row');
     add(row, 'subtree', groupExpanded ? '▾' : '▸');
     add(row, '', `${group.label} [${files.length}]`);
-    const groupItem = createItem(groupKey, `${group.label}, ${files.length} ${files.length === 1 ? 'file' : 'files'}`,
+    const groupItem = createItem(groupKey, `${group.label}, ${files.length} ${files.length === 1 ? 'file' : 'files'}${partial ? ' on this page' : ''}`,
       row, files.length > 0, groupExpanded, parentKey);
     parentElement.appendChild(groupItem.item);
     if (!groupExpanded || !files.length) continue;
@@ -185,11 +241,53 @@ function renderGroups(parentElement, groups, parentKey, ownerId) {
     groupItem.item.appendChild(filesGroup);
     for (const file of files) {
       const fileKey = `file:${file.id}`;
-      const fileItem = createItem(fileKey, `${file.status || 'changed'} ${file.path || file.name}`,
+      const fileItem = createItem(fileKey, `${file.status || 'changed'} ${file.path || file.name}${file.directory ? ', untracked directory' : ''}`,
         fileRow(file), false, false, groupKey);
-      fileItem.fileId = file.id;
+      if (!file.directory) fileItem.fileId = file.id;
       filesGroup.appendChild(fileItem.item);
     }
+  }
+}
+
+function renderPage(parentElement, owner, parentKey) {
+  const page = owner.changesPage;
+  if (!page) return;
+  if (page.state === 'loading') {
+    const status = element('div', 'page-status', 'Loading changes…');
+    status.setAttribute('role', 'status');
+    parentElement.appendChild(status);
+  } else if (page.state === 'error') {
+    const error = element('div', 'page-status error', page.error || 'Could not load changes.');
+    error.setAttribute('role', 'alert');
+    parentElement.appendChild(error);
+  } else if (page.state === 'ready' && (page.previous || page.next)) {
+    const count = (owner.groups || []).reduce((total, group) => total + (group.files?.length || 0), 0);
+    const status = element('div', 'page-status', `Page ${page.page + 1} · ${count} ${count === 1 ? 'change' : 'changes'} shown`);
+    status.setAttribute('role', 'status');
+    parentElement.appendChild(status);
+  } else if (page.state === 'ready' && !fileCount(owner)) {
+    const status = element('div', 'page-status', 'No changed files.');
+    status.setAttribute('role', 'status');
+    parentElement.appendChild(status);
+  }
+  const directions = page.state === 'error' ? ['retry'] : [
+    ...(page.previous ? ['previous'] : []), ...(page.next ? ['next'] : [])
+  ];
+  for (const direction of directions) {
+    const label = direction === 'retry' ? 'Retry loading changes' :
+      direction === 'previous' ? 'Previous changes' : 'Next changes';
+    const row = element('div', 'row page-row');
+    add(row, '', label);
+    const item = createItem(`page:${direction}:${owner.id}`, `${label} for ${owner.name || owner.branch}`,
+      row, false, false, parentKey);
+    item.pageOwner = owner.id;
+    item.pageNumber = page.page;
+    item.pageDirection = direction;
+    if (page.state === 'loading' || pendingPages.has(owner.id) || pendingLoads.has(owner.id)) {
+      item.item.setAttribute('aria-disabled', 'true');
+      item.pageDisabled = true;
+    }
+    parentElement.appendChild(item.item);
   }
 }
 
@@ -215,47 +313,66 @@ function renderMessages() {
 
 function render() {
   const hadFocus = tree.contains(document.activeElement);
+  const previousSelection = visible.find(item => item.key === selected);
   const focusedAction = document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
     document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
     document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
   const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
   visible = [];
+  const owners = new Set();
   tree.replaceChildren();
   renderMessages();
   for (const repo of snapshot.repositories) {
+    owners.add(repo.id);
+    reconcilePending(repo);
     const key = `repo:${repo.id}`;
-    const count = fileCount(repo);
+    const info = countInfo(repo);
     const groups = Array.isArray(repo.groups) ? repo.groups : [];
     const worktrees = !repo.statusUnavailable && Array.isArray(repo.worktrees) ? repo.worktrees : [];
     const stashes = !repo.statusUnavailable && Array.isArray(repo.stashes) ? repo.stashes : [];
     const isExpanded = expanded.has(key);
-    const item = createItem(key, labelForRepo(repo, count), repoRow(repo, count, isExpanded, worktrees.length > 0, stashes.length > 0),
-      groups.length > 0 || worktrees.length > 0 || stashes.length > 0, isExpanded, undefined);
+    const hasPage = !!repo.changesPage && (repo.dirty || repo.changesPage.state === 'loading' ||
+      repo.changesPage.state === 'error' || repo.changesPage.previous || repo.changesPage.next);
+    const item = createItem(key, labelForRepo(repo, info), repoRow(repo, info, isExpanded, worktrees.length > 0, stashes.length > 0),
+      groups.length > 0 || worktrees.length > 0 || stashes.length > 0 || hasPage, isExpanded, undefined);
+    item.owner = repo;
     tree.appendChild(item.item);
-    if (!isExpanded || (!groups.length && !worktrees.length && !stashes.length)) continue;
+    if (!isExpanded || (!groups.length && !worktrees.length && !stashes.length && !hasPage)) continue;
+    requestChanges(repo);
     const children = element('div', 'children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
-    renderGroups(children, groups, key, repo.id);
+    renderGroups(children, groups, key, repo.id, info.partial);
+    renderPage(children, repo, key);
     for (const worktree of worktrees) {
+      owners.add(worktree.id);
+      reconcilePending(worktree);
       const worktreeKey = `worktree:${worktree.id}`;
       const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.dirty ? 'has changes' : 'clean'];
-      if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+      const worktreeInfo = countInfo(worktree);
+      if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
+      else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
       if (!worktree.available) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
       const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
       const worktreeExpanded = expanded.has(worktreeKey);
+      const worktreeHasPage = worktree.available && !!worktree.changesPage &&
+        (worktree.dirty || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
+          worktree.changesPage.previous || worktree.changesPage.next);
       const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
-        worktreeGroups.length > 0, worktreeExpanded, key);
+        worktreeGroups.length > 0 || worktreeHasPage, worktreeExpanded, key);
       worktreeItem.worktreeId = worktree.id;
+      worktreeItem.owner = worktree;
       children.appendChild(worktreeItem.item);
-      if (worktreeExpanded && worktreeGroups.length) {
+      if (worktreeExpanded && (worktreeGroups.length || worktreeHasPage)) {
+        requestChanges(worktree);
         const files = element('div', 'children worktree-files');
         files.setAttribute('role', 'group');
         worktreeItem.item.appendChild(files);
-        renderGroups(files, worktreeGroups, worktreeKey, worktreeKey);
+        renderGroups(files, worktreeGroups, worktreeKey, worktreeKey, worktreeInfo.partial);
+        renderPage(files, worktree, worktreeKey);
       }
     }
     if (stashes.length) {
@@ -282,7 +399,13 @@ function render() {
       }
     }
   }
-  if (!visible.some(item => item.key === selected)) selected = visible[0]?.key;
+  for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);
+  for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
+  if (!visible.some(item => item.key === selected)) {
+    const alternate = previousSelection?.pageOwner && visible.find(item =>
+      item.pageOwner === previousSelection.pageOwner && !item.pageDisabled);
+    selected = alternate?.key || visible.find(item => item.key === previousSelection?.parent)?.key || visible[0]?.key;
+  }
   for (const item of visible) {
     const active = item.key === selected;
     item.item.setAttribute('aria-selected', active ? 'true' : 'false');
@@ -310,11 +433,40 @@ function select(item, focus = true) {
   save();
 }
 
+function releaseChanges(item) {
+  if (!item.owner?.changesPage) return;
+  pendingLoads.delete(item.owner.id);
+  pendingPages.delete(item.owner.id);
+  vscode.postMessage({ type: 'releaseChanges', id: item.owner.id });
+}
+
+function releaseDescendants(item) {
+  const byKey = new Map(visible.map(value => [value.key, value]));
+  for (const candidate of visible) {
+    if (candidate.key === item.key) {
+      releaseChanges(candidate);
+      continue;
+    }
+    let parent = candidate.parent;
+    while (parent && parent !== item.key) parent = byKey.get(parent)?.parent;
+    if (parent === item.key && candidate.isExpanded) releaseChanges(candidate);
+  }
+}
+
 function toggle(item) {
   if (!item.expandable) return;
   if (item.key.startsWith('repo:') || item.key.startsWith('worktree:')) {
-    if (item.isExpanded) expanded.delete(item.key);
-    else expanded.add(item.key);
+    if (item.isExpanded) {
+      expanded.delete(item.key);
+      releaseDescendants(item);
+    }
+    else {
+      expanded.add(item.key);
+      requestChanges(item.owner, true);
+      for (const worktree of item.owner?.worktrees || []) {
+        if (worktree.available && expanded.has(`worktree:${worktree.id}`)) requestChanges(worktree, true);
+      }
+    }
   } else if (item.key.startsWith('stash-group:')) {
     if (item.isExpanded) expandedStashes.delete(item.key);
     else expandedStashes.add(item.key);
@@ -326,9 +478,22 @@ function toggle(item) {
 function activate(item) {
   if (!item) return;
   if (item.expandable) toggle(item);
+  else if (item.pageOwner && !item.pageDisabled) {
+    if (item.pageDirection === 'retry') {
+      const owner = visible.find(value => value.key === item.parent)?.owner;
+      requestChanges(owner, true);
+    } else requestPage(item.pageOwner, item.pageDirection, item.pageNumber);
+    render();
+  }
   else if (item.fileId !== undefined) vscode.postMessage({ type: 'openChange', id: item.fileId });
   else if (item.worktreeId !== undefined) vscode.postMessage({ type: 'menu', kind: 'worktree', id: item.worktreeId });
 }
+
+tree.addEventListener('focusin', event => {
+  const key = event.target.closest('.treeitem')?.dataset.key;
+  const item = visible.find(value => value.key === key);
+  if (item && selected !== key) select(item, false);
+});
 
 tree.addEventListener('click', event => {
   const row = event.target.closest('.row');

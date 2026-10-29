@@ -83,12 +83,24 @@ class BridgeClient {
     return this.request('status', { repo, ...(includeWorktrees === undefined ? {} : { include_worktrees: includeWorktrees }) });
   }
 
+  beginChanges(repo) { return this.request('changes_begin', { repo }); }
+
+  nextChanges(repo, snapshot, cursor) { return this.request('changes_next', { repo, snapshot, cursor }); }
+
+  findChange(repo, snapshot, target, group) { return this.request('changes_find', { repo, snapshot, path: target, group }); }
+
+  releaseChanges(repo, snapshot) { return this.request('changes_release', { repo, snapshot }); }
+
   sortRepositories(order, repositories) {
     return this.request('sort_repositories', { order, repositories });
   }
 
   fileActionPreview(repo, path, operation) {
     return this.request('file_action_preview', { repo, path, operation });
+  }
+
+  readWorkingSymlink(repo, path) {
+    return this.request('working_symlink', { repo, path });
   }
 
   planWorktree(repo, branch) {

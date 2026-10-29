@@ -81,25 +81,51 @@ fn hash_file(hash: &mut Sha256, file: &mut impl Read) -> Result<(), BridgeError>
 }
 
 #[cfg(not(unix))]
-fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
+fn working_entry(
+    hash: &mut Sha256,
+    path: &Path,
+    link_only: bool,
+) -> Result<Option<Vec<u8>>, BridgeError> {
     // Windows opens the leaf as a reparse point, but ancestor components can
     // still change between validation and open. Revalidation cannot make the
     // following Git subprocess atomic with respect to other processes.
     let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if link_only {
+                return Err(changed());
+            }
             update(hash, b"missing");
-            return Ok(());
+            return Ok(None);
         }
         Err(err) => return Err(error(err)),
     };
     let identity = metadata_identity(&before).map_err(error)?;
     update(hash, &identity);
+    let mut link = None;
     if before.file_type().is_symlink() {
         update(hash, b"symlink");
         let target = fs::read_link(path).map_err(error)?;
-        update(hash, target.as_os_str().as_encoded_bytes());
+        let bytes = if link_only {
+            target
+                .to_str()
+                .ok_or_else(|| {
+                    BridgeError::new("repository_error", "symlink target is not valid UTF-8")
+                })?
+                .as_bytes()
+                .to_vec()
+        } else {
+            target.as_os_str().as_encoded_bytes().to_vec()
+        };
+        if link_only && bytes.len() >= 1024 * 1024 {
+            return Err(too_large());
+        }
+        update(hash, &bytes);
+        link = Some(bytes);
     } else if before.is_file() {
+        if link_only {
+            return Err(changed());
+        }
         if before.len() > MAX_FILE_BYTES {
             return Err(too_large());
         }
@@ -125,11 +151,15 @@ fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
     {
         return Err(changed());
     }
-    Ok(())
+    Ok(link)
 }
 
 #[cfg(unix)]
-fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
+fn working_entry(
+    hash: &mut Sha256,
+    path: &Path,
+    link_only: bool,
+) -> Result<Option<Vec<u8>>, BridgeError> {
     use std::ffi::{CString, OsStr};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
@@ -227,8 +257,11 @@ fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
         directory = match open_dir(&directory, part) {
             Ok(fd) => fd,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if link_only {
+                    return Err(changed());
+                }
                 update(hash, b"missing");
-                return Ok(());
+                return Ok(None);
             }
             Err(err) => return Err(error(err)),
         };
@@ -238,14 +271,18 @@ fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
     let before = match stat(&directory, &leaf) {
         Ok(value) => value,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if link_only {
+                return Err(changed());
+            }
             update(hash, b"missing");
-            return Ok(());
+            return Ok(None);
         }
         Err(err) => return Err(error(err)),
     };
     let before_identity = identity(&before);
     update(hash, &before_identity);
     let kind = before.st_mode & libc::S_IFMT;
+    let mut link = None;
     if kind == libc::S_IFLNK {
         update(hash, b"symlink");
         let mut target = vec![0u8; 1024 * 1024];
@@ -264,7 +301,12 @@ fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
             return Err(too_large());
         }
         update(hash, &target[..count as usize]);
+        target.truncate(count as usize);
+        link = Some(target);
     } else if kind == libc::S_IFREG {
+        if link_only {
+            return Err(changed());
+        }
         if before.st_size < 0 || before.st_size as u64 > MAX_FILE_BYTES {
             return Err(too_large());
         }
@@ -316,7 +358,14 @@ fn working_entry(hash: &mut Sha256, path: &Path) -> Result<(), BridgeError> {
     if identity(&stat(&current, &leaf).map_err(error)?) != before_identity {
         return Err(changed());
     }
-    Ok(())
+    Ok(link)
+}
+
+/// Read a symlink entry without following it or any directory component.
+pub(super) fn link_target(path: &Path) -> Result<String, BridgeError> {
+    let bytes = working_entry(&mut Sha256::new(), path, true)?.ok_or_else(changed)?;
+    String::from_utf8(bytes)
+        .map_err(|_| BridgeError::new("repository_error", "symlink target is not valid UTF-8"))
 }
 
 /// Build a token for the exact canonical file-operation plan and its inputs.
@@ -403,7 +452,7 @@ pub(super) fn plan(
                 None => update(&mut hash, b"no-index-entry"),
             }
         }
-        working_entry(&mut hash, &repo_path.join(path))?;
+        working_entry(&mut hash, &repo_path.join(path), false)?;
     }
     Ok((format!("{:x}", hash.finalize()), args))
 }
@@ -527,7 +576,7 @@ mod tests {
         symlink(outside.path(), dir.path().join("linkdir")).unwrap();
         let mut hash = Sha256::new();
         let path = dir.path().canonicalize().unwrap().join("linkdir/secret");
-        assert!(working_entry(&mut hash, &path).is_err());
+        assert!(working_entry(&mut hash, &path, false).is_err());
     }
 
     #[cfg(unix)]

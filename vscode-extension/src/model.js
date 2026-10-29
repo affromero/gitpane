@@ -78,6 +78,31 @@ function comparison(group, change) {
   };
 }
 
+// A rich record preserves the two independent Git sides and conflict paths.
+function richComparison(record) {
+  const git = (file, ref) => ({ gitPath: file, ref });
+  const file = value => ({ filePath: value });
+  const empty = { empty: true };
+  const current = record.path;
+  const original = record.original_path || current;
+  if (record.group === 'merge') {
+    const stages = record.conflict_stages;
+    if (stages.ours && stages.theirs) return { left: git(stages.ours, ':2'), right: git(stages.theirs, ':3') };
+    if (stages.base && stages.ours) return { left: git(stages.base, ':1'), right: git(stages.ours, ':2') };
+    if (stages.base && stages.theirs) return { left: git(stages.base, ':1'), right: git(stages.theirs, ':3') };
+    if (stages.base) return { left: git(stages.base, ':1'), right: empty };
+    if (stages.ours) return { left: empty, right: git(stages.ours, ':2') };
+    if (stages.theirs) return { left: empty, right: git(stages.theirs, ':3') };
+    throw new Error('Conflict has no available Git stages.');
+  }
+  if (record.group === 'untracked' || record.kind === 'intent_to_add') return { left: empty, right: file(current) };
+  if (record.group === 'index') return {
+    left: record.kind === 'index_added' ? empty : git(original, 'HEAD'),
+    right: record.kind === 'index_deleted' ? empty : git(current, '')
+  };
+  return { left: git(original, ''), right: record.kind === 'working_deleted' ? empty : file(current) };
+}
+
 function sameOrInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -105,4 +130,4 @@ function isSubmodule(repoPath, filePath, submodules) {
   });
 }
 
-module.exports = { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, statusLabel, visibleRepository };
+module.exports = { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, statusLabel, visibleRepository };
