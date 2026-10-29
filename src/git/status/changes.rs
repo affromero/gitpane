@@ -312,6 +312,41 @@ fn add_working(
     )
 }
 
+/// Read a status pass without refreshing the captured in-memory index.
+fn captured_statuses<'repo>(
+    repo: &'repo Repository,
+    sub_cfg: &SubmoduleConfig,
+    show: git2::StatusShow,
+) -> Result<git2::Statuses<'repo>, git2::Error> {
+    let mut options = status_options(true, sub_cfg);
+    options.show(show).no_refresh(true);
+    repo.statuses(Some(&mut options))
+}
+
+fn current_head(repo: &Repository) -> Result<Option<git2::Oid>, ChangeError> {
+    match repo.head().and_then(|head| head.peel_to_commit()) {
+        Ok(commit) => Ok(Some(commit.id())),
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::NotFound | git2::ErrorCode::UnbornBranch
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn require_head(repo: &Repository, expected: Option<git2::Oid>) -> Result<(), ChangeError> {
+    if current_head(repo)? != expected {
+        return Err(ChangeError::Repository(
+            "Repository HEAD changed while collecting changes.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Collect independent index and worktree changes for consumers that need
 /// individual files. The TUI continues using its compact summary.
 pub(crate) fn collect_changes(
@@ -319,7 +354,9 @@ pub(crate) fn collect_changes(
     sub_cfg: &SubmoduleConfig,
     max_records: usize,
 ) -> Result<Vec<ChangeRecord>, ChangeError> {
-    let index = repo.index()?;
+    let mut index = repo.index()?;
+    index.read(false)?;
+    let baseline = current_head(repo)?;
     let submodules: HashSet<_> = repo
         .submodules()?
         .into_iter()
@@ -327,23 +364,49 @@ pub(crate) fn collect_changes(
         .collect();
     let mut records = Vec::new();
     collect_conflicts(&index, &mut records, max_records, &submodules)?;
+    // Staged gitlinks belong to the HEAD-to-index comparison independently
+    // of checkout state.
+    if !sub_cfg.ignore_dirty {
+        let staged = captured_statuses(repo, sub_cfg, git2::StatusShow::Index)?;
+        for entry in staged.iter() {
+            if !entry.status().is_conflicted() {
+                add_index(
+                    entry.status(),
+                    entry.head_to_index(),
+                    &index,
+                    &mut records,
+                    max_records,
+                    &submodules,
+                )?;
+            }
+        }
+    }
     // Keep worktree renames as the deletion and untracked addition Git's
     // file actions operate on. Staged rename detection remains enabled.
-    let mut options = status_options(true, sub_cfg);
-    let statuses = repo.statuses(Some(&mut options))?;
+    require_head(repo, baseline)?;
+    let show = if sub_cfg.ignore_dirty {
+        git2::StatusShow::IndexAndWorkdir
+    } else {
+        git2::StatusShow::Workdir
+    };
+    let statuses = captured_statuses(repo, sub_cfg, show)?;
     for entry in statuses.iter() {
         let status = entry.status();
         if status.is_conflicted() {
             continue;
         }
-        add_index(
-            status,
-            entry.head_to_index(),
-            &index,
-            &mut records,
-            max_records,
-            &submodules,
-        )?;
+        // Ignore rules apply to the paired deltas. A non-gitlink type change
+        // can retain the staged side even when a pure gitlink is hidden.
+        if sub_cfg.ignore_dirty {
+            add_index(
+                status,
+                entry.head_to_index(),
+                &index,
+                &mut records,
+                max_records,
+                &submodules,
+            )?;
+        }
         add_working(
             status,
             entry.index_to_workdir(),
@@ -390,6 +453,7 @@ pub(crate) fn collect_changes(
             )?;
         }
     }
+    require_head(repo, baseline)?;
     records.sort_by(|a, b| {
         a.path
             .cmp(&b.path)
@@ -411,6 +475,46 @@ mod tests {
     use crate::git::status::change_summary::status_options;
 
     use super::delta_is_submodule;
+
+    #[test]
+    fn status_passes_keep_the_captured_index_when_another_process_stages() {
+        use crate::git::status::test_support::{commit_index, init_temp_repo};
+        let (temporary, repo) = init_temp_repo();
+        let path = std::path::Path::new("file");
+        std::fs::write(temporary.path().join(path), "original\n").unwrap();
+        let mut captured = repo.index().unwrap();
+        captured.add_path(path).unwrap();
+        captured.write().unwrap();
+        commit_index(&repo, "Original");
+        let original = captured.get_path(path, 0).unwrap().id;
+        let config = SubmoduleConfig::default();
+        assert!(
+            super::captured_statuses(&repo, &config, git2::StatusShow::Index)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::write(temporary.path().join(path), "new staged content\n").unwrap();
+        let external = Repository::open(temporary.path()).unwrap();
+        let mut external_index = external.index().unwrap();
+        external_index.add_path(path).unwrap();
+        external_index.write().unwrap();
+        assert_ne!(external_index.get_path(path, 0).unwrap().id, original);
+        let working = super::captured_statuses(&repo, &config, git2::StatusShow::Workdir).unwrap();
+        assert_eq!(working.len(), 1);
+        assert!(working.get(0).unwrap().status().is_wt_modified());
+        assert_eq!(captured.get_path(path, 0).unwrap().id, original);
+    }
+
+    #[test]
+    fn a_changed_head_is_rejected_even_when_the_tree_is_unchanged() {
+        use crate::git::status::test_support::{commit_index, init_temp_repo};
+        let (_temporary, repo) = init_temp_repo();
+        let original = super::current_head(&repo).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap().id();
+        commit_index(&repo, "New commit with unchanged tree");
+        assert_eq!(repo.head().unwrap().peel_to_tree().unwrap().id(), tree);
+        assert!(super::require_head(&repo, original).is_err());
+    }
 
     #[test]
     fn deleted_gitlink_is_identified_without_a_configured_module_name() {

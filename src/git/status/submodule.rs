@@ -184,13 +184,28 @@ pub(super) fn compute_submodule_head_and_warn(
         Err(_) => return Ok((None, SubmoduleWarn::default())),
     };
 
-    let head = Some(read_submodule_head(&inner));
+    Ok(submodule_head_and_warn(
+        &inner,
+        sub.index_id(),
+        warn_enabled,
+    ))
+}
+
+/// Observe a validated child using the parent's staged pointer. Keeping this
+/// independent of a libgit2 submodule handle lets callers authorize and open
+/// each checkout before inspecting its state.
+pub(super) fn submodule_head_and_warn(
+    inner: &Repository,
+    recorded: Option<git2::Oid>,
+    warn_enabled: bool,
+) -> (Option<SubmoduleHead>, SubmoduleWarn) {
+    let head = Some(read_submodule_head(inner));
     let warn = if warn_enabled {
-        compute_submodule_warn(sub, &inner)
+        compute_submodule_warn(recorded, inner)
     } else {
         SubmoduleWarn::default()
     };
-    Ok((head, warn))
+    (head, warn)
 }
 
 /// Read the submodule's current branch, or `Detached` when it sits on a
@@ -209,8 +224,8 @@ fn read_submodule_head(inner: &Repository) -> SubmoduleHead {
 /// open handle to it. Uses `index_id()` (parent's *staged* pointer, not
 /// committed) so the warning fires *before* the parent commit ships, while the
 /// user can still amend or reset.
-fn compute_submodule_warn(sub: &git2::Submodule, inner: &Repository) -> SubmoduleWarn {
-    let recorded = match sub.index_id() {
+fn compute_submodule_warn(recorded: Option<git2::Oid>, inner: &Repository) -> SubmoduleWarn {
+    let recorded = match recorded {
         Some(o) => o,
         None => return SubmoduleWarn::default(),
     };

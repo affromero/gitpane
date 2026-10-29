@@ -2,6 +2,52 @@ use super::test_support::{commit_index, init_temp_repo};
 use super::*;
 
 #[test]
+fn staged_rename_keeps_its_working_edit_or_deletion_as_a_separate_change() {
+    for deleted in [false, true] {
+        let (tmp, repo) = init_temp_repo();
+        std::fs::write(tmp.path().join("old"), "original\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("old")).unwrap();
+        index.write().unwrap();
+        commit_index(&repo, "Original file");
+        std::fs::rename(tmp.path().join("old"), tmp.path().join("new")).unwrap();
+        index.remove_path(Path::new("old")).unwrap();
+        index.add_path(Path::new("new")).unwrap();
+        index.write().unwrap();
+        if deleted {
+            std::fs::remove_file(tmp.path().join("new")).unwrap();
+        } else {
+            std::fs::write(tmp.path().join("new"), "working edit\n").unwrap();
+        }
+        let records =
+            serde_json::to_value(collect_changes(&repo, &SubmoduleConfig::default(), 100).unwrap())
+                .unwrap();
+        let records = records.as_array().unwrap();
+        assert_eq!(records.len(), 2);
+        let staged = records
+            .iter()
+            .find(|record| record["group"] == "index")
+            .unwrap();
+        assert_eq!(staged["path"], "new");
+        assert_eq!(staged["kind"], "index_renamed");
+        assert_eq!(staged["original_path"], "old");
+        let working = records
+            .iter()
+            .find(|record| record["group"] == "working")
+            .unwrap();
+        assert_eq!(working["path"], "new");
+        assert_eq!(
+            working["kind"],
+            if deleted {
+                "working_deleted"
+            } else {
+                "working_modified"
+            }
+        );
+    }
+}
+
+#[test]
 fn bare_repository_reports_head_without_worktree_changes() {
     let tmp = tempfile::TempDir::new().unwrap();
     let repo = Repository::init_bare(tmp.path()).unwrap();

@@ -4,6 +4,89 @@ use git2::Repository;
 use std::{fs, path::Path};
 
 #[test]
+fn ignored_submodule_addition_keeps_staged_and_working_type_change() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    let mut link = index.get_path(Path::new("my-sub"), 0).unwrap();
+    link.path = b"new-sub".to_vec();
+    index.add(&link).unwrap();
+    index.write().unwrap();
+    fs::write(tmp.path().join("new-sub"), "replacement file").unwrap();
+    let config = SubmoduleConfig {
+        ignore_dirty: true,
+        warn_unpushed: false,
+    };
+    let records = serde_json::to_value(collect_changes(&repo, &config, 100).unwrap()).unwrap();
+    let records = records.as_array().unwrap();
+    assert!(
+        records
+            .iter()
+            .any(|record| record["path"] == "new-sub" && record["kind"] == "index_added")
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["path"] == "new-sub" && record["kind"] == "type_changed")
+    );
+}
+
+#[test]
+fn staged_and_working_gitlink_changes_are_independent() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let committed = repo
+        .head()
+        .unwrap()
+        .peel_to_tree()
+        .unwrap()
+        .get_name("my-sub")
+        .unwrap()
+        .id();
+    let staged = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    assert_ne!(staged, committed);
+    stage_submodule_pointer(tmp.path(), "my-sub");
+    let record_kinds = || {
+        let records = collect_changes(&repo, &SubmoduleConfig::default(), 100).unwrap();
+        let records = serde_json::to_value(records).unwrap();
+        records
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["path"] == "my-sub")
+            .map(|record| {
+                (
+                    record["group"].as_str().unwrap().to_owned(),
+                    record["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        record_kinds(),
+        vec![("index".to_owned(), "index_modified".to_owned())]
+    );
+    let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+    let working = add_commit_on_head(&child, "next.rs", "next change");
+    assert_ne!(working, staged);
+    assert_eq!(
+        repo.index()
+            .unwrap()
+            .get_path(Path::new("my-sub"), 0)
+            .unwrap()
+            .id,
+        staged
+    );
+    assert_eq!(
+        record_kinds(),
+        vec![
+            ("index".to_owned(), "index_modified".to_owned()),
+            ("working".to_owned(), "working_modified".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn submodule_candidates_preserve_config_paths_includes_and_recorded_links() {
     for (config, extra) in [
         ("[submodule \"my-sub\"]\nurl = source\n", None),
