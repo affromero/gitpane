@@ -35,7 +35,16 @@ function fixture(t, record, sides, head = 'a'.repeat(40), root = path.resolve('w
     commands: { async executeCommand(...args) { commands.push(args); } } };
   const links = new LinkDocuments(vscode, tree, backend);
   t.after(() => links.dispose());
-  const provider = { currentChange: () => selected ? node : undefined, async revalidateChange() { return revalidate; } };
+  const provider = { currentChange: () => selected ? node : undefined,
+    async waitForCurrentChange() { return selected ? node : undefined; },
+    async withCurrentChange(_node, dispatch) {
+      if (!selected) return false;
+      const result = dispatch(node);
+      if (result === false) return false;
+      await result;
+      return true;
+    },
+    async revalidateChange() { return revalidate; } };
   return { node, tree, repo, backend, links, vscode, provider, commands, snapshot, get reads() { return reads; },
     setAlive(value) { alive = value; }, setSelected(value) { selected = value; }, setRevalidate(value) { revalidate = value; },
     onCompare(value) { compareHook = value; }, onContent(value) { contentHook = value; } };
@@ -46,6 +55,24 @@ const blob = name => ({ path: name, kind: 'blob', mode: 33188, oid: 'c'.repeat(4
 const record = (kind, group = 'index') => ({ group, kind, path: 'child',
   original_path: kind === 'index_renamed' ? 'old-child' : null,
   conflict_stages: group === 'merge' ? { base: 'child', ours: 'child', theirs: 'child' } : null, is_submodule: true });
+
+test('pointer opening waits for a refreshed selection and rejects removal', async t => {
+  const f = fixture(t, record('index_deleted'), { base: gitlink('child', '1'), index: null });
+  let release, started, selected = true;
+  const waiting = new Promise(resolve => { started = resolve; });
+  f.provider.waitForCurrentChange = async () => {
+    started();
+    await new Promise(resolve => { release = resolve; });
+    return selected ? f.node : undefined;
+  };
+  const opening = openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode);
+  await waiting;
+  assert.deepEqual(f.commands, []);
+  selected = false;
+  release();
+  await assert.rejects(opening, /no longer/i);
+  assert.deepEqual(f.commands, []);
+});
 
 test('staged rename and type changes open guarded pointer and blob contents', async t => {
   for (const [change, sides] of [

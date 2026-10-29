@@ -161,8 +161,9 @@ class LinkDocuments {
     const checkAncestors = async (batch, checks) => {
       if (!batch.verifyAncestors) return true;
       if (typeof batch.ancestorKey !== 'string' || !batch.ancestorKey) throw new Error('Invalid submodule ancestor guard.');
-      if (!checks.has(batch.ancestorKey)) checks.set(batch.ancestorKey, Promise.resolve().then(() => batch.verifyAncestors()));
-      return await checks.get(batch.ancestorKey) === true;
+      const key = JSON.stringify([batch.ancestorKey, batch.contextKey]);
+      if (!checks.has(key)) checks.set(key, Promise.resolve().then(() => batch.verifyAncestors()));
+      return await checks.get(key) === true;
     };
     for (const item of repositories.values()) {
       const groups = [...item.groups];
@@ -219,6 +220,78 @@ class LinkDocuments {
     return results;
   }
 
+  async liveBatches(entries) {
+    const repositories = new Map(), results = new Map();
+    for (const entry of entries) {
+      if (!entry.liveBatch || entry.closed || (entry.guardSync && !entry.guardSync())) continue;
+      const key = JSON.stringify([entry.liveBatch.repo, entry.liveBatch.identity, entry.liveBatch.session.git.key]);
+      if (!repositories.has(key)) repositories.set(key, { repo: entry.liveBatch.repo, identity: entry.liveBatch.identity,
+        session: entry.liveBatch.session, groups: new Map() });
+      repositories.get(key).groups.set(entry.group, entry.liveBatch);
+    }
+    const ancestors = async (batch, checks) => {
+      if (!batch.verifyAncestors) return true;
+      const key = JSON.stringify([batch.ancestorKey, batch.contextKey]);
+      if (!checks.has(key)) checks.set(key, Promise.resolve().then(() => batch.verifyAncestors()));
+      return await checks.get(key) === true;
+    };
+    for (const repo of repositories.values()) {
+      const groups = [...repo.groups];
+      const { snapshot, git } = repo.session;
+      const baseBytes = Buffer.byteLength(`${JSON.stringify({ version: 1, workspace_roots: snapshot.roots,
+        workspace_root_identities: snapshot.rootIdentities, workspace_root_sources: snapshot.rootSources,
+        repo: repo.repo, expected_repo_identity: repo.identity, git_executable: git.executable,
+        operation: { kind: 'metadata', items: [] } })}\n`);
+      let start = 0;
+      while (start < groups.length && !this.disposed) {
+        const batch = [];
+        let bytes = baseBytes;
+        while (start < groups.length && batch.length < 128) {
+          const candidate = groups[start];
+          const size = Buffer.byteLength(JSON.stringify(candidate[1].item)) + (batch.length ? 1 : 0);
+          if (bytes + size > MAX_REQUEST_BYTES) {
+            if (batch.length) break;
+            results.set(candidate[0], { error: Object.assign(new Error('Git file metadata request is too large.'), { code: 'request_too_large' }) });
+            start++;
+            continue;
+          }
+          bytes += size;
+          batch.push(candidate);
+          start++;
+        }
+        const before = new Map(), eligible = [];
+        for (const [group, entry] of batch) {
+          try {
+            if (await ancestors(entry, before)) eligible.push([group, entry]);
+            else results.set(group, { error: new Error('The parent submodule changed.') });
+          } catch (error) { results.set(group, { error }); }
+        }
+        if (!eligible.length) continue;
+        try {
+          const revisions = eligible.map(([, entry]) => entry.revision?.() ?? null);
+          const response = await this.backend.gitSideOperation(repo.session, repo.identity,
+            { kind: 'metadata', items: eligible.map(([, entry]) => entry.item) });
+          if (!response || response.version !== 1 || typeof response.volatile !== 'boolean' ||
+              !/^[a-f0-9]{64}$/.test(response.replacements) || !/^[a-f0-9]{64}$/.test(response.config) ||
+              !Array.isArray(response.results) || response.results.length !== eligible.length) {
+            throw new Error('Gitpane returned invalid Git file metadata checks.');
+          }
+          const after = new Map();
+          for (let index = 0; index < eligible.length; index++) {
+            const [group, entry] = eligible[index];
+            try {
+              if (!await ancestors(entry, after)) throw new Error('The parent submodule changed.');
+              results.set(group, { fingerprint: entry.convert(response.results[index], response, revisions[index]) });
+            } catch (error) { results.set(group, { error }); }
+          }
+        } catch (error) {
+          for (const [group] of eligible) results.set(group, { error });
+        }
+      }
+    }
+    return results;
+  }
+
   async refresh() {
     if (this.refreshing) { this.refreshAgain = true; return; }
     this.refreshing = true;
@@ -226,8 +299,9 @@ class LinkDocuments {
       const checks = new Map(), probes = new Map(), shown = new Set();
       const entries = [...this.documents.values()];
       const pointerResults = await this.pointerBatches(entries);
+      const liveResults = await this.liveBatches(entries);
       for (const entry of entries) {
-        let current, failure;
+        let current, failure, target;
         try {
           if (entry.batch) {
             const result = pointerResults.get(entry.group);
@@ -235,13 +309,21 @@ class LinkDocuments {
             if (result && !result.valid && result.code !== 'stale_target') {
               failure = Object.assign(new Error(result.message), { code: result.code });
             }
+          } else if (entry.liveBatch && entry.group) {
+            if (entry.guardSync && !entry.guardSync()) current = false;
+            else {
+              const result = liveResults.get(entry.group);
+              if (result?.error) throw result.error;
+              if (!result) throw new Error('Gitpane could not validate the open diff.');
+              target = result.fingerprint;
+              current = !entry.guardSync || entry.guardSync();
+            }
           } else if ((entry.content !== undefined || entry.readContent || entry.readBinary) && entry.group) {
             if (!checks.has(entry.group)) checks.set(entry.group, entry.refreshGuard ? entry.refreshGuard() : this.current(entry));
             current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
           } else current = await this.current(entry);
         }
         catch (error) { current = false; failure = error; }
-        let target;
         if (current && entry.content === undefined && !entry.readContent && !entry.readBinary) {
           const key = JSON.stringify([this.repoKey(entry.repo), entry.path]);
           try {
@@ -251,15 +333,26 @@ class LinkDocuments {
           } catch (error) { current = false; failure = error; }
         }
         if (this.disposed || entry.closed) continue;
-        const next = current ? this.fingerprint(entry, target) : `stale:${failure?.message || ''}`;
+        const next = current ? (entry.liveBatch ? target : this.fingerprint(entry, target)) : `stale:${failure?.message || ''}`;
         if (entry.fingerprint !== next) {
           entry.fingerprint = next;
+          if (entry.liveBatch) this.updateLiveVersion(entry, next);
           if (failure?.code === 'watched_path_error') this.vscode.window?.showErrorMessage(failure.message);
+          if (entry.liveBatch && failure && failure.code !== 'stale_target') {
+            const key = JSON.stringify([entry.liveBatch.repo, failure.code, failure.message]);
+            if (!shown.has(key)) {
+              shown.add(key);
+              const message = `Gitpane could not refresh a diff: ${failure.message}`;
+              if (this.output) this.output.appendLine(message);
+              this.vscode.window?.showErrorMessage(message);
+            }
+          }
           if (entry.batch && failure) {
             const key = JSON.stringify([entry.batch.repo, failure.code, failure.message]);
             if (!shown.has(key)) { shown.add(key); this.vscode.window?.showErrorMessage(`Gitpane could not validate a submodule diff: ${failure.message}`); }
           }
-          if (entry.readBinary) this.fileEmitter.fire([{ type: this.vscode.FileChangeType.Changed, uri: entry.uri }]);
+          if (entry.readBinary && entry.liveBatch && (entry.activeLiveReads || entry.pendingLiveDispatch)) entry.pendingLiveChange = true;
+          else if (entry.readBinary) this.fileEmitter.fire([{ type: this.vscode.FileChangeType.Changed, uri: entry.uri }]);
           else this.emitter.fire(entry.uri);
         }
       }
@@ -317,7 +410,7 @@ class LinkDocuments {
 
   async binaryMetadata(entry) {
     if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
-    const metadata = await entry.readMetadata();
+    const metadata = await entry.readMetadata(entry.abort?.signal);
     if (!metadata || !Number.isSafeInteger(metadata.size) || metadata.size < 0) {
       throw new Error('Gitpane returned invalid historical file metadata.');
     }
@@ -339,6 +432,20 @@ class LinkDocuments {
     return entry.uri;
   }
 
+  async createLiveBinary(fileUri, readMetadata, readBinary, guard, group, batch) {
+    if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
+    const entry = { readMetadata, readBinary, guard, guardSync: guard, group, liveBatch: batch, abort: new AbortController(),
+      closed: false, textOpen: false, tabOpen: false, mtime: Date.now() };
+    const metadata = await this.binaryMetadata(entry);
+    if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
+    entry.uri = fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${path.basename(fileUri.fsPath)}`, query: '', fragment: '' });
+    entry.fingerprint = metadata.eventFingerprint;
+    entry.liveVersion = metadata.eventFingerprint;
+    this.documents.set(entry.uri.toString(), entry);
+    this.expirePendingBinary(entry.uri.toString(), entry);
+    return entry.uri;
+  }
+
   expirePendingBinary(key, entry, delay = 60000) {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
@@ -353,28 +460,53 @@ class LinkDocuments {
     return entry;
   }
 
+  updateLiveVersion(entry, fingerprint) {
+    if (entry.liveVersion === fingerprint) return;
+    entry.liveVersion = fingerprint;
+    entry.mtime = Math.max(Date.now(), entry.mtime + 1);
+  }
+
   async stat(uri) {
     const entry = this.binaryEntry(uri);
     const metadata = await this.binaryMetadata(entry);
     if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
-    return { type: this.vscode.FileType.File, size: metadata.size, ctime: 0, mtime: 0 };
+    if (entry.liveBatch) this.updateLiveVersion(entry, metadata.eventFingerprint);
+    return { type: this.vscode.FileType.File, size: metadata.size, ctime: 0, mtime: entry.mtime || 0 };
   }
 
   async readFile(uri) {
     const entry = this.binaryEntry(uri);
-    if (entry.refreshGuard) {
+    if (entry.refreshGuard || entry.liveBatch) {
       if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
     } else await this.binaryMetadata(entry);
     await this.acquireBinary();
+    let counted = false;
     try {
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
-      await this.binaryMetadata(entry);
-      const bytes = await entry.readBinary();
+      if (entry.liveBatch) { entry.activeLiveReads = (entry.activeLiveReads || 0) + 1; counted = true; }
+      const before = entry.liveBatch ? undefined : await this.binaryMetadata(entry);
+      const bytes = await entry.readBinary(before, entry.abort?.signal);
       if (!(bytes instanceof Uint8Array)) throw new Error('VS Code returned invalid historical file contents.');
-      await this.binaryMetadata(entry);
+      if (!entry.liveBatch) await this.binaryMetadata(entry);
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
       return bytes;
-    } finally { this.releaseBinary(); }
+    } finally {
+      if (counted && --entry.activeLiveReads === 0 && entry.pendingLiveChange) {
+        entry.pendingLiveChange = false;
+        entry.pendingLiveDispatch = true;
+        setTimeout(() => {
+          entry.pendingLiveDispatch = false;
+          if (!this.disposed && !entry.closed && this.documents.get(uri.toString()) === entry) {
+            if (entry.activeLiveReads) entry.pendingLiveChange = true;
+            else {
+              entry.pendingLiveChange = false;
+              this.fileEmitter.fire([{ type: this.vscode.FileChangeType.Changed, uri: entry.uri }]);
+            }
+          }
+        }, 0);
+      }
+      this.releaseBinary();
+    }
   }
 
   acquireBinary() {
@@ -442,6 +574,7 @@ class LinkDocuments {
     const entry = this.documents.get(key);
     if (!entry) return;
     entry.closed = true;
+    entry.abort?.abort();
     clearTimeout(entry.timer);
     this.documents.delete(key);
   }

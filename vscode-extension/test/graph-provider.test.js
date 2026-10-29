@@ -6,6 +6,7 @@ const Module = require('node:module');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { installGitSideFixture } = require('./git-side-fixture');
 
 test('commit graph opens Unix filenames containing literal backslashes', { skip: process.platform === 'win32' }, async () => {
   const calls = [], messages = [];
@@ -17,15 +18,22 @@ test('commit graph opens Unix filenames containing literal backslashes', { skip:
     Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
     const { GraphProvider } = require('../src/graph-provider');
     const root = path.resolve('workspace/repo');
-    const repo = { rootUri: uri(root) };
+    const repo = { rootUri: uri(root), async buffer(ref) { return Buffer.from(ref); } };
     const tree = { git: { get repositories() { return [{ ...repo }]; } }, isVisible: () => true,
       repositoryToken: () => 1, isCurrentRepository: (_repo, token) => token === 1,
       onDidChangeTreeData: () => ({ dispose() {} }) };
     const oid = 'a'.repeat(40), parent = 'b'.repeat(40);
     const oldPath = 'old\\..\\file.txt', newPath = 'new\\..\\file.txt';
-    const backend = { async commitFiles() { return { files: [{ status: 'R', path: newPath, old_path: oldPath }] }; } };
+    const backend = { async commitFiles() { return { repo_identity: 'e'.repeat(64), files: [{ status: 'R', path: newPath, old_path: oldPath }] }; },
+      async repoBlobMetadata(_repo, _identity, ref) { return { oid: '1'.repeat(40), mode: 0o100644, size: 40, head_oid: ref }; } };
+    installGitSideFixture(backend, () => repo);
     const git = { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
-    const provider = new GraphProvider(tree, backend, git, '/extension');
+    const links = { async createLiveBinary(value, metadata, read, guard) {
+      assert.equal(await guard(), true);
+      const details = await metadata();
+      return { scheme: 'gitpane-blob', fsPath: value.fsPath, ref: details.ref, guard, read: () => read(details) };
+    } };
+    const provider = new GraphProvider(tree, backend, git, '/extension', undefined, links);
     provider.repoKey = repo.rootUri.toString();
     provider.panel = { visible: true, webview: { postMessage: message => messages.push(message) }, dispose() {} };
     provider.rows.set(oid, { oid, parent_oids: [parent] });
@@ -79,9 +87,10 @@ test('commit files open native diffs against the first parent and reject stale a
   } finally { Module._load = load; }
 
   const root = path.resolve('workspace/repo');
-  const repo = { rootUri: uri(root) };
+  const repo = { rootUri: uri(root), async buffer(ref) { return Buffer.from(ref); } };
   let visible = true;
   let linked = true;
+  let worktreeLinked = true;
   let incarnation = 1;
   const tree = {
     git: { get repositories() { return [{ ...repo }]; } },
@@ -95,6 +104,7 @@ test('commit files open native diffs against the first parent and reject stale a
   const firstParent = 'c'.repeat(40);
   let labelMaxLen;
   const backend = {
+    async repoBlobMetadata(_repo, _identity, ref) { return { oid: '1'.repeat(40), mode: 0o100644, size: 40, head_oid: ref }; },
     async graphRevision() { return { revision: 'a'.repeat(64) }; },
     async graph() { return { branches: [], label_max_len: labelMaxLen, rows: [
       { oid: rootOid, parent_oids: [] },
@@ -109,16 +119,22 @@ test('commit files open native diffs against the first parent and reject stale a
       ] };
     }
   };
+  installGitSideFixture(backend, () => repo);
   const git = { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
   const links = { async validateStaticIdentity(_repo, _identity, guard) { return guard(); },
-    async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { scheme: 'gitpane-link', content, guard }; } };
+    async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { scheme: 'gitpane-link', content, guard }; },
+    async createLiveBinary(value, metadata, read, guard) {
+      assert.equal(await guard(), true);
+      const details = await metadata();
+      return { scheme: 'gitpane-blob', fsPath: value.fsPath, ref: details.ref, guard, read: () => read(details) };
+    } };
   const provider = new GraphProvider(tree, backend, git, '/extension', undefined, links);
   try {
     Module._load = function(name, ...args) {
       if (name === './graph/html') return { getHtml: () => '<html></html>' };
       return load.call(this, name, ...args);
     };
-    provider.open(repo, () => linked);
+    provider.open(repo, () => linked, undefined, { current: () => worktreeLinked, contextKey: 'parent-worktree' });
     assert.deepEqual(panelOptions.localResourceRoots, ['/extension/src']);
   } finally { Module._load = load; }
 
@@ -168,6 +184,9 @@ test('commit files open native diffs against the first parent and reject stale a
     assert.equal(messages.at(-1).oid, mergeOid);
 
     linked = false;
+    assert.equal(await commands[1][1].guard(), true, 'an open diff survives a graph selection change');
+    worktreeLinked = false;
+    assert.equal(await commands[1][1].guard(), false, 'an open diff rejects a replaced worktree relationship');
     await receive({ type: 'openCommitFile', id: mergeFile.id });
     assert.equal(commands.length, 4);
     provider.open(repo);

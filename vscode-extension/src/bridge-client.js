@@ -143,6 +143,16 @@ class BridgeClient {
     }
   }
 
+  async repoBlobMetadataBatch(repo, identity, items) {
+    try { return await this.request('repo_blob_metadata_batch', { repo, expected_repo_identity: identity, items }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support live diffs. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   nextChanges(repo, snapshot, cursor) { return this.request('changes_next', { repo, snapshot, cursor }); }
 
   searchChanges(repo, snapshot, query, direction, position) {

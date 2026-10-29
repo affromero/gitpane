@@ -15,12 +15,14 @@ their metadata. Git status scans also use temporary memory. If the cache is
 full, collapse another repository or worktree and retry. A single snapshot
 larger than 64 MiB cannot be loaded.
 
-When a file or symlink blocks the old path of a deleted or renamed file, the
-Git side opens as a read-only snapshot from the selected repository. Reopen
-the diff after changing that index entry. Gitpane checks the entry before and
-after reading; a change that is reversed during the read may go undetected.
-Other Git sides use VS Code's Git provider, which selects a repository by path.
-An overlapping open repository can affect which history that provider reads.
+Git sides of diffs read from the selected repository, including when another
+repository overlaps the file path. They update as its Git state changes.
+Gitpane checks index entries before and after reading; a change reversed during
+the read may go undetected. Gitpane keeps up to 256 virtual diff documents open
+at once, shared with symlink and submodule comparisons. Close a diff to make
+room for another one. Repositories with a configured text converter or Git
+replacement objects may refresh open Git sides during periodic status polling,
+even when their original blob has not changed.
 
 The view includes detected repositories inside the open workspace folders,
 including multi-root workspaces. Linked worktrees inside the workspace appear

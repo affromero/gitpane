@@ -65,13 +65,13 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
       tree.workspaceWorktrees(parent).some(item => item.path === node.parentWorktree.path) &&
       tree.worktreeRepository(parent, node.parentWorktree.path)?.rootUri.toString() === repo.rootUri.toString();
   };
-  const selected = () => current() && !!provider.currentChange(node);
-  if (!selected()) throw new Error('The selected submodule change is no longer available.');
+  const selected = async () => current() && !!await provider.waitForCurrentChange(node) && current();
+  if (!await selected()) throw new Error('The selected submodule change is no longer available.');
   const repoPath = repo.rootUri.fsPath;
   if (options.verifyAncestors && !await options.verifyAncestors()) throw new Error('The parent submodule changed.');
-  if (!selected()) throw new Error('The selected submodule change is no longer available.');
+  if (!await selected()) throw new Error('The selected submodule change is no longer available.');
   const snapshot = validateSnapshot(await backend.submodulePointerCompare(repoPath, record, repoIdentity), record, repoIdentity);
-  if (!selected()) throw new Error('The selected submodule change is no longer available.');
+  if (!await selected()) throw new Error('The selected submodule change is no longer available.');
   const expected = JSON.stringify([snapshot.repo_identity, snapshot.head_oid, snapshot.record, snapshot.sides]);
   let pending;
   const verify = () => {
@@ -94,9 +94,10 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
     path.join(repoPath, ...relative.split('/')) : scopedFile(repoPath, relative);
   const uri = vscode.Uri.file(virtualPath(record.path));
   const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-  const group = JSON.stringify([repoPath, repoIdentity, token, record, snapshot.head_oid, snapshot.sides, options.ancestorKey]);
+  const contextKey = options.contextKey || JSON.stringify(node.parentWorktree || null);
+  const group = JSON.stringify([repoPath, repoIdentity, token, record, snapshot.head_oid, snapshot.sides, options.ancestorKey, contextKey]);
   const batch = { repo: repoPath, identity: repoIdentity, snapshot: { record, head_oid: snapshot.head_oid, sides: snapshot.sides },
-    ...(options.verifyAncestors ? { ancestorKey: options.ancestorKey, verifyAncestors: options.verifyAncestors } : {}) };
+    ...(options.verifyAncestors ? { ancestorKey: options.ancestorKey, contextKey, verifyAncestors: options.verifyAncestors } : {}) };
   const makeSide = async name => {
     if (!name || !snapshot.sides[name]) return empty;
     const target = vscode.Uri.file(virtualPath(snapshot.sides[name].path));
@@ -109,10 +110,12 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
   };
   const [leftName, rightName] = selectedSides(record, snapshot.sides);
   const left = await makeSide(leftName), right = await makeSide(rightName);
-  if (!selected() || !await provider.revalidateChange(node.fileId) || !selected() || !await verify() || !selected()) {
+  if (!await selected() || !await provider.revalidateChange(node.fileId) || !await selected() || !await verify()) {
     throw new Error('The selected submodule pointer changed. Refresh and try again.');
   }
-  await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(record.path)} (${record.group})`);
+  const opened = await provider.withCurrentChange(node, () => current() &&
+    vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(record.path)} (${record.group})`));
+  if (!opened) throw new Error('The selected submodule pointer changed. Refresh and try again.');
 }
 
 module.exports = { isPointerComparison, openPointerDiff, selectedSides, validateSnapshot };

@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { BranchReviewProvider } = require('../src/branch-review-provider');
+const { installGitSideFixture } = require('./git-side-fixture');
 
 function fixture() {
   const root = path.resolve('workspace/repo');
@@ -33,6 +34,11 @@ function fixture() {
   };
   const git = { toGitUri: (uri, ref) => ({ fsPath: uri.fsPath, ref }) };
   const links = {
+    async createLiveBinary(uri, metadata, read, guard) {
+      assert.equal(await guard(), true);
+      const details = await metadata();
+      return { scheme: 'gitpane-blob', fsPath: uri.fsPath, ref: details.ref, guard, read: () => read(details) };
+    },
     async validateStaticIdentity(_repo, identity, guard) { return identityValid && identity === 'f'.repeat(64) && guard(); },
     async createStatic(_uri, content, guard) {
       if (!await guard()) throw new Error('Repository identity changed');
@@ -44,11 +50,15 @@ function fixture() {
       return { scheme: 'gitpane-blob', ref: (await read()).toString(), guard };
     }
   };
-  const provider = new BranchReviewProvider(tree, { branchReview: async () => {
+  const backend = { branchReview: async () => {
     if (review instanceof Error) throw review;
     const result = structuredClone(review);
     await reviewHook();
     return result;
+  }, async repoBlobMetadata(repoPath, identity, ref) {
+    assert.equal(repoPath, root);
+    assert.equal(identity, 'f'.repeat(64));
+    return { oid: '1'.repeat(40), mode: 0o100644, size: 40, head_oid: ref };
   }, async submoduleHistoricalContent(repoPath, identity, commit, relative, oid, mode) {
     assert.equal(repoPath, root);
     assert.equal(identity, 'f'.repeat(64));
@@ -57,7 +67,9 @@ function fixture() {
     assert.equal(mode, 33188);
     assert.ok(commit === base || commit === head);
     return { size: 40 };
-  } }, git, { vscode, links });
+  } };
+  installGitSideFixture(backend, () => repo);
+  const provider = new BranchReviewProvider(tree, backend, git, { vscode, links });
   return {
     provider, repo, root, base, head, calls, errors, information,
     setReview(value) { review = value; }, getReview() { return review; },
@@ -226,6 +238,21 @@ test('an open pointer diff survives later sidebar selection changes', async () =
   selectionCurrent = false;
   assert.equal(await document.guard(), true);
   f.reopen();
+  assert.equal(await document.guard(), false);
+});
+
+test('open branch review files retain their worktree identity after sidebar selection changes', async () => {
+  const f = fixture();
+  f.setReview({ ...f.getReview(), files: [{ path: 'file', status: 'M', is_submodule: false }] });
+  let selected = true, linked = true;
+  const worktree = { current: () => linked, contextKey: 'parent-worktree' };
+  await f.provider.open(f.repo, () => selected, worktree);
+  assert.equal(f.calls.length, 1);
+  const document = f.calls[0][1];
+  assert.equal(await document.guard(), true);
+  selected = false;
+  assert.equal(await document.guard(), true);
+  linked = false;
   assert.equal(await document.guard(), false);
 });
 

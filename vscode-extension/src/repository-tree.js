@@ -73,6 +73,7 @@ class RepositoryTree {
     this.repositoryIdentities = new Map();
     this.repositoryTokens = new Map();
     this.repositoryRevisions = new Map();
+    this.contentRevisions = new Map();
     this.nextRepositoryToken = 0;
     this.sharedWorkspaceIdentities = backend.workspaceIdentities instanceof Map;
     this.workspaceIdentities = this.sharedWorkspaceIdentities ? backend.workspaceIdentities : new Map();
@@ -136,8 +137,10 @@ class RepositoryTree {
     this.repositoryIdentities.set(key, directoryIdentity(repo.rootUri.fsPath));
     const token = ++this.nextRepositoryToken;
     this.repositoryTokens.set(key, token);
+    this.contentRevisions.set(key, 0);
     this.listeners.set(key, repo.state.onDidChange(() => {
       if (!this.isCurrentRepository(repo, token)) return;
+      this.contentRevisions.set(key, (this.contentRevisions.get(key) || 0) + 1);
       this.groupCache.delete(key);
       if (this.isVisible(repo)) this.scheduleChanged();
     }));
@@ -151,6 +154,7 @@ class RepositoryTree {
     this.listeners.delete(key);
     this.repositoryIdentities.delete(key);
     this.repositoryTokens.delete(key);
+    this.contentRevisions.delete(key);
     this.sortGeneration++;
     this.sortRanks.delete(key);
     this.groupCache.delete(key);
@@ -699,6 +703,10 @@ class RepositoryTree {
 
   repositoryToken(repo) {
     return repo?.rootUri && this.repositoryTokens.get(repo.rootUri.toString());
+  }
+
+  contentRevision(repo) {
+    return repo?.rootUri && this.contentRevisions.get(repo.rootUri.toString());
   }
 
   repositoryRevision(uri) {

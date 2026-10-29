@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { SubmoduleProvider } = require('../src/submodule-provider');
 const { LinkDocuments } = require('../src/link-documents');
+const { installGitSideFixture } = require('./git-side-fixture');
 
 function fixture(t, linkDocuments) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-submodule-'));
@@ -23,7 +24,8 @@ function fixture(t, linkDocuments) {
     record: { path: 'child', group: 'working', kind: 'working_modified', original_path: null,
       conflict_stages: null, is_submodule: true } };
   const child = { rootUri: uri(childPath), state: { HEAD: { commit: head }, submodules: [],
-    workingTreeChanges: [{ uri: uri(path.join(childPath, 'dirty.txt')), status: 5 }] }, async status() {} };
+    workingTreeChanges: [{ uri: uri(path.join(childPath, 'dirty.txt')), status: 5 }] }, async status() {},
+    async buffer(ref) { return Buffer.from(ref); } };
   let visible = true;
   let rowVisible = true;
   let parentRecord;
@@ -72,6 +74,12 @@ function fixture(t, linkDocuments) {
     if (response instanceof Error) throw response;
     return response;
   }, async status() { return { head_oid: child.state.HEAD.commit }; },
+  async repoBlobMetadata(repoPath, identity, ref) {
+    assert.equal(repoPath, childPath);
+    assert.equal(identity, '2'.repeat(64));
+    return { oid: 'c'.repeat(40), mode: 0o100644, size: 40,
+      head_oid: ref === 'HEAD' ? child.state.HEAD.commit : ref.startsWith(':') ? null : ref || null };
+  },
   async openChangesSession() { if (scanError) throw scanError; return { begin: async () => page(0), next: async (_id, cursor) => page(cursor),
     close() { closedSessions++; } }; },
   async verifyChanges(repo, record) {
@@ -88,7 +96,14 @@ function fixture(t, linkDocuments) {
     }
     return { valid: true };
   } };
-  const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments, resolveChange: () => visible && rowVisible ? node : undefined,
+  installGitSideFixture(backend, repoPath => git.repositories.find(repo => repo.rootUri.fsPath === repoPath));
+  const links = linkDocuments || { async createLiveBinary(value, metadata, read, guard) {
+    assert.equal(await guard(), true);
+    const details = await metadata();
+    return { scheme: 'gitpane-blob', fsPath: value.fsPath, ref: details.ref, guard, read: () => read(details),
+      toString: () => `gitpane-blob:${value.fsPath}` };
+  } };
+  const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments: links, resolveChange: () => visible && rowVisible ? node : undefined,
     openGraph: async (repo, guard, validate) => { graphs.push(repo); graphGuard = guard; graphValidate = validate; } });
   t.after(() => provider.dispose());
   return { temporary, childPath, node, child, base, head, provider, backend, commands, errors, graphs, inspections,
@@ -128,7 +143,7 @@ test('opens committed rename and current dirty file comparisons using native edi
   assert.equal(f.commands[0][2].ref, f.head);
   f.pick(choices => choices.find(choice => choice.kind === 'change') || choices.find(choice => choice.kind === 'browse'));
   await f.provider.open(f.node);
-  assert.equal(f.commands[1][1].ref, '');
+  assert.equal(f.commands[1][1].ref, ':0');
   assert.equal(f.commands[1][2].fsPath, path.join(f.childPath, 'dirty.txt'));
   f.pick(choices => choices.find(choice => choice.kind === 'graph'));
   await f.provider.open(f.node);
@@ -152,7 +167,7 @@ test('nested deleted files use the owning repository and retain ancestor guards 
   fs.writeFileSync(path.join(f.childPath, 'blocked'), 'replacement');
   const bytes = Buffer.from([0, 255, 1]);
   f.child.buffer = async (ref, file) => {
-    assert.equal(ref, '');
+    assert.equal(ref, ':0');
     assert.equal(file, record.path);
     return bytes;
   };
@@ -337,7 +352,8 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   let current = root;
   for (let index = 0; index <= 6; index++) {
     fs.mkdirSync(current, { recursive: true });
-    repos.push({ rootUri: uri(current), state: { HEAD: { commit: head }, submodules: [] } });
+    repos.push({ rootUri: uri(current), state: { HEAD: { commit: head }, submodules: [] },
+      async buffer(ref) { return Buffer.from(ref); } });
     current = path.join(current, 'child');
   }
   fs.writeFileSync(path.join(repos.at(-1).rootUri.fsPath, 'file.txt'), 'nested working change');
@@ -357,6 +373,11 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   let pinMode = false, browseDepth = 0, pinned;
   let fault, nestedInspected = false, removedNested = false, leafSelected = false, leafChecks = 0, removedLeaf = false, identityChanged = false;
   const backend = {
+    async repoBlobMetadata(repoPath, identity, ref) {
+      assert.equal(repoPath, repos.at(-1).rootUri.fsPath);
+      assert.equal(identity, '2'.repeat(64));
+      return { oid: 'c'.repeat(40), mode: 0o100644, size: 40, head_oid: ref === 'HEAD' ? head : ref.startsWith(':') ? null : ref || null };
+    },
     async inspectSubmodule(repo, target) {
       if (fault === 'nested' && repo === repos[1].rootUri.fsPath) nestedInspected = true;
       return { repo: path.join(repo, target), base_oid: head, head_oid: head, child_head_oid: head,
@@ -390,6 +411,7 @@ test('nested working changes traverse beyond four levels and reject stale ancest
         previous_cursor: null, next_cursor: null, changes: [record] }; }, close() { activeSessions--; } };
     }
   };
+  installGitSideFixture(backend, repoPath => repos.find(repo => repo.rootUri.fsPath === repoPath));
   const commands = [], errors = [];
   const vscode = { Uri: { file: uri }, window: {
     async showQuickPick(choices) {
@@ -406,7 +428,12 @@ test('nested working changes traverse beyond four levels and reject stale ancest
   const opened = [];
   const git = { repositories: repos, async openRepository(value) { opened.push(value.fsPath); return repos.find(repo => repo.rootUri.fsPath === value.fsPath); },
     toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
-  const provider = new SubmoduleProvider(tree, backend, git, { vscode, resolveChange: () => node });
+  const links = { async createLiveBinary(value, metadata, read, guard) {
+    assert.equal(await guard(), true);
+    const details = await metadata();
+    return { scheme: 'gitpane-blob', fsPath: value.fsPath, ref: details.ref, guard, read: () => read(details) };
+  } };
+  const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments: links, resolveChange: () => node });
   t.after(() => provider.dispose());
   await provider.open(node);
   assert.equal(commands.length, 1, errors.at(-1));

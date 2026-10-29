@@ -62,6 +62,12 @@ enum Command {
         /// Run a cancellable worker dedicated to editor session liveness.
         #[arg(long, conflicts_with = "mutation_once")]
         liveness_worker: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_exec", "content_guard"])]
+        content_worker: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_worker", "content_guard"])]
+        content_exec: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_worker", "content_exec"])]
+        content_guard: bool,
     },
 }
 
@@ -91,11 +97,28 @@ enum Command {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let cli = Cli::parse();
+    if let Some(Command::Serve {
+        content_guard,
+        content_worker,
+        content_exec,
+        ..
+    }) = &cli.command
+    {
+        if *content_guard {
+            bridge::run_content_guard();
+        }
+        if *content_worker || *content_exec {
+            bridge::run_content_worker(*content_exec);
+        }
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run())));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run(cli))));
 
     // A panic skipped the app's quit gating, so a mutating git child may
     // still be running with piped stdio; give it a bounded window before
@@ -152,9 +175,7 @@ fn apply_libgit2_limits(cfg: &config::Git2Config) {
     }
 }
 
-async fn run() -> Result<()> {
-    let cli = Cli::parse();
-
+async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Command::Update) => return self_update(),
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
@@ -164,6 +185,7 @@ async fn run() -> Result<()> {
         Some(Command::Serve {
             mutation_once,
             liveness_worker,
+            ..
         }) => {
             if liveness_worker {
                 session::liveness::install_worker_cancellation()?;

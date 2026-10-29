@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::config::{Config, GraphConfig, SubmoduleConfig, WorktreeConfig};
 
 mod changes;
+mod content_worker;
 mod fetch;
 mod file_identity;
 mod github;
@@ -31,6 +32,14 @@ const PROTOCOL_VERSION: u64 = 1;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 // Leave room below the extension host's 16 MiB line limit for framing.
 const MAX_RESPONSE_BYTES: usize = 15 * 1024 * 1024;
+
+pub(crate) fn run_content_worker(exec: bool) -> ! {
+    content_worker::main(exec)
+}
+
+pub(crate) fn run_content_guard() -> ! {
+    content_worker::guard()
+}
 
 #[derive(Debug)]
 struct BridgeError {
@@ -232,6 +241,7 @@ fn process(
         "changes_search" => snapshots.search(scope, params(request.params)?),
         "changes_release" => snapshots.release(scope, params(request.params)?),
         "repo_blob_metadata" => changes::blob::metadata(scope, params(request.params)?),
+        "repo_blob_metadata_batch" => changes::blob::metadata_batch(scope, params(request.params)?),
         "file_action_preview" => {
             let input = params(request.params)?;
             mutation::file_action_preview(scope, input)

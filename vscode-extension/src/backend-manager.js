@@ -4,6 +4,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { BridgeClient, BridgeError } = require('./bridge-client');
 const { MutationManager } = require('./mutation-manager');
+const { GitContentWorkers, captureGitEnvironment } = require('./git-content-worker');
+const { GitMetadataBatches } = require('./git-metadata-batches');
 const { visibleRepository } = require('./model');
 
 function normalizeWorkspacePath(value, platform = process.platform) {
@@ -24,6 +26,10 @@ class BackendManager {
     this.stat = options.stat || fs.stat;
     this.createClient = options.createClient || ((executable, callbacks) => new BridgeClient(executable, callbacks));
     this.output = options.output;
+    this.gitApi = options.gitApi;
+    this.gitContentWorkers = options.gitContentWorkers || new GitContentWorkers();
+    this.gitMetadataBatches = new GitMetadataBatches((session, identity, items, signal) =>
+      this.gitSideOperationNow(session, identity, { kind: 'metadata', items }, signal));
     this.sessionMutations = options.sessionMutations || new MutationManager({
       getSnapshot: () => this.mutationSnapshot(),
       isCurrent: (snapshot, repo) => this.isCurrentMutation(snapshot, repo),
@@ -88,6 +94,8 @@ class BackendManager {
   reconfigure() {
     if (this.disposed) return Promise.reject(new BridgeError('disposed', 'Gitpane backend has been disposed.'));
     const generation = ++this.generation;
+    this.gitMetadataBatches.cancel();
+    this.gitContentWorkers.cancel();
     this.cancelChanges();
     this.cancelValidation();
     this.cancelPointerChecks();
@@ -221,6 +229,49 @@ class BackendManager {
     return { executable: this.executable, roots: [...this.roots], rootSources: [...this.rootSources], rootIdentities: [...this.rootIdentities], generation: this.generation };
   }
 
+  async gitSideSession(repo) {
+    const snapshot = await this.mutationSnapshot();
+    const git = captureGitEnvironment(this.gitApi);
+    if (!this.isCurrentMutation(snapshot, repo)) throw new BridgeError('workspace_changed', 'Gitpane workspace changed.');
+    return { snapshot, git, repo };
+  }
+
+  gitSideCurrent(session) {
+    if (!session || !this.isCurrentMutation(session.snapshot, session.repo)) return false;
+    return captureGitEnvironment(this.gitApi).key === session.git.key;
+  }
+
+  async gitSideOperation(session, identity, operation, signal) {
+    if (operation.kind === 'metadata' && Array.isArray(operation.items) && operation.items.length === 1) {
+      if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');
+      const result = await this.gitMetadataBatches.request(session, identity, operation.items[0], signal);
+      if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');
+      return result;
+    }
+    return await this.gitSideOperationNow(session, identity, operation, signal);
+  }
+
+  async gitSideOperationNow(session, identity, operation, signal) {
+    if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');
+    const { snapshot, git, repo } = session;
+    const request = { version: 1, workspace_roots: snapshot.roots, workspace_root_identities: snapshot.rootIdentities,
+      workspace_root_sources: snapshot.rootSources, repo, expected_repo_identity: identity,
+      git_executable: git.executable, operation };
+    let bytes;
+    try { bytes = await this.gitContentWorkers.run(snapshot.executable, git.env, request, signal); }
+    catch (error) {
+      if (operation.kind === 'verified_content' && error?.code === 'invalid_request' &&
+          /unknown variant.*verified_content/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support verified Git reads. Update the backend and try again.');
+      }
+      throw error;
+    }
+    if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');
+    if (operation.kind === 'content' || operation.kind === 'verified_content') return bytes;
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+    catch { throw new BridgeError('protocol_error', 'Gitpane returned invalid Git file metadata.'); }
+  }
+
   isCurrentMutation(snapshot, repo) {
     return !this.disposed && !!this.roots && !!snapshot && typeof repo === 'string' &&
       snapshot.generation === this.generation &&
@@ -274,6 +325,7 @@ class BackendManager {
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
       else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
       else if (method === 'repo_blob_metadata') result = await client.repoBlobMetadata(repo, argument.identity, argument.ref, argument.path);
+      else if (method === 'repo_blob_metadata_batch') result = await client.repoBlobMetadataBatch(repo, argument.identity, argument.items);
       else if (method === 'submodule_pointer_compare') result = await client.submodulePointerCompare(repo, argument.record, argument.identity);
       else if (method === 'submodule_pointer_content') result = await client.submodulePointerContent(repo, argument.record, argument.identity, argument.headOid, argument.sides, argument.side);
       else if (method === 'submodule_historical_content') result = await client.submoduleHistoricalContent(repo, argument.identity, argument.commit, argument.path, argument.oid, argument.mode);
@@ -305,8 +357,8 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
       const invalidIdentity = method === 'repo_identity_validate' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
-      const invalidBlob = method === 'repo_blob_metadata' &&
-        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'unsupported_content'].includes(error?.code);
+      const invalidBlob = ['repo_blob_metadata', 'repo_blob_metadata_batch'].includes(method) &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'unsupported_content', 'content_not_found'].includes(error?.code);
       const invalidPointer = ['submodule_pointer_compare', 'submodule_pointer_content', 'submodule_historical_content'].includes(method) &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'file_too_large', 'unsupported_content'].includes(error?.code);
       const invalidRepositoryPreview = method === 'repository_preview' &&
@@ -648,6 +700,8 @@ class BackendManager {
 
   repoBlobMetadata(repo, identity, ref, path) { return this.request('repo_blob_metadata', repo, { identity, ref, path }); }
 
+  repoBlobMetadataBatch(repo, identity, items) { return this.request('repo_blob_metadata_batch', repo, { identity, items }); }
+
   submoduleHistoricalContent(repo, identity, commit, filePath, oid, mode) {
     return this.request('submodule_historical_content', repo, { identity, commit, path: filePath, oid, mode });
   }
@@ -771,6 +825,8 @@ class BackendManager {
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.sessionMutations.dispose();
+    this.gitMetadataBatches.dispose();
+    this.gitContentWorkers.dispose();
     this.client = undefined;
     this.state = { status: 'disposed' };
     this.emitter.dispose();

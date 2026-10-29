@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const vscode = require('vscode');
 const { openGitlinkDiff } = require('./gitlink-diff');
+const { createLiveGitSide } = require('./git-side-documents');
 const { relativeFile } = require('./change-pager');
 
 function defaultFilters() {
@@ -85,7 +86,7 @@ class GraphProvider {
     return !!repo && this.currentRepo()?.rootUri.toString() === repo.rootUri.toString();
   }
 
-  open(repo, guard = () => true, validateGuard) {
+  open(repo, guard = () => true, validateGuard, persistent) {
     const token = repo && this.tree.repositoryToken(repo);
     const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
     if (!repo || !currentGuard() || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
@@ -95,6 +96,7 @@ class GraphProvider {
     this.ownerEpoch++;
     this.guard = currentGuard;
     this.validateGuard = validateGuard;
+    this.persistent = persistent;
     this.lastHead = repo.state?.HEAD?.commit;
     this.stopPolling();
     this.ready = false;
@@ -466,10 +468,19 @@ class GraphProvider {
     if (!await this.validateGraph(repo) || this.files.get(id) !== file || !this.isCurrentRepo(repo)) return;
     if (file.isSubmodule) return this.openCommitGitlink(repo, file, id);
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
-    const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-    const left = file.status === 'A' || !file.parent ? empty : this.git.toGitUri(oldUri, file.parent);
-    const right = file.status === 'D' ? empty : this.git.toGitUri(uri, file.oid);
+    const repoToken = this.tree.repositoryToken(repo);
+    const persistent = this.persistent;
+    const current = () => this.tree.isCurrentRepository(repo, repoToken) &&
+      this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
+      (!persistent || persistent.current());
+    const makeSide = (relative, ref) => createLiveGitSide({ vscode, links: this.links, backend: this.backend,
+      repo, repoIdentity: file.repoIdentity, repoToken, side: { gitPath: relative, ref }, current,
+      revision: () => this.tree.contentRevision?.(repo), verifyAncestors: persistent?.verifyAncestors,
+      ancestorKey: persistent?.ancestorKey, contextKey: persistent?.contextKey });
+    const left = file.status === 'A' || !file.parent ? empty : await makeSide(file.status === 'R' ? file.oldPath : file.path, file.parent);
+    const right = file.status === 'D' ? empty : await makeSide(file.path, file.oid);
+    if (!await this.validateGraph(repo) || this.files.get(id) !== file || !this.isCurrentRepo(repo)) return;
     await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (${file.oid.slice(0, 8)})`);
   }
 
@@ -488,12 +499,14 @@ class GraphProvider {
       return latest.files.some(item => item.path === file.path && item.status === file.status &&
         item.old_path === file.oldPath && item.is_submodule === true && JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
     };
+    const graphContext = this.persistent;
     const persistent = () => this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
-      this.tree.isCurrentRepository(repo, repoToken);
+      this.tree.isCurrentRepository(repo, repoToken) && (!graphContext || graphContext.current());
     await openGitlinkDiff({ vscode, links: this.links, repo, repoIdentity: file.repoIdentity, repoToken,
       file, oldRef: file.parent, newRef: file.oid, current: persistent, verify,
       readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
         file.repoIdentity, commit, relative, oid, mode),
+      verifyAncestors: graphContext?.verifyAncestors, ancestorKey: graphContext?.ancestorKey, contextKey: graphContext?.contextKey,
       title: `${path.basename(file.path)} (${file.oid.slice(0, 8)})` });
   }
 

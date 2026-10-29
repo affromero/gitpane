@@ -196,6 +196,31 @@ test('nested pointer refresh rechecks shared ancestors after the leaf batch', as
   assert.equal(notifications.length, 2, 'both nested pointer documents are invalidated');
 });
 
+test('nested pointer checks do not share ancestry across worktree contexts', async t => {
+  const changes = new EventEmitter();
+  const vscode = { EventEmitter, workspace: {} };
+  const backend = { async validatePointerBatch(_repo, _identity, snapshots) {
+    return { results: snapshots.map(() => ({ valid: true })) };
+  } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  let worktree = true;
+  const make = async (contextKey, verifyAncestors) => {
+    const batch = { repo: '/repo/child', identity: 'a'.repeat(64), ancestorKey: 'same-chain', contextKey,
+      verifyAncestors, snapshot: { record: { path: 'file' }, head_oid: null, sides: {} } };
+    return docs.createVerified(uri('/repo/child/file'), async () => 'value', async () => true,
+      () => true, contextKey, batch);
+  };
+  const stale = await make('worktree', async () => worktree);
+  const direct = await make('direct', async () => true);
+  const notifications = [];
+  docs.onDidChange(value => notifications.push(value.toString()));
+  worktree = false;
+  await docs.refresh();
+  assert.deepEqual(notifications, [stale.toString()]);
+  assert.equal(await docs.provideTextDocumentContent(direct), 'value');
+});
+
 test('symlink documents show link text, refresh, and expire when closed', { skip: process.platform === 'win32' }, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-link-doc-'));

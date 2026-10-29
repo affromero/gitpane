@@ -26,7 +26,7 @@ const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
-const { createGitSide } = require('./git-side-documents');
+const { createLiveGitSide } = require('./git-side-documents');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -275,11 +275,11 @@ class GitpaneViewProvider {
 
   async revalidateChange(id) {
     const selected = this.changes.get(id);
-    const node = this.currentChange(selected);
+    const node = selected && await this.waitForCurrentChange(selected);
     if (!node) return false;
     const result = await this.tree.backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
     validatePage(result?.page, undefined, 0);
-    if (!this.currentChange(node)) return false;
+    if (!await this.waitForCurrentChange(node)) return false;
     if (result.change !== null && !validRecord(result.change)) throw new Error('Gitpane returned an invalid file check.');
     if (JSON.stringify(result.change) !== JSON.stringify(node.record)) {
       await this.loadChanges(node.ownerId);
@@ -288,10 +288,35 @@ class GitpaneViewProvider {
     return true;
   }
 
-  async waitForCurrentChange(node) {
-    const state = this.pager.get(node?.ownerId);
-    if (state?.pending) await state.pending;
-    return this.currentChange(node);
+  async waitForCurrentChange(node, deadline = Date.now() + 10000) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const pending = this.pager.get(node?.ownerId)?.pending;
+      if (!pending) return this.currentChange(node);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return undefined;
+      let timer;
+      try {
+        const settled = await Promise.race([pending.then(() => true),
+          new Promise(resolve => { timer = setTimeout(() => resolve(false), remaining); })]);
+        if (!settled) return undefined;
+      } finally { clearTimeout(timer); }
+    }
+    return this.pager.get(node?.ownerId)?.pending ? undefined : this.currentChange(node);
+  }
+
+  async withCurrentChange(node, dispatch) {
+    const deadline = Date.now() + 10000;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!await this.waitForCurrentChange(node, deadline)) return false;
+      if (this.pager.get(node?.ownerId)?.pending) continue;
+      const current = this.currentChange(node);
+      if (!current) return false;
+      const result = dispatch(current);
+      if (result === false) return false;
+      await result;
+      return true;
+    }
+    return false;
   }
 
   async refresh(retryBackend = false) {
@@ -583,7 +608,7 @@ async function activate(context) {
     return;
   }
   const api = git.getAPI(1);
-  const backend = new BackendManager(context, { output });
+  const backend = new BackendManager(context, { output, gitApi: api });
   const theme = new ThemeController(backend, vscode.window.onDidChangeActiveColorTheme);
   const worktreeDisplay = new WorktreeDisplay(backend);
   const themePicker = new ThemePicker(vscode, backend, theme);
@@ -608,7 +633,7 @@ async function activate(context) {
   const launchers = new LauncherProvider(tree, backend);
   const submodules = new SubmoduleProvider(tree, backend, api, {
     resolveChange: node => provider.currentChange(node),
-    openGraph: (repo, guard, validate) => graph.open(repo, guard, validate),
+    openGraph: (repo, guard, validate, persistent) => graph.open(repo, guard, validate, persistent),
     linkDocuments: links, pins
   });
   const mutations = new MutationManager({
@@ -618,12 +643,22 @@ async function activate(context) {
   });
   const workspaceFetch = new WorkspaceFetch({ tree, backend, mutations, vscode, output,
     refresh: async () => { await provider.refresh(); await graph.pollRevision(); } });
+  const worktreeContext = (id, repo) => {
+    const link = provider.worktrees.get(id);
+    const parent = api.repositories.find(item => item.rootUri.toString() === link?.repoKey);
+    const childToken = repo && tree.repositoryToken(repo);
+    if (!repo || !link || !parent) return undefined;
+    return { current: () => tree.isCurrentRepository(parent, link.repoToken) && tree.isCurrentRepository(repo, childToken) &&
+      tree.workspaceWorktrees(parent).some(item => item.path === link.path) &&
+      tree.worktreeRepository(parent, link.path)?.rootUri.toString() === repo.rootUri.toString(), contextKey: JSON.stringify(link) };
+  };
   const openWorktreeGraph = async (id, guard = () => true) => {
     const repo = provider.currentWorktreeRepository(id);
-    if (!repo) return;
+    const persistent = worktreeContext(id, repo);
+    if (!persistent) return;
     const current = () => guard() && provider.currentWorktreeRepository(id)?.rootUri.toString() === repo.rootUri.toString();
     if (!current()) return;
-    try { graph.open(repo, current); }
+    try { graph.open(repo, current, undefined, persistent); }
     catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }
   };
   provider.openWorktreeGraph = openWorktreeGraph;
@@ -665,6 +700,10 @@ async function activate(context) {
     validateChangePath: item => scopedFile(item.repoPath, item.path),
     resolveRepository: id => provider.resolveRepository(id),
     resolveChange: id => provider.resolveChange(id),
+    waitForChange: async id => {
+      const selected = provider.changes.get(id);
+      return !!selected && !!await provider.waitForCurrentChange(selected);
+    },
     resolveWorktree: id => provider.resolveWorktree(id),
     reviewBranch: async (id, guard = () => true) => {
       const repo = provider.currentRepository(id);
@@ -689,7 +728,8 @@ async function activate(context) {
     openWorktreeGraph,
     reviewWorktree: async (id, guard = () => true) => {
       const repo = provider.currentWorktreeRepository(id);
-      if (repo && guard()) await review.open(repo, guard);
+      const persistent = worktreeContext(id, repo);
+      if (repo && persistent && guard()) await review.open(repo, guard, persistent);
     },
     onWorktreeCreated: async (target, reveal) => {
       if (!tree.isPathInWorkspace(target) || reveal?.current() === false) return;
@@ -762,7 +802,7 @@ async function activate(context) {
         let node = await provider.waitForCurrentChange(selected);
         if (!node) throw new Error('The change is no longer in the workspace.');
         if (!await provider.revalidateChange(node.fileId)) throw new Error('The change has changed; refresh and try again.');
-        node = provider.currentChange(node);
+        node = await provider.waitForCurrentChange(node);
         if (!node) throw new Error('The change is no longer in the workspace.');
         if (isPointerComparison(node.record)) {
           await openPointerDiff(node, provider, tree, backend, links, vscode);
@@ -792,14 +832,12 @@ async function activate(context) {
         };
         const resolve = async side => {
           if (side.empty) return empty;
-          let target;
-          try { target = scopedFile(node.repo.rootUri.fsPath, side.filePath || side.gitPath); }
-          catch (error) {
-            if (side.filePath || error.code !== 'unsafe_ancestor') throw error;
+          if (side.gitPath) {
             const repoIdentity = tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
-            return createGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
-              side, record: node.record, current, verify, contextKey: JSON.stringify(node.parentWorktree || null) });
+            return createLiveGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
+              side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null) });
           }
+          const target = scopedFile(node.repo.rootUri.fsPath, side.filePath);
           if (side.filePath) {
             const stat = fs.lstatSync(target);
             if (stat.isSymbolicLink()) {
@@ -810,13 +848,14 @@ async function activate(context) {
             if (!stat.isFile()) throw new Error('The changed file is unavailable.');
           }
           const uri = vscode.Uri.file(target);
-          return side.filePath ? uri : api.toGitUri(uri, side.ref);
+          return uri;
         };
         const left = await resolve(plan.left);
         const right = await resolve(plan.right);
-        if (!await provider.waitForCurrentChange(node)) throw new Error('The change is no longer in the workspace.');
         const title = `${path.basename(node.change.uri.fsPath)} (${node.group})`;
-        await vscode.commands.executeCommand('vscode.diff', left, right, title);
+        if (!await provider.withCurrentChange(node, () => vscode.commands.executeCommand('vscode.diff', left, right, title))) {
+          throw new Error('The change is no longer in the workspace.');
+        }
       } catch (error) {
         output.appendLine(`Could not open change: ${error.message}`);
         vscode.window.showErrorMessage(`Gitpane could not open the change: ${error.message}`);

@@ -44,6 +44,7 @@ class SidebarActions {
     this.mutations = options.mutations;
     this.resolveRepository = options.resolveRepository;
     this.resolveChange = options.resolveChange;
+    this.waitForChange = options.waitForChange;
     this.resolveWorktree = options.resolveWorktree;
     this.refresh = options.refresh;
     this.refreshRepository = options.refreshRepository;
@@ -83,7 +84,7 @@ class SidebarActions {
 
   async showMenu(kind, id, guard = () => true) {
     try {
-      if (!guard()) return;
+      if (!guard() || (kind === 'file' && this.waitForChange && !await this.waitForChange(id)) || !guard()) return;
       const item = this.resolve(kind, id);
       const expected = fingerprint(item, kind);
       if (!expected) return;
@@ -125,6 +126,7 @@ class SidebarActions {
       else return;
       if (!choices.length) return;
       const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane action' });
+      if (selected && kind === 'file' && this.waitForChange && !await this.waitForChange(id)) return;
       if (!selected || !choices.includes(selected) || !guard() || !this.current(kind, id, expected)) return;
       await this.handle({ type: 'action', action: selected.action, id }, expected, guard);
     } catch (error) {
@@ -143,6 +145,7 @@ class SidebarActions {
     const kind = FILE_ACTIONS.has(action) ? 'file' : REPO_ACTIONS.has(action) ? 'repo' : WORKTREE_ACTIONS.has(action) ? 'worktree' : undefined;
     if (message?.type !== 'action' || !kind || typeof message.id !== 'string') return;
     try {
+      if (kind === 'file' && this.waitForChange && !await this.waitForChange(message.id)) return;
       const item = this.resolve(kind, message.id);
       const original = fingerprint(item, kind);
       if (!original || (expected && original !== expected) || !guard()) return;
@@ -150,7 +153,8 @@ class SidebarActions {
       if (item.refreshOnly && action !== 'refreshRepo') return;
       if (kind === 'file' && !fileOptions(item).some(choice => choice.action === action)) return;
       if (kind === 'file' && action !== 'open' && this.revalidateChange) {
-        if (!await this.revalidateChange(message.id) || !current()) return;
+        if (!await this.revalidateChange(message.id) ||
+            (this.waitForChange && !await this.waitForChange(message.id)) || !current()) return;
         if (this.validateChangePath) this.validateChangePath(item);
       }
       if (kind === 'worktree' && !['removeWorktree', 'hideWorktree', 'refreshWorktree'].includes(action) && !item.available) return;

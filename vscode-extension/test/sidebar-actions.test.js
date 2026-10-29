@@ -23,6 +23,7 @@ function fixture() {
   const calls = [];
   const errors = [];
   let beforeValidation = () => {};
+  let waitForChange = async () => true;
   let preview = async () => ({ token: 'a'.repeat(64) });
   let worktreePreview = async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'b'.repeat(64) });
   let stat = async () => ({});
@@ -44,6 +45,7 @@ function fixture() {
   const actions = new SidebarActions({
     vscode,
     resolveChange: id => id === 'file' ? file : undefined,
+    waitForChange: id => waitForChange(id),
     resolveRepository: id => id === 'repo' ? repo : undefined,
     resolveWorktree: id => id === 'worktree' ? worktree : undefined,
     mutations: { async execute(method, params, options) {
@@ -80,6 +82,7 @@ function fixture() {
     pick(fn) { quickPick = fn; }, confirm(fn) { warning = fn; },
     setFailure(value) { failure = value; }, setRefreshFailure(value) { refreshFailure = value; },
     beforeValidation(fn) { beforeValidation = fn; },
+    setWaitForChange(fn) { waitForChange = fn; },
     setInput(fn) { input = fn; },
     setPlan(fn) { plan = fn; },
     setPreview(fn) { preview = fn; },
@@ -89,6 +92,24 @@ function fixture() {
 }
 
 const action = (action, id) => ({ type: 'action', action, id });
+
+test('file actions wait for a refresh and still reject a changed selection', async () => {
+  const f = fixture();
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  f.setWaitForChange(async () => { started(); await new Promise(resolve => { release = resolve; }); return true; });
+  const opening = f.actions.handle(action('open', 'file'));
+  await waiting;
+  assert.deepEqual(f.calls, []);
+  f.setFile(undefined);
+  release();
+  await opening;
+  assert.deepEqual(f.calls, []);
+  f.setFile({ repoPath: f.root, commonDir: f.commonDir, path: 'file.txt', group: 'working', status: 5, uri: f.uri, node: f.node });
+  f.setWaitForChange(async () => true);
+  await f.actions.handle(action('open', 'file'));
+  assert.deepEqual(f.calls, [['gitpane.openChange', f.node]]);
+});
 
 test('repository and unavailable worktree menus offer a scoped refresh', async () => {
   const f = fixture();

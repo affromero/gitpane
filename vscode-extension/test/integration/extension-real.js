@@ -76,14 +76,18 @@ async function main() {
   process.env.GITPANE_CONFIG = path.join(temporary, 'no-config.toml');
   const repo = { rootUri: uri(repoPath), state: { HEAD: { name: git('branch', '--show-current'),
     commit: git('rev-parse', 'HEAD') }, onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [] },
-  async status() {} };
+  async status() {}, async buffer(ref, relative) { return gitBuffer(repoPath, ref, relative); } };
   const worktree = { rootUri: uri(worktreePath), kind: 'worktree', state: { HEAD: {
     name: 'feature/worktree', commit: git('rev-parse', 'HEAD') }, onDidChange: event,
-  workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {},
+  async buffer(ref, relative) { return gitBuffer(worktreePath, ref, relative); } };
   const openedRepositories = new EventEmitter();
   const closedRepositories = new EventEmitter();
   const workspaceChanged = new EventEmitter();
-  const api = { repositories: [repo, worktree], onDidOpenRepository: openedRepositories.event, onDidCloseRepository: closedRepositories.event,
+  const gitLookup = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['git'], { encoding: 'utf8' });
+  if (gitLookup.error || gitLookup.status !== 0) throw new Error('Cannot locate the Git executable for the integration test.');
+  const api = { git: { path: gitLookup.stdout.trim().split(/\r?\n/)[0], env: isolatedGitEnv() },
+    repositories: [repo, worktree], onDidOpenRepository: openedRepositories.event, onDidCloseRepository: closedRepositories.event,
     toGitUri: (value, ref) => ({ scheme: 'git', fsPath: value.fsPath, ref }) };
   const view = { visible: true, webview: {
     postMessage: snapshot => snapshots.push(snapshot),
@@ -92,6 +96,7 @@ async function main() {
   const vscode = {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
     FileType: { File: 1 }, FileChangeType: { Changed: 1 },
+    FileSystemError: { FileNotFound: () => Object.assign(new Error('File not found'), { code: 'FileNotFound' }) },
     env: { clipboard: { async writeText(value) { copied.push(value); } } },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
@@ -256,14 +261,147 @@ async function main() {
     await receive({ type: 'releaseChanges', id: row.id });
     assert.deepEqual(await files.readFile(left), conflict ? ours : bytes, 'an open diff survives collapsing its source page');
     if (!staged && !symlink && !conflict) {
+      const updated = Buffer.from([0, 252, 7]);
+      const hashed = spawnSync('git', ['-C', root, 'hash-object', '-w', '--stdin'], { env: isolatedGitEnv(), input: updated });
+      if (hashed.error || hashed.status !== 0) throw new Error(hashed.error?.message || hashed.stderr.toString());
+      gitAt(root, 'update-index', '--add', '--cacheinfo', `100644,${hashed.stdout.toString().trim()},${relative}`);
+      await files.refresh();
+      assert.deepEqual(await files.readFile(left), updated, 'blocked Git sides follow index updates');
       gitAt(root, 'add', '-A');
-      await assert.rejects(files.readFile(left), /no longer|changed/i);
+      await assert.rejects(files.readFile(left), error => error.code === 'FileNotFound');
     }
     api.repositories.splice(api.repositories.indexOf(added), 1);
     closedRepositories.fire(added);
     await assert.rejects(files.readFile(left), /no longer/i);
   }
   if (blockedCases.length) console.log('PASS blocked historical Git sides use the owning repository for binary files');
+  const overlapRoot = path.join(temporary, 'workspace', 'overlap-owner');
+  const overlapChild = path.join(overlapRoot, 'nested');
+  fs.mkdirSync(overlapChild, { recursive: true });
+  fs.writeFileSync(path.join(overlapChild, 'tracked.txt'), 'parent history\n');
+  gitAt(overlapRoot, 'init', '-q');
+  gitAt(overlapRoot, 'add', '-A');
+  gitAt(overlapRoot, 'commit', '-qm', 'parent history');
+  gitAt(overlapChild, 'init', '-q');
+  fs.writeFileSync(path.join(overlapChild, 'tracked.txt'), 'nested history\n');
+  gitAt(overlapChild, 'add', '-A');
+  gitAt(overlapChild, 'commit', '-qm', 'nested history');
+  fs.writeFileSync(path.join(overlapChild, 'tracked.txt'), 'working change\n');
+  const overlapRepo = { rootUri: uri(overlapRoot), state: { HEAD: { commit: gitAt(overlapRoot, 'rev-parse', 'HEAD'), name: 'main' },
+    onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [], submodules: [] },
+    async status() {}, async buffer(ref, file) { return gitBuffer(overlapRoot, ref, file); } };
+  const overlapping = { rootUri: uri(overlapChild), state: { HEAD: { commit: gitAt(overlapChild, 'rev-parse', 'HEAD'), name: 'main' },
+    onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [], submodules: [] },
+    async status() {}, async buffer(ref, file) { return gitBuffer(overlapChild, ref, file); } };
+  api.repositories.push(overlapRepo);
+  openedRepositories.fire(overlapRepo);
+  await commands.get('gitpane.refresh')();
+  let overlapRow = snapshots.at(-1).repositories.find(item => item.name === 'overlap-owner');
+  await receive({ type: 'loadChanges', id: overlapRow.id });
+  overlapRow = snapshots.at(-1).repositories.find(item => item.name === 'overlap-owner');
+  const overlapFile = overlapRow.groups.flatMap(group => group.files).find(item => item.path === 'nested/tracked.txt');
+  assert.ok(overlapFile, 'parent repository must expose its tracked file');
+  await receive({ type: 'openChange', id: overlapFile.id });
+  const ownerSide = diffs.at(-1)[0], blobDocuments = documents.get('gitpane-blob');
+  assert.equal((await blobDocuments.readFile(ownerSide)).toString(), 'parent history\n');
+  api.repositories.push(overlapping);
+  openedRepositories.fire(overlapping);
+  assert.equal((await blobDocuments.readFile(ownerSide)).toString(), 'parent history\n', 'opening a nested repo cannot retarget an existing diff');
+  gitAt(overlapRoot, 'add', 'nested/tracked.txt');
+  fs.writeFileSync(path.join(overlapChild, 'tracked.txt'), 'new working change\n');
+  await commands.get('gitpane.refresh')();
+  await blobDocuments.refresh();
+  assert.equal((await blobDocuments.readFile(ownerSide)).toString(), 'working change\n', 'index sides update from their selected owner');
+  await receive({ type: 'releaseChanges', id: overlapRow.id });
+  assert.equal((await blobDocuments.readFile(ownerSide)).toString(), 'working change\n', 'paging away does not close the diff');
+  for (const item of [overlapping, overlapRepo]) { api.repositories.splice(api.repositories.indexOf(item), 1); closedRepositories.fire(item); }
+  await assert.rejects(blobDocuments.readFile(ownerSide), /no longer/i);
+  console.log('PASS live Git sides stay bound to their selected owner across nested repository opens and staging');
+  if (process.platform !== 'win32') {
+    const aliasRoot = path.join(temporary, 'workspace', 'index-alias');
+    fs.mkdirSync(aliasRoot, { recursive: true });
+    fs.writeFileSync(path.join(aliasRoot, '2:file'), 'stage zero\n');
+    fs.writeFileSync(path.join(aliasRoot, 'file'), 'base\n');
+    gitAt(aliasRoot, 'init', '-q');
+    gitAt(aliasRoot, 'add', '-A');
+    gitAt(aliasRoot, 'commit', '-qm', 'index alias');
+    fs.writeFileSync(path.join(aliasRoot, '2:file'), 'working edit\n');
+    const base = gitAt(aliasRoot, 'rev-parse', 'HEAD:file');
+    const conflict = spawnSync('git', ['-C', aliasRoot, 'hash-object', '-w', '--stdin'],
+      { env: isolatedGitEnv(), input: 'wrong conflict stage\n' });
+    if (conflict.error || conflict.status !== 0) throw new Error(conflict.error?.message || conflict.stderr.toString());
+    const records = `0 ${'0'.repeat(40)}\tfile\n100644 ${base} 1\tfile\n` +
+      `100644 ${conflict.stdout.toString().trim()} 2\tfile\n100644 ${base} 3\tfile\n`;
+    const changedIndex = spawnSync('git', ['-C', aliasRoot, 'update-index', '--index-info'], { env: isolatedGitEnv(), input: records });
+    if (changedIndex.error || changedIndex.status !== 0) throw new Error(changedIndex.error?.message || changedIndex.stderr.toString());
+    const aliasRepo = { rootUri: uri(aliasRoot), state: { HEAD: { commit: gitAt(aliasRoot, 'rev-parse', 'HEAD'), name: 'main' },
+      onDidChange: event, workingTreeChanges: [], indexChanges: [], mergeChanges: [], submodules: [] },
+      async status() {}, async buffer(ref, file) { return gitBuffer(aliasRoot, ref, file); } };
+    api.repositories.push(aliasRepo);
+    openedRepositories.fire(aliasRepo);
+    await commands.get('gitpane.refresh')();
+    let aliasRow = snapshots.at(-1).repositories.find(item => item.name === 'index-alias');
+    await receive({ type: 'loadChanges', id: aliasRow.id });
+    aliasRow = snapshots.at(-1).repositories.find(item => item.name === 'index-alias');
+    const aliasFile = aliasRow.groups.flatMap(group => group.files).find(item => item.path === '2:file');
+    assert.ok(aliasFile, 'working change for the stage-zero colon filename must appear');
+    const priorDiffs = diffs.length, priorErrors = errors.length;
+    await receive({ type: 'openChange', id: aliasFile.id });
+    assert.equal(errors.length, priorErrors, errors.at(-1));
+    assert.equal(diffs.length, priorDiffs + 1);
+    assert.equal((await blobDocuments.readFile(diffs.at(-1)[0])).toString(), 'stage zero\n');
+    api.repositories.splice(api.repositories.indexOf(aliasRepo), 1);
+    closedRepositories.fire(aliasRepo);
+    console.log('PASS index stage-zero colon filenames cannot alias conflict stages');
+  }
+  if (process.platform !== 'win32') {
+    const convertRoot = path.join(temporary, 'workspace', 'textconv-repo');
+    const converterOutput = path.join(temporary, 'converter-output');
+    fs.mkdirSync(convertRoot, { recursive: true });
+    fs.writeFileSync(path.join(convertRoot, '.gitattributes'), '*.txt diff=gitpane-test\n');
+    fs.writeFileSync(path.join(convertRoot, 'file.txt'), 'original\n');
+    fs.writeFileSync(converterOutput, 'converted one\n');
+    gitAt(convertRoot, 'init', '-q');
+    const quoted = `'${converterOutput.replace(/'/g, "'\\''")}'`;
+    const converterScript = path.join(temporary, 'gitpane-converter.sh');
+    fs.writeFileSync(converterScript, `#!/bin/sh\ncat ${quoted}\n`, { mode: 0o755 });
+    gitAt(convertRoot, 'config', 'diff.gitpane-test.textconv', `'${converterScript.replace(/'/g, "'\\''")}'`);
+    gitAt(convertRoot, 'add', '-A');
+    gitAt(convertRoot, 'commit', '-qm', 'textconv');
+    fs.writeFileSync(path.join(convertRoot, 'file.txt'), 'changed\n');
+    const changed = new EventEmitter();
+    const convertRepo = { rootUri: uri(convertRoot), state: { HEAD: { commit: gitAt(convertRoot, 'rev-parse', 'HEAD'), name: 'main' },
+      onDidChange: changed.event, workingTreeChanges: [], indexChanges: [], mergeChanges: [], submodules: [] },
+      async status() {}, async buffer(ref, file) { return gitBuffer(convertRoot, ref, file); } };
+    api.repositories.push(convertRepo);
+    openedRepositories.fire(convertRepo);
+    await commands.get('gitpane.refresh')();
+    let convertRow = snapshots.at(-1).repositories.find(item => item.name === 'textconv-repo');
+    await receive({ type: 'loadChanges', id: convertRow.id });
+    convertRow = snapshots.at(-1).repositories.find(item => item.name === 'textconv-repo');
+    const convertFile = convertRow.groups.flatMap(group => group.files).find(item => item.path === 'file.txt');
+    const priorDiffs = diffs.length, priorErrors = errors.length;
+    await receive({ type: 'openChange', id: convertFile.id });
+    assert.equal(errors.length, priorErrors, errors.at(-1));
+    assert.equal(diffs.length, priorDiffs + 1);
+    const convertSide = diffs.at(-1)[0], before = await blobDocuments.stat(convertSide), changeEvents = [];
+    const subscription = blobDocuments.onDidChangeFile(events => changeEvents.push(...events));
+    assert.equal((await blobDocuments.readFile(convertSide)).toString(), 'converted one\n');
+    fs.writeFileSync(converterOutput, 'converted two\n');
+    changed.fire();
+    await blobDocuments.refresh();
+    const refreshDeadline = Date.now() + 5000;
+    while (!changeEvents.some(item => item.uri.toString() === convertSide.toString()) && Date.now() < refreshDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(changeEvents.some(item => item.uri.toString() === convertSide.toString()));
+    assert.ok((await blobDocuments.stat(convertSide)).mtime > before.mtime);
+    assert.equal((await blobDocuments.readFile(convertSide)).toString(), 'converted two\n');
+    subscription.dispose();
+    api.repositories.splice(api.repositories.indexOf(convertRepo), 1);
+    closedRepositories.fire(convertRepo);
+    console.log('PASS SCM events refresh textconv output when the Git blob is unchanged');
+  }
   diffs.length = 0;
   await commands.get('gitpane.refresh')();
   const owner = snapshots.at(-1).repositories[0];
@@ -784,12 +922,12 @@ async function main() {
   const beforePointerDiffs = diffs.length;
   await receive({ type: 'openChange', id: stagedPointer.id });
   assert.equal(diffs.length, beforePointerDiffs + 1, errors.at(-1));
-  assert.equal(diffs.at(-1)[0].ref, pointerA, 'staged diff starts at the committed parent pointer');
-  assert.equal(diffs.at(-1)[1].ref, pointerB, 'staged diff ends at the index pointer');
+  assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[0])).toString(), 'committed locally\n');
+  assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[1])).toString(), 'staged child commit\n');
   await receive({ type: 'openChange', id: workingPointer.id });
   assert.equal(diffs.length, beforePointerDiffs + 2, errors.at(-1));
-  assert.equal(diffs.at(-1)[0].ref, pointerB, 'working diff starts at the index pointer');
-  assert.equal(diffs.at(-1)[1].ref, pointerC, 'working diff ends at the live child HEAD');
+  assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[0])).toString(), 'staged child commit\n');
+  assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[1])).toString(), 'working child commit\n');
   console.log('PASS staged and unstaged submodule file clicks use their selected A→B and B→C native diffs');
 
   git('commit', '-qm', 'record staged pointer');
@@ -870,7 +1008,8 @@ async function main() {
   childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
   const grandPath = fs.realpathSync(path.join(childPath, 'nested'));
   const grandRepo = { rootUri: uri(grandPath), state: { HEAD: { commit: gitAt(grandPath, 'rev-parse', 'HEAD') },
-    onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+    onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {},
+    async buffer(ref, relative) { return gitBuffer(grandPath, ref, relative); } };
   availableSubmodules.set(grandPath, grandRepo);
   childRepo.state.submodules = [{ path: 'nested', url: grandSource }];
   if (!api.repositories.includes(childRepo)) { api.repositories.push(childRepo); openedRepositories.fire(childRepo); }

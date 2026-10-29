@@ -8,7 +8,7 @@ const { isSubmodule, richComparison } = require('./model');
 const { relativeFile: safeRelative, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { openGitlinkDiff } = require('./gitlink-diff');
-const { createGitSide } = require('./git-side-documents');
+const { createLiveGitSide } = require('./git-side-documents');
 
 class SubmoduleProvider {
   constructor(tree, backend, git, options = {}) {
@@ -98,7 +98,7 @@ class SubmoduleProvider {
     }, delay);
   }
 
-  async openGuardedGraph(child, node, current, checkAll) {
+  async openGuardedGraph(child, node, current, checkAll, persistent) {
     this.clearGraphWatch();
     if (typeof node.record?.path !== 'string' || typeof node.record?.group !== 'string') {
       return this.openGraph(child, current);
@@ -117,7 +117,7 @@ class SubmoduleProvider {
       return pending;
     };
     watch.validate = validate;
-    try { return await this.openGraph(child, () => watch.valid && current(), validate); }
+    try { return await this.openGraph(child, () => watch.valid && current(), validate, persistent); }
     catch (error) { if (this.graphWatch === watch) this.clearGraphWatch(); throw error; }
   }
 
@@ -207,7 +207,7 @@ class SubmoduleProvider {
       const checkHead = (persistent = false) => checkFrames([...ancestors, frame], persistent);
       const pointerOptions = { parent: node.repo.rootUri.fsPath, relative, group, originalPath,
         childToken, currentChild, currentLink, checkHead,
-        ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)) };
+        ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)), contextKey };
       const pin = async () => {
         if (!this.pins) throw new Error('Submodule pins are unavailable.');
         const links = [...ancestors, frame].map(item => item.link);
@@ -220,7 +220,9 @@ class SubmoduleProvider {
       if (!initial || !initialChoices.includes(initial)) return;
       if (!await checkHead()) throw new Error('The submodule changed; refresh and try again.');
       if (initial.kind === 'pin') return await pin();
-      if (initial.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
+      const graphContext = { current: currentLink, verifyAncestors: () => checkHead(true),
+        ancestorKey: pointerOptions.ancestorKey, contextKey };
+      if (initial.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead, graphContext);
       if (initial.kind === 'pointer') {
         return await this.openPointer(child, result, initial.file, pointerOptions);
       }
@@ -247,7 +249,7 @@ class SubmoduleProvider {
           if (next.revision !== page.revision) throw new Error('The submodule changed; refresh and try again.');
           page = next;
         }
-        if (chosen.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead);
+        if (chosen.kind === 'graph') return await this.openGuardedGraph(child, node, currentChild, checkHead, graphContext);
         if (chosen.kind === 'pin') {
           session.close();
           sessionClosed = true;
@@ -274,6 +276,14 @@ class SubmoduleProvider {
             const nested = { repo: child, repoToken: childToken, group: record.group, record, change: { uri }, fileId: record.path };
             const pointerProvider = {
               currentChange: () => currentChild() ? nested : undefined,
+              waitForCurrentChange: async () => currentChild() ? nested : undefined,
+              withCurrentChange: async (_node, dispatch) => {
+                if (!currentChild()) return false;
+                const result = dispatch(nested);
+                if (result === false) return false;
+                await result;
+                return true;
+              },
               revalidateChange: async () => {
                 if (!await checkHead() || !currentChild()) return false;
                 const latest = await this.backend.verifyChanges(child.rootUri.fsPath, record);
@@ -282,7 +292,7 @@ class SubmoduleProvider {
             };
             return await openPointerDiff(nested, pointerProvider, this.tree, this.backend, this.linkDocuments, this.vscode, {
               repoIdentity: result.child_identity, current: currentLink, verifyAncestors: () => checkHead(true),
-              ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link))
+              ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)), contextKey
             });
           }
           if (record.group === 'working' && record.kind === 'working_renamed') {
@@ -295,21 +305,12 @@ class SubmoduleProvider {
         const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
         const resolve = async side => {
           if (side.empty) return empty;
-          let target;
-          try { target = scopedFile(child.rootUri.fsPath, side.filePath || side.gitPath); }
-          catch (error) {
-            if (side.filePath || error.code !== 'unsafe_ancestor') throw error;
-            const verify = async () => {
-              const current = await this.backend.verifyChanges(child.rootUri.fsPath, record);
-              return validRecord(current?.change) && JSON.stringify(current.change) === JSON.stringify(record);
-            };
-            return createGitSide({ vscode: this.vscode, links: this.linkDocuments, backend: this.backend,
-              repo: child, repoIdentity: result.child_identity, repoToken: childToken, side, record,
-              current: currentLink, verify, verifyAncestors: () => checkHead(true),
-              ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)), contextKey });
-          }
+          if (side.gitPath) return createLiveGitSide({ vscode: this.vscode, links: this.linkDocuments,
+            backend: this.backend, repo: child, repoIdentity: result.child_identity, repoToken: childToken,
+            side, current: currentLink, revision: () => this.tree.contentRevision?.(child), verifyAncestors: () => checkHead(true),
+            ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link)), contextKey });
+          const target = scopedFile(child.rootUri.fsPath, side.filePath);
           const sideUri = this.vscode.Uri.file(target);
-          if (!side.filePath) return this.git.toGitUri(sideUri, side.ref);
           const stat = fs.lstatSync(target);
           if (!stat.isSymbolicLink()) {
             if (!stat.isFile()) throw new Error('The changed file is unavailable.');
@@ -355,14 +356,21 @@ class SubmoduleProvider {
         oldRef: result.base_oid, newRef: result.head_oid, current: options.currentLink, verify,
         readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
           result.child_identity, commit, relative, oid, mode),
-        verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey,
+        verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey, contextKey: options.contextKey,
         title: `${path.basename(file.path)} (submodule)` });
     }
     const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const old = file.status === 'R' ? this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.old_path)) : uri;
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-    const left = file.status === 'A' || !result.base_oid ? empty : this.git.toGitUri(old, result.base_oid);
-    const right = file.status === 'D' || !result.head_oid ? empty : this.git.toGitUri(uri, result.head_oid);
+    const makeSide = (target, ref) => createLiveGitSide({ vscode: this.vscode, links: this.linkDocuments,
+      backend: this.backend, repo, repoIdentity: result.child_identity, repoToken: options.childToken,
+      side: { gitPath: path.relative(repo.rootUri.fsPath, target.fsPath).split(path.sep).join('/'), ref },
+      current: options.currentLink, revision: () => this.tree.contentRevision?.(repo),
+      verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey,
+      contextKey: options.contextKey });
+    const left = file.status === 'A' || !result.base_oid ? empty : await makeSide(old, result.base_oid);
+    const right = file.status === 'D' || !result.head_oid ? empty : await makeSide(uri, result.head_oid);
+    if (!options.currentChild() || !await options.checkHead()) throw new Error('The submodule changed; refresh and try again.');
     await this.vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (submodule)`);
   }
 
