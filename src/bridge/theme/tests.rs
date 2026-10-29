@@ -24,7 +24,7 @@ fn request(config: &Config, params: Value) -> Value {
         theme: config,
     };
     let mut output = Vec::new();
-    serve_inner(&mut Cursor::new(input), &mut output, &options, false).unwrap();
+    serve_inner(&mut Cursor::new(input), &mut output, &options, false, false).unwrap();
     let replies: Vec<Value> = String::from_utf8(output)
         .unwrap()
         .lines()

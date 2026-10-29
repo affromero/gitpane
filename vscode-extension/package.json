@@ -38,6 +38,14 @@
           "default": "",
           "scope": "machine",
           "description": "Path to a compatible Gitpane backend on the workspace host. Leave empty to use the bundled backend."
+        },
+        "gitpane.sessionBackend": {
+          "type": "string",
+          "enum": ["auto", "tmux", "herdr"],
+          "enumDescriptions": ["Detect the multiplexer from the extension host environment.", "Check tmux sessions on the workspace host.", "Check herdr sessions on the workspace host."],
+          "default": "auto",
+          "scope": "machine",
+          "description": "Choose where Gitpane checks for live repository sessions. Auto stays quiet when no multiplexer is detected."
         }
       }
     }

@@ -115,7 +115,7 @@ class GitpaneViewProvider {
         const childRepoId = childRepoKey && this.idFor(JSON.stringify(['repo', childRepoKey, childToken]), live);
         if (childRepoId) repositoriesById.set(childRepoId, { repoKey: childRepoKey, repoToken: childToken });
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
-        return { id: worktreeId, name: path.basename(item.path), branch: item.branch,
+        return { id: worktreeId, name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
           available: !!child, hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
           changeCountLowerBound: child ? lowerBound(childStatus) : 0,
@@ -132,6 +132,7 @@ class GitpaneViewProvider {
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
         worktree: repo.kind === 'worktree',
+        live: this.tree.sessionLive?.(root) || false,
         statusUnavailable: !status,
         stashCount: status?.stashes.length || 0,
         stashes,

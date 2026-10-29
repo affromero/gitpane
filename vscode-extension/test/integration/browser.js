@@ -16,7 +16,7 @@ const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js')
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
   repositories: [
-    { id: 'api', name: 'api-service', branch: 'main', dirty: true, ahead: 2, behind: 1,
+    { id: 'api', name: 'api-service', branch: 'main', dirty: true, live: true, ahead: 2, behind: 1,
       groups: [
         { id: 'working', label: 'Unstaged', files: [
           { id: 'file1', status: 'M', path: 'src/server.rs' },
@@ -62,8 +62,10 @@ const scenario = String.raw`
     const themed = JSON.parse(JSON.stringify(snapshot));
     themed.theme = { name: 'custom', values: { 'repo-list-stash': 'rgb(255, 0, 120)',
       'repo-list-worktree-count': 'rgb(240, 150, 0)', 'repo-list-repo-name': 'rgb(0, 180, 180)',
+      'repo-list-live': 'rgb(30, 190, 130)',
       'repo-list-worktree-subtree-icon': 'rgb(160, 80, 240)', 'file-list-regular-path': 'rgb(0, 180, 0)',
       'file-list-submodule-path': 'rgb(255, 100, 0)' }, lanes: [], authors: [] };
+    themed.repositories[1].live = true;
     window.postMessage(themed, '*');
     await tick();
     check('workspace semantic theme applies under CSP',
@@ -73,6 +75,8 @@ const scenario = String.raw`
     const webName = items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name');
     check('repository names use native semantic color', getComputedStyle(webName).color ===
       document.documentElement.style.getPropertyValue('--gitpane-repo-list-repo-name'));
+    check('live session uses native semantic color', getComputedStyle(webName.closest('.row').querySelector('.live')).color ===
+      document.documentElement.style.getPropertyValue('--gitpane-repo-list-live'));
     const badTheme = JSON.parse(JSON.stringify(themed));
     badTheme.theme.values['repo-list-stash'] = 'red; display: none';
     window.postMessage(badTheme, '*');
@@ -127,6 +131,7 @@ const scenario = String.raw`
     frame.remove();
     let repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository status and branch', repo.textContent.includes('*') && repo.textContent.includes('main'));
+    check('live session is visible and accessible', repo.textContent.includes('◉') && repo.getAttribute('aria-label').includes('live session'));
     check('ahead and behind', repo.textContent.includes('↑2') && repo.textContent.includes('↓1'));
     check('unique file count', repo.textContent.includes('[2]'));
     check('collapsed by default', repo.getAttribute('aria-expanded') === 'false');
@@ -204,7 +209,7 @@ const scenario = String.raw`
     stashRepo.querySelector('.row').click();
     const withWorktree = JSON.parse(JSON.stringify(snapshot));
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
-      name: 'web-review', branch: 'review', dirty: true, fileCount: 2, ahead: 1, behind: 0, available: true,
+      name: 'web-review', branch: 'review', dirty: true, live: true, fileCount: 2, ahead: 1, behind: 0, available: true,
       groups: [
         { id: 'index', label: 'Staged', files: [{ id: 'worktree-staged', status: 'M', path: 'staged.txt', submodule: true }] },
         { id: 'working', label: 'Unstaged', files: [{ id: 'worktree-working', status: 'M', path: 'working.txt' }] }
@@ -219,6 +224,8 @@ const scenario = String.raw`
     check('worktree subtree icon uses native semantic color', getComputedStyle(worktree.querySelector('.subtree')).color ===
       document.documentElement.style.getPropertyValue('--gitpane-repo-list-worktree-subtree-icon'));
     check('workspace worktree status is visible', !!worktree && ['⎇', '*', 'review', '[2]', '↑1'].every(value => worktree.textContent.includes(value)));
+    check('worktree live session is independent and accessible', worktree.textContent.includes('◉') &&
+      worktree.getAttribute('aria-label').includes('live session') && !cleanRepo.querySelector('.repo-row .live'));
     check('worktree status has accessible meaning', ['has changes', '2 files', '1 ahead'].every(value => worktree.getAttribute('aria-label').includes(value)));
     check('dirty worktree is collapsed and expandable', worktree.getAttribute('aria-expanded') === 'false');
     const worktreeGraph = worktree.querySelector('.graph-action');

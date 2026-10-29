@@ -211,6 +211,7 @@ fn process(
             submodule::chain::validate(scope, params(request.params)?, sub_cfg)
         }
         "sessions_list" => session::list(scope, params(request.params)?),
+        "session_liveness" => session::liveness(scope, params(request.params)?, options.theme),
         "launchers_list" => launcher::list(scope, params(request.params)?),
         "launcher_plan" => launcher::plan(scope, params(request.params)?),
         "launcher_validate" => launcher::validate(scope, params(request.params)?),
@@ -312,10 +313,14 @@ fn serve_inner(
     writer: &mut impl Write,
     options: &BridgeOptions<'_>,
     mutation_once: bool,
+    liveness_worker: bool,
 ) -> io::Result<()> {
     let mut scope = None;
     let mut snapshots = changes::Snapshots::default();
     loop {
+        if liveness_worker && crate::session::liveness::worker_cancelled() {
+            return Ok(());
+        }
         let mut line = Vec::new();
         let count = (&mut *reader)
             .take(MAX_REQUEST_BYTES + 1)
@@ -337,6 +342,21 @@ fn serve_inner(
         match serde_json::from_slice::<Request>(&line) {
             Ok(request) => {
                 let id = request.id;
+                let liveness_request = liveness_worker && request.method == "session_liveness";
+                let liveness_initialization = liveness_worker && request.method == "initialize";
+                if liveness_worker
+                    && !matches!(request.method.as_str(), "initialize" | "session_liveness")
+                {
+                    write_reply(
+                        writer,
+                        Some(id),
+                        Err(BridgeError::new(
+                            "invalid_request",
+                            "liveness worker only accepts session liveness requests",
+                        )),
+                    )?;
+                    continue;
+                }
                 if mutation_once && let Some(scope) = scope.as_ref() {
                     let result = process_mutation(scope, request);
                     write_reply(writer, Some(id), result)?;
@@ -353,9 +373,15 @@ fn serve_inner(
                     )?;
                     return Ok(());
                 }
-                let result = process(&mut scope, &mut snapshots, request, options);
+                let mut result = process(&mut scope, &mut snapshots, request, options);
+                if liveness_initialization && let Ok(value) = &mut result {
+                    value["capabilities"] = json!({"liveness_worker": true});
+                }
                 let failed = result.is_err();
                 write_reply(writer, Some(id), result)?;
+                if liveness_request {
+                    return Ok(());
+                }
                 if mutation_once && failed {
                     return Ok(());
                 }
@@ -395,10 +421,15 @@ fn serve(
             theme: &Config::default(),
         },
         mutation_once,
+        false,
     )
 }
 
-pub(crate) fn run(config: &Config, mutation_once: bool) -> color_eyre::Result<()> {
+pub(crate) fn run(
+    config: &Config,
+    mutation_once: bool,
+    liveness_worker: bool,
+) -> color_eyre::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     serve_inner(
@@ -412,6 +443,7 @@ pub(crate) fn run(config: &Config, mutation_once: bool) -> color_eyre::Result<()
             theme: config,
         },
         mutation_once,
+        liveness_worker,
     )?;
     Ok(())
 }

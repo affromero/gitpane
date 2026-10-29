@@ -7,6 +7,8 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { BridgeClient } = require('../../src/bridge-client');
 const { MutationManager } = require('../../src/mutation-manager');
+const { BackendManager } = require('../../src/backend-manager');
+const { SessionLiveness } = require('../../src/session-liveness');
 const { isolatedGitEnv } = require('./git-env');
 
 const executable = process.env.GITPANE_TEST_BINARY;
@@ -294,12 +296,19 @@ async function waitForFile(file) {
       gitEnv.GITPANE_TEST_PANES = paneFile;
       gitEnv.GITPANE_TEST_FOCUS = focusFile;
       const sessionEnv = { ...gitEnv, PATH: `${sessionDir}${path.delimiter}${gitEnv.PATH || ''}` };
+      sessionEnv.HERDR_ENV = '1';
+      delete sessionEnv.TMUX;
+      delete sessionEnv.TMUX_PANE;
       sessionClient = new BridgeClient(executable, { spawn: (program, args, options) => {
         sessionChild = spawn(program, args, { ...options, env: sessionEnv });
         sessionClosed = new Promise(resolve => sessionChild.once('close', resolve));
         return sessionChild;
       } });
       await sessionClient.initialize([root]);
+      assert.deepEqual(await sessionClient.sessionLiveness([repoPath]), {
+        enabled: true, reason: null, repos: [{ repo: repoPath, live: true }]
+      });
+      await assert.rejects(sessionClient.sessionLiveness([outsidePath]), error => error.code === 'outside_workspace');
       assert.deepEqual(await sessionClient.call('sessions_list', { repo: repoPath, backend: 'herdr' }), { sessions: [safeSession] });
       await assert.rejects(sessionClient.call('sessions_list', { repo: outsidePath, backend: 'herdr' }), error => error.code === 'outside_workspace');
       useFakeSessions = true;
@@ -309,6 +318,86 @@ async function waitForFile(file) {
       assert.equal(fs.readFileSync(focusFile, 'utf8'), safeSession);
       useFakeSessions = false;
       console.log('PASS scoped session discovery and literal one-shot navigation with fake host');
+
+      const liveStarted = path.join(temporary, 'live-started');
+      const liveRelease = path.join(temporary, 'live-release');
+      const liveFinished = path.join(temporary, 'live-finished');
+      const livePids = path.join(temporary, 'live-pids');
+      fs.writeFileSync(path.join(sessionDir, 'herdr'), '#!/bin/sh\nprintf "%s\\n" "$$" >> "$GITPANE_LIVE_PIDS"\n: > "$GITPANE_LIVE_STARTED"\nwhile [ ! -e "$GITPANE_LIVE_RELEASE" ]; do /bin/sleep 0.02; done\n/bin/cat "$GITPANE_TEST_PANES"\n: > "$GITPANE_LIVE_FINISHED"\n', { mode: 0o755 });
+      const liveEnv = { ...sessionEnv, GITPANE_LIVE_STARTED: liveStarted, GITPANE_LIVE_RELEASE: liveRelease,
+        GITPANE_LIVE_FINISHED: liveFinished, GITPANE_LIVE_PIDS: livePids };
+      class EventEmitter {
+        constructor() { this.handlers = new Set(); this.event = handler => { this.handlers.add(handler); return { dispose: () => this.handlers.delete(handler) }; }; }
+        fire(value) { for (const handler of this.handlers) handler(value); }
+        dispose() { this.handlers.clear(); }
+      }
+      const event = () => ({ dispose() {} });
+      const liveWorkers = [];
+      const liveManager = new BackendManager({ extensionPath: temporary }, {
+        vscode: { EventEmitter, workspace: { workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
+          onDidChangeWorkspaceFolders: event, onDidChangeConfiguration: event,
+          getConfiguration: () => ({ get: name => name === 'backendPath' ? executable : 'herdr' }) } },
+        createClient: (program, options) => new BridgeClient(program, { ...options, spawn: (file, args, spawnOptions) => {
+          const worker = spawn(file, args, { ...spawnOptions, env: liveEnv });
+          liveWorkers.push(new Promise(resolve => worker.once('close', resolve)));
+          return worker;
+        } })
+      });
+      let published = 0;
+      const liveTree = { sessionTargets: () => [{ path: repoPath, references: ['repo'] }], changed: () => { published++; } };
+      const liveController = new SessionLiveness(liveTree, liveManager);
+      try {
+        await liveManager.ready();
+        liveController.setVisible(true);
+        await waitForFile(liveStarted);
+        for (let index = 0; index < 4; index++) {
+          liveController.setVisible(false);
+          liveController.setVisible(true);
+        }
+        liveController.setVisible(false);
+        assert.equal(fs.readFileSync(livePids, 'utf8').trim().split('\n').length, 1, 'one held host probe across visibility changes');
+        fs.writeFileSync(liveRelease, '');
+        await waitForFile(liveFinished);
+        const deadline = Date.now() + 5000;
+        while (liveController.pending) {
+          if (Date.now() > deadline) throw new Error('Liveness probe did not drain');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(published, 0, 'a hidden stale probe must not publish');
+        const pid = Number(fs.readFileSync(livePids, 'utf8').trim());
+        assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH', 'held host child must be reaped');
+        liveController.setVisible(true);
+        while (!liveController.live.get(repoPath)) {
+          if (Date.now() > deadline) throw new Error('Liveness did not recover after hiding');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(fs.readFileSync(livePids, 'utf8').trim().split('\n').length, 2);
+        while (liveController.pending) await new Promise(resolve => setTimeout(resolve, 10));
+        liveController.setVisible(false);
+        fs.unlinkSync(liveRelease);
+        fs.unlinkSync(liveStarted);
+        fs.unlinkSync(liveFinished);
+        liveManager.livenessRequestTimeoutMs = 200;
+        liveController.setVisible(true);
+        await waitForFile(liveStarted);
+        const timeoutDeadline = Date.now() + 5000;
+        while (!liveController.error) {
+          if (Date.now() > timeoutDeadline) throw new Error('Liveness timeout was not reported');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.match(liveController.error, /timed out/i);
+        const probePids = fs.readFileSync(livePids, 'utf8').trim().split('\n').map(Number);
+        assert.equal(probePids.length, 3);
+        assert.throws(() => process.kill(probePids[2], 0), error => error.code === 'ESRCH', 'timed-out host child must be reaped');
+        assert.equal(liveManager.livenessClient, undefined, 'the worker closes after cleanup');
+        assert.equal(fs.existsSync(liveFinished), false, 'the held host did not complete on its own');
+      } finally {
+        fs.writeFileSync(liveRelease, '');
+        liveController.dispose();
+        liveManager.dispose();
+        await Promise.all(liveWorkers);
+      }
+      console.log('PASS held live-session probe drains after hiding without worker accumulation');
 
       write('in-flight.txt', 'pending\n');
       holdGit = true;

@@ -90,9 +90,9 @@ fn disambiguate_nested(tmux_pane_pids: &[u32], parent: u32, self_pid: u32) -> Mu
 /// tmux is absent, unreachable, or errors (the nested decision then falls back
 /// to herdr).
 fn tmux_pane_pids() -> Vec<u32> {
-    let output = std::process::Command::new("tmux")
-        .args(["list-panes", "-a", "-F", "#{pane_pid}"])
-        .output();
+    let mut command = std::process::Command::new("tmux");
+    command.args(["list-panes", "-a", "-F", "#{pane_pid}"]);
+    let output = crate::session::liveness::bounded_output(&mut command);
     match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()

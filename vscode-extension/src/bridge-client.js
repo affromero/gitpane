@@ -21,6 +21,8 @@ class BridgeClient {
     this.executable = executable;
     this.spawn = options.spawn || spawn;
     this.timeoutMs = options.timeoutMs ?? 30000;
+    this.serviceArgs = options.serviceArgs || ['serve'];
+    this.killGraceMs = options.killGraceMs ?? 1000;
     this.maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
     this.onStderr = options.onStderr || (() => {});
     this.onFailure = options.onFailure || (() => {});
@@ -37,8 +39,9 @@ class BridgeClient {
   start() {
     if (this.disposed) throw new BridgeError('disposed', 'Gitpane service has been disposed.');
     if (this.child) return;
-    const child = this.spawn(this.executable, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = this.spawn(this.executable, this.serviceArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
+    this.closed = new Promise(resolve => child.once('close', resolve));
     child.stdout.on('data', chunk => this.receive(child, chunk));
     child.stdout.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service output failed: ${error.message}`)));
     child.stdin.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service input failed: ${error.message}`)));
@@ -89,6 +92,16 @@ class BridgeClient {
     catch (error) {
       if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
         throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support workspace identity checks. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  async sessionLiveness(repos, backend = 'auto') {
+    try { return await this.request('session_liveness', { repos, backend }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && (error.message === 'unknown bridge method' || /unknown field.*backend/i.test(error.message))) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support session liveness. Update the backend and try again.');
       }
       throw error;
     }
@@ -304,7 +317,7 @@ class BridgeClient {
     if (!child) return;
     if (graceful) child.stdin.end();
     else child.kill();
-    const timer = setTimeout(() => child.kill('SIGKILL'), 1000);
+    const timer = setTimeout(() => child.kill('SIGKILL'), this.killGraceMs);
     timer.unref();
     child.once('close', () => clearTimeout(timer));
   }
@@ -328,6 +341,12 @@ class BridgeClient {
     this.initialization = undefined;
     this.rejectPending(new BridgeError('disposed', 'Gitpane service has been disposed.'));
     this.stop(child, !options.immediate);
+  }
+
+  async shutdown(options = {}) {
+    const closed = this.closed;
+    this.dispose(options);
+    if (closed) await closed;
   }
 }
 

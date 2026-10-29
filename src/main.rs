@@ -59,6 +59,9 @@ enum Command {
         /// Handle one authorized mutation after initialization and exit.
         #[arg(long)]
         mutation_once: bool,
+        /// Run a cancellable worker dedicated to editor session liveness.
+        #[arg(long, conflicts_with = "mutation_once")]
+        liveness_worker: bool,
     },
 }
 
@@ -158,10 +161,16 @@ async fn run() -> Result<()> {
         Some(Command::Diagnostic) => {
             return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
         }
-        Some(Command::Serve { mutation_once }) => {
+        Some(Command::Serve {
+            mutation_once,
+            liveness_worker,
+        }) => {
+            if liveness_worker {
+                session::liveness::install_worker_cancellation()?;
+            }
             let config = config::Config::load()?;
             apply_libgit2_limits(&config.git2);
-            return bridge::run(&config, mutation_once);
+            return bridge::run(&config, mutation_once, liveness_worker);
         }
         None => {}
     }

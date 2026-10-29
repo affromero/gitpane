@@ -25,7 +25,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'initialize') {
     roots = request.params.workspace_roots;
     sources = request.params.workspace_root_sources || roots;
-    send({id: request.id, result: {version: 1}});
+    send({id: request.id, result: {version: 1, capabilities: {liveness_worker: true}}});
   } else if (request.method === 'workspace_root_identities') {
     send({id: request.id, result: {roots: roots.map((path, index) => ({path, source: sources[index], identity: 'a'.repeat(64)}))}});
   } else if (request.method === 'status' && request.params.repo.endsWith('slow')) {
@@ -53,6 +53,13 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     else send({id: request.id, result});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
+  } else if (request.method === 'session_liveness') {
+    if (request.params.repos.some(repo => repo.endsWith('probe-error'))) {
+      send({id: request.id, error: {code: 'session_error', message: 'host probe failed'}}); return;
+    }
+    const result = {enabled: true, reason: null, repos: request.params.repos.map(repo => ({repo, live: request.params.backend === 'herdr' || repo.endsWith('topic')}))};
+    if (request.params.repos.some(repo => repo.endsWith('slow'))) setTimeout(() => send({id: request.id, result}), 300);
+    else send({id: request.id, result});
   } else {
     send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch}});
   }
@@ -76,10 +83,11 @@ function fixture() {
   const folders = new EventEmitter();
   const configuration = new EventEmitter();
   let backendPath = '';
+  let sessionBackend = 'auto';
   const root = path.resolve('workspace');
   const workspace = {
     workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
-    getConfiguration: () => ({ get: () => backendPath }),
+    getConfiguration: () => ({ get: name => name === 'sessionBackend' ? sessionBackend : backendPath }),
     onDidChangeWorkspaceFolders: folders.event,
     onDidChangeConfiguration: configuration.event
   };
@@ -105,6 +113,10 @@ function fixture() {
     setBackendPath(value) {
       backendPath = value;
       configuration.fire({ affectsConfiguration: name => name === 'gitpane.backendPath' });
+    },
+    setSessionBackend(value) {
+      sessionBackend = value;
+      configuration.fire({ affectsConfiguration: name => name === 'gitpane.sessionBackend' });
     }
   };
 }
@@ -155,6 +167,125 @@ test('theme configuration errors do not mark the repository backend unavailable'
   manager.client.theme = async () => { throw Object.assign(new Error('theme missing'), { code: 'theme_error' }); };
   await assert.rejects(manager.theme(), /theme missing/);
   assert.equal(manager.state.status, 'ready');
+});
+
+test('session liveness uses the selected host and invalidates stale workspace probes', async t => {
+  const { manager, root, setFolders, setSessionBackend } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repos = [path.join(root, 'main'), path.join(root, 'topic')];
+  assert.deepEqual(await manager.sessionLiveness(repos), { enabled: true, reason: null,
+    repos: [{ repo: repos[0], live: false }, { repo: repos[1], live: true }] });
+  setSessionBackend('herdr');
+  assert.deepEqual(await manager.sessionLiveness([repos[0]]), { enabled: true, reason: null,
+    repos: [{ repo: repos[0], live: true }] });
+  setSessionBackend('tmux');
+  await assert.rejects(manager.sessionLiveness([path.join(root, 'probe-error')]), error => error.code === 'session_error');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.sessionLiveness([path.resolve('outside')]), error => error.code === 'outside_workspace');
+  const pending = manager.sessionLiveness([path.join(root, 'slow')]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  setFolders([path.resolve('other-workspace')]);
+  await assert.rejects(pending, error => error.code === 'workspace_changed');
+});
+
+test('unresponsive liveness startup or probe times out, releases its worker, and recovers', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const original = manager.createClient;
+  manager.livenessRequestTimeoutMs = 150;
+  for (const mode of ['initialize', 'probe']) {
+    let closed;
+    let sawProbe = false;
+    manager.livenessInitializationTimeoutMs = mode === 'initialize' ? 200 : 3000;
+    manager.livenessRequestTimeoutMs = 150;
+    const script = `const readline = require('node:readline');\nreadline.createInterface({input:process.stdin}).on('line', line => {\nconst request = JSON.parse(line);\nif (request.method === 'initialize' && ${JSON.stringify(mode)} === 'probe') process.stdout.write(JSON.stringify({id: request.id, result: {version:1,capabilities:{liveness_worker:true}}}) + '\\n');\nif (request.method === 'session_liveness') process.stderr.write('probe-started');\n});`;
+    manager.createClient = (executable, options) => new BridgeClient(executable, { ...options,
+      onStderr: value => { if (value.includes('probe-started')) sawProbe = true; }, spawn: () => {
+      const child = spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] });
+      closed = new Promise(resolve => child.once('close', resolve));
+      return child;
+    } });
+    await assert.rejects(manager.sessionLiveness([path.join(root, 'main')]), error => error.code === 'timeout');
+    assert.equal(sawProbe, mode === 'probe', 'the timeout occurs at the intended boundary');
+    assert.equal(manager.livenessClient, undefined);
+    await closed;
+    manager.createClient = original;
+    manager.livenessInitializationTimeoutMs = 3000;
+    manager.livenessRequestTimeoutMs = 3000;
+    assert.equal((await manager.sessionLiveness([path.join(root, 'main')])).enabled, true);
+  }
+});
+
+test('a backend without cooperative worker capability cannot run a liveness probe', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  for (const capabilities of [undefined, { liveness_worker: 'true' }]) {
+    let sawProbe = false;
+    const handshake = JSON.stringify({ version: 1, ...(capabilities ? { capabilities } : {}) });
+    const script = `const readline = require('node:readline');\nreadline.createInterface({input:process.stdin}).on('line', line => {\nconst request = JSON.parse(line);\nif (request.method === 'initialize') process.stdout.write(JSON.stringify({id:request.id,result:${handshake}}) + '\\n');\nelse if (request.method === 'session_liveness') process.stderr.write('probe-started');\n});`;
+    manager.createClient = (executable, options) => new BridgeClient(executable, { ...options,
+      onStderr: value => { if (value.includes('probe-started')) sawProbe = true; },
+      spawn: () => spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] }) });
+    await assert.rejects(manager.sessionLiveness([path.join(root, 'main')]), error =>
+      error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
+    assert.equal(sawProbe, false);
+    assert.equal(manager.livenessClient, undefined);
+  }
+});
+
+test('disposing while a liveness response is held drains the bounded worker', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  manager.livenessRequestTimeoutMs = 100;
+  let enterProbe;
+  const probeStarted = new Promise(resolve => { enterProbe = resolve; });
+  let closed;
+  const script = String.raw`const readline = require('node:readline');
+readline.createInterface({input:process.stdin}).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') process.stdout.write(JSON.stringify({id:request.id,result:{version:1,capabilities:{liveness_worker:true}}}) + '\n');
+  else if (request.method === 'session_liveness') process.stderr.write('probe-started');
+});`;
+  manager.createClient = (executable, options) => new BridgeClient(executable, { ...options,
+    onStderr: value => { if (value.includes('probe-started')) enterProbe(); }, spawn: () => {
+      const child = spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] });
+      closed = new Promise(resolve => child.once('close', resolve));
+      return child;
+    } });
+  const pending = manager.sessionLiveness([path.join(root, 'main')]);
+  await probeStarted;
+  manager.dispose();
+  await assert.rejects(pending, error => error.code === 'workspace_changed');
+  await closed;
+  assert.equal(manager.livenessClient, undefined);
+});
+
+test('liveness keeps its lease until a timed-out worker finishes signal cleanup', { skip: process.platform === 'win32' }, async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  manager.livenessRequestTimeoutMs = 100;
+  let term;
+  const signaled = new Promise(resolve => { term = resolve; });
+  const script = String.raw`const readline = require('node:readline');
+process.on('SIGTERM', () => { process.stderr.write('cleanup-started'); setTimeout(() => process.exit(0), 250); });
+readline.createInterface({input:process.stdin}).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') process.stdout.write(JSON.stringify({id:request.id,result:{version:1,capabilities:{liveness_worker:true}}}) + '\n');
+});`;
+  manager.createClient = (executable, options) => new BridgeClient(executable, { ...options,
+    onStderr: value => { if (value.includes('cleanup-started')) term(); },
+    spawn: () => spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] }) });
+  const pending = manager.sessionLiveness([path.join(root, 'main')]);
+  await signaled;
+  assert.ok(manager.livenessClient, 'the lease remains held during cleanup');
+  await assert.rejects(manager.sessionLiveness([path.join(root, 'main')]), error => error.code === 'busy');
+  await assert.rejects(pending, error => error.code === 'timeout');
+  assert.equal(manager.livenessClient, undefined);
 });
 
 test('missing workspace folders do not block remaining roots and do not widen scope', async t => {

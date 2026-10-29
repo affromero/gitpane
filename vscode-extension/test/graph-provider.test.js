@@ -524,7 +524,7 @@ test('backend and ancestor validation errors do not cause rapid graph retries', 
     dispose() { this.onDispose(); }, reveal() {} };
   const vscode = { EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
     workspace: { workspaceFolders: [{ uri: uri(root) }], onDidChangeWorkspaceFolders: event,
-      onDidChangeConfiguration: event, getConfiguration: () => ({ get: () => '' }) },
+      onDidChangeConfiguration: event, getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : '' }) },
     window: { createWebviewPanel: () => panel }, commands: { async executeCommand(...args) { commands.push(args); } } };
   const load = Module._load;
   for (const name of ['../src/repository-tree', '../src/graph-provider']) delete require.cache[require.resolve(name)];

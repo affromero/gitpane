@@ -80,6 +80,11 @@ navigation uses Gitpane's `[goto]` configuration. Session navigation and
 submodule actions are not yet supported on Windows. Remote workspace hosts may
 not be able to focus a local terminal window.
 
+The ◉ marker shows a live session for a repository or worktree. Set
+`gitpane.sessionBackend` to `tmux` or `herdr` when VS Code does not inherit the
+multiplexer environment. The default, `auto`, uses the detected host. Gitpane's
+`ui.show_liveness` setting also controls the marker.
+
 Configured Launchers offers Gitpane's `[open]` and custom keybinding commands
 in integrated terminals. Command and inline placements are supported; other
 placements and interpreter executables report an error rather than changing

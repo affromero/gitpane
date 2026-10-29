@@ -727,6 +727,9 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     assert.deepEqual(rows.find(row => row.name === 'main').worktrees.map(row => row.name), ['two']);
     assert.deepEqual(rows.find(row => row.name === 'one').worktrees, []);
     let explicitId = rows.find(row => row.name === 'one').id;
+    const sessionTargets = tree.sessionTargets();
+    assert.deepEqual(sessionTargets.map(target => target.path).sort(), [root, first, second].map(value => fs.realpathSync(value)).sort());
+    assert.ok(sessionTargets.find(target => target.path === fs.realpathSync(second)).references.some(reference => reference.includes('worktree')));
     const removal = provider.resolveRepository(explicitId).worktreeRemoval;
     assert.equal(removal.repoPath, root);
     assert.equal(fs.realpathSync(removal.path), fs.realpathSync(first));

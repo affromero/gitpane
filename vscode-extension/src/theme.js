@@ -27,7 +27,7 @@ function color(value) {
 
 const FIELDS = {
   repo_list: ['dirty_marker', 'branch', 'branch_default', 'ahead', 'behind', 'worktree_count',
-    'dirty_submodule', 'unpushed_submodule', 'stash', 'file_count', 'repo_name', 'worktree_subtree_icon', 'worktree_subtree_branch'],
+    'dirty_submodule', 'unpushed_submodule', 'stash', 'file_count', 'repo_name', 'worktree_subtree_icon', 'worktree_subtree_branch', 'live'],
   file_list: ['status_modified', 'status_added', 'status_deleted', 'status_renamed', 'status_untracked',
     'status_conflicted', 'submodule_path', 'regular_path'],
   graph: ['commit_id', 'commit_message', 'merge_message', 'time', 'addition', 'deletion', 'paren',

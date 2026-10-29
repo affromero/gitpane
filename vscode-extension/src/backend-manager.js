@@ -39,6 +39,10 @@ class BackendManager {
     this.validationEpoch = 0;
     this.activeValidations = 0;
     this.verifyClients = new Set();
+    this.livenessClient = undefined;
+    this.livenessEpoch = 0;
+    this.livenessInitializationTimeoutMs = options.livenessInitializationTimeoutMs ?? 10000;
+    this.livenessRequestTimeoutMs = options.livenessRequestTimeoutMs ?? 45000;
     this.executable = undefined;
     this.roots = undefined;
     this.rootSources = undefined;
@@ -60,6 +64,10 @@ class BackendManager {
       }),
       this.vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('gitpane.backendPath')) this.reconfigure();
+        if (event.affectsConfiguration('gitpane.sessionBackend')) {
+          this.cancelSessionLiveness();
+          this.emitter.fire({ ...this.state, livenessChanged: true });
+        }
       })
     ];
     this.reconfigure();
@@ -76,6 +84,7 @@ class BackendManager {
     const generation = ++this.generation;
     this.cancelChanges();
     this.cancelValidation();
+    this.cancelSessionLiveness();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.roots = undefined;
@@ -463,6 +472,52 @@ class BackendManager {
 
   inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
 
+  cancelSessionLiveness() {
+    this.livenessEpoch++;
+  }
+
+  async sessionLiveness(repos) {
+    if (!Array.isArray(repos) || repos.length > 1024 || repos.some(repo => typeof repo !== 'string' || !path.isAbsolute(repo))) {
+      throw new BridgeError('invalid_request', 'Invalid session liveness repositories.');
+    }
+    const epoch = this.livenessEpoch;
+    const selection = this.vscode.workspace.getConfiguration('gitpane').get('sessionBackend', 'auto');
+    if (!['auto', 'tmux', 'herdr'].includes(selection)) throw new BridgeError('invalid_request', 'Choose auto, tmux, or herdr for gitpane.sessionBackend.');
+    const snapshot = await this.mutationSnapshot();
+    if (epoch !== this.livenessEpoch || this.disposed) throw new BridgeError('workspace_changed', 'Session liveness check was cancelled.');
+    if (this.livenessClient) throw new BridgeError('busy', 'A session liveness check is already running.');
+    if (repos.some(repo => !this.isCurrentMutation(snapshot, repo))) throw new BridgeError('outside_workspace', 'Session liveness repository is outside the workspace.');
+    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk),
+      timeoutMs: this.livenessInitializationTimeoutMs, serviceArgs: ['serve', '--liveness-worker'], killGraceMs: 3000 });
+    this.livenessClient = client;
+    let initialized = false;
+    let completedProbe = false;
+    try {
+      const handshake = await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+      if (handshake?.capabilities?.liveness_worker !== true) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend lacks safe session liveness support. Update the backend and try again.');
+      }
+      initialized = true;
+      if (epoch !== this.livenessEpoch || this.disposed || snapshot.generation !== this.generation) throw new BridgeError('workspace_changed', 'Session liveness check was cancelled.');
+      client.timeoutMs = this.livenessRequestTimeoutMs;
+      const result = await client.sessionLiveness(repos, selection);
+      completedProbe = true;
+      if (epoch !== this.livenessEpoch || this.disposed || snapshot.generation !== this.generation) throw new BridgeError('workspace_changed', 'Session liveness check was cancelled.');
+      return result;
+    } catch (error) {
+      if (epoch !== this.livenessEpoch || this.disposed || snapshot.generation !== this.generation) {
+        throw new BridgeError('workspace_changed', 'Session liveness check was cancelled.');
+      }
+      if (!initialized && error?.code === 'service_exited') {
+        throw new BridgeError('unsupported_backend', 'Gitpane could not start a dedicated session liveness worker. Update or check the configured backend.');
+      }
+      throw error;
+    } finally {
+      await client.shutdown({ immediate: !completedProbe });
+      if (this.livenessClient === client) this.livenessClient = undefined;
+    }
+  }
+
   async listSessions(repo, backend) {
     if (!['tmux', 'herdr'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
     const snapshot = await this.mutationSnapshot();
@@ -509,6 +564,7 @@ class BackendManager {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.cancelSessionLiveness();
     this.generation++;
     for (const subscription of this.subscriptions) subscription.dispose();
     this.client?.dispose();

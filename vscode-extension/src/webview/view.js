@@ -113,6 +113,7 @@ function labelForRepo(repo, info) {
     if (repo.hasDirtySubmodules) details.push('dirty submodules');
     if (repo.hasUnpushedSubmodules) details.push('submodules need attention');
   }
+  if (repo.live) details.push('live session');
   return details.filter(Boolean).join(', ');
 }
 
@@ -125,6 +126,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes) {
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
+  if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (repo.statusUnavailable) add(tail, 'behind', '!', 'Status unavailable');
   else {
     if (repo.stashCount > 0) {
@@ -191,6 +193,7 @@ function worktreeRow(worktree) {
   add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   add(row, 'name', worktree.name || '', worktree.name);
   const tail = element('span', 'tail');
+  if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
   if (worktree.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
@@ -361,6 +364,7 @@ function render() {
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
       if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
+      if (worktree.live) worktreeDetails.push('live session');
       if (!worktree.available) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
       const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];

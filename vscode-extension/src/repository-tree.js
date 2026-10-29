@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { groups } = require('./model');
 const { relativeFile } = require('./change-pager');
+const { SessionLiveness } = require('./session-liveness');
 
 function directoryIdentity(value) {
   try {
@@ -122,6 +123,7 @@ class RepositoryTree {
     ];
     this.updateWorkspacePaths();
     for (const repo of git.repositories) this.observe(repo);
+    if (typeof backend.sessionLiveness === 'function') this.liveness = new SessionLiveness(this, backend);
     this.backendChanged(backend.state);
   }
 
@@ -158,6 +160,11 @@ class RepositoryTree {
 
   backendChanged(state) {
     if (this.disposed) return;
+    if (state.livenessChanged) {
+      this.liveness?.restart();
+      this.scheduleChanged();
+      return;
+    }
     const wasUnavailable = this.backendError !== undefined;
     if (state.status === 'initializing') {
       this.backendGeneration++;
@@ -370,8 +377,33 @@ class RepositoryTree {
     return undefined;
   }
 
+  sessionTargets(view = this.workspaceView()) {
+    const entries = new Map();
+    const add = (identity, reference) => {
+      if (!identity) return;
+      if (!entries.has(identity.path)) entries.set(identity.path, []);
+      entries.get(identity.path).push(reference);
+    };
+    for (const record of view.records) {
+      add(record.identity, ['repo', record.key, this.repositoryToken(record.repo), identityKey(record.identity)]);
+      for (const worktree of view.worktrees.get(record.key) || []) {
+        const identity = directoryIdentity(worktree.path);
+        add(identity, ['worktree', record.key, this.repositoryToken(record.repo), worktree.path, worktree.branch, identityKey(identity)]);
+      }
+    }
+    return [...entries].sort(([a], [b]) => a.localeCompare(b)).map(([target, references]) => ({
+      path: target, references: references.map(value => JSON.stringify(value)).sort()
+    }));
+  }
+
+  sessionLive(value) {
+    const identity = directoryIdentity(value);
+    return !!identity && this.liveness?.live.get(identity.path) === true;
+  }
+
   changed() {
     if (this.disposed) return;
+    this.liveness?.changed();
     if (this.sortOrder !== 'workspace') this.scheduleSort();
     this.emitter.fire();
   }
@@ -503,6 +535,7 @@ class RepositoryTree {
 
   setVisible(visible) {
     this.visible = visible;
+    this.liveness?.setVisible(visible);
     if (!visible && this.pollTimer !== undefined) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -635,7 +668,7 @@ class RepositoryTree {
         }
         return [];
       });
-      const failures = [this.pollError, this.backendError, this.sortError, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
+      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.workspaceView();
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
         repo, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty
@@ -662,6 +695,7 @@ class RepositoryTree {
 
   dispose() {
     this.disposed = true;
+    this.liveness?.dispose();
     for (const waiter of this.allRefreshWaiters) waiter.resolve();
     this.refreshWaiters = [];
     if (this.changeTimer !== undefined) clearTimeout(this.changeTimer);

@@ -80,7 +80,7 @@ async function main() {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
-      getConfiguration: () => ({ get: () => executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
+      getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
       onDidChangeConfiguration: event,
       registerTextDocumentContentProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },

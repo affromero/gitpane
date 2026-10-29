@@ -3,6 +3,49 @@
 //! tmux is unavailable) the probe yields nothing and no markers are shown.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static WORKER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn worker_cancelled() -> bool {
+    WORKER_CANCELLED.load(Ordering::SeqCst)
+}
+
+#[cfg(unix)]
+pub(crate) fn install_worker_cancellation() -> std::io::Result<()> {
+    extern "C" fn cancel(_signal: libc::c_int) {
+        WORKER_CANCELLED.store(true, Ordering::SeqCst);
+    }
+    // The dedicated process owns its child lifecycle. An inherited ignored
+    // SIGCHLD or SA_NOCLDWAIT would allow leader PID reuse during cleanup.
+    let mut child_action: libc::sigaction = unsafe { std::mem::zeroed() };
+    child_action.sa_sigaction = libc::SIG_DFL;
+    unsafe { libc::sigemptyset(&mut child_action.sa_mask) };
+    if unsafe { libc::sigaction(libc::SIGCHLD, &child_action, std::ptr::null_mut()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = cancel as *const () as usize;
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+    if unsafe { libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn install_worker_cancellation() -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn cancellation_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "session worker cancelled")
+}
+
+#[cfg(all(test, unix))]
+#[path = "liveness_worker_tests.rs"]
+mod worker_tests;
 
 /// Probe the selected host multiplexer without hiding process or parse errors.
 pub(crate) fn checked_pane_sessions(kind: &str) -> color_eyre::Result<Vec<(String, PathBuf)>> {
@@ -66,11 +109,30 @@ pub(crate) fn bounded_output(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if worker_cancelled() {
+        return Err(cancellation_error());
+    }
+    ensure_child_reaping_enabled()?;
     let mut child = crate::git::process::spawn_killable(command)?;
     let pid = child.id() as i32;
     let result = capture_session_output(&mut child, std::time::Duration::from_secs(15));
     crate::git::process::unregister_killable_pid(pid);
     result
+}
+
+#[cfg(unix)]
+fn ensure_child_reaping_enabled() -> std::io::Result<()> {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut action) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if action.sa_sigaction == libc::SIG_IGN || action.sa_flags & libc::SA_NOCLDWAIT != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "session probes require SIGCHLD child reaping; disable SIG_IGN and SA_NOCLDWAIT",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -85,9 +147,13 @@ fn capture_session_output(
     let mut stderr = child.stderr.take();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let mut status = None;
+    let mut exited = false;
     let mut drain_deadline = None;
     loop {
+        if worker_cancelled() {
+            cleanup_session_child(child);
+            return Err(cancellation_error());
+        }
         let mut fds = [
             libc::pollfd {
                 fd: stdout.as_ref().map_or(-1, AsRawFd::as_raw_fd),
@@ -106,10 +172,7 @@ fn capture_session_output(
             .as_ref()
             .is_some_and(|error| error.kind() != std::io::ErrorKind::Interrupted)
         {
-            if status.is_none() {
-                crate::git::process::kill_process_group(child);
-                let _ = child.wait();
-            }
+            cleanup_session_child(child);
             return Err(poll_error.expect("poll error"));
         }
         let read_result = if fds[0].revents != 0 {
@@ -125,59 +188,86 @@ fn capture_session_output(
             }
         });
         if let Err(error) = read_result {
-            if status.is_none() {
-                crate::git::process::kill_process_group(child);
-                let _ = child.wait();
-            }
+            cleanup_session_child(child);
             return Err(error);
         }
         if out.len().saturating_add(err.len()) > MAX_OUTPUT {
-            if status.is_none() {
-                crate::git::process::kill_process_group(child);
-                let _ = child.wait();
-            }
+            cleanup_session_child(child);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "session process output exceeds the size limit",
             ));
         }
-        if status.is_none() {
-            match child.try_wait() {
-                Ok(Some(exit)) => {
-                    status = Some(exit);
+        if !exited {
+            match child_exited_without_reaping(child) {
+                Ok(true) => {
+                    exited = true;
                     drain_deadline =
                         Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 }
-                Ok(None) => {}
+                Ok(false) => {}
                 Err(error) => {
-                    crate::git::process::kill_process_group(child);
-                    let _ = child.wait();
+                    cleanup_session_child(child);
                     return Err(error);
                 }
             }
         }
-        if let Some(exit) = status {
+        if exited {
             if stdout.is_none() && stderr.is_none() {
                 return Ok(std::process::Output {
-                    status: exit,
+                    status: child.wait()?,
                     stdout: out,
                     stderr: err,
                 });
             }
             if drain_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                cleanup_session_child(child);
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "session process output did not close",
                 ));
             }
         }
-        if status.is_none() && std::time::Instant::now() >= deadline {
-            crate::git::process::kill_process_group(child);
-            let _ = child.wait();
+        if !exited && std::time::Instant::now() >= deadline {
+            cleanup_session_child(child);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "session process timed out",
             ));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn cleanup_session_child(child: &mut std::process::Child) {
+    // A SIGCHLD disposition of SIG_IGN or an external reaper can already have
+    // released the leader PID. Never signal its process group in that case.
+    if child_exited_without_reaping(child).is_ok() {
+        crate::git::process::kill_process_group(child);
+        let _ = child.wait();
+    }
+}
+
+#[cfg(unix)]
+fn child_exited_without_reaping(child: &std::process::Child) -> std::io::Result<bool> {
+    // Keeping the group leader unreaped prevents its PID being recycled before
+    // cleanup of a descendant that still holds an output pipe.
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            return Ok(unsafe { info.si_pid() } != 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
         }
     }
 }
@@ -397,6 +487,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn checked_probe_reads_real_host_output_and_reports_host_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("nested");
+        std::fs::create_dir(&cwd).unwrap();
+        let script = temp.path().join("fake-tmux");
+        let escaped = cwd.to_str().unwrap().replace('\'', "'\\''");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\t%s\\n' '{escaped}' session\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let panes = checked_pane_sessions_with("tmux", script.to_str().unwrap()).unwrap();
+        assert_eq!(panes, vec![("session".into(), cwd.canonicalize().unwrap())]);
+        std::fs::write(&script, "#!/bin/sh\nprintf 'host failed' >&2\nexit 1\n").unwrap();
+        let error = checked_pane_sessions_with("tmux", script.to_str().unwrap()).unwrap_err();
+        assert!(error.to_string().contains("host failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn checked_probe_reports_unresolvable_session_directories() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
@@ -425,13 +537,38 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn incomplete_output_after_process_exit_is_reported() {
+    fn incomplete_output_after_process_exit_kills_pipe_holding_descendant() {
+        let temp = tempfile::tempdir().unwrap();
+        let pid_file = temp.path().join("descendant.pid");
+        let escaped = pid_file.to_str().unwrap().replace('\'', "'\\''");
         let mut command = std::process::Command::new("sh");
-        command.args(["-c", "(sleep 3; printf late) & printf early"]);
+        command.args(["-c", &format!("sleep 30 & echo $! > '{escaped}'")]);
         let error = bounded_output(&mut command).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
-        // The stand-in descendant exits on its own; no unrelated process is signaled.
-        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let pid: i32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let result = unsafe { libc::kill(pid, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                break;
+            }
+            #[cfg(target_os = "linux")]
+            if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with("Z "))
+            }) {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                panic!("pipe-holding descendant {pid} survived the drain timeout");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 
     fn panes(ps: &[(&str, &str)]) -> Vec<(String, PathBuf)> {
