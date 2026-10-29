@@ -90,6 +90,8 @@ class RepositoryTree {
     this.statusErrors = new Map();
     this.busy = false;
     this.pending = false;
+    this.refreshWaiters = [];
+    this.allRefreshWaiters = new Set();
     this.disposed = false;
     this.visible = false;
     this.pollTimer = undefined;
@@ -553,7 +555,19 @@ class RepositoryTree {
     return !this.disposed && token !== undefined && this.repositoryToken(repo) === token && this.isVisible(repo);
   }
 
-  async refresh(retryBackend = false) {
+  refresh(retryBackend = false) {
+    if (this.disposed) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve: () => { this.allRefreshWaiters.delete(waiter); resolve(); },
+        reject: error => { this.allRefreshWaiters.delete(waiter); reject(error); }
+      };
+      this.allRefreshWaiters.add(waiter);
+      this.runRefresh(retryBackend).then(waiter.resolve, waiter.reject);
+    });
+  }
+
+  async runRefresh(retryBackend = false) {
     if (retryBackend && this.backend.state.status === 'error') {
       try { await this.backend.retry(); }
       catch { this.changed(); return; }
@@ -562,7 +576,14 @@ class RepositoryTree {
     if (this.disposed) return;
     if (this.busy) {
       this.pending = true;
-      return;
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          resolve: () => { this.allRefreshWaiters.delete(waiter); resolve(); },
+          reject: error => { this.allRefreshWaiters.delete(waiter); reject(error); }
+        };
+        this.allRefreshWaiters.add(waiter);
+        this.refreshWaiters.push(waiter);
+      });
     }
     this.busy = true;
     this.pollError = undefined;
@@ -589,7 +610,17 @@ class RepositoryTree {
       this.changed();
       if (this.pending && !this.disposed) {
         this.pending = false;
-        await this.refresh();
+        const waiters = this.refreshWaiters.splice(0);
+        this.refresh().then(
+          () => { for (const waiter of waiters) waiter.resolve(); },
+          error => {
+            for (const waiter of waiters) waiter.reject(error);
+            if (!waiters.length) {
+              this.fail(`Could not refresh repository status: ${error.message}`);
+              this.changed();
+            }
+          }
+        );
       }
     }
   }
@@ -631,6 +662,8 @@ class RepositoryTree {
 
   dispose() {
     this.disposed = true;
+    for (const waiter of this.allRefreshWaiters) waiter.resolve();
+    this.refreshWaiters = [];
     if (this.changeTimer !== undefined) clearTimeout(this.changeTimer);
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);

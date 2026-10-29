@@ -108,6 +108,45 @@ test('workspace authorization follows the backend identity captured during initi
   assert.ok(!tree.getChildren().some(node => node.type === 'error'));
 });
 
+test('disposing settles refresh callers waiting for a poll or initial status', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-refresh-dispose-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.git'));
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    workspace: { workspaceFolders: [{ uri: uri(root) }], onDidChangeWorkspaceFolders: event } };
+  const load = Module._load;
+  let RepositoryTree;
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    ({ RepositoryTree } = require('../src/repository-tree'));
+  } finally { Module._load = load; }
+  for (const mode of ['poll', 'status']) {
+    let enterStatus;
+    const statusStarted = new Promise(resolve => { enterStatus = resolve; });
+    const backend = { state: { status: 'ready' }, onDidChange: event, async status() {
+      enterStatus();
+      return new Promise(() => {});
+    } };
+    const repo = { rootUri: uri(root), state: { onDidChange: event }, async status() {} };
+    const api = { repositories: [repo], onDidOpenRepository: event, onDidCloseRepository: event };
+    const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+    if (mode === 'poll') tree.pollPromise = new Promise(() => {});
+    const pending = tree.refresh();
+    if (mode === 'status') await statusStarted;
+    else await new Promise(resolve => setImmediate(resolve));
+    tree.dispose();
+    let timeout;
+    try {
+      await Promise.race([pending, new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Disposed refresh waiting for ${mode} did not settle`)), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+  }
+});
+
 test('slow detailed refresh finishes one sweep before scheduling another', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-page-sweep-'));
@@ -651,9 +690,37 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['main']);
     assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    let queuedFinished = false;
+    const queuedRefresh = tree.refresh().then(() => { queuedFinished = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(queuedFinished, false, 'a refresh requested during an active sweep waits for its follow-up');
+    const releaseFirst = releaseDetails;
+    releaseDetails = undefined;
+    releaseFirst();
+    await refresh;
+    while (!releaseDetails) {
+      if (Date.now() > deadline) throw new Error('Follow-up refresh did not start');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(queuedFinished, false, 'the queued refresh waits until its own sweep finishes');
+    const thirdRefresh = tree.refresh();
+    const releaseSecond = releaseDetails;
+    releaseDetails = undefined;
+    releaseSecond();
+    let timeout;
+    try {
+      await Promise.race([queuedRefresh, new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Queued refresh waited for a later sweep')), 5000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.equal(queuedFinished, true);
+    while (!releaseDetails) {
+      if (Date.now() > deadline) throw new Error('Third refresh did not start');
+      await new Promise(resolve => setImmediate(resolve));
+    }
     pauseDetails = false;
     releaseDetails();
-    await refresh;
+    await thirdRefresh;
     await changeFolders([workspace, first]);
     rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name).sort(), ['main', 'one']);
@@ -731,6 +798,30 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     await changeFolders([workspace]);
     await changeFolders([workspace, initiallyMissing]);
     assert.ok(!provider.snapshot().errors.some(message => message.includes(initiallyMissing)));
+    pauseDetails = true;
+    releaseDetails = undefined;
+    const activeRefresh = tree.refresh();
+    const disposeDeadline = Date.now() + 5000;
+    while (!releaseDetails) {
+      if (Date.now() > disposeDeadline) throw new Error('Refresh before disposal did not start');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    const pendingRefresh = tree.refresh();
+    const releaseActive = releaseDetails;
+    releaseDetails = undefined;
+    releaseActive();
+    await activeRefresh;
+    while (!releaseDetails) {
+      if (Date.now() > disposeDeadline) throw new Error('Refresh held during disposal did not start');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    tree.dispose();
+    let disposeTimeout;
+    try {
+      await Promise.race([pendingRefresh, new Promise((_, reject) => {
+        disposeTimeout = setTimeout(() => reject(new Error('Disposed refresh remained pending')), 5000);
+      })]);
+    } finally { clearTimeout(disposeTimeout); }
   } finally {
     provider.dispose();
     tree.dispose();
