@@ -217,6 +217,11 @@ fn process(
             let _: EmptyRequest = params(request.params)?;
             theme::query(options.theme)
         }
+        "themes_list" => {
+            let _: EmptyRequest = params(request.params)?;
+            theme::list(options.theme)
+        }
+        "theme_preview" => theme::preview(options.theme, params(request.params)?),
         "changes_begin" => snapshots.begin(scope, params(request.params)?, sub_cfg),
         "changes_next" => snapshots.page(scope, params(request.params)?),
         "changes_find" => snapshots.find(scope, params(request.params)?),
@@ -417,7 +422,11 @@ fn serve_inner(
                     continue;
                 }
                 if mutation_once && let Some(scope) = scope.as_ref() {
-                    let result = process_mutation(scope, request);
+                    let result = if request.method == "theme_save" {
+                        params(request.params).and_then(|input| theme::save(options.theme, input))
+                    } else {
+                        process_mutation(scope, request)
+                    };
                     write_reply(writer, Some(id), result)?;
                     return Ok(());
                 }

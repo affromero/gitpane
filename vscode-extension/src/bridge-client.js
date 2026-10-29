@@ -276,6 +276,19 @@ class BridgeClient {
     }
   }
 
+  async themeRequest(method, params) {
+    try { return await this.request(method, params); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support the theme picker. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  themesList() { return this.themeRequest('themes_list', {}); }
+  themePreview(name) { return this.themeRequest('theme_preview', { name }); }
+
   commitFiles(repo, oid) {
     return this.request('commit_files', { repo, oid });
   }

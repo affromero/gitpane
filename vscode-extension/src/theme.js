@@ -80,11 +80,36 @@ class ThemeController {
   payload() { return this.value && { ...this.value, appearance: this.appearance }; }
   notify() { for (const listener of this.listeners) listener(); }
   async retry() {
-    if (this.disposed || this.requestEpoch !== undefined) return;
+    if (this.disposed) return;
+    if (this.pendingLoad && this.pendingGeneration === this.backend.generation) return this.pendingLoad;
     this.generation = Symbol('retry');
     await this.load();
   }
-  async load() {
+  beginPreview() {
+    this.epoch++;
+    this.requestEpoch = undefined;
+    return { value: this.value, error: this.error, generation: this.backend.generation, epoch: this.epoch };
+  }
+  previewCurrent(session) {
+    return !this.disposed && this.backend.generation === session.generation && this.epoch === session.epoch;
+  }
+  applyPreview(session, value, error) {
+    if (!this.previewCurrent(session)) return false;
+    this.value = value;
+    this.error = error;
+    this.notify();
+    return true;
+  }
+  load() {
+    const generation = this.backend.generation;
+    if (this.pendingLoad && this.pendingGeneration === generation) return this.pendingLoad;
+    const pending = this.loadTheme();
+    this.pendingLoad = pending;
+    this.pendingGeneration = generation;
+    pending.finally(() => { if (this.pendingLoad === pending) this.pendingLoad = undefined; });
+    return pending;
+  }
+  async loadTheme() {
     const generation = this.backend.generation;
     if (this.disposed || this.generation === generation) return;
     this.generation = generation;

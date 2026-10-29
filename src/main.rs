@@ -168,7 +168,8 @@ async fn run() -> Result<()> {
             if liveness_worker {
                 session::liveness::install_worker_cancellation()?;
             }
-            let config = config::Config::load()?;
+            let mut config = config::Config::load()?;
+            config.runtime_theme_override = cli.theme;
             apply_libgit2_limits(&config.git2);
             return bridge::run(&config, mutation_once, liveness_worker);
         }

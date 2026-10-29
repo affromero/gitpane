@@ -38,7 +38,8 @@ commit and then a file to open its diff; the file list is searchable too.
 The graph uses Gitpane's `[graph]` settings for branch visibility, label length
 and diff statistics. Restart the VS Code extension host after changing them.
 The sidebar and graph use Gitpane's configured theme and adapt its colors for
-the VS Code background. Restart the extension host after changing the theme.
+the VS Code background. Use **Gitpane: Choose Theme…** to preview and save a
+theme for Gitpane. Restart the extension host after editing theme files directly.
 
 The `⋯` menus provide file actions to stage, unstage, discard or delete an
 untracked file. Repository actions include branch review, push, pull, pull with

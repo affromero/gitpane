@@ -8,7 +8,10 @@
 mod loader;
 mod presets;
 
-pub(crate) use loader::{LoadThemeError, discover_all_theme_names, load_theme};
+pub(crate) use loader::{
+    LoadThemeError, discover_all_theme_names, discover_all_theme_names_bounded, load_theme,
+    load_theme_bounded,
+};
 pub(crate) use presets::muted;
 
 use ratatui::style::Color;

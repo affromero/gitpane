@@ -19,6 +19,7 @@ const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
 const { ThemeController } = require('./theme');
+const { ThemePicker } = require('./theme-picker');
 const { WorkspaceFetch } = require('./workspace-fetch');
 const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
@@ -456,6 +457,7 @@ async function activate(context) {
   const api = git.getAPI(1);
   const backend = new BackendManager(context, { output });
   const theme = new ThemeController(backend, vscode.window.onDidChangeActiveColorTheme);
+  const themePicker = new ThemePicker(vscode, backend, theme);
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
   const hidden = new HiddenRepositories(tree, backend, context.workspaceState, vscode);
   tree.hiddenRepositories = hidden;
@@ -569,11 +571,12 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, theme, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
+  context.subscriptions.push(backend, theme, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
     vscode.commands.registerCommand('gitpane.refresh', () => provider.refresh(true)),
+    vscode.commands.registerCommand('gitpane.pickTheme', () => themePicker.open()),
     vscode.commands.registerCommand('gitpane.fetchWorkspace', () => workspaceFetch.run()),
     vscode.commands.registerCommand('gitpane.addWorkspaceRepository', async () => {
       try { await workspaceRepositories.add(); }

@@ -277,6 +277,8 @@ class BackendManager {
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'theme') result = await client.theme();
+      else if (method === 'themes_list') result = await client.themesList();
+      else if (method === 'theme_preview') result = await client.themePreview(argument);
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
       else if (method === 'launchers_list') result = await client.listLaunchers(repo);
       else if (method === 'launcher_plan') result = await client.planLauncher(repo, argument.id, argument.fingerprint);
@@ -305,7 +307,7 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
-      const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
+      const invalidTheme = ['theme', 'themes_list', 'theme_preview'].includes(method) && ['theme_error', 'invalid_request', 'unsupported_backend', 'stale_target'].includes(error?.code);
       if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
@@ -717,6 +719,15 @@ class BackendManager {
   graphRevision(repo) { return this.request('graph_revision', repo); }
 
   theme() { return this.request('theme'); }
+
+  themesList() { return this.request('themes_list'); }
+
+  themePreview(name) { return this.request('theme_preview', undefined, name); }
+
+  async themeSave(name, expectedCurrent, previewToken, validateTarget) {
+    return this.sessionMutations.executeTheme({ name, expected_current: expectedCurrent, preview_token: previewToken },
+      snapshot => !this.disposed && snapshot.generation === this.generation && validateTarget());
+  }
 
   commitFiles(repo, oid) { return this.request('commit_files', repo, oid); }
 

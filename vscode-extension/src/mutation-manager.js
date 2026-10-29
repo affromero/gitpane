@@ -265,6 +265,44 @@ class MutationManager {
     }
   }
 
+  async executeTheme(params, validateTarget) {
+    if (this.disposed) throw new BridgeError('disposed', 'Gitpane actions are unavailable.');
+    if (!params || typeof params.name !== 'string' || !params.name || typeof params.expected_current !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(params.preview_token || '') || typeof validateTarget !== 'function') {
+      throw new BridgeError('invalid_request', 'A current theme preview is required.');
+    }
+    const snapshot = await this.getSnapshot();
+    if (this.locks.has('theme')) throw new BridgeError('busy', 'A Gitpane theme save is already running.');
+    const token = {};
+    this.locks.set('theme', token);
+    let worker;
+    try {
+      if (this.disposed || !validateTarget(snapshot)) throw new BridgeError('workspace_changed', 'Workspace changed before saving the theme.');
+      worker = new MutationWorker(snapshot.executable, { spawn: this.spawn, onStderr: this.onStderr });
+      this.workers.add(worker);
+      const initialized = await worker.call(1, 'initialize', { version: 1, workspace_roots: snapshot.roots,
+        workspace_root_sources: snapshot.rootSources, workspace_root_identities: snapshot.rootIdentities }, this.handshakeTimeoutMs);
+      if (!initialized || initialized.version !== 1) throw new BridgeError('unsupported_version', 'Gitpane service returned an unsupported protocol version.');
+      if (this.disposed || !validateTarget(snapshot)) throw new BridgeError('workspace_changed', 'Workspace changed before saving the theme.');
+      try { return await worker.call(2, 'theme_save', params, 0); }
+      catch (error) {
+        if (error.code === 'invalid_request' && ['unknown bridge method', 'expected a mutation request'].includes(error.message)) {
+          throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support saving themes. Update the backend and try again.');
+        }
+        if (error.code === 'outcome_unknown') error.workerClosed = worker.closed;
+        throw error;
+      }
+    } finally {
+      if (!worker) { if (this.locks.get('theme') === token) this.locks.delete('theme'); }
+      else {
+        worker.cancelBeforeSend();
+        const release = () => { this.workers.delete(worker); if (this.locks.get('theme') === token) this.locks.delete('theme'); };
+        if (worker.authoritative || !worker.dispatched) { await worker.closeAfterResponse(this.responseCloseGraceMs); release(); }
+        else worker.closed.then(release);
+      }
+    }
+  }
+
   dispose() {
     if (this.disposed) return;
     this.disposed = true;

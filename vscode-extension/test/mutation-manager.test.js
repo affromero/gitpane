@@ -31,6 +31,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   fs.appendFileSync(file('actions'), JSON.stringify(request) + '\n');
+  if (mode === 'theme-lost-reply') {
+    fs.writeFileSync(file('saved-theme'), request.params.name);
+    process.stdout.write('not-json\n');
+    release('release-action', () => process.exit(0));
+    return;
+  }
   if (mode === 'malformed-with-child') {
     const childScript = "const fs=require('node:fs'),p=require('node:path'); const dir=process.env.MUTATION_TEST_DIR; const f=n=>p.join(dir,n); fs.writeFileSync(f('child-started'),String(process.pid)); const timer=setInterval(()=>{if(fs.existsSync(f('release-child'))){clearInterval(timer);fs.writeFileSync(f('child-finished'),'');}},10);";
     const child = require('node:child_process').spawn(process.execPath, ['-e', childScript], {detached:true,stdio:'ignore'});
@@ -104,6 +110,44 @@ async function fixture(t, mode = 'success') {
 }
 
 function code(expected) { return error => error.code === expected; }
+
+test('theme save uses a scoped one-shot worker and aborts if the workspace changes during startup', async t => {
+  const f = await fixture(t, 'hold-init');
+  let current = true;
+  const params = { name: 'blue', expected_current: 'original', preview_token: 'a'.repeat(64) };
+  const pending = f.manager.executeTheme(params, () => current);
+  await f.wait('initialized');
+  current = false;
+  await f.mark('release-init');
+  await assert.rejects(pending, code('workspace_changed'));
+  assert.equal(await exists(path.join(f.dir, 'actions')), false);
+});
+
+test('theme save sends the guarded selection to the mutation worker', async t => {
+  const f = await fixture(t);
+  const params = { name: 'blue', expected_current: 'original', preview_token: 'a'.repeat(64) };
+  assert.deepEqual(await f.manager.executeTheme(params, () => true), {});
+  const actions = await f.actions();
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].method, 'theme_save');
+  assert.deepEqual(actions[0].params, params);
+});
+
+test('lost theme response retains the worker until its saved write has finished', async t => {
+  const f = await fixture(t, 'theme-lost-reply');
+  const params = { name: 'blue', expected_current: 'original', preview_token: 'a'.repeat(64) };
+  let failure;
+  try { await f.manager.executeTheme(params, () => true); } catch (error) { failure = error; }
+  assert.equal(failure?.code, 'outcome_unknown');
+  assert.equal(await fs.readFile(path.join(f.dir, 'saved-theme'), 'utf8'), 'blue');
+  let closed = false;
+  failure.workerClosed.then(() => { closed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, false);
+  await f.mark('release-action');
+  await failure.workerClosed;
+  assert.equal(closed, true);
+});
 
 test('requires a valid shared Git directory and rejects repositories outside the workspace', async t => {
   const f = await fixture(t);

@@ -80,10 +80,37 @@ pub(crate) fn discover_all_theme_names(dirs: &[PathBuf]) -> Vec<String> {
     names
 }
 
+/// Discover themes with explicit errors and limits for editor-facing requests.
+pub(crate) fn discover_all_theme_names_bounded(dirs: &[PathBuf]) -> std::io::Result<Vec<String>> {
+    let mut names: Vec<String> = BUILT_IN_THEMES.iter().map(|s| s.to_string()).collect();
+    for custom in scan_custom_theme_names(dirs, true)? {
+        if !names.contains(&custom) {
+            names.push(custom);
+        }
+    }
+    Ok(names)
+}
+
 /// Resolve a theme by name. Built-ins (`default`, `muted`) are returned
 /// directly; any other name is treated as a custom theme file living at
 /// `<dir>/gitpane/themes/<name>.toml` for each candidate `<dir>`.
 pub(crate) fn load_theme(name: &str, candidate_dirs: &[PathBuf]) -> Result<Theme, LoadThemeError> {
+    load_theme_inner(name, candidate_dirs, false)
+}
+
+/// Load the same theme format with a bounded, nonblocking file read.
+pub(crate) fn load_theme_bounded(
+    name: &str,
+    candidate_dirs: &[PathBuf],
+) -> Result<Theme, LoadThemeError> {
+    load_theme_inner(name, candidate_dirs, true)
+}
+
+fn load_theme_inner(
+    name: &str,
+    candidate_dirs: &[PathBuf],
+    bounded: bool,
+) -> Result<Theme, LoadThemeError> {
     match name {
         "default" => return Ok(Theme::default()),
         "muted" => return Ok(muted()),
@@ -93,16 +120,58 @@ pub(crate) fn load_theme(name: &str, candidate_dirs: &[PathBuf]) -> Result<Theme
     let searched = candidate_paths(name, candidate_dirs);
     for path in &searched {
         if path.is_file() {
-            return load_theme_from_path(path);
+            return if bounded {
+                load_theme_from_path_bounded(path)
+            } else {
+                load_theme_from_path(path)
+            };
         }
     }
 
     Err(LoadThemeError::Unknown {
         name: name.to_string(),
         builtins: BUILT_IN_THEMES.to_vec(),
-        custom: discover_custom_theme_names(candidate_dirs),
+        custom: if bounded {
+            Vec::new()
+        } else {
+            discover_custom_theme_names(candidate_dirs)
+        },
         searched,
     })
+}
+
+fn load_theme_from_path_bounded(path: &Path) -> Result<Theme, LoadThemeError> {
+    use std::io::Read;
+    let failed = |error: String| LoadThemeError::InvalidFile {
+        path: path.to_owned(),
+        message: error,
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| failed(error.to_string()))?;
+    let metadata = file.metadata().map_err(|error| failed(error.to_string()))?;
+    const LIMIT: u64 = 1024 * 1024;
+    if !metadata.is_file() || metadata.len() > LIMIT {
+        return Err(failed(
+            "theme must be a regular file no larger than 1 MiB".into(),
+        ));
+    }
+    let mut contents = Vec::new();
+    file.take(LIMIT + 1)
+        .read_to_end(&mut contents)
+        .map_err(|error| failed(error.to_string()))?;
+    if contents.len() as u64 > LIMIT {
+        return Err(failed("theme exceeds the 1 MiB limit".into()));
+    }
+    let contents = std::str::from_utf8(&contents).map_err(|error| failed(error.to_string()))?;
+    toml::from_str(contents).map_err(|error: toml::de::Error| failed(error.to_string()))
 }
 
 fn load_theme_from_path(path: &Path) -> Result<Theme, LoadThemeError> {
@@ -123,18 +192,39 @@ fn candidate_paths(name: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn discover_custom_theme_names(dirs: &[PathBuf]) -> Vec<String> {
+    scan_custom_theme_names(dirs, false).unwrap_or_default()
+}
+
+fn scan_custom_theme_names(dirs: &[PathBuf], strict: bool) -> std::io::Result<Vec<String>> {
     let mut names = Vec::new();
+    let mut count = 0usize;
     for dir in dirs {
         let themes_dir = dir.join("themes");
-        let Ok(entries) = std::fs::read_dir(&themes_dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&themes_dir) {
+            Ok(entries) => entries,
+            Err(error) if !strict || error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
         };
-        for entry in entries.flatten() {
+        for item in entries {
+            let entry = match item {
+                Ok(entry) => entry,
+                Err(_) if !strict => continue,
+                Err(error) => return Err(error),
+            };
+            count += 1;
+            if strict && count > 4096 {
+                return Err(std::io::Error::other("too many theme directory entries"));
+            }
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("toml")
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
             {
                 let owned = stem.to_string();
+                if strict && (owned.len() > 255 || names.len() >= 512) {
+                    return Err(std::io::Error::other(
+                        "theme discovery exceeds the supported limit",
+                    ));
+                }
                 if !names.contains(&owned) {
                     names.push(owned);
                 }
@@ -142,7 +232,7 @@ fn discover_custom_theme_names(dirs: &[PathBuf]) -> Vec<String> {
         }
     }
     names.sort();
-    names
+    Ok(names)
 }
 
 #[cfg(test)]

@@ -10,6 +10,220 @@ use crate::theme::Theme;
 
 use super::super::{BridgeOptions, serve_inner};
 
+struct ThemeEnv(std::path::PathBuf);
+
+impl crate::config::ConfigEnv for ThemeEnv {
+    fn gitpane_config(&self) -> Option<std::path::PathBuf> {
+        Some(self.0.join("config.toml"))
+    }
+    fn xdg_config_home(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    fn home_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    fn project_config_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    fn file_exists(&self, path: &std::path::Path) -> bool {
+        path.exists()
+    }
+}
+
+#[test]
+fn picker_previews_without_saving_and_commits_with_stale_guards() {
+    use super::{PreviewRequest, SaveRequest, list_with_env, preview_with_env, save_with_env};
+    let temp = TempDir::new().unwrap();
+    let env = ThemeEnv(temp.path().to_owned());
+    let config_path = temp.path().join("config.toml");
+    fs::write(&config_path, "theme = 'default'\nscan_depth = 2\n").unwrap();
+    let config = Config::load_without_theme(&env).unwrap();
+    fs::create_dir(temp.path().join("themes")).unwrap();
+    fs::write(
+        temp.path().join("themes/custom.toml"),
+        toml::to_string(&Theme::default()).unwrap(),
+    )
+    .unwrap();
+    let list = list_with_env(&config, &env).unwrap();
+    assert_eq!(list["current"], "default");
+    assert_eq!(list["persisted"], "default");
+    assert_eq!(list["names"], json!(["default", "muted", "custom"]));
+    let preview = preview_with_env(
+        &config,
+        PreviewRequest {
+            name: "custom".into(),
+        },
+        &env,
+    )
+    .unwrap();
+    assert_eq!(preview["theme"]["name"], "custom");
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        "theme = 'default'\nscan_depth = 2\n"
+    );
+    let token = preview["preview_token"].as_str().unwrap().to_owned();
+    assert_eq!(token.len(), 64);
+    let mut override_config = config.clone();
+    override_config.runtime_theme_override = Some("muted".into());
+    assert_eq!(
+        list_with_env(&override_config, &env).unwrap()["current"],
+        "muted"
+    );
+    let failure = save_with_env(
+        &override_config,
+        SaveRequest {
+            name: "custom".into(),
+            expected_current: "default".into(),
+            preview_token: token.clone(),
+        },
+        &env,
+    )
+    .unwrap_err();
+    assert_eq!(failure.code, "theme_error");
+    assert!(failure.message.contains("--theme"));
+    fs::write(&config_path, "theme = 'default'\nscan_depth = 9\n").unwrap();
+    let saved = save_with_env(
+        &config,
+        SaveRequest {
+            name: "custom".into(),
+            expected_current: "default".into(),
+            preview_token: token.clone(),
+        },
+        &env,
+    )
+    .unwrap();
+    assert_eq!(saved["theme"], preview["theme"]);
+    let disk = Config::load_without_theme(&env).unwrap();
+    assert_eq!(disk.theme_name, "custom");
+    assert_eq!(disk.scan_depth, 9);
+    assert_eq!(list_with_env(&config, &env).unwrap()["current"], "custom");
+    let stale = save_with_env(
+        &config,
+        SaveRequest {
+            name: "custom".into(),
+            expected_current: "default".into(),
+            preview_token: token.clone(),
+        },
+        &env,
+    )
+    .unwrap_err();
+    assert_eq!(stale.code, "stale_target");
+    let mut changed = Theme::default();
+    changed.repo_list.dirty_marker = Color::Rgb(1, 2, 3);
+    fs::write(
+        temp.path().join("themes/custom.toml"),
+        toml::to_string(&changed).unwrap(),
+    )
+    .unwrap();
+    let stale = save_with_env(
+        &config,
+        SaveRequest {
+            name: "custom".into(),
+            expected_current: "custom".into(),
+            preview_token: token,
+        },
+        &env,
+    )
+    .unwrap_err();
+    assert_eq!(stale.code, "stale_target");
+    assert_eq!(
+        Config::load_without_theme(&env).unwrap().theme_name,
+        "custom"
+    );
+}
+
+#[test]
+fn picker_rejects_bad_themes_names_and_oversized_files() {
+    use super::{PreviewRequest, list_with_env, preview_with_env};
+    let temp = TempDir::new().unwrap();
+    let env = ThemeEnv(temp.path().to_owned());
+    fs::write(temp.path().join("config.toml"), "theme = 'default'\n").unwrap();
+    let config = Config::load_without_theme(&env).unwrap();
+    fs::write(temp.path().join("themes"), "not a directory").unwrap();
+    assert_eq!(
+        list_with_env(&config, &env).unwrap_err().code,
+        "theme_error"
+    );
+    fs::remove_file(temp.path().join("themes")).unwrap();
+    fs::create_dir(temp.path().join("themes")).unwrap();
+    for name in ["../outside", "a/b", "a\\b", ""] {
+        assert_eq!(
+            preview_with_env(&config, PreviewRequest { name: name.into() }, &env)
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+    }
+    fs::write(
+        temp.path().join("themes/bad.toml"),
+        "[repo_list]\nstash='bogus'\n",
+    )
+    .unwrap();
+    assert_eq!(
+        preview_with_env(&config, PreviewRequest { name: "bad".into() }, &env)
+            .unwrap_err()
+            .code,
+        "theme_error"
+    );
+    fs::write(
+        temp.path().join("themes/large.toml"),
+        vec![b'x'; 1024 * 1024 + 1],
+    )
+    .unwrap();
+    assert_eq!(
+        preview_with_env(
+            &config,
+            PreviewRequest {
+                name: "large".into()
+            },
+            &env
+        )
+        .unwrap_err()
+        .code,
+        "theme_error"
+    );
+    fs::write(temp.path().join("config.toml"), "[broken\n").unwrap();
+    assert_eq!(
+        list_with_env(&config, &env).unwrap_err().code,
+        "theme_error"
+    );
+}
+
+#[test]
+fn picker_repairs_invalid_persisted_theme_name() {
+    use super::{PreviewRequest, SaveRequest, list_with_env, preview_with_env, save_with_env};
+    let temp = TempDir::new().unwrap();
+    let env = ThemeEnv(temp.path().to_owned());
+    let path = temp.path().join("config.toml");
+    fs::write(&path, "theme = '../bad'\n").unwrap();
+    let config = Config::load_without_theme(&env).unwrap();
+    let list = list_with_env(&config, &env).unwrap();
+    assert_eq!(list["persisted"], "../bad");
+    let preview = preview_with_env(
+        &config,
+        PreviewRequest {
+            name: "default".into(),
+        },
+        &env,
+    )
+    .unwrap();
+    let saved = save_with_env(
+        &config,
+        SaveRequest {
+            name: "default".into(),
+            expected_current: "../bad".into(),
+            preview_token: preview["preview_token"].as_str().unwrap().into(),
+        },
+        &env,
+    )
+    .unwrap();
+    assert_eq!(saved["theme"]["name"], "default");
+    assert_eq!(
+        Config::load_without_theme(&env).unwrap().theme_name,
+        "default"
+    );
+}
+
 fn request(config: &Config, params: Value) -> Value {
     let input = format!(
         "{}\n{}\n",
