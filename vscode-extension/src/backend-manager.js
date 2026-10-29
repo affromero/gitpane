@@ -146,7 +146,7 @@ class BackendManager {
       else if (method === 'working_symlink') result = await client.readWorkingSymlink(repo, argument);
       else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
       else if (method === 'branch_review') result = await client.branchReview(repo);
-      else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument, true);
+      else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'theme') result = await client.theme();
@@ -286,7 +286,7 @@ class BackendManager {
 
   branchReview(repo) { return this.request('branch_review', repo); }
 
-  inspectSubmodule(repo, path) { return this.request('submodule_inspect', repo, path); }
+  inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
 
   async listSessions(repo, backend) {
     if (!['tmux', 'herdr'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');

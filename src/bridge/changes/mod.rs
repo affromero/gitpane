@@ -98,14 +98,14 @@ impl DirectoryIdentity {
 }
 
 #[derive(PartialEq, Eq)]
-struct RepositoryIdentity {
+pub(super) struct RepositoryIdentity {
     worktree: DirectoryIdentity,
     gitdir: DirectoryIdentity,
     common: DirectoryIdentity,
 }
 
 impl RepositoryIdentity {
-    fn read(repo: &Path) -> Result<Self, BridgeError> {
+    pub(super) fn read(repo: &Path) -> Result<Self, BridgeError> {
         let repository = git2::Repository::open(repo).map_err(repository_error)?;
         Ok(Self {
             worktree: DirectoryIdentity::read(repo)?,

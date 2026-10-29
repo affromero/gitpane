@@ -120,12 +120,13 @@ class BridgeClient {
     return this.request('branch_review', { repo });
   }
 
-  async inspectSubmodule(repo, path, summaryOnly = false) {
+  async inspectSubmodule(repo, path, summaryOnly = false, group, originalPath) {
     try {
-      return await this.request('submodule_inspect', { repo, path, ...(summaryOnly ? { summary_only: true } : {}) });
+      return await this.request('submodule_inspect', { repo, path, ...(summaryOnly ? { summary_only: true } : {}),
+        ...(group === undefined ? {} : { group }), ...(originalPath === undefined ? {} : { original_path: originalPath }) });
     } catch (error) {
-      if (summaryOnly && error.code === 'invalid_request' && /unknown field.*summary_only/i.test(error.message)) {
-        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support compact submodule status. Update the backend and try again.');
+      if (summaryOnly && error.code === 'invalid_request' && /unknown field.*(?:summary_only|group|original_path)/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support selected submodule comparisons. Update the backend and try again.');
       }
       throw error;
     }

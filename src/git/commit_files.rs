@@ -124,16 +124,19 @@ pub(crate) fn list_review_files(
     Ok((base_ref, merge_base, head.id(), changed_tree_files(&diff)?))
 }
 
-/// Compare two committed trees, or an empty tree when no base is recorded.
+/// Compare two committed trees, substituting an empty tree for either missing side.
 pub(crate) fn list_revision_files(
     path: &Path,
     base: Option<Oid>,
-    head: Oid,
+    head: Option<Oid>,
 ) -> color_eyre::Result<Vec<CommitFile>> {
+    if base.is_none() && head.is_none() {
+        return Ok(Vec::new());
+    }
     let repo = Repository::open(path)?;
     let base_tree = base.map(|oid| repo.find_commit(oid)?.tree()).transpose()?;
-    let head_tree = repo.find_commit(head)?.tree()?;
-    let mut diff = repo.diff_tree_to_tree(base_tree.as_ref(), Some(&head_tree), None)?;
+    let head_tree = head.map(|oid| repo.find_commit(oid)?.tree()).transpose()?;
+    let mut diff = repo.diff_tree_to_tree(base_tree.as_ref(), head_tree.as_ref(), None)?;
     diff.find_similar(Some(git2::DiffFindOptions::new().renames(true)))?;
     changed_tree_files(&diff)
 }

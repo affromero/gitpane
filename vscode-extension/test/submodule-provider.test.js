@@ -30,7 +30,7 @@ function fixture(t, linkDocuments) {
   const tokens = new Map([[parentPath, 1], [childPath, 1]]);
   const revisions = new Map([[parentPath, 1], [childPath, 1]]);
   let pick = choices => choices[0];
-  let response = { repo: childPath, base_oid: base, head_oid: head, pointer_files: [
+  let response = { repo: childPath, base_oid: base, head_oid: head, child_head_oid: head, pointer_files: [
     { status: 'R', path: 'new.txt', old_path: 'old.txt', is_submodule: false }
   ] };
   let opens = 0;
@@ -46,7 +46,7 @@ function fixture(t, linkDocuments) {
       previous_cursor: cursor ? 0 : null, next_cursor: cursor + 128 < all.length ? cursor + 128 : null,
       changes: all.slice(cursor, cursor + 128) };
   };
-  const commands = [], errors = [], graphs = [];
+  const commands = [], errors = [], graphs = [], inspections = [];
   const tree = { isVisible: () => visible, isPathInWorkspace: value => value.startsWith(parentPath + path.sep),
     onDidChangeTreeData(handler) { listeners.add(handler); return { dispose: () => listeners.delete(handler) }; },
     changed() { for (const handler of listeners) handler(); },
@@ -62,7 +62,8 @@ function fixture(t, linkDocuments) {
     toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
   let graphGuard;
   let scanError;
-  const backend = { inspectSubmodule: async () => {
+  const backend = { inspectSubmodule: async (repo, target, group, originalPath) => {
+    inspections.push({ repo, target, group, originalPath });
     if (response instanceof Error) throw response;
     return response;
   }, async status() { return { head_oid: child.state.HEAD.commit }; },
@@ -74,7 +75,7 @@ function fixture(t, linkDocuments) {
   const provider = new SubmoduleProvider(tree, backend, git, { vscode, linkDocuments, resolveChange: () => visible && rowVisible ? node : undefined,
     openGraph: async (repo, guard) => { graphs.push(repo); graphGuard = guard; } });
   t.after(() => provider.dispose());
-  return { temporary, childPath, node, child, base, head, provider, commands, errors, graphs,
+  return { temporary, childPath, node, child, base, head, provider, commands, errors, graphs, inspections,
     opened: () => opens, pick(fn) { pick = fn; }, setVisible(value) { visible = value; },
     setRowVisible(value) { rowVisible = value; }, setParentRecord(value) { parentRecord = value; hasParentRecord = true; },
     notifyTreeChange() { tree.changed(); },
@@ -115,6 +116,74 @@ test('opens committed rename and current dirty file comparisons using native edi
   f.pick(choices => choices.find(choice => choice.kind === 'graph'));
   await f.provider.open(f.node);
   assert.deepEqual(f.graphs, [f.child]);
+});
+
+test('submodule diffs use the selected pointer endpoints while guarding the live child', async t => {
+  const f = fixture(t);
+  const live = 'c'.repeat(40);
+  f.child.state.HEAD.commit = live;
+  f.node.group = 'index';
+  f.setResponse({ ...f.getResponse(), child_head_oid: live });
+  f.pick(choices => choices.find(choice => choice.kind === 'pointer'));
+  await f.provider.open(f.node);
+  assert.equal(f.commands[0][1].ref, f.base);
+  assert.equal(f.commands[0][2].ref, f.head);
+  assert.ok(f.inspections.every(request => request.group === 'index'));
+
+  f.setResponse({ ...f.getResponse(), base_oid: null, head_oid: f.head,
+    pointer_files: [{ status: 'A', path: 'added.txt', old_path: null, is_submodule: false }] });
+  await f.provider.open(f.node);
+  assert.equal(f.commands[1][1].toString(), 'gitpane-empty:' + path.join(f.childPath, 'added.txt'));
+  assert.equal(f.commands[1][2].ref, f.head);
+
+  f.setResponse({ ...f.getResponse(), base_oid: f.base, head_oid: null,
+    pointer_files: [{ status: 'D', path: 'deleted.txt', old_path: null, is_submodule: false }] });
+  await f.provider.open(f.node);
+  assert.equal(f.commands[2][1].ref, f.base);
+  assert.equal(f.commands[2][2].toString(), 'gitpane-empty:' + path.join(f.childPath, 'deleted.txt'));
+
+  f.pick(choices => {
+    f.setResponse({ ...f.getResponse(), head_oid: 'd'.repeat(40) });
+    return choices.find(choice => choice.kind === 'pointer');
+  });
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 3);
+  assert.match(f.errors.at(-1), /changed/i);
+});
+
+test('staged submodule renames report the backend limitation without opening a diff', async t => {
+  const f = fixture(t);
+  const record = { path: 'child', group: 'index', kind: 'index_renamed', original_path: 'old-child',
+    conflict_stages: null, is_submodule: true };
+  f.node.group = 'index';
+  f.node.record = record;
+  f.setResponse(new Error('Staged submodule renames cannot be inspected yet. Inspect the rename in Source Control.'));
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.equal(f.inspections[0].group, 'index');
+  assert.equal(f.inspections[0].originalPath, 'old-child');
+  assert.match(f.errors.at(-1), /renames cannot be inspected/i);
+});
+
+test('submodule and regular-file type changes report the backend limitation', async t => {
+  const f = fixture(t);
+  f.node.group = 'index';
+  f.node.record = { path: 'child', group: 'index', kind: 'index_type_changed', original_path: null,
+    conflict_stages: null, is_submodule: true };
+  f.setResponse(new Error('Submodule type changes cannot be inspected yet.'));
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /type changes cannot be inspected/i);
+});
+
+test('submodule conflicts report the backend error without opening a diff', async t => {
+  const f = fixture(t);
+  f.node.group = 'merge';
+  f.setResponse(new Error('Cannot compare conflicted submodule pointers.'));
+  await f.provider.open(f.node);
+  assert.equal(f.commands.length, 0);
+  assert.match(f.errors.at(-1), /conflict/i);
+  assert.equal(f.inspections[0].group, 'merge');
 });
 
 test('inspects hidden submodule changes across pages and rejects stale selections', async t => {
@@ -209,7 +278,7 @@ test('reports uninitialized submodules and refuses outside paths before opening 
   f.setResponse(new Error('Submodule is not initialized'));
   await f.provider.open(f.node);
   assert.match(f.errors[0], /not initialized/i);
-  f.setResponse({ repo: path.join(f.temporary, 'outside'), base_oid: null, head_oid: f.head, pointer_files: [] });
+  f.setResponse({ repo: path.join(f.temporary, 'outside'), base_oid: null, head_oid: f.head, child_head_oid: f.head, pointer_files: [] });
   await f.provider.open(f.node);
   assert.match(f.errors[1], /no longer in the workspace/i);
   assert.equal(f.opened(), 0);

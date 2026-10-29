@@ -36,7 +36,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch};
+  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, operation: request.params.operation, branch: request.params.branch};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -80,6 +80,10 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.inspectSubmodule(repo, 'child'), { method: 'submodule_inspect', repo, path: 'child', roots: [root] });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child', true),
     { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true });
+  assert.deepEqual(await client.inspectSubmodule(repo, 'child', true, 'index'),
+    { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true, group: 'index' });
+  assert.deepEqual(await client.inspectSubmodule(repo, 'child', true, 'index', 'old-child'),
+    { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true, group: 'index', original_path: 'old-child' });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
   assert.deepEqual(await client.planWorktree(repo, 'feature/a'), { method: 'worktree_plan', repo, roots: [root], branch: 'feature/a' });
 });

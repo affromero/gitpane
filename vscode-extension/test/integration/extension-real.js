@@ -303,6 +303,36 @@ async function main() {
   assert.equal(diffs.length, diffsBeforeWarning);
   assert.equal(terminals.length, terminalsBeforeWarning);
   console.log('PASS clean parent unpushed submodule warning opens the scoped inspector without a terminal');
+
+  const pointerA = git('rev-parse', 'HEAD:child');
+  fs.writeFileSync(path.join(childPath, 'unpushed.txt'), 'staged child commit\n');
+  gitAt(childPath, 'add', 'unpushed.txt');
+  gitAt(childPath, 'commit', '-qm', 'staged child commit');
+  const pointerB = gitAt(childPath, 'rev-parse', 'HEAD');
+  git('add', 'child');
+  fs.writeFileSync(path.join(childPath, 'unpushed.txt'), 'working child commit\n');
+  gitAt(childPath, 'add', 'unpushed.txt');
+  gitAt(childPath, 'commit', '-qm', 'working child commit');
+  const pointerC = gitAt(childPath, 'rev-parse', 'HEAD');
+  childRepo.state.HEAD.commit = pointerC;
+  await commands.get('gitpane.refresh')();
+  const pointerParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: pointerParent.id });
+  const pointerGroups = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups;
+  const stagedPointer = pointerGroups.find(group => group.id === 'index')?.files.find(item => item.path === 'child');
+  const workingPointer = pointerGroups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(stagedPointer && workingPointer, 'staged and working gitlink changes must both be selectable');
+  pickChanges = choices => choices.find(choice => choice.kind === 'pointer' && choice.file.path === 'unpushed.txt');
+  const beforePointerDiffs = diffs.length;
+  await receive({ type: 'openChange', id: stagedPointer.id });
+  assert.equal(diffs.length, beforePointerDiffs + 1, errors.at(-1));
+  assert.equal(diffs.at(-1)[0].ref, pointerA, 'staged diff starts at the committed parent pointer');
+  assert.equal(diffs.at(-1)[1].ref, pointerB, 'staged diff ends at the index pointer');
+  await receive({ type: 'openChange', id: workingPointer.id });
+  assert.equal(diffs.length, beforePointerDiffs + 2, errors.at(-1));
+  assert.equal(diffs.at(-1)[0].ref, pointerB, 'working diff starts at the index pointer');
+  assert.equal(diffs.at(-1)[1].ref, pointerC, 'working diff ends at the live child HEAD');
+  console.log('PASS staged and unstaged submodule file clicks use their selected A→B and B→C native diffs');
 }
 
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; }).finally(async () => {
