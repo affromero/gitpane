@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { codeExecutable, runHost } = require('./host');
+const { isolatedGitEnv } = require('./git-env');
 
 const sourceExtension = path.resolve(__dirname, '../..');
 const extension = process.env.GITPANE_TEST_EXTENSION || sourceExtension;
@@ -20,8 +21,7 @@ const workspaceFile = path.join(temporary, 'multi-root.code-workspace');
 let safeToRemove = false;
 
 function git(cwd, ...args) {
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT']) delete env[key];
+  const env = isolatedGitEnv();
   const result = spawnSync('git', ['-c', 'user.name=Gitpane Test', '-c', 'user.email=gitpane-test@example.invalid', ...args], {
     cwd, env, encoding: 'utf8'
   });
@@ -61,7 +61,7 @@ try {
   fs.writeFileSync(workspaceFile, JSON.stringify({ folders: [{ path: root }, { path: secondRoot }], settings: { 'git.repositoryScanMaxDepth': 4 } }));
 
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     GITPANE_TEST_EXTENSION: extension,
     GITPANE_TEST_REPO: fs.realpathSync(repo),
     GITPANE_TEST_NESTED: fs.realpathSync(nested),

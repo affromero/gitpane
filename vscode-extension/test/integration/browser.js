@@ -23,7 +23,13 @@ const snapshot = {
         ] },
         { id: 'index', label: 'Staged', files: [{ id: 'file2', status: 'M', path: 'src/server.rs' }] }
       ] },
-    { id: 'web', name: 'web-app', branch: 'feature/ui', dirty: false, ahead: 0, behind: 0, groups: [] }
+    { id: 'web', name: 'web-app', branch: 'feature/ui', dirty: false, ahead: 0, behind: 0, groups: [] },
+    { id: 'docs', name: 'docs', branch: 'docs/edit', dirty: true, ahead: 0, behind: 0,
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'file3', status: 'M', path: 'README.md' }] }] },
+    { id: 'sync', name: 'sync', branch: 'feature/sync', dirty: true, ahead: 12, behind: 3,
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'file4', status: 'M', path: 'sync.rs' }] }] },
+    { id: 'offline', name: 'offline', branch: 'main', dirty: false, ahead: 0, behind: 0,
+      statusUnavailable: true, groups: [] }
   ]
 };
 const encodedSnapshot = Buffer.from(JSON.stringify(snapshot)).toString('base64');
@@ -54,11 +60,148 @@ const scenario = String.raw`
     await tick();
     const root = document.querySelector('[role="tree"]');
     check('tree label', root.getAttribute('aria-label') === 'Gitpane repositories');
+    for (const width of [500, 300, 210]) {
+      root.style.width = width + 'px';
+      const rows = [...document.querySelectorAll('#repositories > .treeitem > .repo-row')];
+      const branches = rows.map(row => row.querySelector('.branch').getBoundingClientRect().left);
+      check('aligned branch columns at ' + width + 'px', branches.every(left => Math.abs(left - branches[0]) < 1));
+      const marker = rows[0].querySelector('.dirty');
+      const markerText = document.createRange();
+      markerText.selectNodeContents(marker);
+      check('dirty marker has a visible gap at ' + width + 'px',
+        rows[0].querySelector('.name').getBoundingClientRect().left - markerText.getBoundingClientRect().right >= 4);
+      for (const row of rows) {
+        const tail = row.querySelector('.tail');
+        const bounds = tail.getBoundingClientRect();
+        for (const indicator of tail.children) {
+          const indicatorBounds = indicator.getBoundingClientRect();
+          check('status indicator visible at ' + width + 'px',
+            indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
+        }
+      }
+    }
+    root.style.width = '';
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;left:-9999px;width:210px;height:650px;border:0';
+    document.body.appendChild(frame);
+    const frameDocument = frame.contentDocument;
+    frameDocument.head.appendChild(document.querySelector('style').cloneNode(true));
+    frameDocument.body.className = document.body.className;
+    frameDocument.body.appendChild(root.cloneNode(true));
+    check('narrow viewport triggers compact layout', frame.contentWindow.innerWidth <= 230);
+    const narrowRows = [...frameDocument.querySelectorAll('#repositories > .treeitem > .repo-row')];
+    const narrowBranches = narrowRows.map(row => row.querySelector('.branch').getBoundingClientRect().left);
+    check('aligned branch columns in narrow viewport', narrowBranches.every(left => Math.abs(left - narrowBranches[0]) < 1));
+    for (const row of narrowRows) {
+      const tail = row.querySelector('.tail');
+      const bounds = tail.getBoundingClientRect();
+      for (const indicator of tail.children) {
+        const indicatorBounds = indicator.getBoundingClientRect();
+        check('status indicator visible in narrow viewport',
+          indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
+      }
+    }
+    frame.remove();
     let repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository status and branch', repo.textContent.includes('*') && repo.textContent.includes('main'));
     check('ahead and behind', repo.textContent.includes('↑2') && repo.textContent.includes('↓1'));
     check('unique file count', repo.textContent.includes('[2]'));
     check('collapsed by default', repo.getAttribute('aria-expanded') === 'false');
+    const graphButton = repo.querySelector('.graph-action');
+    check('graph action has an accessible name', graphButton.getAttribute('aria-label') === 'Open commit graph for api-service');
+    graphButton.click();
+    check('graph action selects the repository without expanding',
+      window.posted.some(message => message.type === 'openGraph' && message.id === 'api') && repo.getAttribute('aria-expanded') === 'false');
+    const repoMenu = repo.querySelector('.menu-action');
+    check('repository actions have an accessible name', repoMenu.getAttribute('aria-label') === 'Actions for api-service');
+    repoMenu.click();
+    check('repository actions do not expand the row',
+      window.posted.some(message => message.type === 'menu' && message.kind === 'repo' && message.id === 'api') &&
+      repo.getAttribute('aria-expanded') === 'false');
+    repoMenu.focus();
+    repoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('action keyboard activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
+    window.postMessage(snapshot, '*');
+    await tick();
+    check('focused action survives refresh', document.activeElement.getAttribute('aria-label') === 'Actions for api-service');
+    const badges = JSON.parse(JSON.stringify(snapshot));
+    Object.assign(badges.repositories[0], { stashCount: 2, worktreeCount: 1, hasDirtySubmodules: true, hasUnpushedSubmodules: true });
+    window.postMessage(badges, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    check('repository indicators are visible', ['$2', '⎇1', '◈', '⇡'].every(value => repo.textContent.includes(value)));
+    check('repository indicators have accessible meaning', ['2 stashes', '1 worktree', 'dirty submodules', 'unpushed submodule commits']
+      .every(value => repo.getAttribute('aria-label').includes(value)));
+    badges.repositories[0].statusUnavailable = true;
+    window.postMessage(badges, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    check('unavailable status does not show stale counts', repo.getAttribute('aria-label').includes('status unavailable') &&
+      !repo.textContent.includes('$2') && !repo.textContent.includes('⎇1'));
+    const withStashes = JSON.parse(JSON.stringify(snapshot));
+    Object.assign(withStashes.repositories[1], { stashCount: 2, stashes: [
+      { id: 'stash-a', index: 0, message: 'WIP on feature: save work' },
+      { id: 'stash-b', index: 1, message: '<img src=x onerror="window.injected=true">' }
+    ] });
+    window.postMessage(withStashes, '*');
+    await tick();
+    let stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
+    check('repository with stashes can expand', stashRepo.getAttribute('aria-expanded') === 'false');
+    let stashButton = stashRepo.querySelector('.stash-action');
+    check('stash toggle is accessible', stashButton.getAttribute('aria-label') === 'Expand stashes for web-app' &&
+      stashButton.getAttribute('aria-expanded') === 'false');
+    stashButton.focus();
+    stashButton.click();
+    stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
+    stashButton = stashRepo.querySelector('.stash-action');
+    check('stash badge expands repository and stash details', stashRepo.getAttribute('aria-expanded') === 'true' &&
+      stashButton.getAttribute('aria-expanded') === 'true' && document.activeElement === stashButton);
+    let stashGroup = items().find(item => item.getAttribute('aria-label') === 'Stashes, 2 stashes');
+    check('stash group exposes expanded state', stashGroup.getAttribute('aria-expanded') === 'true');
+    check('stash details show index and message', items().some(item => item.getAttribute('aria-label') ===
+      'stash@{0}, WIP on feature: save work'));
+    check('stash message is rendered as text', items().some(item => item.textContent.includes('<img src=x')) &&
+      !document.querySelector('img') && !window.injected);
+    window.postMessage(withStashes, '*');
+    await tick();
+    stashGroup = items().find(item => item.getAttribute('aria-label') === 'Stashes, 2 stashes');
+    check('stash expansion survives snapshots', stashGroup.getAttribute('aria-expanded') === 'true');
+    stashGroup.querySelector('.row').click();
+    stashGroup = items().find(item => item.getAttribute('aria-label') === 'Stashes, 2 stashes');
+    check('stash group collapses on click', stashGroup.getAttribute('aria-expanded') === 'false' &&
+      !items().some(item => item.getAttribute('aria-label').startsWith('stash@{0}')));
+    stashGroup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    check('keyboard expands stash details', items().some(item => item.getAttribute('aria-label').startsWith('stash@{0}')));
+    stashGroup = items().find(item => item.getAttribute('aria-label') === 'Stashes, 2 stashes');
+    stashGroup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    check('keyboard collapses stash details', !items().some(item => item.getAttribute('aria-label').startsWith('stash@{0}')));
+    stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
+    stashRepo.querySelector('.row').click();
+    const withWorktree = JSON.parse(JSON.stringify(snapshot));
+    Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
+      name: 'web-review', branch: 'review', dirty: true, fileCount: 2, ahead: 1, behind: 0 }] });
+    window.postMessage(withWorktree, '*');
+    await tick();
+    let cleanRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
+    check('clean repository with worktrees is expandable', cleanRepo.getAttribute('aria-expanded') === 'false' && cleanRepo.textContent.includes('▸⎇1'));
+    cleanRepo.querySelector('.row').click();
+    cleanRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
+    const worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('workspace worktree status is visible', !!worktree && ['⎇', '*', 'review', '[2]', '↑1'].every(value => worktree.textContent.includes(value)));
+    check('worktree status has accessible meaning', ['has changes', '2 files', '1 ahead'].every(value => worktree.getAttribute('aria-label').includes(value)));
+    const worktreeMenu = worktree.querySelector('.menu-action');
+    check('worktree action has an accessible name', worktreeMenu.getAttribute('aria-label') === 'Actions for worktree web-review');
+    worktreeMenu.click();
+    check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'menu' &&
+      message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
+    worktree.querySelector('.row').click();
+    const worktreeCalls = window.posted.filter(message => message.type === 'menu' && message.kind === 'worktree').length;
+    worktree.focus();
+    worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    check('keyboard opens worktree actions', window.posted.filter(message => message.type === 'menu' && message.kind === 'worktree').length === worktreeCalls + 1);
+    window.postMessage(snapshot, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     repo.focus();
     repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
@@ -71,11 +214,25 @@ const scenario = String.raw`
     check('arrow down selects group', document.activeElement.getAttribute('aria-label').startsWith('Unstaged'));
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     check('arrow down selects file', document.activeElement.getAttribute('aria-label').includes('src/server.rs'));
+    const selectedFile = document.activeElement;
+    const fileMenu = selectedFile.querySelector('.menu-action');
+    check('file actions have an accessible name', fileMenu.getAttribute('aria-label') === 'Actions for src/server.rs');
+    const openCount = window.posted.filter(message => message.type === 'openChange').length;
+    fileMenu.click();
+    check('file actions do not open the diff',
+      window.posted.some(message => message.type === 'menu' && message.kind === 'file' && message.id === 'file1') &&
+      window.posted.filter(message => message.type === 'openChange').length === openCount);
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('enter opens selected diff', window.posted.some(message => message.type === 'openChange' && message.id === 'file1'));
     const unsafe = items().find(item => item.getAttribute('aria-label').includes('<img'));
     unsafe.querySelector('.row').click();
     check('click opens selected diff', window.posted.some(message => message.type === 'openChange' && message.id === 'unsafe'));
+    const reordered = JSON.parse(JSON.stringify(snapshot));
+    reordered.repositories.reverse();
+    window.postMessage(reordered, '*');
+    await tick();
+    check('repository reorder preserves selection and expansion', document.activeElement.dataset.key === 'file:unsafe' &&
+      items().find(item => item.getAttribute('aria-label').includes('api-service')).getAttribute('aria-expanded') === 'true');
     window.postMessage({ type: 'snapshot', repositories: [], errors: ['Bad <img>'], loading: false }, '*');
     await tick();
     check('error announced', document.querySelector('[role="alert"]').textContent === 'Bad <img>');

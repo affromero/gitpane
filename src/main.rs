@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod bridge;
 mod components;
 mod config;
 mod diagnostic;
@@ -53,6 +54,12 @@ enum Command {
     /// Print configuration and workspace diagnostics
     #[command(alias = "diagnostics")]
     Diagnostic,
+    /// Run the workspace-scoped editor bridge over standard input and output
+    Serve {
+        /// Handle one authorized mutation after initialization and exit.
+        #[arg(long)]
+        mutation_once: bool,
+    },
 }
 
 /// Run the app on an explicitly-owned multi-thread runtime, then drop it
@@ -150,6 +157,15 @@ async fn run() -> Result<()> {
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
         Some(Command::Diagnostic) => {
             return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
+        }
+        Some(Command::Serve { mutation_once }) => {
+            let config = config::Config::load()?;
+            apply_libgit2_limits(&config.git2);
+            return bridge::run(
+                &config.submodules,
+                config.review.base.as_deref(),
+                mutation_once,
+            );
         }
         None => {}
     }

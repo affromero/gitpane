@@ -13,9 +13,9 @@ mod tests_filters;
 
 use refs::{merge_stash_labels, resolve_refs};
 
-pub(crate) use segments::{BranchSegment, compute_branch_segments};
+pub(crate) use segments::{BranchSegment, compute_branch_segments, project_branch_collapses};
 
-const MAX_COMMITS: usize = 200;
+pub(crate) const MAX_COMMITS: usize = 200;
 const PALETTE_SIZE: usize = 6;
 
 #[derive(Clone, Debug)]
@@ -160,13 +160,28 @@ impl GraphBuilder {
         }
     }
 
-    pub fn build(
+    pub fn build(self, path: &Path, options: &GraphOptions) -> color_eyre::Result<Vec<GraphRow>> {
+        self.build_inner(path, options, None)
+    }
+
+    /// Build a graph without opening linked worktrees outside the caller's scope.
+    pub fn build_scoped(
+        self,
+        path: &Path,
+        options: &GraphOptions,
+        allow_worktree: &dyn Fn(&Path) -> bool,
+    ) -> color_eyre::Result<Vec<GraphRow>> {
+        self.build_inner(path, options, Some(allow_worktree))
+    }
+
+    fn build_inner(
         mut self,
         path: &Path,
         options: &GraphOptions,
+        allow_worktree: Option<&dyn Fn(&Path) -> bool>,
     ) -> color_eyre::Result<Vec<GraphRow>> {
         let mut repo = Repository::open(path)?;
-        let mut ref_map = resolve_refs(&repo, &options.branch_filter);
+        let mut ref_map = resolve_refs(&repo, &options.branch_filter, allow_worktree)?;
         merge_stash_labels(&mut repo, &mut ref_map);
 
         // A branch selection is the graph's root set. Keep this separate from
@@ -279,8 +294,24 @@ impl GraphBuilder {
         path: &Path,
         branch_filter: &BranchFilter,
     ) -> color_eyre::Result<Vec<String>> {
+        Self::branch_names_inner(path, branch_filter, None)
+    }
+
+    pub(crate) fn branch_names_scoped(
+        path: &Path,
+        branch_filter: &BranchFilter,
+        allow_worktree: &dyn Fn(&Path) -> bool,
+    ) -> color_eyre::Result<Vec<String>> {
+        Self::branch_names_inner(path, branch_filter, Some(allow_worktree))
+    }
+
+    fn branch_names_inner(
+        path: &Path,
+        branch_filter: &BranchFilter,
+        allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+    ) -> color_eyre::Result<Vec<String>> {
         let repo = Repository::open(path)?;
-        let refs = resolve_refs(&repo, branch_filter);
+        let refs = resolve_refs(&repo, branch_filter, allow_worktree)?;
         let names = refs
             .values()
             .flat_map(|labels| labels.iter())

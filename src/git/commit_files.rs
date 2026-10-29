@@ -7,6 +7,35 @@ pub(crate) fn list_commit_files(
     path: &Path,
     oid_str: &str,
 ) -> color_eyre::Result<(String, Vec<(String, String)>)> {
+    let (message, files) = list_commit_files_inner(path, oid_str, false)?;
+    Ok((
+        message,
+        files
+            .into_iter()
+            .map(|file| (file.status, file.path))
+            .collect(),
+    ))
+}
+
+pub(crate) struct CommitFile {
+    pub status: String,
+    pub path: String,
+    pub old_path: Option<String>,
+    pub is_submodule: bool,
+}
+
+pub(crate) fn list_commit_files_detailed(
+    path: &Path,
+    oid_str: &str,
+) -> color_eyre::Result<(String, Vec<CommitFile>)> {
+    list_commit_files_inner(path, oid_str, true)
+}
+
+fn list_commit_files_inner(
+    path: &Path,
+    oid_str: &str,
+    detect_renames: bool,
+) -> color_eyre::Result<(String, Vec<CommitFile>)> {
     let repo = Repository::open(path)?;
     let oid = Oid::from_str(oid_str)?;
     let commit = repo.find_commit(oid)?;
@@ -14,16 +43,28 @@ pub(crate) fn list_commit_files(
     let message = commit.message().unwrap_or("").trim().to_string();
 
     let tree = commit.tree()?;
-    let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    let parent_tree = if commit.parent_count() == 0 {
+        None
+    } else {
+        Some(commit.parent(0)?.tree()?)
+    };
 
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+    let mut diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+    if detect_renames {
+        diff.find_similar(Some(git2::DiffFindOptions::new().renames(true)))?;
+    }
 
+    let files = changed_tree_files(&diff)?;
+    Ok((message, files))
+}
+
+fn changed_tree_files(diff: &Diff<'_>) -> color_eyre::Result<Vec<CommitFile>> {
     let mut files = Vec::new();
     for delta in diff.deltas() {
         let status = match delta.status() {
             git2::Delta::Added => "A",
             git2::Delta::Deleted => "D",
-            git2::Delta::Modified => "M",
+            git2::Delta::Modified | git2::Delta::Typechange => "M",
             git2::Delta::Renamed => "R",
             _ => "?",
         };
@@ -31,12 +72,70 @@ pub(crate) fn list_commit_files(
             .new_file()
             .path()
             .or_else(|| delta.old_file().path())
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        files.push((status.to_string(), file_path));
+            .ok_or_else(|| color_eyre::eyre::eyre!("commit file has no path"))?
+            .to_str()
+            .ok_or_else(|| color_eyre::eyre::eyre!("commit file path is not valid UTF-8"))?
+            .to_string();
+        let old_path = if delta.status() == git2::Delta::Renamed {
+            Some(
+                delta
+                    .old_file()
+                    .path()
+                    .and_then(Path::to_str)
+                    .ok_or_else(|| {
+                        color_eyre::eyre::eyre!("original commit path is not valid UTF-8")
+                    })?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        files.push(CommitFile {
+            status: status.to_string(),
+            path: file_path,
+            old_path,
+            is_submodule: matches!(delta.old_file().mode(), git2::FileMode::Commit)
+                || matches!(delta.new_file().mode(), git2::FileMode::Commit),
+        });
     }
 
-    Ok((message, files))
+    Ok(files)
+}
+
+/// Compare committed HEAD against the merge base with the configured review base.
+pub(crate) fn list_review_files(
+    path: &Path,
+    configured_base: Option<&str>,
+) -> color_eyre::Result<(String, Oid, Oid, Vec<CommitFile>)> {
+    let repo = Repository::open(path)?;
+    let base_ref = configured_base
+        .map(str::to_owned)
+        .or_else(|| crate::git::status::default_branch_name(&repo))
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("No review base resolved; set [review] base in config")
+        })?;
+    let base = repo.revparse_single(&base_ref)?.peel_to_commit()?;
+    let head = repo.head()?.peel_to_commit()?;
+    let merge_base = repo.merge_base(base.id(), head.id())?;
+    let base_tree = repo.find_commit(merge_base)?.tree()?;
+    let head_tree = head.tree()?;
+    let mut diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)?;
+    diff.find_similar(Some(git2::DiffFindOptions::new().renames(true)))?;
+    Ok((base_ref, merge_base, head.id(), changed_tree_files(&diff)?))
+}
+
+/// Compare two committed trees, or an empty tree when no base is recorded.
+pub(crate) fn list_revision_files(
+    path: &Path,
+    base: Option<Oid>,
+    head: Oid,
+) -> color_eyre::Result<Vec<CommitFile>> {
+    let repo = Repository::open(path)?;
+    let base_tree = base.map(|oid| repo.find_commit(oid)?.tree()).transpose()?;
+    let head_tree = repo.find_commit(head)?.tree()?;
+    let mut diff = repo.diff_tree_to_tree(base_tree.as_ref(), Some(&head_tree), None)?;
+    diff.find_similar(Some(git2::DiffFindOptions::new().renames(true)))?;
+    changed_tree_files(&diff)
 }
 
 /// Get the diff text for a single file in a commit.
@@ -83,7 +182,11 @@ pub(crate) fn batch_diff_stats(
         let Ok(tree) = commit.tree() else {
             continue;
         };
-        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+        let parent_tree = if commit.parent_count() == 0 {
+            None
+        } else {
+            Some(commit.parent(0)?.tree()?)
+        };
         let Ok(diff) = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) else {
             continue;
         };

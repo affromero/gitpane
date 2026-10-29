@@ -6,7 +6,7 @@
   "publisher": "gitpane",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/affromero/gitpane.git" },
-  "files": ["src/**", "README.md", "LICENSE"],
+  "files": ["src/**", "bin/**", "README.md", "LICENSE"],
   "engines": { "vscode": "^1.111.0" },
   "main": "./src/extension.js",
   "extensionKind": ["workspace"],
@@ -23,10 +23,23 @@
     },
     "commands": [
       { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
+      { "command": "gitpane.sort", "title": "Gitpane: Sort Repositories", "icon": "$(list-ordered)" },
       { "command": "gitpane.openChange", "title": "Gitpane: Open Change" }
     ],
     "menus": {
-      "view/title": [{ "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
+      "view/title": [{ "command": "gitpane.sort", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
+    },
+    "configuration": {
+      "title": "Gitpane",
+      "properties": {
+        "gitpane.backendPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to a compatible Gitpane backend on the workspace host. Leave empty to use the bundled backend."
+        }
+      }
     }
   },
   "scripts": { "test": "node --test test/*.test.js" }

@@ -19,6 +19,7 @@ pub(super) fn collect_change_summary(
     path: &Path,
     recurse_untracked_dirs: bool,
     sub_cfg: &SubmoduleConfig,
+    strict: bool,
 ) -> color_eyre::Result<ChangeSummary> {
     if repo.is_bare() {
         return Ok(ChangeSummary {
@@ -109,21 +110,47 @@ pub(super) fn collect_change_summary(
     // Iterate when *any* submodule signal is requested. `ignore_dirty` and
     // `warn_unpushed` are independent: even with dirty hidden, we may still
     // need to surface unpushed-pointer warnings.
-    if has_submodules
-        && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed)
-        && let Ok(subs) = repo.submodules()
-    {
+    if has_submodules && (!sub_cfg.ignore_dirty || sub_cfg.warn_unpushed) {
+        let subs = match repo.submodules() {
+            Ok(subs) => subs,
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => Vec::new(),
+        };
         for sub in &subs {
-            let name = sub.name().unwrap_or("").to_string();
+            let name = match sub.name() {
+                Ok(name) => name.to_string(),
+                Err(error) if strict => return Err(error.into()),
+                Err(_) => String::new(),
+            };
             let sub_path = PathBuf::from(sub.path());
 
             // Dirty-state mapping (gated on !ignore_dirty).
+            let uninitialized = if strict {
+                match path.join(&sub_path).join(".git").symlink_metadata() {
+                    Ok(_) => false,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                false
+            };
+            let status = if !sub_cfg.ignore_dirty || (strict && sub_cfg.warn_unpushed) {
+                if uninitialized {
+                    Some(SubmoduleStatus::WD_UNINITIALIZED)
+                } else {
+                    match repo.submodule_status(&name, git2::SubmoduleIgnore::Unspecified) {
+                        Ok(status) => Some(status),
+                        Err(error) if strict => return Err(error.into()),
+                        Err(_) => Some(SubmoduleStatus::empty()),
+                    }
+                }
+            } else {
+                None
+            };
             let state = if sub_cfg.ignore_dirty {
                 None
             } else {
-                let status = repo
-                    .submodule_status(&name, git2::SubmoduleIgnore::Unspecified)
-                    .unwrap_or(SubmoduleStatus::empty());
+                let status = status.unwrap_or(SubmoduleStatus::empty());
                 if status.is_wd_uninitialized() {
                     Some(SubmoduleState::Uninitialized)
                 } else if status.is_wd_wd_modified()
@@ -144,9 +171,10 @@ pub(super) fn collect_change_summary(
             // submodules (`sub.open()` fails) and when there is nothing to show
             // (clean working tree with warnings disabled): branch is only worth
             // reading for a submodule that will render a row.
-            let is_uninit = state == Some(SubmoduleState::Uninitialized);
+            let is_uninit = state == Some(SubmoduleState::Uninitialized)
+                || status.is_some_and(|status| status.is_wd_uninitialized());
             let (head, warn) = if !is_uninit && (state.is_some() || sub_cfg.warn_unpushed) {
-                compute_submodule_head_and_warn(sub, sub_cfg.warn_unpushed)
+                compute_submodule_head_and_warn(sub, sub_cfg.warn_unpushed, strict)?
             } else {
                 (None, SubmoduleWarn::default())
             };

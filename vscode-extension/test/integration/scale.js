@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { codeExecutable, runHost } = require('./host');
+const { isolatedGitEnv } = require('./git-env');
 
 const sourceExtension = path.resolve(__dirname, '../..');
 const extension = process.env.GITPANE_TEST_EXTENSION || sourceExtension;
@@ -19,8 +20,7 @@ try {
   if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw new Error('GITPANE_SCALE_COUNT must be between 1 and 10000.');
   if (!path.isAbsolute(extension) || !fs.existsSync(path.join(extension, 'package.json'))) throw new Error(`Invalid extension directory: ${extension}`);
   fs.mkdirSync(root);
-  const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT']) delete gitEnv[key];
+  const gitEnv = isolatedGitEnv();
   for (let index = 0; index < count; index++) {
     const repo = path.join(root, `repo-${String(index).padStart(5, '0')}`);
     fs.mkdirSync(repo);
@@ -29,7 +29,7 @@ try {
     fs.writeFileSync(path.join(repo, 'new.txt'), `${index}\n`);
   }
   const env = {
-    ...process.env,
+    ...isolatedGitEnv(),
     GITPANE_TEST_EXTENSION: extension,
     GITPANE_SCALE_COUNT: String(count),
     GITPANE_TEST_RESULT: path.join(temporary, 'result.json')

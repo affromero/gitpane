@@ -4,6 +4,211 @@
 
 use std::path::{Path, PathBuf};
 
+/// Probe the selected host multiplexer without hiding process or parse errors.
+pub(crate) fn checked_pane_sessions(kind: &str) -> color_eyre::Result<Vec<(String, PathBuf)>> {
+    checked_pane_sessions_with(kind, kind)
+}
+
+fn checked_pane_sessions_with(
+    kind: &str,
+    program: &str,
+) -> color_eyre::Result<Vec<(String, PathBuf)>> {
+    let mut command = std::process::Command::new(program);
+    match kind {
+        "tmux" => {
+            command.args([
+                "list-panes",
+                "-a",
+                "-F",
+                "#{pane_current_path}\t#{session_name}",
+            ]);
+        }
+        "herdr" => {
+            command.args(["pane", "list"]);
+        }
+        _ => return Err(color_eyre::eyre::eyre!("unknown session backend")),
+    }
+    let output = bounded_output(&mut command)?;
+    if !output.status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "{kind} session probe failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = std::str::from_utf8(&output.stdout)?;
+    let panes = if kind == "tmux" {
+        let parsed = parse_pane_sessions(text);
+        if parsed.len() != text.lines().filter(|line| !line.is_empty()).count() {
+            return Err(color_eyre::eyre::eyre!("invalid tmux session output"));
+        }
+        parsed
+    } else {
+        parse_herdr_panes(text).map_err(|message| color_eyre::eyre::eyre!(message))?
+    };
+    panes
+        .into_iter()
+        .map(|(name, cwd)| {
+            let cwd = cwd
+                .canonicalize()
+                .map_err(|_| color_eyre::eyre::eyre!("Cannot resolve a session directory"))?;
+            Ok((name, cwd))
+        })
+        .collect()
+}
+
+/// Run a session probe or explicit goto with a process-group deadline.
+#[cfg(unix)]
+pub(crate) fn bounded_output(
+    command: &mut std::process::Command,
+) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = crate::git::process::spawn_killable(command)?;
+    let pid = child.id() as i32;
+    let result = capture_session_output(&mut child, std::time::Duration::from_secs(15));
+    crate::git::process::unregister_killable_pid(pid);
+    result
+}
+
+#[cfg(unix)]
+fn capture_session_output(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::os::fd::AsRawFd;
+    const MAX_OUTPUT: usize = 1024 * 1024;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut status = None;
+    let mut drain_deadline = None;
+    loop {
+        let mut fds = [
+            libc::pollfd {
+                fd: stdout.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stderr.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), 2, 20) };
+        let poll_error = (rc < 0).then(std::io::Error::last_os_error);
+        if poll_error
+            .as_ref()
+            .is_some_and(|error| error.kind() != std::io::ErrorKind::Interrupted)
+        {
+            if status.is_none() {
+                crate::git::process::kill_process_group(child);
+                let _ = child.wait();
+            }
+            return Err(poll_error.expect("poll error"));
+        }
+        let read_result = if fds[0].revents != 0 {
+            read_session_pipe(&mut stdout, &mut out)
+        } else {
+            Ok(())
+        }
+        .and_then(|()| {
+            if fds[1].revents != 0 {
+                read_session_pipe(&mut stderr, &mut err)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = read_result {
+            if status.is_none() {
+                crate::git::process::kill_process_group(child);
+                let _ = child.wait();
+            }
+            return Err(error);
+        }
+        if out.len().saturating_add(err.len()) > MAX_OUTPUT {
+            if status.is_none() {
+                crate::git::process::kill_process_group(child);
+                let _ = child.wait();
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "session process output exceeds the size limit",
+            ));
+        }
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(Some(exit)) => {
+                    status = Some(exit);
+                    drain_deadline =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    crate::git::process::kill_process_group(child);
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            }
+        }
+        if let Some(exit) = status {
+            if stdout.is_none() && stderr.is_none() {
+                return Ok(std::process::Output {
+                    status: exit,
+                    stdout: out,
+                    stderr: err,
+                });
+            }
+            if drain_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "session process output did not close",
+                ));
+            }
+        }
+        if status.is_none() && std::time::Instant::now() >= deadline {
+            crate::git::process::kill_process_group(child);
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "session process timed out",
+            ));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_session_pipe<R: std::io::Read>(
+    pipe: &mut Option<R>,
+    output: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    let mut buffer = [0; 8192];
+    if let Some(reader) = pipe {
+        match reader.read(&mut buffer) {
+            Ok(0) => *pipe = None,
+            Ok(count) => output.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn bounded_output(
+    _command: &mut std::process::Command,
+) -> std::io::Result<std::process::Output> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "session integration is not supported on this platform",
+    ))
+}
+
 /// `(session_name, pane_cwd)` for every tmux pane across all sessions, via a
 /// single `tmux list-panes -a` call. Empty when tmux is absent or errors.
 pub(crate) fn tmux_pane_sessions() -> Vec<(String, PathBuf)> {
@@ -189,6 +394,45 @@ pub(crate) fn is_live(path: &Path, panes: &[(String, PathBuf)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_probe_reports_unresolvable_session_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let script = temp.path().join("fake-herdr");
+        std::fs::write(&script, "#!/bin/sh\nprintf '%s' '{\"result\":{\"panes\":[{\"tab_id\":\"tab\",\"cwd\":\"/gitpane-nonexistent-session-test\"}]}}'\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = checked_pane_sessions_with("herdr", script.to_str().unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot resolve a session directory")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_session_output_fails_before_excessive_output_accumulates() {
+        let mut command = std::process::Command::new("sh");
+        let chunk = "x".repeat(4096);
+        command
+            .arg("-c")
+            .arg(format!("while :; do printf '%s' '{chunk}'; done"));
+        let error = bounded_output(&mut command).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_output_after_process_exit_is_reported() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "(sleep 3; printf late) & printf early"]);
+        let error = bounded_output(&mut command).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        // The stand-in descendant exits on its own; no unrelated process is signaled.
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+    }
 
     fn panes(ps: &[(&str, &str)]) -> Vec<(String, PathBuf)> {
         ps.iter()

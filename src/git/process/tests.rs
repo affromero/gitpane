@@ -10,10 +10,27 @@
 //! app does not leave ssh running.
 #![cfg(unix)]
 
-use super::{
-    ResetsShuttingDown, capture_with_timeout, kill_in_flight_git_ops, kill_process_group,
-    spawn_killable,
-};
+use super::{capture_with_timeout, kill_in_flight_git_ops, kill_process_group, spawn_killable};
+
+fn in_isolated_harness(name: &str) -> bool {
+    const MARKER: &str = "GITPANE_ISOLATED_SHUTDOWN_TEST";
+    if std::env::var(MARKER).as_deref() == Ok(name) {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", name, "--nocapture"])
+        .env(MARKER, name)
+        .output()
+        .expect("start isolated shutdown test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+        "isolated shutdown test {name} failed ({}):\n{stdout}\n{stderr}",
+        output.status
+    );
+    false
+}
 
 /// sh forks a `sleep` grandchild, prints its pid, then waits on it — the
 /// same parent/grandchild shape as `git fetch` + `ssh`.
@@ -74,12 +91,11 @@ fn kill_in_flight_git_ops_takes_registered_groups_down() {
     use std::io::BufRead;
     use std::process::{Command, Stdio};
 
-    let _lock = super::TEST_KILL_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    // Reset the one-way global SHUTTING_DOWN flag on drop (even on panic);
-    // declared after the lock so it is reset before the lock is released.
-    let _reset = ResetsShuttingDown::new();
+    if !in_isolated_harness(
+        "git::process::tests::kill_in_flight_git_ops_takes_registered_groups_down",
+    ) {
+        return;
+    }
     let mut command = Command::new("sh");
     command
         .arg("-c")
@@ -246,10 +262,9 @@ fn run_git_op_capturing_registers_and_unregisters() {
     if !crate::git::git_test_available() {
         return;
     }
-    let _lock = super::TEST_KILL_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let _reset = ResetsShuttingDown::new();
+    if !in_isolated_harness("git::process::tests::run_git_op_capturing_registers_and_unregisters") {
+        return;
+    }
 
     let tmp = tempfile::TempDir::new().unwrap();
     let path = tmp.path().to_path_buf();
@@ -343,4 +358,24 @@ fn failed_git_queries_report_stderr_instead_of_empty_content() {
         .args(["status", "--short"])
         .output();
     assert!(super::output_text(output).unwrap().is_empty());
+}
+
+#[test]
+fn bounded_capture_drains_both_streams_without_accumulating_excess_output() {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("sh")
+        .args(["-c", "i=0; while [ \"$i\" -lt 3000 ]; do printf '0123456789'; printf 'abcdefghij' >&2; i=$((i + 1)); done"])
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output =
+        super::capture_with_limit(&mut child, std::time::Duration::from_secs(10), 1024).unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 1024);
+    assert_eq!(output.stderr.len(), 1024);
+    assert!(output.stdout.starts_with(b"0123456789"));
+    assert!(output.stderr.starts_with(b"abcdefghij"));
 }

@@ -15,10 +15,12 @@ impl SubmoduleWarn {
 pub(super) fn compute_submodule_head_and_warn(
     sub: &git2::Submodule,
     warn_enabled: bool,
-) -> (Option<SubmoduleHead>, SubmoduleWarn) {
+    strict: bool,
+) -> color_eyre::Result<(Option<SubmoduleHead>, SubmoduleWarn)> {
     let inner = match sub.open() {
         Ok(r) => r,
-        Err(_) => return (None, SubmoduleWarn::default()),
+        Err(error) if strict => return Err(error.into()),
+        Err(_) => return Ok((None, SubmoduleWarn::default())),
     };
 
     let head = Some(read_submodule_head(&inner));
@@ -27,7 +29,7 @@ pub(super) fn compute_submodule_head_and_warn(
     } else {
         SubmoduleWarn::default()
     };
-    (head, warn)
+    Ok((head, warn))
 }
 
 /// Read the submodule's current branch, or `Detached` when it sits on a

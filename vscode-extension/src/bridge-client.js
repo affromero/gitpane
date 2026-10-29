@@ -1,0 +1,230 @@
+'use strict';
+
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const MAX_REQUEST_BYTES = 1024 * 1024;
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_PENDING = 64;
+
+class BridgeError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'BridgeError';
+    this.code = code;
+  }
+}
+
+class BridgeClient {
+  constructor(executable, options = {}) {
+    if (!path.isAbsolute(executable)) throw new Error('Bridge executable must be an absolute path.');
+    this.executable = executable;
+    this.spawn = options.spawn || spawn;
+    this.timeoutMs = options.timeoutMs ?? 30000;
+    this.maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    this.onStderr = options.onStderr || (() => {});
+    this.onFailure = options.onFailure || (() => {});
+    this.child = undefined;
+    this.pending = new Map();
+    this.expired = new Set();
+    this.nextId = 1;
+    this.parts = [];
+    this.lineBytes = 0;
+    this.initialization = undefined;
+    this.disposed = false;
+  }
+
+  start() {
+    if (this.disposed) throw new BridgeError('disposed', 'Gitpane service has been disposed.');
+    if (this.child) return;
+    const child = this.spawn(this.executable, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    this.child = child;
+    child.stdout.on('data', chunk => this.receive(child, chunk));
+    child.stdout.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service output failed: ${error.message}`)));
+    child.stdin.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service input failed: ${error.message}`)));
+    child.stderr.on('data', chunk => this.onStderr(chunk.toString()));
+    child.stderr.on('error', error => this.abort(child, new BridgeError('io_error', `Gitpane service diagnostics failed: ${error.message}`)));
+    child.on('error', error => this.abort(child, new BridgeError('spawn_error', `Could not start Gitpane service: ${error.message}`)));
+    child.on('close', (code, signal) => {
+      this.abort(child, new BridgeError('service_exited', `Gitpane service exited (code ${code}, signal ${signal}).`));
+    });
+  }
+
+  initialize(workspaceRoots) {
+    if (!Array.isArray(workspaceRoots) || workspaceRoots.some(root => typeof root !== 'string' || !path.isAbsolute(root))) {
+      return Promise.reject(new BridgeError('invalid_workspace', 'Workspace roots must be absolute paths.'));
+    }
+    try { this.start(); }
+    catch (error) { return Promise.reject(error); }
+    const child = this.child;
+    const initialization = this.call('initialize', { version: 1, workspace_roots: [...workspaceRoots] }).then(result => {
+      if (!result || result.version !== 1) {
+        const error = new BridgeError('unsupported_version', 'Gitpane service returned an unsupported protocol version.');
+        this.abort(child, error);
+        throw error;
+      }
+      return result;
+    });
+    this.initialization = initialization;
+    return initialization;
+  }
+
+  async request(method, params) {
+    if (this.disposed) throw new BridgeError('disposed', 'Gitpane service has been disposed.');
+    const initialization = this.initialization;
+    if (!initialization) throw new BridgeError('not_initialized', 'Gitpane service has not been initialized.');
+    await initialization;
+    if (initialization !== this.initialization) throw new BridgeError('workspace_changed', 'Workspace changed before the request could start.');
+    if (!this.child) throw new BridgeError('service_exited', 'Gitpane service is not running.');
+    return this.call(method, params);
+  }
+
+  status(repo) {
+    return this.request('status', { repo });
+  }
+
+  sortRepositories(order, repositories) {
+    return this.request('sort_repositories', { order, repositories });
+  }
+
+  fileActionPreview(repo, path, operation) {
+    return this.request('file_action_preview', { repo, path, operation });
+  }
+
+  branchReview(repo) {
+    return this.request('branch_review', { repo });
+  }
+
+  inspectSubmodule(repo, path) {
+    return this.request('submodule_inspect', { repo, path });
+  }
+
+  graph(repo, firstParent = false, filters, collapsedSegments) {
+    return this.request('graph', { repo, first_parent: firstParent, ...(filters === undefined ? {} : { filters }),
+      ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) });
+  }
+
+  commitFiles(repo, oid) {
+    return this.request('commit_files', { repo, oid });
+  }
+
+  call(method, params) {
+    if (!this.child) return Promise.reject(new BridgeError('service_exited', 'Gitpane service is not running.'));
+    if (this.pending.size >= MAX_PENDING) return Promise.reject(new BridgeError('busy', 'Too many Gitpane service requests are pending.'));
+    if (!Number.isSafeInteger(this.nextId)) return Promise.reject(new BridgeError('protocol_error', 'Gitpane request IDs exhausted.'));
+    const id = this.nextId++;
+    const line = `${JSON.stringify({ id, method, params })}\n`;
+    if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) return Promise.reject(new BridgeError('request_too_large', 'Gitpane request exceeds the size limit.'));
+    return new Promise((resolve, reject) => {
+      const timer = this.timeoutMs > 0 ? setTimeout(() => {
+        this.pending.delete(id);
+        this.expired.add(id);
+        reject(new BridgeError('timeout', `Gitpane service request timed out: ${method}.`));
+        if (this.expired.size >= MAX_PENDING) {
+          this.abort(this.child, new BridgeError('timeout', 'Too many Gitpane service responses timed out.'));
+        }
+      }, this.timeoutMs) : undefined;
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.child.stdin.write(line); }
+      catch (error) { this.abort(this.child, new BridgeError('io_error', `Could not send Gitpane request: ${error.message}`)); }
+    });
+  }
+
+  receive(child, chunk) {
+    if (this.child !== child) return;
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    let start = 0;
+    while (start < data.length) {
+      const newline = data.indexOf(10, start);
+      const end = newline < 0 ? data.length : newline;
+      const segment = data.subarray(start, end);
+      this.lineBytes += segment.length;
+      if (this.lineBytes > this.maxResponseBytes) {
+        this.abort(child, new BridgeError('response_too_large', 'Gitpane service response exceeds the size limit.'));
+        return;
+      }
+      this.parts.push(segment);
+      if (newline < 0) return;
+      let line;
+      try { line = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(this.parts, this.lineBytes)); }
+      catch {
+        this.abort(child, new BridgeError('protocol_error', 'Gitpane service returned invalid UTF-8.'));
+        return;
+      }
+      this.parts = [];
+      this.lineBytes = 0;
+      if (!this.handleLine(child, line)) return;
+      start = newline + 1;
+    }
+  }
+
+  handleLine(child, line) {
+    let response;
+    try { response = JSON.parse(line); }
+    catch {
+      this.abort(child, new BridgeError('protocol_error', 'Gitpane service returned invalid JSON.'));
+      return false;
+    }
+    if (!response || !Number.isSafeInteger(response.id) ||
+      (Object.hasOwn(response, 'result') === Object.hasOwn(response, 'error'))) {
+      this.abort(child, new BridgeError('protocol_error', 'Gitpane service returned an invalid response.'));
+      return false;
+    }
+    if (this.expired.delete(response.id)) return true;
+    const pending = this.pending.get(response.id);
+    if (!pending) {
+      this.abort(child, new BridgeError('protocol_error', 'Gitpane service returned an unexpected response ID.'));
+      return false;
+    }
+    if (Object.hasOwn(response, 'error') && (!response.error || typeof response.error.code !== 'string' || typeof response.error.message !== 'string')) {
+      this.abort(child, new BridgeError('protocol_error', 'Gitpane service returned an invalid error.'));
+      return false;
+    }
+    this.pending.delete(response.id);
+    clearTimeout(pending.timer);
+    if (Object.hasOwn(response, 'error')) pending.reject(new BridgeError(response.error.code, response.error.message));
+    else pending.resolve(response.result);
+    return true;
+  }
+
+  rejectPending(error) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    this.expired.clear();
+  }
+
+  stop(child, graceful) {
+    if (!child) return;
+    if (graceful) child.stdin.end();
+    else child.kill();
+    const timer = setTimeout(() => child.kill('SIGKILL'), 1000);
+    timer.unref();
+    child.once('close', () => clearTimeout(timer));
+  }
+
+  abort(child, error) {
+    if (this.child !== child) return;
+    this.child = undefined;
+    this.initialization = undefined;
+    this.parts = [];
+    this.lineBytes = 0;
+    this.rejectPending(error);
+    this.stop(child, false);
+    this.onFailure(error);
+  }
+
+  dispose(options = {}) {
+    if (this.disposed) return;
+    this.disposed = true;
+    const child = this.child;
+    this.child = undefined;
+    this.initialization = undefined;
+    this.rejectPending(new BridgeError('disposed', 'Gitpane service has been disposed.'));
+    this.stop(child, !options.immediate);
+  }
+}
+
+module.exports = { BridgeClient, BridgeError };

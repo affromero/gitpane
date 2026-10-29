@@ -30,6 +30,13 @@ test('webview shows workspace state and opens only currently visible changes', a
   let onChange;
   const tree = {
     git: { repositories: [repo] }, busy: false, failedStatuses: new Set(),
+    workspacePaths: [path.dirname(root)], isPathInWorkspace(value) { return value.startsWith(`${path.dirname(root)}${path.sep}`); },
+    backendStatuses: new Map([[root, {
+      common_dir: path.join(root, '.git'), branch: 'topic', is_dirty: true, ahead: 2, behind: 1,
+      stashes: [{ index: 0, message: 'WIP on topic', oid: 'stash-commit-id' }], worktrees: [{ path: path.join(path.dirname(root), 'worktree'), branch: 'worktree-branch' },
+        { path: path.resolve('outside/worktree'), branch: 'outside' }], has_dirty_submodules: false,
+      has_unpushed_submodules: false
+    }]]),
     onDidChangeTreeData(handler) { onChange = handler; return { dispose() {} }; },
     setVisible(value) { visible = value; },
     isVisible() { return visible; },
@@ -39,7 +46,7 @@ test('webview shows workspace state and opens only currently visible changes', a
       if (node.type === 'repo') return this.groupsFor().map(group => ({ type: 'group', repo, group }));
       return node.group.changes.map(change => ({ type: 'change', repo, group: node.group.id, change }));
     },
-    async refresh() { repo.state.HEAD.name = 'updated'; onChange(); }
+    async refresh() { repo.state.HEAD.name = 'updated'; this.backendStatuses.get(root).branch = 'updated'; onChange(); }
   };
   let onMessage, onVisibility, onDispose;
   const snapshots = [];
@@ -53,6 +60,8 @@ test('webview shows workspace state and opens only currently visible changes', a
     onDidDispose(handler) { onDispose = handler; return { dispose() {} }; }
   };
   const provider = new GitpaneViewProvider(tree, '/extension');
+  const menus = [];
+  provider.actions = { async showMenu(kind, id) { menus.push([kind, id]); } };
   try {
     Module._load = function (name, ...args) {
       if (name === './webview/html') return { getHtml: () => '<html></html>' };
@@ -68,9 +77,21 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(first.repositories[0].name, 'repo');
     assert.equal(first.repositories[0].branch, 'topic');
     assert.equal(first.repositories[0].ahead, 2);
+    const stash = first.repositories[0].stashes[0];
+    assert.equal(stash.index, 0);
+    assert.equal(stash.message, 'WIP on topic');
+    assert.notEqual(stash.id, 'stash-commit-id');
+    assert.equal('oid' in stash, false);
     const file = first.repositories[0].groups[0].files[0];
     assert.equal(file.path, 'file.txt');
     assert.equal(file.status, 'M');
+    assert.equal(first.repositories[0].worktrees.length, 1);
+    const worktree = first.repositories[0].worktrees[0];
+    assert.equal(provider.resolveWorktree(worktree.id).branch, 'worktree-branch');
+    assert.equal(provider.resolveChange(file.id).path, 'file.txt');
+    assert.equal(provider.resolveRepository(first.repositories[0].id).commonDir, path.join(root, '.git'));
+    await onMessage({ type: 'menu', kind: 'file', id: file.id, path: '/outside' });
+    assert.deepEqual(menus, [['file', file.id]]);
     const activeListener = onChange;
     const restarted = new GitpaneViewProvider(tree, '/extension');
     try {
@@ -83,6 +104,7 @@ test('webview shows workspace state and opens only currently visible changes', a
 
     await onMessage({ type: 'refresh' });
     assert.equal(snapshots.at(-1).repositories[0].branch, 'updated');
+    assert.equal(snapshots.at(-1).repositories[0].stashes[0].id, stash.id);
     assert.equal(snapshots.at(-1).repositories[0].groups[0].files[0].id, file.id);
     await onMessage({ type: 'openChange', id: 'invalid', path: '/outside' });
     assert.deepEqual(calls, []);
@@ -92,15 +114,25 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(calls[0][0], 'gitpane.openChange');
     assert.equal(calls[0][1].change.status, 2);
     current = undefined;
+    assert.equal(provider.resolveChange(file.id), undefined);
     await onMessage({ type: 'openChange', id: file.id });
     assert.equal(calls.length, 1);
     onChange();
     await onMessage({ type: 'openChange', id: file.id });
     assert.equal(calls.length, 1);
 
+    await onMessage({ type: 'openGraph', id: 'invalid', path: '/outside' });
+    assert.equal(calls.length, 1);
+    await onMessage({ type: 'openGraph', id: first.repositories[0].id });
+    assert.equal(calls[1][0], 'gitpane.openGraph');
+    assert.equal(calls[1][1], repo);
+
     view.visible = false;
     onVisibility();
     assert.equal(visible, false);
+    assert.equal(provider.resolveWorktree(worktree.id), undefined);
+    await onMessage({ type: 'openGraph', id: first.repositories[0].id });
+    assert.equal(calls.length, 2);
     onDispose();
     assert.equal(visible, false);
   } finally {

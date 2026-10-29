@@ -6,12 +6,13 @@ const messages = document.getElementById('messages');
 const saved = vscode.getState() || {};
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
+const expandedStashes = new Set(Array.isArray(saved.expandedStashes) ? saved.expandedStashes : []);
 let selected = typeof saved.selected === 'string' ? saved.selected : undefined;
 let snapshot = { repositories: [], errors: [], loading: true };
 let visible = [];
 
 function save() {
-  vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], selected });
+  vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes], selected });
 }
 
 function element(tag, className, text) {
@@ -28,6 +29,18 @@ function add(parent, className, text, title) {
   return node;
 }
 
+function menuButton(label, kind, id) {
+  const button = element('button', 'menu-action', '⋯');
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    vscode.postMessage({ type: 'menu', kind, id });
+  });
+  return button;
+}
+
 function fileCount(repo) {
   const paths = new Set();
   for (const group of repo.groups || []) {
@@ -39,13 +52,19 @@ function fileCount(repo) {
 function labelForRepo(repo, count) {
   const details = [repo.name, repo.worktree ? 'worktree' : '', repo.branch || 'unknown branch',
     repo.statusUnavailable ? 'status unavailable' : repo.dirty ? 'has changes' : 'clean',
-    `${count} ${count === 1 ? 'file' : 'files'}`];
-  if (repo.ahead > 0) details.push(`${repo.ahead} ahead`);
-  if (repo.behind > 0) details.push(`${repo.behind} behind`);
+    repo.statusUnavailable ? '' : `${count} ${count === 1 ? 'file' : 'files'}`];
+  if (!repo.statusUnavailable) {
+    if (repo.stashCount > 0) details.push(`${repo.stashCount} ${repo.stashCount === 1 ? 'stash' : 'stashes'}`);
+    if (repo.worktreeCount > 0) details.push(`${repo.worktreeCount} ${repo.worktreeCount === 1 ? 'worktree' : 'worktrees'}`);
+    if (repo.ahead > 0) details.push(`${repo.ahead} ahead`);
+    if (repo.behind > 0) details.push(`${repo.behind} behind`);
+    if (repo.hasDirtySubmodules) details.push('dirty submodules');
+    if (repo.hasUnpushedSubmodules) details.push('unpushed submodule commits');
+  }
   return details.filter(Boolean).join(', ');
 }
 
-function repoRow(repo, count, isExpanded) {
+function repoRow(repo, count, isExpanded, hasWorktrees, hasStashes) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
   const name = add(row, 'name', '', repo.name);
@@ -54,10 +73,45 @@ function repoRow(repo, count, isExpanded) {
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
-  if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
-  if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
   if (repo.statusUnavailable) add(tail, 'behind', '!', 'Status unavailable');
-  else if (count) add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${count}]`);
+  else {
+    if (repo.stashCount > 0) {
+      if (hasStashes) {
+        const key = `stash-group:${repo.id}`;
+        const open = isExpanded && expandedStashes.has(key);
+        const button = element('button', 'stash stash-action', `${open ? '▾' : '▸'}$${repo.stashCount}`);
+        button.type = 'button';
+        button.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} stashes for ${repo.name}`);
+        button.setAttribute('aria-expanded', String(open));
+        button.addEventListener('click', event => {
+          event.stopPropagation();
+          if (open) expandedStashes.delete(key);
+          else { expanded.add(`repo:${repo.id}`); expandedStashes.add(key); }
+          render();
+        });
+        tail.appendChild(button);
+      } else add(tail, 'stash', `$${repo.stashCount}`, `${repo.stashCount} stashes`);
+    }
+    if (repo.worktreeCount > 0) {
+      const indicator = hasWorktrees && !count ? (isExpanded ? '▾' : '▸') : '';
+      add(tail, 'worktree', `${indicator}⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
+    }
+    if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
+    if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
+    if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
+    if (repo.hasUnpushedSubmodules) add(tail, 'behind', '⇡', 'Unpushed submodule commits');
+    if (count) add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${count}]`);
+  }
+  const graphButton = element('button', 'graph-action', '●');
+  graphButton.type = 'button';
+  graphButton.title = `Open commit graph for ${repo.name}`;
+  graphButton.setAttribute('aria-label', graphButton.title);
+  graphButton.addEventListener('click', event => {
+    event.stopPropagation();
+    vscode.postMessage({ type: 'openGraph', id: repo.id });
+  });
+  tail.appendChild(graphButton);
+  tail.appendChild(menuButton(`Actions for ${repo.name}`, 'repo', repo.id));
   row.appendChild(tail);
   return row;
 }
@@ -70,6 +124,22 @@ function fileRow(file) {
   const row = element('div', 'row file-row');
   add(row, statusClass(file.status), file.status || ' ');
   add(row, 'file-path', file.path || file.name, file.path || file.name);
+  row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
+  return row;
+}
+
+function worktreeRow(worktree) {
+  const row = element('div', 'row worktree-row');
+  add(row, 'subtree', '⎇');
+  add(row, 'dirty', worktree.dirty ? '*' : '\u00a0');
+  add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
+  add(row, 'name', worktree.name || '', worktree.name);
+  const tail = element('span', 'tail');
+  if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
+  if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
+  if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
+  tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
+  row.appendChild(tail);
   return row;
 }
 
@@ -109,6 +179,10 @@ function renderMessages() {
 
 function render() {
   const hadFocus = tree.contains(document.activeElement);
+  const focusedAction = document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
+    document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
+    document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
+  const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
   visible = [];
   tree.replaceChildren();
   renderMessages();
@@ -116,10 +190,13 @@ function render() {
     const key = `repo:${repo.id}`;
     const count = fileCount(repo);
     const groups = Array.isArray(repo.groups) ? repo.groups : [];
+    const worktrees = !repo.statusUnavailable && Array.isArray(repo.worktrees) ? repo.worktrees : [];
+    const stashes = !repo.statusUnavailable && Array.isArray(repo.stashes) ? repo.stashes : [];
     const isExpanded = expanded.has(key);
-    const item = createItem(key, labelForRepo(repo, count), repoRow(repo, count, isExpanded), groups.length > 0, isExpanded, undefined);
+    const item = createItem(key, labelForRepo(repo, count), repoRow(repo, count, isExpanded, worktrees.length > 0, stashes.length > 0),
+      groups.length > 0 || worktrees.length > 0 || stashes.length > 0, isExpanded, undefined);
     tree.appendChild(item.item);
-    if (!isExpanded || !groups.length) continue;
+    if (!isExpanded || (!groups.length && !worktrees.length && !stashes.length)) continue;
     const children = element('div', 'children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
@@ -145,6 +222,40 @@ function render() {
         filesGroup.appendChild(fileItem.item);
       }
     }
+    for (const worktree of worktrees) {
+      const worktreeKey = `worktree:${worktree.id}`;
+      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.dirty ? 'has changes' : 'clean'];
+      if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+      if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
+      if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
+      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree), false, false, key);
+      worktreeItem.worktreeId = worktree.id;
+      children.appendChild(worktreeItem.item);
+    }
+    if (stashes.length) {
+      const stashKey = `stash-group:${repo.id}`;
+      const stashExpanded = expandedStashes.has(stashKey);
+      const row = element('div', 'row group-row');
+      add(row, 'stash', stashExpanded ? '▾' : '▸');
+      add(row, 'stash', `Stashes [${stashes.length}]`);
+      const stashGroup = createItem(stashKey, `Stashes, ${stashes.length} ${stashes.length === 1 ? 'stash' : 'stashes'}`,
+        row, true, stashExpanded, key);
+      children.appendChild(stashGroup.item);
+      if (stashExpanded) {
+        const stashChildren = element('div', 'children');
+        stashChildren.setAttribute('role', 'group');
+        stashGroup.item.appendChild(stashChildren);
+        for (const stash of stashes) {
+          const label = `stash@{${stash.index}}`;
+          const stashRow = element('div', 'row stash-row');
+          add(stashRow, 'stash', `$ ${label}`);
+          add(stashRow, 'stash-message', stash.message, stash.message);
+          const stashItem = createItem(`stash:${stash.id}`, `${label}, ${stash.message}`, stashRow, false, false, stashKey);
+          stashChildren.appendChild(stashItem.item);
+        }
+      }
+    }
   }
   if (!visible.some(item => item.key === selected)) selected = visible[0]?.key;
   for (const item of visible) {
@@ -152,7 +263,11 @@ function render() {
     item.item.setAttribute('aria-selected', active ? 'true' : 'false');
     item.item.setAttribute('tabindex', active ? '0' : '-1');
   }
-  if (hadFocus) visible.find(item => item.key === selected)?.item.focus();
+  if (hadFocus) {
+    const action = focusedAction && visible.find(item => item.key === focusedActionKey)?.item.querySelector(`.${focusedAction}`);
+    if (action) action.focus();
+    else visible.find(item => item.key === selected)?.item.focus();
+  }
   save();
 }
 
@@ -175,6 +290,9 @@ function toggle(item) {
   if (item.key.startsWith('repo:')) {
     if (item.isExpanded) expanded.delete(item.key);
     else expanded.add(item.key);
+  } else if (item.key.startsWith('stash-group:')) {
+    if (item.isExpanded) expandedStashes.delete(item.key);
+    else expandedStashes.add(item.key);
   } else if (item.isExpanded) collapsedGroups.add(item.key);
   else collapsedGroups.delete(item.key);
   render();
@@ -184,6 +302,7 @@ function activate(item) {
   if (!item) return;
   if (item.expandable) toggle(item);
   else if (item.fileId !== undefined) vscode.postMessage({ type: 'openChange', id: item.fileId });
+  else if (item.worktreeId !== undefined) vscode.postMessage({ type: 'menu', kind: 'worktree', id: item.worktreeId });
 }
 
 tree.addEventListener('click', event => {
@@ -196,6 +315,9 @@ tree.addEventListener('click', event => {
 });
 
 tree.addEventListener('keydown', event => {
+  if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
+      event.target.classList?.contains('stash-action')) &&
+      (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
   const index = visible.indexOf(current);

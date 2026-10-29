@@ -1,15 +1,17 @@
 use crate::config::BranchFilter;
 use git2::{BranchType, Oid, Repository};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use super::BranchLabel;
 
 pub(super) fn resolve_refs(
     repo: &Repository,
     filter: &BranchFilter,
-) -> HashMap<Oid, Vec<BranchLabel>> {
+    allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+) -> color_eyre::Result<HashMap<Oid, Vec<BranchLabel>>> {
     if *filter == BranchFilter::None {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
 
     let head_oid = repo.head().ok().and_then(|r| r.target());
@@ -17,7 +19,7 @@ pub(super) fn resolve_refs(
         .head()
         .ok()
         .and_then(|r| r.shorthand().ok().map(String::from));
-    let wt_branches = collect_worktree_branches(repo);
+    let wt_branches = collect_worktree_branches(repo, allow_worktree)?;
 
     // Map a remote-tracking branch's short name (e.g. `origin/main`) to the
     // local branch that tracks it, so a merged catalog entry can collapse a
@@ -154,7 +156,7 @@ pub(super) fn resolve_refs(
         });
     }
 
-    map
+    Ok(map)
 }
 
 /// Attach a `stash@{n}` label to the commit each stash was created on top of
@@ -187,23 +189,36 @@ pub(super) fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, V
     }
 }
 
-fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
+fn collect_worktree_branches(
+    repo: &Repository,
+    allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+) -> color_eyre::Result<HashSet<String>> {
     let mut branches = HashSet::new();
     let wt_names = match repo.worktrees() {
         Ok(names) => names,
-        Err(_) => return branches,
+        Err(error) if allow_worktree.is_some() => return Err(error.into()),
+        Err(_) => return Ok(branches),
     };
     for i in 0..wt_names.len() {
         let name = match wt_names.get(i) {
             Ok(Some(n)) => n,
+            Ok(None) if allow_worktree.is_some() => {
+                return Err(color_eyre::eyre::eyre!("worktree name is not valid UTF-8"));
+            }
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             _ => continue,
         };
         let wt = match repo.find_worktree(name) {
             Ok(wt) => wt,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
+        if allow_worktree.is_some_and(|allow| !allow(wt.path())) {
+            continue;
+        }
         let wt_repo = match Repository::open(wt.path()) {
             Ok(r) => r,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
         if let Ok(head) = wt_repo.head()
@@ -212,5 +227,5 @@ fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
             branches.insert(shorthand.to_string());
         }
     }
-    branches
+    Ok(branches)
 }

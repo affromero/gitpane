@@ -4,8 +4,10 @@ pub(crate) mod github;
 pub(crate) mod graph;
 pub(crate) mod graph_render;
 pub(crate) mod process;
+pub(crate) mod repo_sort;
 pub(crate) mod scanner;
 pub(crate) mod status;
+pub(crate) mod worktree_ops;
 
 use std::io;
 use std::sync::OnceLock;

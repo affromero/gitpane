@@ -11,24 +11,35 @@ use super::change_summary::{ChangeSummary, collect_change_summary};
 pub(super) fn collect_worktree_info(
     repo: &Repository,
     sub_cfg: &SubmoduleConfig,
-) -> Vec<WorktreeEntry> {
+    allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+) -> color_eyre::Result<Vec<WorktreeEntry>> {
     let wt_names = match repo.worktrees() {
         Ok(names) => names,
-        Err(_) => return Vec::new(),
+        Err(error) if allow_worktree.is_some() => return Err(error.into()),
+        Err(_) => return Ok(Vec::new()),
     };
     let mut entries = Vec::new();
     for i in 0..wt_names.len() {
         let name = match wt_names.get(i) {
             Ok(Some(n)) => n,
+            Ok(None) if allow_worktree.is_some() => {
+                return Err(color_eyre::eyre::eyre!("worktree name is not valid UTF-8"));
+            }
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             _ => continue,
         };
         let wt = match repo.find_worktree(name) {
             Ok(wt) => wt,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
         let wt_path = wt.path().to_path_buf();
+        if allow_worktree.is_some_and(|allow| !allow(&wt_path)) {
+            continue;
+        }
         let wt_repo = match Repository::open(&wt_path) {
             Ok(wt_repo) => wt_repo,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
         let branch = match wt_repo.head() {
@@ -36,15 +47,24 @@ pub(super) fn collect_worktree_info(
             Err(_) => "(no branch)".to_string(),
         };
         let (ahead, behind) = compute_ahead_behind(&wt_repo);
-        let summary =
-            collect_change_summary(&wt_repo, &wt_path, false, sub_cfg).unwrap_or(ChangeSummary {
+        let summary = match collect_change_summary(
+            &wt_repo,
+            &wt_path,
+            false,
+            sub_cfg,
+            allow_worktree.is_some(),
+        ) {
+            Ok(summary) => summary,
+            Err(error) if allow_worktree.is_some() => return Err(error),
+            Err(_) => ChangeSummary {
                 files: Vec::new(),
                 is_dirty: false,
                 has_submodules: false,
                 submodules: Vec::new(),
                 has_dirty_submodules: false,
                 has_unpushed_submodules: false,
-            });
+            },
+        };
 
         entries.push(WorktreeEntry {
             name: name.to_string(),
@@ -58,7 +78,7 @@ pub(super) fn collect_worktree_info(
             has_unpushed_submodules: summary.has_unpushed_submodules,
         });
     }
-    entries
+    Ok(entries)
 }
 
 /// Run `git fetch` with a 30-second timeout to update remote-tracking refs.

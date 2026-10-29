@@ -27,17 +27,24 @@ exports.run = async () => {
     const right = fs.realpathSync(second);
     return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   }
-  let api, tree, provider, nodes;
+  let api, tree, backend, provider, nodes;
   const rootNode = target => tree.getChildren().find(item => item.type === 'repo' && samePath(item.repo.rootUri.fsPath, target));
   const snapshotRepo = target => provider.snapshot().repositories.find(item => item.name === path.basename(target));
 
   await test('show repositories in nested and multi-root workspaces', async () => {
+    if (process.env.GITPANE_TEST_BINARY) {
+      await vscode.workspace.getConfiguration('gitpane').update('backendPath', process.env.GITPANE_TEST_BINARY, vscode.ConfigurationTarget.Global);
+    }
     api = (await vscode.extensions.getExtension('vscode.git').activate()).getAPI(1);
     const extension = vscode.extensions.getExtension('gitpane.gitpane-explorer');
     assert.ok(extension, 'Gitpane extension must be registered');
     await extension.activate();
     const { RepositoryTree, GitpaneViewProvider } = require(path.join(process.env.GITPANE_TEST_EXTENSION, 'src/extension.js'));
-    tree = new RepositoryTree(api, vscode.window.createOutputChannel('Gitpane integration test'));
+    const { BackendManager } = require(path.join(process.env.GITPANE_TEST_EXTENSION, 'src/backend-manager.js'));
+    const output = vscode.window.createOutputChannel('Gitpane integration test');
+    backend = new BackendManager({ extensionPath: process.env.GITPANE_TEST_EXTENSION }, { output });
+    await backend.ready();
+    tree = new RepositoryTree(api, output, backend);
     provider = new GitpaneViewProvider(tree, vscode.Uri.file(process.env.GITPANE_TEST_EXTENSION));
     tree.setVisible(true);
     await waitFor(() => [fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND]
@@ -103,6 +110,7 @@ exports.run = async () => {
 
   if (provider) provider.dispose();
   if (tree) tree.dispose();
+  if (backend) backend.dispose();
   publishResult(process.env.GITPANE_TEST_RESULT, results);
   if (results.some(result => !result.ok)) throw new Error('Gitpane integration tests failed.');
 };
