@@ -63,10 +63,15 @@ for the repository. GitHub Enterprise hosts are not supported.
 
 Select a changed submodule to inspect its commit graph, committed pointer
 changes and current file changes. The submodule must be initialized and inside
-the workspace. If removing a submodule also removes its checkout, its diff is
-unavailable here. Staged submodule renames, transitions between submodules and
-regular files, and conflicted pointers cannot be compared yet. Working changes
-in nested submodules can be inspected; historical nested pointer diffs are not
+the workspace. Staged submodule renames, type changes and conflicts open a
+pointer comparison; staged deletions also open a pointer comparison. Use
+**Inspect Submodule** from a change menu to open an available checkout.
+If a deleted submodule leaves a corrupt checkout behind, Gitpane reports the
+repository status as unavailable until that checkout is repaired or removed.
+Blob and symlink sides in these comparisons must be UTF-8 text under 1 MiB.
+Working submodule renames and type changes cannot be compared yet. Working changes
+in nested submodules can be inspected, and staged or conflicted nested gitlinks
+open pointer comparisons. Historical nested pointer diffs are not
 available yet. The parent repository's file actions cannot stage, unstage, discard or
 delete a submodule entry. Gitpane's push and pull actions do not recurse into
 submodules. On Unix, the repository menu can sync direct submodules, update

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { LinkDocuments, statusRevision } = require('../src/link-documents');
+const { MAX_REQUEST_BYTES } = require('../src/bridge-client');
 
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
@@ -66,6 +67,133 @@ test('many open pointer documents share lightweight identity checks and invalida
   assert.equal(calls, 1, 'one lightweight check validates all pointer documents for this repository');
   assert.equal(notified.length, pointers.length);
   await assert.rejects(docs.provideTextDocumentContent(pointers[0]), /no longer/i);
+});
+
+test('many mutable pointer documents batch refreshes, invalidate stale rows, and surface backend errors', async t => {
+  const changes = new EventEmitter(), errors = [];
+  const vscode = { EventEmitter, workspace: {}, window: { showErrorMessage: message => errors.push(message) } };
+  const states = new Map(), batches = [];
+  let offline = false, guards = 0;
+  const backend = { async validatePointerBatch(repo, identity, snapshots) {
+    batches.push({ repo, identity, snapshots });
+    if (offline) throw new Error('pointer worker unavailable');
+    return { results: snapshots.map(item => states.get(item.record.path) ? { valid: true } :
+      { valid: false, code: 'stale_target', message: 'Pointer changed' }) };
+  } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  const documents = [];
+  for (let index = 0; index < 128; index++) {
+    const file = `child-${index}`;
+    states.set(file, true);
+    const snapshot = { record: { path: file }, head_oid: null, sides: {} };
+    const batch = { repo: '/repo', identity: '1'.repeat(64), snapshot };
+    const guard = async () => { guards++; return states.get(file); };
+    for (let side = 0; side < 2; side++) {
+      documents.push(await docs.createVerified(uri(`/repo/${file}`), async () => file, guard, () => true, file, batch));
+    }
+  }
+  const notified = [];
+  docs.onDidChange(value => notified.push(value.toString()));
+  guards = 0;
+  states.set('child-3', false);
+  await docs.refresh();
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].snapshots.length, 128);
+  assert.equal(guards, 0, 'background validation never scans every document separately');
+  assert.equal(notified.length, 2, 'both sides of the changed pointer are invalidated');
+  await assert.rejects(docs.provideTextDocumentContent(documents[6]), /no longer/i);
+  offline = true;
+  await docs.refresh();
+  assert.equal(batches.length, 2);
+  assert.equal(errors.length, 1, 'a worker failure is reported once per repository');
+  assert.match(errors[0], /worker unavailable/i);
+});
+
+test('pointer batches fit the wire limit and reject an oversized item independently', async t => {
+  const changes = new EventEmitter(), errors = [], calls = [];
+  const vscode = { EventEmitter, workspace: {}, window: { showErrorMessage: value => errors.push(value) } };
+  const backend = { async validatePointerBatch(repo, identity, snapshots) {
+    const wire = `${JSON.stringify({ id: Number.MAX_SAFE_INTEGER, method: 'submodule_pointer_validate_batch',
+      params: { repo, expected_repo_identity: identity, snapshots } })}\n`;
+    assert.ok(Buffer.byteLength(wire) <= MAX_REQUEST_BYTES, 'every batch must fit the bridge request limit');
+    calls.push(snapshots);
+    return { results: snapshots.map(() => ({ valid: true })) };
+  } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  const sidePath = 'å'.repeat(1900);
+  const documents = [];
+  for (let index = 0; index < 110; index++) {
+    const snapshot = { record: { path: `${sidePath}${index}` }, head_oid: null,
+      sides: { base: { path: sidePath }, ours: { path: sidePath }, theirs: { path: sidePath } } };
+    documents.push(await docs.createVerified(uri(`/repo/${index}`), async () => 'valid', async () => true, () => true,
+      String(index), { repo: '/repo', identity: 'a'.repeat(64), snapshot }));
+  }
+  const oversized = { record: { path: 'x'.repeat(MAX_REQUEST_BYTES) }, head_oid: null, sides: {} };
+  const oversizedDoc = await docs.createVerified(uri('/repo/oversized'), async () => 'oversized', async () => true, () => true,
+    'oversized', { repo: '/repo', identity: 'a'.repeat(64), snapshot: oversized });
+  const notified = [];
+  docs.onDidChange(value => notified.push(value.toString()));
+  await docs.refresh();
+  assert.ok(calls.length > 1, 'long UTF-8 paths must produce multiple requests');
+  assert.equal(calls.flat().length, 110, 'only the individually oversized snapshot is rejected');
+  assert.deepEqual(notified, [oversizedDoc.toString()]);
+  assert.match(errors[0], /snapshot exceeds.*request size/i);
+  assert.equal(await docs.provideTextDocumentContent(documents[0]), 'valid');
+});
+
+test('a pointer document created during a held batch is not marked stale', async t => {
+  const changes = new EventEmitter();
+  const vscode = { EventEmitter, workspace: {} };
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const backend = { async validatePointerBatch(_repo, _identity, snapshots) {
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    return { results: snapshots.map(() => ({ valid: false, code: 'stale_target', message: 'changed' })) };
+  } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  const batch = name => ({ repo: '/repo', identity: 'a'.repeat(64), snapshot: { record: { path: name }, head_oid: null, sides: {} } });
+  const old = await docs.createVerified(uri('/repo/old'), async () => 'old', async () => true, () => true, 'old', batch('old'));
+  const notifications = [];
+  docs.onDidChange(value => notifications.push(value.toString()));
+  const refreshing = docs.refresh();
+  await started;
+  const added = await docs.createVerified(uri('/repo/new'), async () => 'new', async () => true, () => true, 'new', batch('new'));
+  release();
+  await refreshing;
+  assert.deepEqual(notifications, [old.toString()]);
+  assert.equal(await docs.provideTextDocumentContent(added), 'new');
+});
+
+test('nested pointer refresh rechecks shared ancestors after the leaf batch', async t => {
+  const changes = new EventEmitter();
+  const vscode = { EventEmitter, workspace: {} };
+  let validAncestor = true, checks = 0, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const backend = { async validatePointerBatch(_repo, _identity, snapshots) {
+    entered(); await new Promise(resolve => { release = resolve; });
+    return { results: snapshots.map(() => ({ valid: true })) };
+  } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  const notifications = [];
+  docs.onDidChange(value => notifications.push(value.toString()));
+  for (const name of ['one', 'two']) {
+    const batch = { repo: '/repo/child', identity: 'a'.repeat(64), ancestorKey: 'same-chain',
+      verifyAncestors: async () => { checks++; return validAncestor; },
+      snapshot: { record: { path: name }, head_oid: null, sides: {} } };
+    await docs.createVerified(uri(`/repo/child/${name}`), async () => name, async () => validAncestor, () => true, name, batch);
+  }
+  const pending = docs.refresh();
+  await started;
+  validAncestor = false;
+  release();
+  await pending;
+  assert.equal(checks, 2, 'one shared ancestor check runs before and after the leaf batch');
+  assert.equal(notifications.length, 2, 'both nested pointer documents are invalidated');
 });
 
 test('symlink documents show link text, refresh, and expire when closed', { skip: process.platform === 'win32' }, async t => {

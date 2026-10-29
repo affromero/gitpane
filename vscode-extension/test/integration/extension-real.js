@@ -566,6 +566,42 @@ async function main() {
   console.log('PASS clean parent unpushed submodule warning opens the scoped inspector without a terminal');
 
   const pointerA = git('rev-parse', 'HEAD:child');
+  const pointerRepoPath = path.join(path.dirname(repoPath), 'pointer-only');
+  fs.mkdirSync(pointerRepoPath);
+  gitAt(pointerRepoPath, 'init', '-q');
+  gitAt(pointerRepoPath, 'update-index', '--add', '--cacheinfo', '160000', pointerA, 'child');
+  gitAt(pointerRepoPath, 'commit', '-qm', 'pointer root');
+  gitAt(pointerRepoPath, 'update-index', '--force-remove', 'child');
+  fs.mkdirSync(path.join(pointerRepoPath, 'child', '.git'), { recursive: true });
+  const pointerRepo = { rootUri: uri(pointerRepoPath), state: { HEAD: { commit: gitAt(pointerRepoPath, 'rev-parse', 'HEAD') },
+    onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  api.repositories.push(pointerRepo); openedRepositories.fire(pointerRepo);
+  await commands.get('gitpane.refresh')();
+  let pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  assert.equal(pointerOnly.statusUnavailable, true, 'a corrupt checkout must not be reported as clean');
+  assert.ok(snapshots.at(-1).errors.some(message => /child/.test(message) && /cannot open repository/i.test(message)),
+    'the overview reports the unavailable corrupt child');
+  await receive({ type: 'loadChanges', id: pointerOnly.id });
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  assert.equal(pointerOnly.changesPage.state, 'error');
+  assert.match(pointerOnly.changesPage.error, /cannot open repository/i);
+  fs.rmSync(path.join(pointerRepoPath, 'child'), { recursive: true });
+  await commands.get('gitpane.refresh')();
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  await receive({ type: 'loadChanges', id: pointerOnly.id });
+  pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
+  const removedPointer = pointerOnly.groups.flatMap(group => group.files).find(item => item.path === 'child');
+  assert.ok(removedPointer, 'deleted gitlink must appear after its checkout is removed');
+  const beforeRemovedDiff = diffs.length, beforeRemovedTerminals = terminals.length, beforeRemovedRepos = api.repositories.length;
+  await receive({ type: 'openChange', id: removedPointer.id });
+  assert.equal(diffs.length, beforeRemovedDiff + 1, errors.at(-1));
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+  assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
+  assert.equal(terminals.length, beforeRemovedTerminals);
+  assert.equal(api.repositories.length, beforeRemovedRepos, 'pointer comparison must not open a child checkout');
+  api.repositories = api.repositories.filter(item => item !== pointerRepo); closedRepositories.fire(pointerRepo);
+  await commands.get('gitpane.refresh')();
+  console.log('PASS corrupt checkout is reported and removed checkout opens a staged pointer diff');
   fs.writeFileSync(path.join(childPath, 'unpushed.txt'), 'staged child commit\n');
   gitAt(childPath, 'add', 'unpushed.txt');
   gitAt(childPath, 'commit', '-qm', 'staged child commit');
@@ -686,7 +722,7 @@ async function main() {
   await commands.get('gitpane.refresh')();
   const nestedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   await receive({ type: 'loadChanges', id: nestedParent.id });
-  const nestedWorking = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+  let nestedWorking = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
     .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
   assert.ok(nestedWorking, 'parent must expose its changed child');
   pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||
@@ -697,6 +733,46 @@ async function main() {
   assert.equal(diffs.length, beforeNestedDiffs + 1, errors.at(-1));
   assert.equal(diffs.at(-1)[1].fsPath, path.join(grandPath, 'nested.txt'));
   assert.equal(terminals.length, beforeNestedTerminals);
+  gitAt(childPath, 'update-index', '--force-remove', 'nested');
+  if (api.repositories.includes(grandRepo)) {
+    api.repositories = api.repositories.filter(item => item !== grandRepo);
+    closedRepositories.fire(grandRepo);
+  }
+  await commands.get('gitpane.refresh')();
+  const nestedOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: nestedOwner.id });
+  nestedWorking = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(nestedWorking);
+  let nestedCheckoutOpens = 0;
+  const previousOpenRepository = api.openRepository;
+  api.openRepository = async target => {
+    if (target.fsPath === grandPath) nestedCheckoutOpens++;
+    return previousOpenRepository(target);
+  };
+  pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||
+    choices.find(choice => choice.record?.path === 'nested' && choice.record.group === 'index');
+  const beforeNestedPointer = diffs.length, beforeNestedPointerTerminals = terminals.length;
+  await receive({ type: 'openChange', id: nestedWorking.id });
+  assert.equal(diffs.length, beforeNestedPointer + 1, errors.at(-1));
+  assert.equal(nestedCheckoutOpens, 0, 'nested pointer comparison must not open the child checkout');
+  assert.equal(terminals.length, beforeNestedPointerTerminals);
+  const nestedPointerDoc = diffs.at(-1)[0];
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(nestedPointerDoc),
+    `Subproject commit ${gitAt(childPath, 'rev-parse', 'HEAD:nested')}\n`);
+  assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
+  git('add', 'child');
+  await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(nestedPointerDoc), /no longer|changed/i);
+  git('reset', '-q', 'HEAD', '--', 'child');
+  gitAt(childPath, 'read-tree', 'HEAD');
+  api.openRepository = previousOpenRepository;
+  await commands.get('gitpane.refresh')();
+  const restoredNestedOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: restoredNestedOwner.id });
+  nestedWorking = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+  assert.ok(nestedWorking);
+  console.log('PASS nested staged gitlink pointer diff rejects stale ancestors');
   let browseDepth = 0;
   pickChanges = choices => {
     if (choices.some(choice => choice.kind === 'browse')) {
@@ -712,7 +788,7 @@ async function main() {
   assert.equal(pinState.version, 1);
   assert.deepEqual(pinState.pins[0].chain.map(link => link.path), ['child', 'nested']);
   assert.ok(pinState.pins[0].chain.every(link => Object.keys(link).sort().join(',') === 'child_identity,parent_identity,path'));
-  assert.equal(diffs.length, beforeNestedDiffs + 1, 'pinning must not open a terminal or diff');
+  assert.equal(diffs.length, beforeNestedPointer + 1, 'pinning must not open a terminal or diff');
   assert.equal(terminals.length, beforeNestedTerminals);
   const pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
   assert.ok(pinnedRow?.pinned, 'nested pin is visible in the overview');
@@ -741,7 +817,7 @@ async function main() {
       choices.find(choice => choice.record?.path === 'nested') || selected;
   };
   await receive({ type: 'openChange', id: nestedWorking.id });
-  assert.equal(diffs.length, beforeNestedDiffs + 1, 'stale ancestor cannot open a nested diff');
+  assert.equal(diffs.length, beforeNestedPointer + 1, 'stale ancestor cannot open a nested diff');
   assert.match(errors.at(-1), /changed|no longer/i);
   console.log('PASS nested working submodule file opens a native diff and rejects changed ancestors');
 }

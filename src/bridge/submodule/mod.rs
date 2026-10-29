@@ -11,6 +11,7 @@ use super::{BridgeError, changes::RepositoryIdentity, commit_file_json, scope::S
 pub(super) mod actions;
 pub(super) mod chain;
 pub(super) mod pin;
+pub(super) mod pointer;
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]

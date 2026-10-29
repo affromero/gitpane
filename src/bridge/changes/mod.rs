@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -204,6 +204,31 @@ pub(super) fn current_record(
         account_record(&mut bytes, encoded.len())?;
         if record.matches(path, group) {
             found = Some(serde_json::from_slice(&encoded).map_err(repository_error)?);
+        }
+    }
+    Ok(found)
+}
+
+pub(super) fn current_records(
+    repo: &git2::Repository,
+    sub_cfg: &SubmoduleConfig,
+    keys: &HashSet<(String, String)>,
+) -> Result<HashMap<(String, String), Value>, BridgeError> {
+    let mut bytes = 0usize;
+    let mut found = HashMap::new();
+    for record in collect_changes(repo, sub_cfg, MAX_RECORDS).map_err(change_error)? {
+        let encoded = serde_json::to_vec(&record).map_err(repository_error)?;
+        account_record(&mut bytes, encoded.len())?;
+        let value: Value = serde_json::from_slice(&encoded).map_err(repository_error)?;
+        let path = value["path"]
+            .as_str()
+            .ok_or_else(|| repository_error("invalid change path"))?;
+        let group = value["group"]
+            .as_str()
+            .ok_or_else(|| repository_error("invalid change group"))?;
+        let key = (path.to_owned(), group.to_owned());
+        if keys.contains(&key) {
+            found.insert(key, value);
         }
     }
     Ok(found)

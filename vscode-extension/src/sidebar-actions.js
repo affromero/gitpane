@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 
-const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule']);
+const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
 const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree']);
 
@@ -29,7 +29,7 @@ function fileOptions(item) {
     { label: 'Reveal in Explorer', action: 'reveal' },
     { label: 'Copy Path', action: 'copy' }
   ];
-  if (item.isSubmodule) return [...choices, { label: 'Pin Submodule', action: 'pinSubmodule' }];
+  if (item.isSubmodule) return [...choices, { label: 'Inspect Submodule', action: 'inspectSubmodule' }, { label: 'Pin Submodule', action: 'pinSubmodule' }];
   if (item.group === 'index') choices.push({ label: 'Unstage', action: 'unstage' });
   if (['working', 'untracked', 'merge'].includes(item.group)) choices.push({ label: 'Stage', action: 'stage' });
   if (['index', 'working', 'untracked'].includes(item.group)) choices.push({
@@ -55,6 +55,7 @@ class SidebarActions {
     this.openWorktreeGraph = options.openWorktreeGraph;
     this.reviewWorktree = options.reviewWorktree;
     this.pinSubmodule = options.pinSubmodule;
+    this.inspectSubmodule = options.inspectSubmodule;
     this.browseSubmodules = options.browseSubmodules;
     this.hideRepository = options.hideRepository;
     this.removeWorkspaceRepository = options.removeWorkspaceRepository;
@@ -165,6 +166,10 @@ class SidebarActions {
       }
       if (action === 'pinSubmodule') {
         if (this.pinSubmodule) await this.pinSubmodule(message.id, current);
+        return;
+      }
+      if (action === 'inspectSubmodule') {
+        if (this.inspectSubmodule) await this.inspectSubmodule(message.id, current);
         return;
       }
       if (action === 'browseSubmodules' || action === 'browseWorktreeSubmodules') {

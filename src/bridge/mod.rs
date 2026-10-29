@@ -245,6 +245,15 @@ fn process(
             Ok(result)
         }
         "submodule_inspect" => submodule::inspect(scope, params(request.params)?, sub_cfg),
+        "submodule_pointer_compare" => {
+            submodule::pointer::compare(scope, params(request.params)?, sub_cfg)
+        }
+        "submodule_pointer_content" => {
+            submodule::pointer::content(scope, params(request.params)?, sub_cfg)
+        }
+        "submodule_pointer_validate_batch" => {
+            submodule::pointer::validate_batch(scope, params(request.params)?, sub_cfg)
+        }
         "submodule_chain_validate" => {
             submodule::chain::validate(scope, params(request.params)?, sub_cfg)
         }

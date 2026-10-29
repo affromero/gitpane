@@ -60,6 +60,10 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     for (const link of request.params.chain) repos.push(require('node:path').join(repos[repos.length - 1], link.path));
     if (request.params.chain.some(link => link.path === 'slow')) setTimeout(() => send({id: request.id, result: {repos}}), 5000);
     else send({id: request.id, result: {repos}});
+  } else if (request.method === 'submodule_pointer_validate_batch') {
+    const result = {results: request.params.snapshots.map(() => ({valid: true}))};
+    if (request.params.snapshots.some(snapshot => snapshot.record.path === 'slow')) setTimeout(() => send({id: request.id, result}), 300);
+    else send({id: request.id, result});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else if (request.method === 'session_liveness') {
@@ -488,6 +492,26 @@ test('submodule validation uses a bounded reusable worker isolated from paging a
   manager.dispose();
   await rejected;
   assert.equal(manager.validationClient, undefined);
+});
+
+test('pointer batch checks share an isolated worker and cancel on workspace changes', async t => {
+  const { manager, root, executed, setFolders } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo'), item = { record: { path: 'slow' }, head_oid: null, sides: {} };
+  const first = manager.validatePointerBatch(repo, 'a'.repeat(64), [item]);
+  const second = manager.validatePointerBatch(repo, 'a'.repeat(64), [item]);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal((await manager.status(repo)).method, 'status', 'batch worker does not block status');
+  assert.deepEqual(await first, { results: [{ valid: true }] });
+  assert.deepEqual(await second, { results: [{ valid: true }] });
+  assert.equal(executed.length, 2, 'identical in-flight batches share one worker');
+  const pending = manager.validatePointerBatch(repo, 'a'.repeat(64), [item]);
+  const rejected = assert.rejects(pending, error => ['disposed', 'workspace_changed'].includes(error.code));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  setFolders([path.resolve('another-workspace')]);
+  await rejected;
+  assert.equal(manager.pointerClients.size, 0);
 });
 
 test('background pin validation cannot block interactive validation and can be cancelled', async t => {

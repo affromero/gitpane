@@ -41,6 +41,10 @@ class BackendManager {
     this.pinValidationClient = undefined;
     this.activeValidations = 0;
     this.verifyClients = new Set();
+    this.pointerClients = new Set();
+    this.pointerChecks = new Map();
+    this.pointerEpoch = 0;
+    this.activePointerChecks = 0;
     this.livenessClient = undefined;
     this.livenessEpoch = 0;
     this.livenessInitializationTimeoutMs = options.livenessInitializationTimeoutMs ?? 10000;
@@ -86,6 +90,7 @@ class BackendManager {
     const generation = ++this.generation;
     this.cancelChanges();
     this.cancelValidation();
+    this.cancelPointerChecks();
     this.cancelSessionLiveness();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
@@ -267,6 +272,8 @@ class BackendManager {
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
       else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
+      else if (method === 'submodule_pointer_compare') result = await client.submodulePointerCompare(repo, argument.record, argument.identity);
+      else if (method === 'submodule_pointer_content') result = await client.submodulePointerContent(repo, argument.record, argument.identity, argument.headOid, argument.sides, argument.side);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'theme') result = await client.theme();
@@ -292,12 +299,14 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
       const invalidIdentity = method === 'repo_identity_validate' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
+      const invalidPointer = ['submodule_pointer_compare', 'submodule_pointer_content'].includes(method) &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'file_too_large', 'unsupported_content'].includes(error?.code);
       const invalidRepositoryPreview = method === 'repository_preview' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
       throw error;
@@ -534,6 +543,53 @@ class BackendManager {
     } finally { session.close(); }
   }
 
+  cancelPointerChecks() {
+    this.pointerEpoch++;
+    for (const client of this.pointerClients) client.dispose({ immediate: true, closeStreams: true });
+  }
+
+  validatePointerBatch(repo, identity, snapshots) {
+    if (typeof repo !== 'string' || !path.isAbsolute(repo) || !/^[a-f0-9]{64}$/.test(identity || '') ||
+        !Array.isArray(snapshots) || !snapshots.length || snapshots.length > 128) {
+      return Promise.reject(new BridgeError('invalid_request', 'Invalid submodule pointer batch.'));
+    }
+    const key = JSON.stringify([repo, identity, snapshots, this.pointerEpoch]);
+    const existing = this.pointerChecks.get(key);
+    if (existing) return existing;
+    if (this.activePointerChecks >= 2) return Promise.reject(new BridgeError('busy', 'Too many submodule pointer checks are running. Try again.'));
+    this.activePointerChecks++;
+    const epoch = this.pointerEpoch;
+    const pending = (async () => {
+      let client;
+      try {
+        const snapshot = await this.mutationSnapshot();
+        const resolved = await this.realpath(repo);
+        if (this.disposed || epoch !== this.pointerEpoch || !this.isCurrentMutation(snapshot, resolved)) throw new BridgeError('workspace_changed', 'Workspace changed before checking submodule pointers.');
+        client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk), timeoutMs: 30000 });
+        this.pointerClients.add(client);
+        await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+        if (this.disposed || epoch !== this.pointerEpoch || !this.isCurrentMutation(snapshot, resolved)) throw new BridgeError('workspace_changed', 'Workspace changed before checking submodule pointers.');
+        const result = await client.submodulePointerValidateBatch(repo, identity, snapshots);
+        if (this.disposed || epoch !== this.pointerEpoch || !this.isCurrentMutation(snapshot, resolved) ||
+            await this.realpath(repo) !== resolved || !this.isCurrentMutation(snapshot, resolved)) {
+          throw new BridgeError('workspace_changed', 'Workspace changed while checking submodule pointers.');
+        }
+        if (!result || !Array.isArray(result.results) || result.results.length !== snapshots.length ||
+            result.results.some(item => !item || typeof item.valid !== 'boolean' ||
+              (!item.valid && (typeof item.code !== 'string' || typeof item.message !== 'string')))) {
+          throw new BridgeError('protocol_error', 'Gitpane returned invalid submodule pointer checks.');
+        }
+        return result;
+      } finally {
+        if (client) { await client.shutdown({ immediate: true, closeStreams: true }); this.pointerClients.delete(client); }
+        this.activePointerChecks--;
+      }
+    })();
+    this.pointerChecks.set(key, pending);
+    pending.finally(() => { if (this.pointerChecks.get(key) === pending) this.pointerChecks.delete(key); }).catch(() => {});
+    return pending;
+  }
+
   status(repo, includeWorktrees, options) { return this.request('status', repo, { includeWorktrees, options }); }
 
   previewRepository(repo) { return this.request('repository_preview', repo); }
@@ -576,6 +632,12 @@ class BackendManager {
   inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
 
   validateRepositoryIdentity(repo, identity) { return this.request('repo_identity_validate', repo, identity); }
+
+  submodulePointerCompare(repo, record, identity) { return this.request('submodule_pointer_compare', repo, { record, identity }); }
+
+  submodulePointerContent(repo, record, identity, headOid, sides, side) {
+    return this.request('submodule_pointer_content', repo, { record, identity, headOid, sides, side });
+  }
 
   cancelSessionLiveness() {
     this.livenessEpoch++;
@@ -675,6 +737,7 @@ class BackendManager {
     this.client?.dispose();
     this.cancelChanges();
     this.cancelValidation();
+    this.cancelPointerChecks();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.sessionMutations.dispose();

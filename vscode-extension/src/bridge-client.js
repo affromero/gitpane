@@ -177,6 +177,36 @@ class BridgeClient {
     }
   }
 
+  async submodulePointerCompare(repo, record, identity) {
+    try { return await this.request('submodule_pointer_compare', { repo, record, expected_repo_identity: identity }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support submodule pointer diffs. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  async submodulePointerValidateBatch(repo, identity, snapshots) {
+    try { return await this.request('submodule_pointer_validate_batch', { repo, expected_repo_identity: identity, snapshots }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support efficient submodule pointer checks. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  async submodulePointerContent(repo, record, identity, headOid, sides, side) {
+    try { return await this.request('submodule_pointer_content', { repo, record, expected_repo_identity: identity, head_oid: headOid, sides, side }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support submodule pointer diffs. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async previewWorktreeRemoval(repo, path) {
     try { return await this.request('worktree_remove_preview', { repo, path }); }
     catch (error) {
@@ -387,4 +417,4 @@ class BridgeClient {
   }
 }
 
-module.exports = { BridgeClient, BridgeError };
+module.exports = { BridgeClient, BridgeError, MAX_REQUEST_BYTES };

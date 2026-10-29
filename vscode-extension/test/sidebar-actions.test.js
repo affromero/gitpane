@@ -63,6 +63,7 @@ function fixture() {
     openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
     pinSubmodule: async id => { calls.push(['pinSubmodule', id]); },
+    inspectSubmodule: async id => { calls.push(['inspectSubmodule', id]); },
     browseSubmodules: async (id, kind) => { calls.push(['browseSubmodules', id, kind]); },
     hideRepository: async (item, kind) => { calls.push(['hideRepository', item.path || item.repoPath, kind]); },
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
@@ -108,7 +109,7 @@ test('submodule rows offer inspection but no file mutations', async () => {
   for (const group of ['working', 'index', 'untracked', 'merge', 'attention']) {
     f.setFile({ ...f.getFile(), group, isSubmodule: true });
     f.pick(choices => {
-      assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy', 'pinSubmodule']);
+      assert.deepEqual(choices.map(choice => choice.action), ['open', 'openFile', 'reveal', 'copy', 'inspectSubmodule', 'pinSubmodule']);
       return choices.find(choice => choice.action === 'open');
     });
     await f.actions.showMenu('file', 'file');
@@ -129,6 +130,14 @@ test('submodule file and pinned repository menus expose scoped pin actions', asy
   f.setRepo({ ...f.getRepo(), pinned: false });
   await f.actions.handle(action('unpinSubmodule', 'repo'));
   assert.equal(f.calls.length, 2);
+});
+
+test('submodule inspection remains available from the file menu', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), isSubmodule: true, group: 'index' });
+  f.pick(choices => choices.find(choice => choice.action === 'inspectSubmodule'));
+  await f.actions.showMenu('file', 'file');
+  assert.deepEqual(f.calls, [['inspectSubmodule', 'file']]);
 });
 
 test('repository and available worktree menus offer submodule browsing only for current selections', async () => {

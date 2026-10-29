@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isSubmodule, richComparison } = require('./model');
 const { scopedFile, validRecord, validatePage } = require('./change-pager');
+const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 
 function safeRelative(value) {
   return typeof value === 'string' && !!value && !path.isAbsolute(value) &&
@@ -264,6 +265,25 @@ class SubmoduleProvider {
         if (record.is_submodule || isSubmodule(child.rootUri.fsPath, uri.fsPath, child.state.submodules)) {
           session.close();
           sessionClosed = true;
+          if (isPointerComparison(record)) {
+            if (!this.linkDocuments) throw new Error('Submodule pointer diffs are unavailable.');
+            const nested = { repo: child, repoToken: childToken, group: record.group, record, change: { uri }, fileId: record.path };
+            const pointerProvider = {
+              currentChange: () => currentChild() ? nested : undefined,
+              revalidateChange: async () => {
+                if (!await checkHead() || !currentChild()) return false;
+                const latest = await this.backend.verifyChanges(child.rootUri.fsPath, record);
+                return currentChild() && validRecord(latest?.change) && JSON.stringify(latest.change) === JSON.stringify(record);
+              }
+            };
+            return await openPointerDiff(nested, pointerProvider, this.tree, this.backend, this.linkDocuments, this.vscode, {
+              repoIdentity: result.child_identity, current: currentLink, verifyAncestors: () => checkHead(true),
+              ancestorKey: JSON.stringify([...ancestors, frame].map(item => item.link))
+            });
+          }
+          if (record.group === 'working' && ['working_renamed', 'type_changed'].includes(record.kind)) {
+            throw new Error('Working submodule renames and type changes cannot be compared yet.');
+          }
           const nested = { repo: child, group: record.group, record, change: { uri } };
           return await this.openLevel(nested, generation, [...ancestors, frame]);
         }

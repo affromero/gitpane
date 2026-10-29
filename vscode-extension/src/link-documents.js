@@ -3,6 +3,7 @@
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { MAX_REQUEST_BYTES } = require('./bridge-client');
 
 function statusRevision(getStatus, watchedPath, getHead) {
   let observed, watchError, watchToken, suspended = false;
@@ -59,6 +60,11 @@ class LinkDocuments {
     await this.acquire();
     try {
       if (!await this.current(entry)) throw new Error('The symlink change is no longer in the workspace.');
+      if (entry.readContent) {
+        const content = await entry.readContent();
+        if (typeof content !== 'string' || !await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
+        return content;
+      }
       const result = await this.backend.readWorkingSymlink(entry.repo, entry.path);
       if (!await this.current(entry)) throw new Error('The symlink change is no longer in the workspace.');
       if (entry.verify && !await entry.verify()) throw new Error('The symlink change is no longer in the workspace.');
@@ -94,7 +100,7 @@ class LinkDocuments {
   }
 
   fingerprint(entry, target) {
-    if (entry.content !== undefined) return 'static';
+    if (entry.content !== undefined || entry.readContent) return 'static';
     let identity;
     try {
       const stat = fs.lstatSync(path.join(entry.repo, entry.path), { bigint: true });
@@ -128,22 +134,99 @@ class LinkDocuments {
     }, 50);
   }
 
+  async pointerBatches(entries) {
+    const repositories = new Map(), results = new Map();
+    for (const entry of entries) {
+      if (!entry.batch || entry.closed || (entry.guardSync && !entry.guardSync())) continue;
+      const key = JSON.stringify([entry.batch.repo, entry.batch.identity]);
+      if (!repositories.has(key)) repositories.set(key, { repo: entry.batch.repo, identity: entry.batch.identity, groups: new Map() });
+      repositories.get(key).groups.set(entry.group, entry.batch);
+    }
+    const checkAncestors = async (batch, checks) => {
+      if (!batch.verifyAncestors) return true;
+      if (typeof batch.ancestorKey !== 'string' || !batch.ancestorKey) throw new Error('Invalid submodule ancestor guard.');
+      if (!checks.has(batch.ancestorKey)) checks.set(batch.ancestorKey, Promise.resolve().then(() => batch.verifyAncestors()));
+      return await checks.get(batch.ancestorKey) === true;
+    };
+    for (const item of repositories.values()) {
+      const groups = [...item.groups];
+      const baseBytes = Buffer.byteLength(`${JSON.stringify({ id: Number.MAX_SAFE_INTEGER, method: 'submodule_pointer_validate_batch',
+        params: { repo: item.repo, expected_repo_identity: item.identity, snapshots: [] } })}\n`);
+      let start = 0;
+      while (start < groups.length && !this.disposed) {
+        const batch = [];
+        let bytes = baseBytes;
+        while (start < groups.length && batch.length < 128) {
+          const candidate = groups[start];
+          const size = Buffer.byteLength(JSON.stringify(candidate[1].snapshot)) + (batch.length ? 1 : 0);
+          if (bytes + size > MAX_REQUEST_BYTES) {
+            if (batch.length) break;
+            results.set(candidate[0], { valid: false, code: 'request_too_large',
+              message: 'This submodule pointer snapshot exceeds the supported request size.' });
+            start++;
+            continue;
+          }
+          batch.push(candidate);
+          bytes += size;
+          start++;
+        }
+        if (!batch.length) continue;
+        const before = new Map(), eligible = [];
+        for (const [group, entry] of batch) {
+          try {
+            if (await checkAncestors(entry, before)) eligible.push([group, entry]);
+            else results.set(group, { valid: false, code: 'stale_target', message: 'The parent submodule changed.' });
+          } catch (error) { results.set(group, { valid: false, code: error?.code || 'error', message: error?.message || String(error) }); }
+        }
+        if (!eligible.length || this.disposed) continue;
+        try {
+          const response = await this.backend.validatePointerBatch(item.repo, item.identity, eligible.map(([, entry]) => entry.snapshot));
+          if (!response || !Array.isArray(response.results) || response.results.length !== eligible.length ||
+              response.results.some(value => !value || typeof value.valid !== 'boolean' ||
+                (!value.valid && (typeof value.code !== 'string' || typeof value.message !== 'string')))) {
+            throw new Error('Gitpane returned invalid submodule pointer checks.');
+          }
+          const after = new Map();
+          for (let index = 0; index < eligible.length; index++) {
+            const [group, entry] = eligible[index];
+            if (!response.results[index].valid) { results.set(group, response.results[index]); continue; }
+            try {
+              results.set(group, await checkAncestors(entry, after) ? response.results[index] :
+                { valid: false, code: 'stale_target', message: 'The parent submodule changed.' });
+            } catch (error) { results.set(group, { valid: false, code: error?.code || 'error', message: error?.message || String(error) }); }
+          }
+        } catch (error) {
+          for (const [group] of eligible) results.set(group, { valid: false, code: error?.code || 'error', message: error?.message || String(error) });
+        }
+      }
+    }
+    return results;
+  }
+
   async refresh() {
     if (this.refreshing) { this.refreshAgain = true; return; }
     this.refreshing = true;
     try {
-      const checks = new Map(), probes = new Map();
-      for (const entry of this.documents.values()) {
+      const checks = new Map(), probes = new Map(), shown = new Set();
+      const entries = [...this.documents.values()];
+      const pointerResults = await this.pointerBatches(entries);
+      for (const entry of entries) {
         let current, failure;
         try {
-          if (entry.content !== undefined && entry.group) {
+          if (entry.batch) {
+            const result = pointerResults.get(entry.group);
+            current = !!result?.valid && (!entry.guardSync || entry.guardSync());
+            if (result && !result.valid && result.code !== 'stale_target') {
+              failure = Object.assign(new Error(result.message), { code: result.code });
+            }
+          } else if ((entry.content !== undefined || entry.readContent) && entry.group) {
             if (!checks.has(entry.group)) checks.set(entry.group, this.current(entry));
             current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
           } else current = await this.current(entry);
         }
         catch (error) { current = false; failure = error; }
         let target;
-        if (current && entry.content === undefined) {
+        if (current && entry.content === undefined && !entry.readContent) {
           const key = JSON.stringify([this.repoKey(entry.repo), entry.path]);
           try {
             if (!probes.has(key)) probes.set(key, this.probe(entry.repo, entry.path));
@@ -156,6 +239,10 @@ class LinkDocuments {
         if (entry.fingerprint !== next) {
           entry.fingerprint = next;
           if (failure?.code === 'watched_path_error') this.vscode.window?.showErrorMessage(failure.message);
+          if (entry.batch && failure) {
+            const key = JSON.stringify([entry.batch.repo, failure.code, failure.message]);
+            if (!shown.has(key)) { shown.add(key); this.vscode.window?.showErrorMessage(`Gitpane could not validate a submodule diff: ${failure.message}`); }
+          }
           this.emitter.fire(entry.uri);
         }
       }
@@ -188,6 +275,19 @@ class LinkDocuments {
       throw new Error('Invalid submodule pointer contents.');
     }
     const entry = { content, guard, guardSync, group, closed: false };
+    await this.read(entry);
+    if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
+    entry.uri = fileUri.with({ scheme: 'gitpane-link', path: `/${randomUUID()}`, query: '', fragment: '' });
+    const key = entry.uri.toString();
+    entry.timer = setTimeout(() => this.remove(key), 60000);
+    entry.fingerprint = 'static';
+    this.documents.set(key, entry);
+    return entry.uri;
+  }
+
+  async createVerified(fileUri, readContent, guard, guardSync, group, batch) {
+    if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
+    const entry = { readContent, guard, guardSync, group, batch, closed: false };
     await this.read(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
     entry.uri = fileUri.with({ scheme: 'gitpane-link', path: `/${randomUUID()}`, query: '', fragment: '' });

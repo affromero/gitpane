@@ -23,6 +23,7 @@ const { WorkspaceFetch } = require('./workspace-fetch');
 const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
+const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -511,6 +512,10 @@ async function activate(context) {
       const node = provider.currentChange(provider.changes.get(id));
       if (node && guard()) await submodules.open(node, true);
     },
+    inspectSubmodule: async (id, guard) => {
+      const node = provider.currentChange(provider.changes.get(id));
+      if (node && guard()) await submodules.open(node);
+    },
     unpinSubmodule: async (id, guard) => {
       const repo = provider.currentRepository(id);
       if (repo && guard()) await pins.unpin(repo, guard);
@@ -608,7 +613,14 @@ async function activate(context) {
         if (!await provider.revalidateChange(node.fileId)) throw new Error('The change has changed; refresh and try again.');
         node = provider.currentChange(node);
         if (!node) throw new Error('The change is no longer in the workspace.');
+        if (isPointerComparison(node.record)) {
+          await openPointerDiff(node, provider, tree, backend, links, vscode);
+          return;
+        }
         if (node.record.is_submodule || isSubmodule(node.repo.rootUri.fsPath, node.change.uri.fsPath, node.repo.state.submodules)) {
+          if (node.group === 'working' && ['working_renamed', 'type_changed'].includes(node.record.kind)) {
+            throw new Error('Working submodule renames and type changes cannot be compared yet.');
+          }
           await submodules.open(node);
           return;
         }
