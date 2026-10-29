@@ -170,6 +170,27 @@ async function main() {
   closedRepositories.fire(explicitlyAdded);
   await commands.get('gitpane.refresh')();
   console.log('PASS explicit workspace repository addition and removal without closing VS Code repositories');
+  const scopeRoot = path.join(temporary, 'additional-root');
+  const movedScopeRoot = path.join(temporary, 'moved-additional-root');
+  fs.mkdirSync(scopeRoot);
+  const originalFolders = vscode.workspace.workspaceFolders;
+  vscode.workspace.workspaceFolders = [...originalFolders, { uri: uri(scopeRoot) }];
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  fs.renameSync(scopeRoot, movedScopeRoot);
+  await commands.get('gitpane.refresh')();
+  assert.ok(!provider.tree.backend.roots.includes(scopeRoot));
+  fs.renameSync(movedScopeRoot, scopeRoot);
+  const scopeOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  pickChanges = choices => choices.find(choice => choice.action === 'refreshRepo');
+  const errorsBeforeScopeRefresh = errors.length;
+  await receive({ type: 'menu', kind: 'repo', id: scopeOwner.id });
+  assert.equal(errors.length, errorsBeforeScopeRefresh, errors.at(-1));
+  assert.ok(provider.tree.backend.roots.includes(fs.realpathSync(scopeRoot)), 'targeted refresh restores the original workspace identity');
+  vscode.workspace.workspaceFolders = originalFolders;
+  workspaceChanged.fire({});
+  await commands.get('gitpane.refresh')();
+  console.log('PASS targeted refresh restores temporarily unavailable workspace scope');
   const owner = snapshots.at(-1).repositories[0];
   assert.equal(repo.state.workingTreeChanges.length, 0);
   assert.equal(owner.dirty, true);
@@ -202,10 +223,13 @@ async function main() {
   assert.match(errors.at(-1), /changed|no longer/i);
   await receive({ type: 'changesPage', id: owner.id, direction: 'next' });
   assert.equal(snapshots.at(-1).repositories[0].changesPage.page, 1);
-  fs.writeFileSync(path.join(repoPath, 'new-after-refresh.txt'), 'new\n');
-  await commands.get('gitpane.refresh')();
-  assert.equal(snapshots.at(-1).repositories[0].changesPage.page, 0, 'manual refresh must immediately refresh detailed changes');
-  console.log('PASS hidden Git API changes, paged native diff, unrelated edits, stale selection, and manual refresh');
+  fs.writeFileSync(path.join(repoPath, '000-new-after-refresh.txt'), 'new\n');
+  pickChanges = choices => choices.find(choice => choice.action === 'refreshRepo');
+  await receive({ type: 'menu', kind: 'repo', id: owner.id });
+  const refreshedFiles = snapshots.at(-1).repositories[0].groups.flatMap(group => group.files);
+  assert.equal(snapshots.at(-1).repositories[0].changesPage.page, 0, 'targeted refresh must immediately refresh detailed changes');
+  assert.ok(refreshedFiles.some(item => item.path === '000-new-after-refresh.txt'));
+  console.log('PASS hidden Git API changes, paged native diff, unrelated edits, stale selection, and targeted refresh');
 
   await receive({ type: 'searchChanges', id: owner.id, query: 'file-12', direction: 'first' });
   let searched = snapshots.at(-1).repositories.find(item => item.id === owner.id);
@@ -559,7 +583,7 @@ async function main() {
   console.log('PASS hidden submodule changes, second page native diff, and stale child guards');
 
   for (const name of fs.readdirSync(repoPath)) {
-    if (/^file-\d{3}\.txt$/.test(name) || ['nested-repo', 'unrelated.txt', 'new-after-refresh.txt', '000-link'].includes(name)) {
+    if (/^file-\d{3}\.txt$/.test(name) || ['nested-repo', 'unrelated.txt', '000-new-after-refresh.txt', '000-link'].includes(name)) {
       fs.rmSync(path.join(repoPath, name), { recursive: true, force: true });
     }
   }
@@ -1003,18 +1027,18 @@ async function main() {
   assert.match(pinnedStatus.repo_identity, /^[a-f0-9]{64}$/);
   provider.tree.backendStatuses.delete(nestedStatusKey);
   provider.tree.changed();
-  let hidePickerShown = false;
-  pickChanges = choices => { hidePickerShown = true; return choices.find(choice => choice.action === 'hideRepository'); };
+  let repositoryChoices;
+  pickChanges = choices => { repositoryChoices = choices.map(choice => choice.action); return choices.find(choice => choice.action === 'hideRepository'); };
   const errorsBeforePendingHide = errors.length;
   await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
-  assert.equal(hidePickerShown, false, 'pending status must not offer repository actions');
-  assert.match(errors[errorsBeforePendingHide], /status is unavailable.*refresh/i);
+  assert.deepEqual(repositoryChoices, ['refreshRepo'], 'pending status offers only a local refresh');
+  assert.equal(errors.length, errorsBeforePendingHide);
   assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested'));
   provider.tree.backendStatuses.set(nestedStatusKey, pinnedStatus);
   provider.tree.changed();
   pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
   await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
-  assert.equal(hidePickerShown, true, 'verified status offers the hide action');
+  assert.ok(repositoryChoices.includes('hideRepository'), 'verified status offers the hide action');
   assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'nested'));
   assert.ok(workspaceState.get('gitpane.hiddenRepositories').repositories.some(item => item.repo_identity === pinnedStatus.repo_identity),
     'hiding stores the verified repository identity');

@@ -58,6 +58,8 @@ The `⋯` menus provide file actions to stage, unstage, discard or delete an
 untracked file. Repository actions include branch review, push, pull, pull with
 rebase and worktree creation. Linked worktrees inside the workspace can be
 removed from their menu.
+Choose **Refresh** from a repository or worktree menu to update its local status
+and any open change pages. This does not fetch from remotes.
 An explicitly added linked worktree can also be removed from its repository
 menu when it is the only repository in the workspace. If its folder is a
 workspace root, the folder is removed from disk and remains listed in the

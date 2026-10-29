@@ -3,13 +3,13 @@
 const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
-const REPO_ACTIONS = new Set(['createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
-const WORKTREE_ACTIONS = new Set(['removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree']);
+const REPO_ACTIONS = new Set(['refreshRepo', 'createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
+const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir, item.repoIdentity];
-  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned, !!item.added);
+  if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned, !!item.added, !!item.refreshOnly);
   if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId, item.childRepoIdentity);
   return JSON.stringify(fields);
@@ -46,6 +46,7 @@ class SidebarActions {
     this.resolveChange = options.resolveChange;
     this.resolveWorktree = options.resolveWorktree;
     this.refresh = options.refresh;
+    this.refreshRepository = options.refreshRepository;
     this.onWorktreeCreated = options.onWorktreeCreated;
     this.captureWorktreeReveal = options.captureWorktreeReveal;
     this.reviewBranch = options.reviewBranch;
@@ -88,7 +89,9 @@ class SidebarActions {
       if (!expected) return;
       let choices;
       if (kind === 'file') choices = fileOptions(item);
+      else if (kind === 'repo' && item.refreshOnly) choices = [{ label: 'Refresh', action: 'refreshRepo' }];
       else if (kind === 'repo') choices = [
+        { label: 'Refresh', action: 'refreshRepo' },
         { label: 'Create Worktree', action: 'createWorktree' },
         { label: 'Pin Submodule…', action: 'browseSubmodules' },
         { label: 'Hide from Gitpane', action: 'hideRepository' },
@@ -111,6 +114,7 @@ class SidebarActions {
         { label: 'Pull with Rebase', action: 'pull_rebase' }
       ];
       else if (kind === 'worktree') choices = [
+        { label: 'Refresh', action: 'refreshWorktree' },
         { label: 'Hide from Gitpane', action: 'hideWorktree' },
         ...(item.available ? [{ label: 'Open Commit Graph', action: 'openWorktreeGraph' },
           { label: 'Review Branch', action: 'reviewWorktree' },
@@ -143,12 +147,17 @@ class SidebarActions {
       const original = fingerprint(item, kind);
       if (!original || (expected && original !== expected) || !guard()) return;
       const current = () => guard() && this.current(kind, message.id, original);
+      if (item.refreshOnly && action !== 'refreshRepo') return;
       if (kind === 'file' && !fileOptions(item).some(choice => choice.action === action)) return;
       if (kind === 'file' && action !== 'open' && this.revalidateChange) {
         if (!await this.revalidateChange(message.id) || !current()) return;
         if (this.validateChangePath) this.validateChangePath(item);
       }
-      if (kind === 'worktree' && !['removeWorktree', 'hideWorktree'].includes(action) && !item.available) return;
+      if (kind === 'worktree' && !['removeWorktree', 'hideWorktree', 'refreshWorktree'].includes(action) && !item.available) return;
+      if (action === 'refreshRepo' || action === 'refreshWorktree') {
+        if (this.refreshRepository) await this.refreshRepository(message.id, kind, current);
+        return;
+      }
       if (action === 'worktreeRepositoryActions') {
         if (typeof item.childRepoId === 'string') await this.showMenu('repo', item.childRepoId, current);
         return;

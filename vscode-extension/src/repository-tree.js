@@ -92,6 +92,7 @@ class RepositoryTree {
     this.busy = false;
     this.pending = false;
     this.refreshWaiters = [];
+    this.targetRefreshWaiters = [];
     this.allRefreshWaiters = new Set();
     this.disposed = false;
     this.visible = false;
@@ -187,7 +188,7 @@ class RepositoryTree {
   async refreshBackend(repo, cycle, includeWorktrees) {
     const key = repo.rootUri.toString();
     const generation = cycle.generation;
-    const current = () => !this.disposed && generation === this.backendGeneration &&
+    const current = () => !this.disposed && generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
       this.isCurrentRepository(repo, cycle.tokens.get(key));
     if (!current()) return;
     try {
@@ -219,7 +220,7 @@ class RepositoryTree {
   }
 
   async refreshRepositories(repos, cycle, visibleOnly) {
-    const current = repo => !this.disposed && cycle.generation === this.backendGeneration &&
+    const current = repo => !this.disposed && cycle.generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
       (!visibleOnly || this.visible) && this.isCurrentRepository(repo, cycle.tokens.get(repo.rootUri.toString()));
     await parallel(repos, 4, async repo => {
       if (!current(repo)) return;
@@ -260,7 +261,7 @@ class RepositoryTree {
 
   async openWorkspaceWorktrees(parent, status, generation, cycle) {
     if (typeof this.git.openRepository !== 'function') return;
-    const current = () => !this.disposed && generation === this.backendGeneration &&
+    const current = () => !this.disposed && generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
       this.isCurrentRepository(parent, cycle.tokens.get(parent.rootUri.toString()));
     const common = typeof status.common_dir === 'string' && path.isAbsolute(status.common_dir)
       ? directoryIdentity(status.common_dir) : undefined;
@@ -665,6 +666,65 @@ class RepositoryTree {
     });
   }
 
+  async refreshTargets(repos, guard) {
+    if (this.disposed || !guard()) return;
+    if (this.pollPromise) await this.pollPromise;
+    if (this.disposed || !guard()) return;
+    if (this.busy) {
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          resolve: () => { this.allRefreshWaiters.delete(waiter); resolve(); },
+          reject: error => { this.allRefreshWaiters.delete(waiter); reject(error); },
+          run: () => this.refreshTargets(repos, guard)
+        };
+        this.allRefreshWaiters.add(waiter);
+        this.targetRefreshWaiters.push(waiter);
+      });
+    }
+    this.busy = true;
+    try {
+      const generation = this.backendGeneration;
+      if (this.backend.state.status === 'error') await this.backend.retry();
+      await this.backend.syncWorkspaceRoots?.();
+      if (generation !== this.backendGeneration) return { scopeChanged: true };
+      if (!guard()) return;
+      const visible = this.git.repositories.filter(repo => this.isVisible(repo));
+      const cycle = { generation, guard,
+        tokens: new Map(repos.map(repo => [repo.rootUri.toString(), this.repositoryToken(repo)])),
+        visible: new Set(visible.map(repo => identityKey(this.repositoryIdentities.get(repo.rootUri.toString())))),
+        groups: new Map() };
+      await this.refreshRepositories(repos, cycle, false);
+    } finally {
+      this.finishRefresh();
+    }
+  }
+
+  finishRefresh() {
+    this.busy = false;
+    this.changed();
+    if (this.pending && !this.disposed) {
+      this.pending = false;
+      const waiters = this.refreshWaiters.splice(0);
+      this.refresh().then(
+        () => { for (const waiter of waiters) waiter.resolve(); },
+        error => {
+          for (const waiter of waiters) waiter.reject(error);
+          if (!waiters.length) {
+            this.fail(`Could not refresh repository status: ${error.message}`);
+            this.changed();
+          }
+        }
+      );
+    }
+    this.drainTargetRefresh();
+  }
+
+  drainTargetRefresh() {
+    if (this.disposed || this.busy || !this.targetRefreshWaiters.length) return;
+    const waiter = this.targetRefreshWaiters.shift();
+    waiter.run().then(waiter.resolve, waiter.reject).finally(() => this.drainTargetRefresh());
+  }
+
   async runRefresh(retryBackend = false) {
     if (retryBackend && this.backend.state.status === 'error') {
       try { await this.backend.retry(); }
@@ -704,22 +764,7 @@ class RepositoryTree {
       for (const key of this.backendStatuses.keys()) if (!active.has(key)) this.backendStatuses.delete(key);
       for (const key of this.backendErrors.keys()) if (!active.has(key)) this.backendErrors.delete(key);
     } finally {
-      this.busy = false;
-      this.changed();
-      if (this.pending && !this.disposed) {
-        this.pending = false;
-        const waiters = this.refreshWaiters.splice(0);
-        this.refresh().then(
-          () => { for (const waiter of waiters) waiter.resolve(); },
-          error => {
-            for (const waiter of waiters) waiter.reject(error);
-            if (!waiters.length) {
-              this.fail(`Could not refresh repository status: ${error.message}`);
-              this.changed();
-            }
-          }
-        );
-      }
+      this.finishRefresh();
     }
   }
 
@@ -765,6 +810,7 @@ class RepositoryTree {
     this.liveness?.dispose();
     for (const waiter of this.allRefreshWaiters) waiter.resolve();
     this.refreshWaiters = [];
+    this.targetRefreshWaiters = [];
     if (this.changeTimer !== undefined) clearTimeout(this.changeTimer);
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);

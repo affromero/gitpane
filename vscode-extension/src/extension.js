@@ -306,6 +306,56 @@ class GitpaneViewProvider {
     }
   }
 
+  async refreshTarget(id, kind, guard = () => true) {
+    if (!guard()) return [];
+    const selected = kind === 'worktree' ? this.worktrees.get(id) : this.repositories.get(id);
+    const target = kind === 'worktree' ? this.currentWorktreeRepository(id) : this.currentRepository(id);
+    const anchor = kind === 'worktree'
+      ? this.tree.git.repositories.find(repo => repo.rootUri.toString() === selected?.repoKey)
+      : target && this.tree.explicitWorktreeAnchor?.(target)?.anchor;
+    const primary = kind === 'worktree' ? anchor : target;
+    if (!selected || !primary) return [];
+    const primaryToken = this.tree.repositoryToken(primary);
+    const targetToken = target && this.tree.repositoryToken(target);
+    const anchorToken = anchor && this.tree.repositoryToken(anchor);
+    const generation = this.tree.backendGeneration;
+    const anchorKey = anchor?.rootUri.toString();
+    const current = () => {
+      if (this.disposed || generation !== this.tree.backendGeneration ||
+          !this.tree.isCurrentRepository(primary, primaryToken)) return false;
+      if (kind === 'repo') {
+        if (this.currentRepository(id)?.rootUri.toString() !== primary.rootUri.toString()) return false;
+        if (!anchor) return true;
+        const link = this.tree.explicitWorktreeAnchor?.(primary);
+        return !!link && link.anchor.rootUri.toString() === anchorKey &&
+          this.tree.isCurrentRepository(anchor, anchorToken);
+      }
+      const link = this.worktrees.get(id);
+      if (!link || link.repoKey !== selected.repoKey || link.repoToken !== selected.repoToken ||
+          link.path !== selected.path || !this.tree.workspaceWorktrees(primary).some(item => item.path === selected.path)) return false;
+      if (!target) return !link.childRepoId;
+      return link.childToken === targetToken && this.currentWorktreeRepository(id)?.rootUri.toString() === target.rootUri.toString();
+    };
+    const repos = [...new Set([primary, target, anchor].filter(Boolean))];
+    if (!current()) return [];
+    const result = await this.tree.refreshTargets(repos, current);
+    if (result?.scopeChanged) {
+      await this.refresh();
+      return [];
+    }
+    if (!current()) return [];
+    for (const pageId of [...this.pager.entries.keys()]) {
+      const owner = this.currentOwner(pageId);
+      if (!owner || !repos.some(repo => repo.rootUri.toString() === owner.rootUri.toString())) continue;
+      const pending = this.pager.get(pageId)?.pending;
+      if (pending) await pending;
+      if (!current()) return [];
+      if (this.currentOwner(pageId)?.rootUri.toString() === owner.rootUri.toString()) await this.loadChanges(pageId);
+      if (!current()) return [];
+    }
+    return repos.map(repo => repo.rootUri.toString());
+  }
+
   currentChange(node) {
     const stored = this.changes.get(node?.fileId);
     if (!stored || stored.repo.rootUri.toString() !== node.repo?.rootUri?.toString() ||
@@ -350,7 +400,7 @@ class GitpaneViewProvider {
   resolveRepository(id) {
     const repo = this.currentRepository(id);
     const actionRepo = this.actionRepository(repo);
-    if (!actionRepo) return undefined;
+    if (!actionRepo) return repo ? { repoPath: repo.rootUri.fsPath, refreshOnly: true } : undefined;
     actionRepo.pinned = this.pins?.isPinned(repo) || false;
     actionRepo.added = this.workspaceRepositories?.isAdded(repo) || false;
     const found = this.tree.explicitWorktreeAnchor?.(repo);
@@ -464,13 +514,6 @@ class GitpaneViewProvider {
         } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
           await this.openWorktreeGraph?.(message.id);
         } else if (message?.type === 'menu' && typeof message.id === 'string') {
-          if (message.kind === 'repo') {
-            const repo = this.currentRepository(message.id);
-            if (repo && !this.actionRepository(repo)) {
-              await vscode.window.showErrorMessage('Gitpane repository status is unavailable. Wait for it to load, or refresh and try again.');
-              return;
-            }
-          }
           if (message.kind === 'file') {
             const selected = this.changes.get(message.id);
             if (selected && !await this.waitForCurrentChange(selected)) {
@@ -662,6 +705,10 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     captureWorktreeReveal: id => provider.captureWorktreeReveal(id),
+    refreshRepository: async (id, kind, guard) => {
+      const refreshed = await provider.refreshTarget(id, kind, guard);
+      if (refreshed.includes(graph.repoKey)) await graph.pollRevision();
+    },
     refresh: () => provider.refresh() });
   context.subscriptions.push(backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),

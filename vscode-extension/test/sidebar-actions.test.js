@@ -54,6 +54,7 @@ function fixture() {
       if (method === 'submodule_action') return { completed: ['child'], skipped: ['missing'], ...(params.operation === 'pull_with_submodules' ? { parent_pulled: true } : {}) };
     } },
     refresh: async () => { calls.push(['refresh']); if (refreshFailure) throw refreshFailure; },
+    refreshRepository: async (id, kind, guard) => { if (guard()) calls.push(['refreshRepository', id, kind]); },
     onWorktreeCreated: async target => { calls.push(['openWorktree', target]); },
     reviewBranch: async id => { calls.push(['reviewBranch', id]); },
     openGithub: async id => { calls.push(['openGithub', id]); },
@@ -88,6 +89,21 @@ function fixture() {
 }
 
 const action = (action, id) => ({ type: 'action', action, id });
+
+test('repository and unavailable worktree menus offer a scoped refresh', async () => {
+  const f = fixture();
+  f.pick(choices => choices.find(choice => choice.action === 'refreshRepo'));
+  await f.actions.showMenu('repo', 'repo');
+  f.pick(choices => choices.find(choice => choice.action === 'refreshWorktree'));
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(f.calls, [['refreshRepository', 'repo', 'repo'], ['refreshRepository', 'worktree', 'worktree']]);
+  f.calls.length = 0;
+  f.setRepo({ repoPath: f.root, refreshOnly: true });
+  f.pick(choices => { assert.deepEqual(choices.map(choice => choice.action), ['refreshRepo']); return choices[0]; });
+  await f.actions.showMenu('repo', 'repo');
+  await f.actions.handle(action('push', 'repo'));
+  assert.deepEqual(f.calls, [['refreshRepository', 'repo', 'repo']]);
+});
 
 test('file menu offers applicable actions and executes stage or unstage using the selected row', async () => {
   const f = fixture();
