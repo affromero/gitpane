@@ -617,6 +617,62 @@ fn pages_are_revisitable_revision_is_stable_and_snapshots_are_scoped() {
 }
 
 #[test]
+fn snapshot_capacity_recovers_after_closing_a_repository() {
+    let temporary = TempDir::new().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let scope = Scope::new(vec![root.clone()]).unwrap();
+    let mut store = Snapshots::default();
+    let mut opened: Vec<(PathBuf, String)> = Vec::new();
+
+    for index in 0..65 {
+        let repo = root.join(format!("repo-{index:02}"));
+        fs::create_dir(&repo).unwrap();
+        Repository::init(&repo).unwrap();
+        fs::write(repo.join("change.txt"), format!("change {index}")).unwrap();
+        if index == 64 {
+            let error = store
+                .begin(
+                    &scope,
+                    Begin { repo: repo.clone() },
+                    &SubmoduleConfig::default(),
+                )
+                .unwrap_err();
+            assert_eq!(error.code, "snapshot_capacity");
+
+            let (first_repo, first_snapshot) = &opened[0];
+            assert_eq!(
+                page(&mut store, &scope, first_repo, first_snapshot, 0)["changes"][0]["path"],
+                "change.txt"
+            );
+            let replacement = begin(&mut store, &scope, first_repo);
+            assert_ne!(replacement["snapshot"], first_snapshot.as_str());
+            let replacement_token = replacement["snapshot"].as_str().unwrap().to_owned();
+
+            store
+                .release(
+                    &scope,
+                    Release {
+                        repo: first_repo.clone(),
+                        snapshot: replacement_token,
+                    },
+                )
+                .unwrap();
+            let recovered = begin(&mut store, &scope, &repo);
+            assert_eq!(recovered["changes"][0]["path"], "change.txt");
+            let (second_repo, second_snapshot) = &opened[1];
+            assert_eq!(
+                page(&mut store, &scope, second_repo, second_snapshot, 0)["changes"][0]["path"],
+                "change.txt"
+            );
+        } else {
+            let result = begin(&mut store, &scope, &repo);
+            assert_eq!(result["changes"][0]["path"], "change.txt");
+            opened.push((repo, result["snapshot"].as_str().unwrap().to_owned()));
+        }
+    }
+}
+
+#[test]
 fn find_returns_the_selected_change_across_pages_and_rejects_stale_scope() {
     let (_temporary, path, repo) = setup();
     fs::write(path.join("mixed.txt"), "staged\n").unwrap();
