@@ -159,12 +159,16 @@ async function waitForFile(file) {
       }
       return runMutation('file_action', params);
     };
-    const literal = ':(glob)*.txt';
+    const literal = 'file[1].txt';
+    const neighbor = 'file1.txt';
     write(literal, 'literal file\n');
+    write(neighbor, 'neighbor\n');
     await action('stage', literal);
     assert.equal(git(repo, 'show', `:${literal}`), 'literal file');
+    assert.equal(git(repo, 'status', '--porcelain', '--', neighbor).slice(0, 2), '??');
     await action('unstage', literal);
     assert.equal(git(repo, '--literal-pathspecs', 'status', '--porcelain', '--', literal).slice(0, 2), '??');
+    assert.equal(git(repo, 'status', '--porcelain', '--', neighbor).slice(0, 2), '??');
     const stale = await client.fileActionPreview(repoPath, literal, 'delete_untracked');
     write(literal, 'new content after confirmation\n');
     await assert.rejects(runMutation('file_action', {
@@ -173,6 +177,8 @@ async function waitForFile(file) {
     assert.equal(fs.readFileSync(path.join(repo, literal), 'utf8'), 'new content after confirmation\n');
     await action('delete_untracked', literal);
     assert.equal(fs.existsSync(path.join(repo, literal)), false);
+    assert.equal(fs.readFileSync(path.join(repo, neighbor), 'utf8'), 'neighbor\n');
+    assert.equal(git(repo, 'status', '--porcelain', '--', neighbor).slice(0, 2), '??');
     await action('discard', 'tracked.txt');
     assert.equal(fs.readFileSync(path.join(repo, 'tracked.txt'), 'utf8'), 'initial\n');
     assert.equal(git(repo, 'status', '--porcelain', '--', 'tracked.txt'), '');

@@ -17,6 +17,12 @@ opens a repository's stash list. Stash entries are view-only.
 The Explorer title menu offers repository sorting; the default keeps the
 existing dirty-first, full-path order.
 
+Gitpane relies on VS Code's Git extension to detect repositories. Its Git
+auto-detection, scan depth and ignored-repository settings affect which nested
+repositories appear. Gitpane opens detected linked worktrees inside the
+workspace through VS Code's Git API, which also adds them to Source Control
+and can reopen a worktree closed there.
+
 Select the `●` beside a repository to open its commit graph. Search highlights
 matches among the loaded commits, with next and previous navigation. The graph
 shows up to 200 commits and offers first-parent, branch, author and ref filters,
