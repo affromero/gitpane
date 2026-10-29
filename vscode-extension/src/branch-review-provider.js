@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const { openGitlinkDiff } = require('./gitlink-diff');
 
 function validFilePath(value) {
   return typeof value === 'string' && !!value && !path.isAbsolute(value) &&
@@ -13,6 +14,7 @@ class BranchReviewProvider {
     this.backend = backend;
     this.git = git;
     this.vscode = options.vscode || require('vscode');
+    this.links = options.links;
     this.generation = 0;
     this.disposed = false;
   }
@@ -56,7 +58,23 @@ class BranchReviewProvider {
       if (!selected || !choices.includes(selected)) return;
       if (!this.current(repo, generation, result.head_oid, currentGuard)) throw new Error('Repository or HEAD changed; refresh and try again.');
       const file = selected.file;
-      if (file.is_submodule) throw new Error('Submodule changes cannot be opened as a file diff yet.');
+      if (file.is_submodule) {
+        const current = () => this.tree.isCurrentRepository(repo, token) && this.tree.git.repositories.some(item =>
+          item.rootUri.toString() === repo.rootUri.toString());
+        const verify = async () => {
+          if (!this.current(repo, generation, result.head_oid, currentGuard)) return false;
+          const latest = await this.backend.branchReview(repo.rootUri.fsPath);
+          if (!this.current(repo, generation, result.head_oid, currentGuard) || !latest ||
+              latest.repo_identity !== result.repo_identity || latest.base_ref !== result.base_ref ||
+              latest.base_oid !== result.base_oid || latest.head_oid !== result.head_oid || !Array.isArray(latest.files)) return false;
+          return latest.files.some(item => item.path === file.path && item.status === file.status &&
+            item.old_path === file.old_path && item.is_submodule === true && JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
+        };
+        return await openGitlinkDiff({ vscode: this.vscode, git: this.git, links: this.links, repo,
+          repoIdentity: result.repo_identity, repoToken: token, file: { ...file, oldPath: file.old_path },
+          oldRef: result.base_oid, newRef: result.head_oid, current, verify,
+          title: `${path.basename(file.path)} (${result.base_ref}...HEAD)` });
+      }
       const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
       const oldUri = file.status === 'R' ? this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.old_path)) : uri;
       const empty = uri.with({ scheme: 'gitpane-empty', query: '' });

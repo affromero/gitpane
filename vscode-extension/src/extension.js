@@ -488,7 +488,7 @@ async function activate(context) {
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
   const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links);
-  const review = new BranchReviewProvider(tree, backend, api);
+  const review = new BranchReviewProvider(tree, backend, api, { links });
   const github = new GithubProvider(tree, backend);
   const sessions = new SessionProvider(tree, backend);
   const terminals = new RepoTerminalProvider(tree);

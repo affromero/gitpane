@@ -70,6 +70,8 @@ changes and current file changes. The submodule must be initialized and inside
 the workspace. Staged submodule renames, type changes and conflicts open a
 pointer comparison; staged deletions also open a pointer comparison. Use
 **Inspect Submodule** from a change menu to open an available checkout.
+Branch review opens committed submodule pointer comparisons even when the child
+checkout is unavailable.
 If a deleted submodule leaves a corrupt checkout behind, Gitpane reports the
 repository status as unavailable until that checkout is repaired or removed.
 Blob and symlink sides in these comparisons must be UTF-8 text under 1 MiB.

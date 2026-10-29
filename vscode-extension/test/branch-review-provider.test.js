@@ -12,12 +12,14 @@ function fixture() {
   const repo = { rootUri: { fsPath: root, toString: () => root }, state: { HEAD: { commit: head } } };
   let visible = true;
   let incarnation = 1;
-  let review = { base_ref: 'origin/main', base_oid: base, head_oid: head, files: [] };
+  let review = { base_ref: 'origin/main', base_oid: base, head_oid: head, repo_identity: 'f'.repeat(64), files: [] };
+  let identityValid = true;
+  let reviewHook = async () => {};
   let choose = choices => choices[0];
   const calls = [];
   const errors = [];
   const information = [];
-  const tree = { git: { repositories: [repo] }, isVisible: () => visible,
+  const tree = { git: { get repositories() { return [{ ...repo }]; } }, isVisible: () => visible,
     repositoryToken: () => incarnation, isCurrentRepository: (_, token) => visible && token === incarnation };
   const vscode = {
     window: {
@@ -29,14 +31,25 @@ function fixture() {
     commands: { executeCommand: async (...args) => calls.push(args) }
   };
   const git = { toGitUri: (uri, ref) => ({ fsPath: uri.fsPath, ref }) };
+  const links = {
+    async validateStaticIdentity(_repo, identity, guard) { return identityValid && identity === 'f'.repeat(64) && guard(); },
+    async createStatic(_uri, content, guard) {
+      if (!await guard()) throw new Error('Repository identity changed');
+      return { scheme: 'gitpane-link', content, guard };
+    }
+  };
   const provider = new BranchReviewProvider(tree, { branchReview: async () => {
     if (review instanceof Error) throw review;
-    return review;
-  } }, git, { vscode });
+    const result = structuredClone(review);
+    await reviewHook();
+    return result;
+  } }, git, { vscode, links });
   return {
     provider, repo, root, base, head, calls, errors, information,
     setReview(value) { review = value; }, getReview() { return review; },
-    setVisible(value) { visible = value; }, reopen() { incarnation++; }, pick(fn) { choose = fn; }
+    setVisible(value) { visible = value; }, setIdentityValid(value) { identityValid = value; },
+    onReview(value) { reviewHook = value; },
+    reopen() { incarnation++; }, pick(fn) { choose = fn; }
   };
 }
 
@@ -110,7 +123,7 @@ test('does not open a review diff after the same repository path is reopened', a
   assert.match(f.errors[0], /repository or head changed/i);
 });
 
-test('rejects escaped paths and submodules instead of opening unsafe diffs', async () => {
+test('rejects escaped paths and unverified submodule details', async () => {
   const f = fixture();
   f.setReview({ ...f.getReview(), files: [{ path: '../outside', status: 'M', is_submodule: false }] });
   await f.provider.open(f.repo);
@@ -120,6 +133,104 @@ test('rejects escaped paths and submodules instead of opening unsafe diffs', asy
   assert.match(f.errors[1], /invalid branch review file/i);
   f.setReview({ ...f.getReview(), files: [{ path: 'module', status: 'M', is_submodule: true }] });
   await f.provider.open(f.repo);
-  assert.match(f.errors[2], /submodule changes cannot be opened/i);
+  assert.match(f.errors[2], /verified submodule pointer details/i);
   assert.equal(f.calls.length, 0);
+});
+
+test('opens branch review gitlinks using the compared tree endpoints', async () => {
+  const f = fixture();
+  const pointer = digit => ({ kind: 'gitlink', oid: digit.repeat(40), mode: 57344 });
+  const blob = { kind: 'file', oid: '3'.repeat(40), mode: 33188 };
+  const cases = [
+    { status: 'A', old: null, new: pointer('1'), left: 'empty', right: '1'.repeat(40) },
+    { status: 'M', old: pointer('1'), new: pointer('2'), left: '1'.repeat(40), right: '2'.repeat(40) },
+    { status: 'D', old: pointer('1'), new: null, left: '1'.repeat(40), right: 'empty' },
+    { status: 'M', old: blob, new: pointer('2'), left: f.base, right: '2'.repeat(40) },
+    { status: 'M', old: pointer('1'), new: blob, left: '1'.repeat(40), right: f.head }
+  ];
+  const side = value => value.content ? value.content.match(/[a-f0-9]{40}/)[0] : value.ref ||
+    (value.scheme === 'gitpane-empty' ? 'empty' : undefined);
+  for (const item of cases) {
+    f.setReview({ ...f.getReview(), files: [{ path: 'module', status: item.status, is_submodule: true,
+      gitlink: { old: item.old, new: item.new } }] });
+    await f.provider.open(f.repo);
+    const diff = f.calls.at(-1);
+    assert.equal(diff[0], 'vscode.diff');
+    assert.equal(side(diff[1]), item.left);
+    assert.equal(side(diff[2]), item.right);
+  }
+  assert.equal(f.calls.length, cases.length);
+  assert.deepEqual(f.errors, []);
+  const document = f.calls.at(-1)[1];
+  assert.equal(await document.guard(), true);
+  f.setIdentityValid(false);
+  assert.equal(await document.guard(), false, 'a replaced repository invalidates its pointer document');
+  f.setIdentityValid(true);
+  f.reopen();
+  assert.equal(await document.guard(), false, 'an open pointer document cannot follow a reopened repository');
+});
+
+test('does not open a gitlink diff if the repository reopens during verification', async () => {
+  const f = fixture();
+  const pointer = digit => ({ kind: 'gitlink', oid: digit.repeat(40), mode: 57344 });
+  f.setReview({ ...f.getReview(), files: [{ path: 'module', status: 'M', is_submodule: true,
+    gitlink: { old: pointer('1'), new: pointer('2') } }] });
+  let calls = 0, release;
+  f.onReview(async () => { if (++calls === 2) await new Promise(resolve => { release = resolve; }); });
+  const pending = f.provider.open(f.repo);
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  f.reopen();
+  release();
+  await pending;
+  assert.equal(f.calls.length, 0);
+  assert.match(f.errors[0], /no longer/i);
+});
+
+test('an open pointer diff survives later sidebar selection changes', async () => {
+  const f = fixture();
+  const pointer = digit => ({ kind: 'gitlink', oid: digit.repeat(40), mode: 57344 });
+  f.setReview({ ...f.getReview(), files: [{ path: 'module', status: 'M', is_submodule: true,
+    gitlink: { old: pointer('1'), new: pointer('2') } }] });
+  let selectionCurrent = true;
+  await f.provider.open(f.repo, () => selectionCurrent);
+  assert.equal(f.calls.length, 1);
+  const document = f.calls[0][1];
+  selectionCurrent = false;
+  assert.equal(await document.guard(), true);
+  f.reopen();
+  assert.equal(await document.guard(), false);
+});
+
+test('rejects gitlink comparisons against a directory', async () => {
+  const f = fixture();
+  f.setReview({ ...f.getReview(), files: [{ path: 'module', status: 'M', is_submodule: true,
+    gitlink: { old: { kind: 'gitlink', oid: '1'.repeat(40), mode: 57344 },
+      new: { kind: 'tree', oid: '2'.repeat(40), mode: 16384 } } }] });
+  await f.provider.open(f.repo);
+  assert.equal(f.calls.length, 0);
+  assert.match(f.errors[0], /directory/i);
+});
+
+test('rejects changed branch-review pointers, base or repository identity before opening', async () => {
+  const pointer = digit => ({ kind: 'gitlink', oid: digit.repeat(40), mode: 57344 });
+  for (const change of ['base', 'pointer', 'identity', 'reopen', 'link']) {
+    const f = fixture();
+    const file = { path: 'module', status: 'M', is_submodule: true,
+      gitlink: { old: pointer('1'), new: pointer('2') } };
+    f.setReview({ ...f.getReview(), files: [file] });
+    let linked = true;
+    f.pick(choices => {
+      const review = structuredClone(f.getReview());
+      if (change === 'base') review.base_oid = 'c'.repeat(40);
+      if (change === 'pointer') review.files[0].gitlink.new = pointer('4');
+      if (change === 'identity') review.repo_identity = 'e'.repeat(64);
+      if (change === 'reopen') f.reopen();
+      if (change === 'link') linked = false;
+      f.setReview(review);
+      return choices[0];
+    });
+    await f.provider.open(f.repo, () => linked);
+    assert.equal(f.calls.length, 0, `${change} must not open a diff`);
+    assert.match(f.errors[0], /changed|no longer/i);
+  }
 });

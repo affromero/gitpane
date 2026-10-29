@@ -788,6 +788,42 @@ fn commit_files_identifies_gitlink_entries() {
     );
 }
 
+#[test]
+fn branch_review_returns_verified_gitlink_tree_endpoints() {
+    let temporary = TempDir::new().unwrap();
+    let repo_path = temporary.path().join("repo");
+    let repo = create_repo(&repo_path);
+    let base = repo.head().unwrap().peel_to_commit().unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    builder.insert("child", base.id(), 0o160000).unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let signature = Signature::now("Test", "test@example.invalid").unwrap();
+    let head = repo
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Add pointer",
+            &tree,
+            &[&base],
+        )
+        .unwrap();
+    let requests = [
+        json!({"id": 1, "method": "initialize", "params": {"version": 1, "workspace_roots": [temporary.path()]}}),
+        json!({"id": 2, "method": "branch_review", "params": {"repo": repo_path}}),
+    ];
+    let replies = exchange_with_base(&requests, Some("HEAD~1"));
+    let result = &replies[1]["result"];
+    assert_eq!(result["base_oid"], base.id().to_string());
+    assert_eq!(result["head_oid"], head.to_string());
+    assert_eq!(result["repo_identity"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        result["files"],
+        json!([{"status": "A", "path": "child", "is_submodule": true,
+        "gitlink": {"old": null, "new": {"kind": "gitlink", "oid": base.id().to_string(), "mode": 0o160000}}}])
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn commit_files_rejects_non_utf8_paths_instead_of_rewriting_them() {

@@ -688,6 +688,27 @@ async function main() {
   assert.equal(api.repositories.length, beforeGraphRepos, 'opening a pointer diff does not open a child repository');
   console.log('PASS committed submodule pointer opens a native diff without a child checkout or terminal');
 
+  const previousReviewBase = git('rev-parse', 'refs/remotes/origin/main');
+  git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD^'));
+  await commands.get('gitpane.refresh')();
+  const reviewRoot = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  const parkedChild = `${childPath}-parked`;
+  fs.renameSync(childPath, parkedChild);
+  try {
+    pickChanges = choices => choices.find(choice => choice.action === 'reviewBranch') ||
+      choices.find(choice => choice.file?.path === 'child');
+    const beforeReviewDiffs = diffs.length, beforeReviewTerminals = terminals.length;
+    await receive({ type: 'menu', kind: 'repo', id: reviewRoot.id });
+    assert.equal(diffs.length, beforeReviewDiffs + 1, errors.at(-1));
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), `Subproject commit ${pointerB}\n`);
+    assert.equal(terminals.length, beforeReviewTerminals);
+  } finally {
+    fs.renameSync(parkedChild, childPath);
+    git('update-ref', 'refs/remotes/origin/main', previousReviewBase);
+  }
+  console.log('PASS branch review opens a native gitlink diff without an initialized child or terminal');
+
   const grandSource = path.join(temporary, 'grandchild-source');
   fs.mkdirSync(grandSource);
   gitAt(grandSource, 'init', '-q');

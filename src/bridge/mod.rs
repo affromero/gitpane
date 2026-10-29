@@ -295,12 +295,21 @@ fn process(
         "branch_review" => {
             let input: RepositoryRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
+            let identity = changes::RepositoryIdentity::read(&repo)?;
             let (base_ref, base_oid, head_oid, files) =
                 crate::git::commit_files::list_review_files(&repo, review_base)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
-            scope.repository(&repo)?;
+            if scope.repository(&input.repo)? != repo
+                || changes::RepositoryIdentity::read(&repo)? != identity
+            {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Repository changed while collecting branch review files.",
+                ));
+            }
             Ok(json!({
                 "base_ref": base_ref, "base_oid": base_oid.to_string(), "head_oid": head_oid.to_string(),
+                "repo_identity": identity.fingerprint()?,
                 "files": files.into_iter().map(commit_file_json).collect::<Vec<_>>(),
             }))
         }
