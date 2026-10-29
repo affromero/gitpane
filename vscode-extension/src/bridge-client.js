@@ -108,6 +108,12 @@ class BridgeClient {
     return this.request('commit_files', { repo, oid });
   }
 
+  listLaunchers(repo) { return this.request('launchers_list', { repo }); }
+
+  planLauncher(repo, id, fingerprint) { return this.request('launcher_plan', { repo, id, fingerprint }); }
+
+  validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', { repo, id, fingerprint }); }
+
   call(method, params) {
     if (!this.child) return Promise.reject(new BridgeError('service_exited', 'Gitpane service is not running.'));
     if (this.pending.size >= MAX_PENDING) return Promise.reject(new BridgeError('busy', 'Too many Gitpane service requests are pending.'));

@@ -3,7 +3,7 @@
 const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard']);
-const REPO_ACTIONS = new Set(['createWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
+const REPO_ACTIONS = new Set(['createWorktree', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['removeWorktree']);
 
 function fingerprint(item, kind) {
@@ -50,6 +50,7 @@ class SidebarActions {
     this.openGithub = options.openGithub;
     this.openSession = options.openSession;
     this.openTerminal = options.openTerminal;
+    this.openLauncher = options.openLauncher;
     this.previewFileAction = options.previewFileAction;
   }
 
@@ -78,9 +79,11 @@ class SidebarActions {
         { label: 'GitHub Issues and Pull Requests', action: 'github' },
         { label: 'Sessions', action: 'session' },
         { label: 'Open Terminal', action: 'openTerminal' },
+        { label: 'Configured Launchers', action: 'openLauncher' },
         { label: 'Sync Direct Submodules', action: 'syncSubmodules' },
         { label: 'Update Submodules Recursively', action: 'updateSubmodules' },
         { label: 'Pull Direct Submodules', action: 'pullSubmodules' },
+        { label: 'Pull with Submodules', action: 'pullWithSubmodules' },
         { label: 'Reveal in Explorer', action: 'revealRepo' },
         { label: 'Copy Path', action: 'copyRepo' },
         { label: 'Push', action: 'push' },
@@ -148,6 +151,10 @@ class SidebarActions {
         if (this.openTerminal) await this.openTerminal(message.id);
         return;
       }
+      if (action === 'openLauncher') {
+        if (this.openLauncher) await this.openLauncher(message.id);
+        return;
+      }
       if (action === 'revealRepo') {
         await this.vscode.commands.executeCommand('revealInExplorer', this.vscode.Uri.file(item.repoPath));
         return;
@@ -179,12 +186,12 @@ class SidebarActions {
         params = { repo: item.repoPath, path: item.path, operation,
           ...(token ? { expected_token: token } : {}) };
       } else if (kind === 'repo' && action !== 'createWorktree') {
-        const submodules = ['syncSubmodules', 'updateSubmodules', 'pullSubmodules'].includes(action);
+        const submodules = ['syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules'].includes(action);
         method = submodules ? 'submodule_action' : 'repo_sync';
         if (typeof item.head !== 'string' || !/^[a-f0-9]{40,64}$/i.test(item.head)) {
           throw new Error('Cannot sync a repository without a current HEAD commit.');
         }
-        const submoduleOperations = { syncSubmodules: 'sync', updateSubmodules: 'update', pullSubmodules: 'pull_latest' };
+        const submoduleOperations = { syncSubmodules: 'sync', updateSubmodules: 'update', pullSubmodules: 'pull_latest', pullWithSubmodules: 'pull_with_submodules' };
         params = { repo: item.repoPath, operation: submodules ? submoduleOperations[action] : action,
           expected_branch: item.branch ?? null, expected_head: item.head };
       } else if (action === 'createWorktree') {
@@ -218,8 +225,9 @@ class SidebarActions {
             throw new Error('Gitpane returned an invalid submodule result.');
           }
           const verb = params.operation === 'sync' ? 'Synced' : params.operation === 'pull_latest' ? 'Pulled' : 'Updated';
-          const scope = params.operation === 'update' ? '' : ' direct';
-          const message = `${verb} ${result.completed.length}${scope} submodule(s).${result.skipped.length ? ` Skipped ${result.skipped.join(', ')}.` : ''}`;
+          const scope = ['update', 'pull_with_submodules'].includes(params.operation) ? '' : ' direct';
+          if (params.operation === 'pull_with_submodules' && result.parent_pulled !== true) throw new Error('Gitpane returned an invalid parent pull result.');
+          const message = `${params.operation === 'pull_with_submodules' ? 'Pulled repository. ' : ''}${verb} ${result.completed.length}${scope} submodule(s).${result.skipped.length ? ` Skipped ${result.skipped.join(', ')}.` : ''}`;
           await this.vscode.window.showInformationMessage(message);
         }
         if (method === 'worktree_create' && this.onWorktreeCreated) {

@@ -9,6 +9,7 @@ use crate::config::SubmoduleConfig;
 mod file_identity;
 mod github;
 mod graph;
+mod launcher;
 mod mutation;
 #[cfg(test)]
 mod mutation_tests;
@@ -132,6 +133,9 @@ fn process(
         }
         "submodule_inspect" => submodule::inspect(scope, params(request.params)?, sub_cfg),
         "sessions_list" => session::list(scope, params(request.params)?),
+        "launchers_list" => launcher::list(scope, params(request.params)?),
+        "launcher_plan" => launcher::plan(scope, params(request.params)?),
+        "launcher_validate" => launcher::validate(scope, params(request.params)?),
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;

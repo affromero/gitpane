@@ -12,6 +12,11 @@ use crate::session::env::Multiplexer;
 
 mod shell;
 
+/// Compile a configured command with values supplied separately in the environment.
+pub(crate) fn integrated_shell_script(template: &str) -> Result<String, String> {
+    shell::compile(template, None)
+}
+
 /// How a verb places the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Placement {

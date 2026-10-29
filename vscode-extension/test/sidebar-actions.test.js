@@ -46,7 +46,7 @@ function fixture() {
       if (!await options.validateTarget()) throw Object.assign(new Error('stale'), { code: 'workspace_changed' });
       calls.push(['mutation', method, params, options.lockKey]);
       if (failure) throw failure;
-      if (method === 'submodule_action') return { completed: ['child'], skipped: ['missing'] };
+      if (method === 'submodule_action') return { completed: ['child'], skipped: ['missing'], ...(params.operation === 'pull_with_submodules' ? { parent_pulled: true } : {}) };
     } },
     refresh: async () => { calls.push(['refresh']); if (refreshFailure) throw refreshFailure; },
     onWorktreeCreated: async target => { calls.push(['openWorktree', target]); },
@@ -54,6 +54,7 @@ function fixture() {
     openGithub: async id => { calls.push(['openGithub', id]); },
     openSession: async id => { calls.push(['openSession', id]); },
     openTerminal: async id => { calls.push(['openTerminal', id]); },
+    openLauncher: async id => { calls.push(['openLauncher', id]); },
     previewFileAction: (...args) => preview(...args)
   });
   return {
@@ -255,6 +256,17 @@ test('repository menu opens a terminal only for the current repository', async (
   assert.deepEqual(f.calls, []);
 });
 
+test('repository menu opens configured launchers only for the current repository', async () => {
+  const f = fixture();
+  f.pick(choices => choices.find(choice => choice.action === 'openLauncher'));
+  await f.actions.showMenu('repo', 'repo');
+  assert.deepEqual(f.calls, [['openLauncher', 'repo']]);
+  f.calls.length = 0;
+  f.pick(choices => { f.setRepo(undefined); return choices.find(choice => choice.action === 'openLauncher'); });
+  await f.actions.showMenu('repo', 'repo');
+  assert.deepEqual(f.calls, []);
+});
+
 test('submodule actions use displayed HEAD and report skipped direct modules', async () => {
   const f = fixture();
   const head = 'c'.repeat(40);
@@ -273,6 +285,11 @@ test('submodule actions use displayed HEAD and report skipped direct modules', a
   await f.actions.showMenu('repo', 'repo');
   assert.equal(f.calls[0][2].operation, 'pull_latest');
   assert.match(f.calls[1][1], /pulled 1 direct submodule/i);
+  f.calls.length = 0;
+  f.pick(choices => choices.find(choice => choice.action === 'pullWithSubmodules'));
+  await f.actions.showMenu('repo', 'repo');
+  assert.equal(f.calls[0][2].operation, 'pull_with_submodules');
+  assert.match(f.calls[1][1], /pulled repository.*updated 1 submodule/i);
 });
 
 test('a failed or uncertain mutation is reported and refreshes even if refresh also fails', async () => {

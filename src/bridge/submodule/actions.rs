@@ -21,7 +21,10 @@ pub(in crate::bridge) fn execute(scope: &Scope, input: Request) -> Result<Value,
         input.expected_branch.as_deref(),
         &input.expected_head,
     )?;
-    if !matches!(input.operation.as_str(), "sync" | "update" | "pull_latest") {
+    if !matches!(
+        input.operation.as_str(),
+        "sync" | "update" | "pull_latest" | "pull_with_submodules"
+    ) {
         return Err(BridgeError::new(
             "invalid_request",
             "unknown submodule action",
@@ -36,13 +39,17 @@ pub(in crate::bridge) fn execute(scope: &Scope, input: Request) -> Result<Value,
     }
     #[cfg(unix)]
     {
-        run_batch(scope, &repo, &input)
+        if input.operation == "pull_with_submodules" {
+            unix::pull_with_submodules(scope, &repo, &input)
+        } else {
+            run_batch(scope, &repo, &input)
+        }
     }
 }
 
 #[cfg(unix)]
 mod unix {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::path::{Component, Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -387,6 +394,16 @@ mod unix {
         repo: &Path,
         input: &Request,
     ) -> Result<Value, BridgeError> {
+        run_batch_scoped(scope, repo, input, None, Instant::now() + BATCH_TIMEOUT)
+    }
+
+    fn run_batch_scoped(
+        scope: &Scope,
+        repo: &Path,
+        input: &Request,
+        initial_heads: Option<&HashMap<PathBuf, ChildHead>>,
+        deadline: Instant,
+    ) -> Result<Value, BridgeError> {
         struct Frame {
             repo: PathBuf,
             prefix: PathBuf,
@@ -397,7 +414,6 @@ mod unix {
         }
 
         let initial = entries(scope, repo, &input.operation)?;
-        let deadline = Instant::now() + BATCH_TIMEOUT;
         let mut completed = Vec::new();
         let mut skipped = Vec::new();
         let mut count = initial.len();
@@ -456,8 +472,24 @@ mod unix {
                         "Submodule configuration, remote, index, branch or HEAD changed; refresh before retrying",
                     ));
                 }
+                if let Some(initial_heads) = initial_heads {
+                    if !entry.initialized {
+                        return Ok(false);
+                    }
+                    let child = scope.repository(&frame.repo.join(&entry.path))?;
+                    match initial_heads.get(&child) {
+                        None => return Ok(false),
+                        Some(head) if Some(head) != entry.child_head.as_ref() => {
+                            return Err(BridgeError::new(
+                                "stale_target",
+                                "Submodule branch or HEAD changed during parent pull",
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
                 if entry.skip {
-                    return Ok(());
+                    return Ok(false);
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -501,7 +533,11 @@ mod unix {
                             .as_deref()
                             .or(entry.module_update.as_deref())
                             .unwrap_or("checkout");
-                        args.extend(["update".into(), "--init".into(), format!("--{strategy}")]);
+                        args.push("update".into());
+                        if initial_heads.is_none() {
+                            args.push("--init".into());
+                        }
+                        args.push(format!("--{strategy}"));
                     }
                     args.extend(["--".into(), path.clone()]);
                     frame.repo.clone()
@@ -526,19 +562,28 @@ mod unix {
                         format!("Git submodule action failed ({}): {detail}", output.status),
                     ));
                 }
-                Ok(())
+                if initial_heads.is_some() && scope.repository(&target)? != target {
+                    return Err(BridgeError::new(
+                        "stale_target",
+                        "Submodule changed during update",
+                    ));
+                }
+                Ok(true)
             })();
-            if let Err(problem) = checked {
-                let problem = BridgeError::new(
-                    problem.code,
-                    format!(
-                        "Submodule {display}: {}. The selected submodule may have changed; inspect it before retrying.",
-                        problem.message
-                    ),
-                );
-                return Err(failure(problem, &completed, &skipped));
-            }
-            if entry.skip {
+            let should_update = match checked {
+                Ok(value) => value,
+                Err(problem) => {
+                    let problem = BridgeError::new(
+                        problem.code,
+                        format!(
+                            "Submodule {display}: {}. The selected submodule may have changed; inspect it before retrying.",
+                            problem.message
+                        ),
+                    );
+                    return Err(failure(problem, &completed, &skipped));
+                }
+            };
+            if !should_update {
                 skipped.push(display);
                 frames.push(frame);
                 continue;
@@ -590,7 +635,141 @@ mod unix {
                 frames.push(frame);
             }
         }
+        if let Some(initial_heads) = initial_heads {
+            for child in initial_heads
+                .keys()
+                .filter(|child| !visited.contains(*child))
+            {
+                let relative = child.strip_prefix(repo).map_err(error)?;
+                let display = relative
+                    .to_str()
+                    .ok_or_else(|| error("submodule path is not valid UTF-8"))?
+                    .to_owned();
+                if !skipped.contains(&display) {
+                    skipped.push(display);
+                }
+            }
+            if completed.len() + skipped.len() > MAX_SUBMODULES {
+                return Err(BridgeError::new(
+                    "partial_failure",
+                    "Too many submodules to report all skipped paths; inspect the repository",
+                ));
+            }
+            skipped.sort();
+        }
         Ok(json!({ "completed": completed, "skipped": skipped }))
+    }
+
+    pub(super) fn pull_with_submodules(
+        scope: &Scope,
+        repo: &Path,
+        input: &Request,
+    ) -> Result<Value, BridgeError> {
+        let deadline = Instant::now() + BATCH_TIMEOUT;
+        let root_head = read_head(repo)?;
+        let branch = mutation::verify_sync_head(
+            repo,
+            input.expected_branch.as_deref(),
+            &input.expected_head,
+        )?;
+        let children = scope.submodule_repositories(repo)?;
+        if children.len() > MAX_SUBMODULES {
+            return Err(BridgeError::new(
+                "invalid_request",
+                "too many initialized submodules for one action",
+            ));
+        }
+        entries(scope, repo, "update")?;
+        let mut initial_heads = HashMap::new();
+        for child in children {
+            entries(scope, &child, "update")?;
+            initial_heads.insert(child.clone(), read_head(&child)?);
+        }
+        scope.repository(repo)?;
+        mutation::verify_sync_head(repo, input.expected_branch.as_deref(), &input.expected_head)?;
+        let args = crate::git::sync_arguments(
+            repo,
+            &branch,
+            false,
+            [
+                "-c",
+                "submodule.recurse=false",
+                "-c",
+                "fetch.recurseSubmodules=false",
+                "pull",
+                "--no-recurse-submodules",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        );
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(BridgeError::new(
+                "timeout",
+                "Submodule action exceeded its time limit",
+            ));
+        }
+        let output = process::run_git_op_noninteractive(repo, &args, remaining).map_err(|failure| {
+            let code = if failure.kind() == std::io::ErrorKind::NotFound { "git_error" } else { "outcome_unknown" };
+            BridgeError::new(code, format!("Parent pull did not complete: {failure}. Inspect the repository before retrying."))
+        })?;
+        if !output.status.success() {
+            let detail: String = String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(2048)
+                .collect();
+            return Err(BridgeError::new(
+                "git_error",
+                format!(
+                    "Parent pull failed ({}): {detail}. Inspect the repository before retrying.",
+                    output.status
+                ),
+            ));
+        }
+        let result = (|| {
+            if scope.repository(repo)? != repo {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Parent repository changed",
+                ));
+            }
+            let head = read_head(repo)?;
+            if head.branch_ref != root_head.branch_ref {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Parent branch changed during pull",
+                ));
+            }
+            let expected_head = head
+                .oid
+                .ok_or_else(|| error("Parent HEAD is unavailable after pull"))?
+                .to_string();
+            let followup = Request {
+                repo: repo.to_path_buf(),
+                operation: "update".into(),
+                expected_branch: input.expected_branch.clone(),
+                expected_head,
+            };
+            run_batch_scoped(scope, repo, &followup, Some(&initial_heads), deadline)
+        })()
+        .map_err(|error| {
+            BridgeError::new(
+                if error.code == "outcome_unknown" {
+                    "outcome_unknown"
+                } else {
+                    "partial_failure"
+                },
+                format!(
+                    "Parent pull completed. Submodule update failed: {}",
+                    error.message
+                ),
+            )
+        })?;
+        Ok(
+            json!({ "parent_pulled": true, "completed": result["completed"], "skipped": result["skipped"] }),
+        )
     }
 }
 

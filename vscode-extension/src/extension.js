@@ -11,6 +11,7 @@ const { GithubProvider } = require('./github-provider');
 const { SubmoduleProvider } = require('./submodule-provider');
 const { SessionProvider } = require('./session-provider');
 const { RepoTerminalProvider } = require('./repo-terminal-provider');
+const { LauncherProvider } = require('./launcher-provider');
 const { MutationManager } = require('./mutation-manager');
 const { SidebarActions } = require('./sidebar-actions');
 const { changedFileCount, comparison, groups, isSubmodule, statusLabel } = require('./model');
@@ -657,6 +658,7 @@ async function activate(context) {
   const github = new GithubProvider(tree, backend);
   const sessions = new SessionProvider(tree, backend);
   const terminals = new RepoTerminalProvider(tree);
+  const launchers = new LauncherProvider(tree, backend);
   const submodules = new SubmoduleProvider(tree, backend, api, {
     resolveChange: node => provider.currentChange(node),
     openGraph: repo => graph.open(repo)
@@ -687,6 +689,10 @@ async function activate(context) {
       const repo = provider.currentRepository(id);
       if (repo) await terminals.open(repo);
     },
+    openLauncher: async id => {
+      const repo = provider.currentRepository(id);
+      if (repo) await launchers.open(repo);
+    },
     onWorktreeCreated: async target => {
       if (!tree.isPathInWorkspace(target)) return;
       try {
@@ -696,7 +702,7 @@ async function activate(context) {
       catch (error) { throw new Error(`Worktree created, but VS Code could not open it: ${error.message}`); }
     },
     refresh: () => tree.refresh() });
-  context.subscriptions.push(backend, tree, provider, graph, review, github, sessions, terminals, submodules, mutations,
+  context.subscriptions.push(backend, tree, provider, graph, review, github, sessions, terminals, launchers, submodules, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.commands.registerCommand('gitpane.refresh', () => tree.refresh(true)),

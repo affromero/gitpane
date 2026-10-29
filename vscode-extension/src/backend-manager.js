@@ -131,6 +131,9 @@ class BackendManager {
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
+      else if (method === 'launchers_list') result = await client.listLaunchers(repo);
+      else if (method === 'launcher_plan') result = await client.planLauncher(repo, argument.id, argument.fingerprint);
+      else if (method === 'launcher_validate') result = await client.validateLauncher(repo, argument.id, argument.fingerprint);
       else throw new BridgeError('invalid_request', 'Unsupported Gitpane backend request.');
       if (this.disposed || generation !== this.generation || client !== this.client) {
         throw new BridgeError('workspace_changed', 'Workspace changed before the Gitpane response arrived.');
@@ -186,6 +189,12 @@ class BackendManager {
   graph(repo, firstParent = false, filters, collapsedSegments) { return this.request('graph', repo, firstParent, filters, collapsedSegments); }
 
   commitFiles(repo, oid) { return this.request('commit_files', repo, oid); }
+
+  listLaunchers(repo) { return this.request('launchers_list', repo); }
+
+  planLauncher(repo, id, fingerprint) { return this.request('launcher_plan', repo, { id, fingerprint }); }
+
+  validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', repo, { id, fingerprint }); }
 
   retry() { return this.reconfigure(); }
 

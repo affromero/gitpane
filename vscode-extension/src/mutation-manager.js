@@ -23,7 +23,7 @@ function normalizeAction(method, params) {
     return { repo: params.repo, operation: params.operation,
       expected_branch: params.expected_branch, expected_head: params.expected_head };
   }
-  if (method === 'submodule_action' && ['sync', 'update', 'pull_latest'].includes(params.operation) &&
+  if (method === 'submodule_action' && ['sync', 'update', 'pull_latest', 'pull_with_submodules'].includes(params.operation) &&
     (params.expected_branch === null || typeof params.expected_branch === 'string') &&
     typeof params.expected_head === 'string' && /^[a-f0-9]{40,64}$/i.test(params.expected_head)) {
     return { repo: params.repo, operation: params.operation,

@@ -42,13 +42,20 @@ delete a submodule entry. Gitpane's push and pull actions do not recurse into
 submodules. On Unix, the repository menu can sync direct submodules, update
 submodules recursively, or pull the latest changes in direct submodules. It
 reports skipped modules and partial failures. Each repository is checked
-against the workspace before Git acts on it.
+against the workspace before Git acts on it. Pull with Submodules first pulls
+the parent, then updates the submodules that were already initialized; it
+reports partial completion if a later step fails.
 
 The repository menu can open an integrated terminal or find and open tmux or
 herdr sessions belonging to the repository on the workspace host. tmux
 navigation uses Gitpane's `[goto]` configuration. Session navigation and
 submodule actions are not yet supported on Windows. Remote workspace hosts may
 not be able to focus a local terminal window.
+
+Configured Launchers offers Gitpane's `[open]` and custom keybinding commands
+in integrated terminals. Command and inline placements are supported; other
+placements and interpreter executables report an error rather than changing
+their behavior silently.
 
 Discard and delete require confirmation and check the selected file for changes
 before running Git. Files larger than 64 MiB, directories and special files

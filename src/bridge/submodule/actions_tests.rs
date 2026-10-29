@@ -349,6 +349,184 @@ fn pull_latest_updates_initialized_direct_child_using_its_remote() {
     );
 }
 
+fn publish_parent_submodule_update(parent: &Path, temporary: &tempfile::TempDir, old: Oid) -> Oid {
+    let bare = temporary.path().join("parent-remote.git");
+    let output = crate::git::process::git_command(parent)
+        .args([
+            "clone",
+            "--bare",
+            parent.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let source_path = temporary.path().join("parent-source");
+    let source = Repository::clone(bare.to_str().unwrap(), &source_path).unwrap();
+    point_index_at(&source_path, &["a"], &[old]);
+    let new_head = commit_file(&source, "parent.txt", "remote parent");
+    let output = crate::git::process::git_command(&source_path)
+        .args(["push", "origin", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let repo = Repository::open(parent).unwrap();
+    repo.remote("origin", bare.to_str().unwrap()).unwrap();
+    let branch = repo.head().unwrap().shorthand().unwrap().to_owned();
+    let mut config = repo.config().unwrap();
+    config
+        .set_str(&format!("branch.{branch}.remote"), "origin")
+        .unwrap();
+    config
+        .set_str(
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{branch}"),
+        )
+        .unwrap();
+    new_head
+}
+
+#[test]
+fn pull_with_submodules_updates_initialized_children_only() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (temporary, parent, old, scope) = fixture(&["a", "b"]);
+    let remote_head = publish_parent_submodule_update(&parent, &temporary, old[0]);
+    let deinit = crate::git::process::git_command(&parent)
+        .args(["submodule", "deinit", "-f", "--", "b"])
+        .output()
+        .unwrap();
+    assert!(
+        deinit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deinit.stderr)
+    );
+    let result = request(&parent, &scope, "pull_with_submodules").unwrap();
+    assert_eq!(
+        result,
+        json!({"parent_pulled": true, "completed": ["a"], "skipped": ["b"]})
+    );
+    assert_eq!(
+        Repository::open(&parent).unwrap().head().unwrap().target(),
+        Some(remote_head)
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("a/file.txt")).unwrap(),
+        "old"
+    );
+    assert!(!parent.join("b/file.txt").exists());
+}
+
+#[test]
+fn pull_with_submodules_reports_parent_success_when_child_checkout_fails() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (temporary, parent, old, scope) = fixture(&["a"]);
+    let remote_head = publish_parent_submodule_update(&parent, &temporary, old[0]);
+    std::fs::write(parent.join("a/file.txt"), "unsaved child").unwrap();
+    let problem = request(&parent, &scope, "pull_with_submodules").unwrap_err();
+    assert_eq!(problem.code, "partial_failure", "{}", problem.message);
+    assert!(
+        problem.message.contains("Parent pull completed"),
+        "{}",
+        problem.message
+    );
+    assert_eq!(
+        Repository::open(&parent).unwrap().head().unwrap().target(),
+        Some(remote_head)
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("a/file.txt")).unwrap(),
+        "unsaved child"
+    );
+}
+
+#[test]
+fn pull_with_submodules_reports_removed_children_without_touching_them() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (temporary, parent, old, scope) = fixture(&["a"]);
+    publish_parent_submodule_update(&parent, &temporary, old[0]);
+    let source_path = temporary.path().join("parent-source");
+    let output = crate::git::process::git_command(&source_path)
+        .args(["rm", "-f", "--", "a"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let source = Repository::open(&source_path).unwrap();
+    let head = commit_file(&source, "parent.txt", "remote removes submodule");
+    let output = crate::git::process::git_command(&source_path)
+        .args(["push", "origin", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = request(&parent, &scope, "pull_with_submodules").unwrap();
+    assert_eq!(
+        result,
+        json!({"parent_pulled": true, "completed": [], "skipped": ["a"]})
+    );
+    assert_eq!(
+        Repository::open(&parent).unwrap().head().unwrap().target(),
+        Some(head)
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("a/file.txt")).unwrap(),
+        "new"
+    );
+}
+
+#[test]
+fn pull_with_submodules_updates_an_initialized_nested_descendant() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (temporary, parent, _, scope) = fixture(&["a"]);
+    let nested_path = temporary.path().join("nested-remote");
+    std::fs::create_dir(&nested_path).unwrap();
+    let nested = Repository::init(&nested_path).unwrap();
+    let old = commit_file(&nested, "nested.txt", "old nested");
+    commit_file(&nested, "nested.txt", "new nested");
+    let child_path = parent.join("a");
+    let child = Repository::open(&child_path).unwrap();
+    let mut sub = child
+        .submodule(nested_path.to_str().unwrap(), Path::new("nested"), true)
+        .unwrap();
+    sub.clone(None).unwrap();
+    sub.add_finalize().unwrap();
+    drop(sub);
+    point_index_at(&child_path, &["nested"], &[old]);
+    let child_head = commit_file(&child, "file.txt", "new");
+    publish_parent_submodule_update(&parent, &temporary, child_head);
+    let result = request(&parent, &scope, "pull_with_submodules").unwrap();
+    assert_eq!(
+        result,
+        json!({"parent_pulled": true, "completed": ["a", "a/nested"], "skipped": []})
+    );
+    assert_eq!(
+        std::fs::read_to_string(child_path.join("nested/nested.txt")).unwrap(),
+        "old nested"
+    );
+}
+
 fn delayed_pull_rejects_changed_settings(change_remote: bool) {
     use std::os::unix::fs::PermissionsExt;
     if !crate::git::git_test_available() {
