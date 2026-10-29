@@ -90,6 +90,10 @@ class GraphProvider {
     return this.guard() && repo && this.tree.isVisible(repo) ? repo : undefined;
   }
 
+  isCurrentRepo(repo) {
+    return !!repo && this.currentRepo()?.rootUri.toString() === repo.rootUri.toString();
+  }
+
   open(repo, guard = () => true, validateGuard) {
     const token = repo && this.tree.repositoryToken(repo);
     const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
@@ -199,7 +203,7 @@ class GraphProvider {
     const panel = this.panel;
     const epoch = this.ownerEpoch;
     const guard = this.validateGuard;
-    if (!panel || panel.visible === false || this.currentRepo() !== repo) return false;
+    if (!panel || panel.visible === false || !this.isCurrentRepo(repo)) return false;
     if (this.validationPending?.epoch === epoch) return this.validationPending.promise;
     const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === epoch &&
       this.validateGuard === guard && this.repoKey === repo.rootUri.toString();
@@ -238,7 +242,7 @@ class GraphProvider {
     const epoch = this.pollEpoch;
     const generation = this.graphGeneration;
     const current = () => this.panel === panel && panel.visible !== false && this.pollEpoch === epoch &&
-      this.graphGeneration === generation && this.currentRepo() === repo;
+      this.graphGeneration === generation && this.isCurrentRepo(repo);
     this.pollPending = true;
     try {
       if (!await this.validateGraph(repo) || !current()) return;
@@ -306,11 +310,11 @@ class GraphProvider {
     try {
       if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
       const before = await this.readRevision(repo);
-      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
       const result = await this.backend.graph(repo.rootUri.fsPath, this.firstParent, copyFilters(this.filters), [...this.collapsedSegments]);
-      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
       const after = await this.readRevision(repo);
-      if (generation !== this.graphGeneration || this.panel !== panel || this.currentRepo() !== repo || panel.visible === false) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
       if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
       if (before !== after) {
         this.revision = undefined;
@@ -354,7 +358,7 @@ class GraphProvider {
         labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
       if (this.selected) await this.loadCommit(this.selected);
     } catch (error) {
-      if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || this.currentRepo() !== repo) return;
+      if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || !this.isCurrentRepo(repo)) return;
       this.rows.clear();
       this.segments.clear();
       this.revision = undefined;
@@ -428,7 +432,7 @@ class GraphProvider {
     const repo = this.currentRepo();
     const row = this.rows.get(oid);
     if (!repo || !row || row.collapsed) return;
-    if (!await this.validateGraph(repo) || this.rows.get(oid) !== row || this.currentRepo() !== repo) return;
+    if (!await this.validateGraph(repo) || this.rows.get(oid) !== row || !this.isCurrentRepo(repo)) return;
     const generation = ++this.detailGeneration;
     this.selected = oid;
     this.files.clear();
@@ -459,7 +463,7 @@ class GraphProvider {
     const repo = this.currentRepo();
     const file = this.files.get(id);
     if (!repo || !file || file.oid !== this.selected) return;
-    if (!await this.validateGraph(repo) || this.files.get(id) !== file || this.currentRepo() !== repo) return;
+    if (!await this.validateGraph(repo) || this.files.get(id) !== file || !this.isCurrentRepo(repo)) return;
     if (file.isSubmodule) return this.openCommitGitlink(repo, file, id);
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
@@ -480,7 +484,7 @@ class GraphProvider {
     const panel = this.panel, detail = this.detailGeneration, graph = this.graphGeneration;
     const repoToken = this.tree.repositoryToken(repo);
     const current = () => this.panel === panel && panel?.visible !== false && this.detailGeneration === detail &&
-      this.graphGeneration === graph && this.currentRepo() === repo && this.selected === file.oid && this.files.get(id) === file;
+      this.graphGeneration === graph && this.isCurrentRepo(repo) && this.selected === file.oid && this.files.get(id) === file;
     const verify = async () => {
       if (!current() || !await this.validateGraph(repo) || !current()) return false;
       const latest = await this.backend.commitFiles(repo.rootUri.fsPath, file.oid);
@@ -492,7 +496,8 @@ class GraphProvider {
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-    const persistent = () => this.tree.git.repositories.includes(repo) && this.tree.isCurrentRepository(repo, repoToken);
+    const persistent = () => this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
+      this.tree.isCurrentRepository(repo, repoToken);
     const documentGuard = () => this.links.validateStaticIdentity(repo.rootUri.fsPath, file.repoIdentity, persistent);
     const group = JSON.stringify([repo.rootUri.fsPath, file.repoIdentity, repoToken]);
     const side = async (value, target, ref) => {

@@ -403,7 +403,7 @@ class RepositoryTree {
   }
 
   explicitWorktreeAnchor(repo, view = this.workspaceView()) {
-    const target = view.records.find(record => record.repo === repo);
+    const target = view.records.find(record => record.repo.rootUri.toString() === repo.rootUri.toString());
     if (!target?.explicit || !target.common) return undefined;
     const anchors = view.records.filter(record => record !== target && sameIdentity(record.common, target.common) &&
       Array.isArray(record.status?.worktrees)).sort((a, b) => compareWorktreeAnchors(a.repo, b.repo));

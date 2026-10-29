@@ -48,7 +48,7 @@ test('webview shows workspace state and opens only currently visible changes', a
   };
   const tree = {
     backend,
-    git: { repositories: [repo, child] }, busy: false, failedStatuses: new Set(),
+    git: { get repositories() { return [{ ...repo }, { ...child }]; } }, busy: false, failedStatuses: new Set(),
     workspacePaths: [path.dirname(root)], isPathInWorkspace(value) { return value.startsWith(`${path.dirname(root)}${path.sep}`); },
     backendStatuses: new Map([[root, {
       common_dir: path.join(root, '.git'), branch: 'topic', is_dirty: true, ahead: 2, behind: 1,
@@ -59,18 +59,19 @@ test('webview shows workspace state and opens only currently visible changes', a
     onDidChangeTreeData(handler) { onChange = handler; return { dispose() {} }; },
     setVisible(value) { visible = value; },
     isVisible() { return visible; },
-    repositoryToken(target) { return target === repo ? 1 : target === child ? 2 : undefined; },
+    repositoryToken(target) { return target?.rootUri.fsPath === root ? 1 : target?.rootUri.fsPath === worktreePath ? 2 : undefined; },
     isCurrentRepository(target, token) { return visible && this.repositoryToken(target) === token; },
     workspaceWorktrees(parent) {
-      return visible && parent === repo ? this.backendStatuses.get(root).worktrees.filter(item => this.isPathInWorkspace(item.path)) : [];
+      return visible && parent?.rootUri.fsPath === root ? this.backendStatuses.get(root).worktrees.filter(item => this.isPathInWorkspace(item.path)) : [];
     },
     worktreeRepository(parent, value) {
-      return visible && parent === repo && value === worktreePath &&
-        this.backendStatuses.get(root).worktrees.some(item => item.path === value) ? child : undefined;
+      return visible && parent?.rootUri.fsPath === root && value === worktreePath &&
+        this.backendStatuses.get(root).worktrees.some(item => item.path === value) ? { ...child } : undefined;
     },
     groupsFor(target) {
-      const change = target === child ? childCurrent : current;
-      return change ? [{ id: target === child ? 'working' : 'index', label: target === child ? 'Unstaged' : 'Staged', changes: [change] }] : [];
+      const isChild = target.rootUri.fsPath === worktreePath;
+      const change = isChild ? childCurrent : current;
+      return change ? [{ id: isChild ? 'working' : 'index', label: isChild ? 'Unstaged' : 'Staged', changes: [change] }] : [];
     },
     getChildren(node) {
       if (!node) return [{ type: 'repo', repo }];
@@ -129,7 +130,7 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(provider.resolveChange(childFile.id).repoPath, worktreePath);
     await onMessage({ type: 'openChange', id: childFile.id });
     assert.equal(calls[0][0], 'gitpane.openChange');
-    assert.equal(calls[0][1].repo, child);
+    assert.equal(calls[0][1].repo.rootUri.fsPath, worktreePath);
     const linked = tree.backendStatuses.get(root).worktrees.shift();
     await onMessage({ type: 'openChange', id: childFile.id });
     assert.equal(calls.length, 1);

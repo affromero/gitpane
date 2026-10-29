@@ -45,7 +45,7 @@ test('commit files open native diffs against the first parent and reject stale a
   let linked = true;
   let incarnation = 1;
   const tree = {
-    git: { repositories: [repo] },
+    git: { get repositories() { return [{ ...repo }]; } },
     isVisible: () => visible,
     repositoryToken: () => incarnation,
     isCurrentRepository: (_, token) => visible && token === incarnation,
@@ -167,7 +167,7 @@ test('committed gitlinks use their tree endpoints and reject stale or unsupporte
     const { GraphProvider } = require('../src/graph-provider');
     const repo = { rootUri: uri(path.resolve('workspace/repo')) };
     let current = true, hold = false, release;
-    const tree = { git: { repositories: [repo] }, isVisible: () => current, repositoryToken: () => 1,
+    const tree = { git: { get repositories() { return [{ ...repo }]; } }, isVisible: () => current, repositoryToken: () => 1,
       isCurrentRepository: (_repo, token) => current && token === 1,
       onDidChangeTreeData: () => ({ dispose() {} }) };
     const oid = 'a'.repeat(40), parent = 'b'.repeat(40), before = '1'.repeat(40), after = '2'.repeat(40);

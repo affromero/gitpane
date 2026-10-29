@@ -48,7 +48,8 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
   const repoIdentity = options.repoIdentity || status?.repo_identity;
   if (!identity(repoIdentity)) throw new Error('Repository identity is unavailable. Refresh Gitpane and try again.');
   const current = () => {
-    if (!tree.git.repositories.includes(repo) || !tree.isCurrentRepository(repo, token) || (options.current && !options.current())) return false;
+    if (!tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) ||
+        !tree.isCurrentRepository(repo, token) || (options.current && !options.current())) return false;
     if (!node.parentWorktree) return true;
     const parent = tree.git.repositories.find(item => item.rootUri.toString() === node.parentWorktree.repoKey);
     return !!parent && tree.isCurrentRepository(parent, node.parentWorktree.repoToken) &&

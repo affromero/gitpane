@@ -646,7 +646,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
         has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false };
     }
   };
-  const api = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event };
+  const api = { get repositories() { return repos.map(repo => ({ ...repo })); }, onDidOpenRepository: event, onDidCloseRepository: event };
   let onWorkspaceChange;
   const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }],
@@ -876,7 +876,9 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   const repo = { rootUri: uri(repoPath), state: { HEAD: { name: 'main' }, onDidChange: event,
     workingTreeChanges: [apiChange] }, async status() { statusCalls++; } };
   let onOpen, onClose;
-  const api = { repositories: [repo],
+  let apiRepositories = [repo];
+  const api = { get repositories() { return apiRepositories.map(item => ({ ...item })); },
+    set repositories(value) { apiRepositories = value; },
     onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
     onDidCloseRepository(handler) { onClose = handler; return { dispose() {} }; },
     toGitUri: (value, ref) => ({ value, ref }) };
@@ -894,6 +896,8 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
   let provider;
   let holdChanges = false;
   let releaseChanges;
+  let holdVerification = false;
+  let releaseVerification;
   class Backend {
     constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
     async status() { backendCalls++; return { common_dir: path.join(realRepo, '.git'), branch: 'main',
@@ -906,6 +910,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
       return changesPage([change('untracked', 'file.txt', 'untracked')]);
     }
     async verifyChanges() {
+      if (holdVerification) await new Promise(resolve => { releaseVerification = resolve; });
       const record = change('untracked', 'file.txt', 'untracked');
       return { page: changesPage([record]), change: record };
     }
@@ -962,14 +967,14 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     assert.match(graphMessages.at(-1).error, /no longer in the workspace/i);
     await provider.tree.refresh();
     const current = provider.snapshot().repositories[0];
-    const repoId = current.id;
+    let repoId = current.id;
     assert.notEqual(repoId, previousId);
     handlers.get('gitpane.openGraph')(repoId);
     await receiveGraph({ type: 'ready' });
     assert.deepEqual(graphRequests, [repoPath, repoPath]);
     await provider.loadChanges(repoId);
     const fileId = provider.snapshot().repositories[0].groups[0].files[0].id;
-    const node = provider.changes.get(fileId);
+    let node = provider.changes.get(fileId);
     await handlers.get('gitpane.openChange')(node);
     assert.equal(calls[0][0], 'vscode.diff');
     holdChanges = true;
@@ -981,6 +986,21 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     await Promise.all([refreshing, clickDuringRefresh]);
     assert.equal(calls.length, 2);
     assert.equal(calls[1][0], 'vscode.diff');
+    holdVerification = true;
+    const staleClick = handlers.get('gitpane.openChange')(node);
+    while (!releaseVerification) await new Promise(resolve => setImmediate(resolve));
+    api.repositories = [];
+    onClose(reopened);
+    api.repositories = [{ ...reopened }];
+    onOpen(reopened);
+    holdVerification = false;
+    releaseVerification();
+    await staleClick;
+    assert.equal(calls.length, 2, 'a reopened repository cannot receive the pending diff');
+    await provider.tree.refresh();
+    repoId = provider.snapshot().repositories[0].id;
+    await provider.loadChanges(repoId);
+    node = provider.changes.get(provider.snapshot().repositories[0].groups[0].files[0].id);
     const beforeStatus = statusCalls;
     const beforeBackend = backendCalls;
     fs.unlinkSync(path.join(realWorkspace, 'repo'));

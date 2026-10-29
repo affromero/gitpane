@@ -179,7 +179,8 @@ class GitpaneViewProvider {
     const repo = this.currentOwner(id);
     if (!repo) return;
     const token = this.tree.repositoryToken(repo);
-    const guard = () => this.currentOwner(id) === repo && this.tree.isCurrentRepository(repo, token);
+    const guard = () => this.currentOwner(id)?.rootUri.toString() === repo.rootUri.toString() &&
+      this.tree.isCurrentRepository(repo, token);
     await this.pager.refresh(id, repo.rootUri.fsPath, guard);
     this.scheduleChangesRefresh();
   }
@@ -242,7 +243,8 @@ class GitpaneViewProvider {
 
   currentChange(node) {
     const stored = this.changes.get(node?.fileId);
-    if (!stored || stored.repo !== node.repo || stored.repoToken !== node.repoToken || stored.group !== node.group ||
+    if (!stored || stored.repo.rootUri.toString() !== node.repo?.rootUri?.toString() ||
+        stored.repoToken !== node.repoToken || stored.group !== node.group ||
         stored.ownerId !== node.ownerId || stored.change.uri.toString() !== node.change?.uri?.toString() ||
         JSON.stringify(stored.record) !== JSON.stringify(node.record)) return undefined;
     node = stored;
@@ -292,7 +294,7 @@ class GitpaneViewProvider {
       const token = this.tree.repositoryToken(repo);
       if (status?.is_linked_worktree !== true || !/^[a-f0-9]{64}$/.test(status.repo_identity || '') ||
           !this.tree.isCurrentRepository(repo, token)) return actionRepo;
-      const record = this.tree.workspaceView().records.find(item => item.repo === repo);
+      const record = this.tree.workspaceView().records.find(item => item.repo.rootUri.toString() === repo.rootUri.toString());
       return { ...actionRepo, worktreeRemoval: { ...actionRepo, path: repo.rootUri.fsPath,
         targetToken: token, selfRemoval: true, workspaceFolder: !!record?.explicit } };
     }

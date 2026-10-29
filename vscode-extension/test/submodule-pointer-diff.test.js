@@ -19,7 +19,7 @@ function fixture(t, record, sides, head = 'a'.repeat(40)) {
   const root = path.resolve('workspace/repo'), repo = { rootUri: uri(root) };
   let alive = true, selected = true, revalidate = true, reads = 0, compareHook = () => {}, contentHook = () => {};
   const changes = new EventEmitter(), commands = [];
-  const tree = { git: { repositories: [repo] }, backendStatuses: new Map([[repo.rootUri.toString(), { repo_identity: 'b'.repeat(64) }]]),
+  const tree = { git: { get repositories() { return [{ ...repo }]; } }, backendStatuses: new Map([[repo.rootUri.toString(), { repo_identity: 'b'.repeat(64) }]]),
     isCurrentRepository: (_repo, token) => alive && token === 1, onDidChangeTreeData: changes.event };
   const node = { repo, repoToken: 1, record, group: record.group, fileId: 'file', change: { uri: uri(path.join(root, record.path)) } };
   const snapshot = { repo_identity: 'b'.repeat(64), head_oid: head, record, sides };
