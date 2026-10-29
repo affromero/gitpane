@@ -59,12 +59,15 @@ function countInfo(owner) {
     ? owner.changeCountLowerBound : 0;
   const count = pending ? Math.max(loaded, lower) : loaded;
   return { count, unknown: !!page && page.state !== 'ready' && !count && !!owner.dirty,
-    partial: !!page && ((pending && count > 0) || page.previous || page.next || page.page > 0) };
+    partial: !!page && ((pending && count > 0) || page.previous || page.next || page.page > 0),
+    hasDirectory: (owner.groups || []).some(group => (group.files || []).some(file => file.directory)) };
 }
 
 function countText(info) {
   if (info.unknown) return 'changes available';
-  return `${info.partial ? 'at least ' : ''}${info.count} ${info.count === 1 ? 'file' : 'files'}`;
+  const changes = info.partial || info.hasDirectory;
+  const noun = changes ? (info.count === 1 ? 'change' : 'changes') : (info.count === 1 ? 'file' : 'files');
+  return `${info.partial ? 'at least ' : ''}${info.count} ${noun}`;
 }
 
 function requestChanges(owner, force = false) {

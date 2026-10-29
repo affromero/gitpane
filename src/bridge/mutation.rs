@@ -162,7 +162,11 @@ pub(super) fn repo_sync(scope: &Scope, input: RepoSync) -> Result<Value, BridgeE
     run(&repo_path, &args)
 }
 
-fn validate_file_path(scope: &Scope, repo: &Path, path: &Path) -> Result<(), BridgeError> {
+pub(super) fn validate_file_path(
+    scope: &Scope,
+    repo: &Path,
+    path: &Path,
+) -> Result<(), BridgeError> {
     relative_path(path)?;
     let full = repo.join(path);
     let parent = full

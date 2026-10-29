@@ -38,7 +38,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else {
-    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch}});
+    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch}});
   }
 });
 
@@ -100,6 +100,9 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.equal(executed[0], path.resolve('extension/bin', process.platform === 'win32' ? 'gitpane.exe' : 'gitpane'));
   assert.deepEqual((await manager.status(path.join(root, 'repo'))).roots, [root]);
   assert.equal((await manager.status(path.join(root, 'repo'), false)).include_worktrees, false);
+  const compact = await manager.status(path.join(root, 'repo'), false, { summaryOnly: true, watchedPaths: ['link'] });
+  assert.equal(compact.summary_only, true);
+  assert.deepEqual(compact.watched_paths, ['link']);
   const graph = await manager.graph(path.join(root, 'repo'), true);
   assert.equal(graph.method, 'graph');
   assert.equal(graph.first_parent, true);
@@ -110,7 +113,9 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.equal(files.method, 'commit_files');
   assert.equal(files.oid, 'abc123');
   assert.equal((await manager.branchReview(path.join(root, 'repo'))).method, 'branch_review');
-  assert.equal((await manager.inspectSubmodule(path.join(root, 'repo'), 'child')).path, 'child');
+  const child = await manager.inspectSubmodule(path.join(root, 'repo'), 'child');
+  assert.equal(child.path, 'child');
+  assert.equal(child.summary_only, true);
   assert.deepEqual(await manager.fileActionPreview(path.join(root, 'repo'), 'file', 'discard'), {
     roots: [root], method: 'file_action_preview', path: 'file', operation: 'discard'
   });

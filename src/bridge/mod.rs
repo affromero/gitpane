@@ -27,6 +27,8 @@ use scope::Scope;
 
 const PROTOCOL_VERSION: u64 = 1;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+// Leave room below the extension host's 16 MiB line limit for framing.
+const MAX_RESPONSE_BYTES: usize = 15 * 1024 * 1024;
 
 #[derive(Debug)]
 struct BridgeError {
@@ -71,6 +73,10 @@ struct StatusRequest {
     repo: PathBuf,
     #[serde(default = "include_worktrees_by_default")]
     include_worktrees: bool,
+    #[serde(default)]
+    summary_only: bool,
+    #[serde(default)]
+    watched_paths: Vec<PathBuf>,
 }
 
 fn include_worktrees_by_default() -> bool {
@@ -151,7 +157,14 @@ fn process(
         "status" => {
             let input: StatusRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
-            let result = status::query(&repo, scope, sub_cfg, input.include_worktrees)?;
+            let result = status::query(
+                &repo,
+                scope,
+                sub_cfg,
+                input.include_worktrees,
+                input.summary_only,
+                &input.watched_paths,
+            )?;
             scope.repository(&repo)?;
             Ok(result)
         }
@@ -232,7 +245,16 @@ fn write_reply(
             json!({ "id": id, "error": { "code": error.code, "message": error.message } })
         }
     };
-    serde_json::to_writer(&mut *writer, &reply).map_err(io::Error::other)?;
+    let encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+    if encoded.len() > MAX_RESPONSE_BYTES {
+        let error = json!({ "id": id, "error": {
+            "code": "response_too_large",
+            "message": "Gitpane response exceeds the supported size limit"
+        }});
+        serde_json::to_writer(&mut *writer, &error).map_err(io::Error::other)?;
+    } else {
+        writer.write_all(&encoded)?;
+    }
     writer.write_all(b"\n")?;
     writer.flush()
 }

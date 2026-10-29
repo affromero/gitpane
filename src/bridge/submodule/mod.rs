@@ -15,6 +15,8 @@ pub(super) mod actions;
 pub(super) struct Request {
     repo: PathBuf,
     path: PathBuf,
+    #[serde(default)]
+    summary_only: bool,
 }
 
 fn error(error: impl std::fmt::Display) -> BridgeError {
@@ -86,7 +88,7 @@ pub(super) fn inspect(
     } else {
         list_revision_files(&child, base, head).map_err(error)?
     };
-    let child_status = status::query(&child, scope, sub_cfg, true)?;
+    let child_status = status::query(&child, scope, sub_cfg, true, input.summary_only, &[])?;
     if scope.repository(&input.repo)? != parent_path || scope.repository(&child_path)? != child {
         return Err(BridgeError::new(
             "stale_target",
@@ -173,6 +175,7 @@ mod tests {
             Request {
                 repo: repo.to_path_buf(),
                 path: PathBuf::from(path),
+                summary_only: false,
             },
             &SubmoduleConfig::default(),
         )
@@ -196,6 +199,19 @@ mod tests {
                 .iter()
                 .any(|file| file["path"] == "base")
         );
+        let compact = inspect(
+            &scope,
+            Request {
+                repo: parent.clone(),
+                path: PathBuf::from("child"),
+                summary_only: true,
+            },
+            &SubmoduleConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(compact["status"]["file_count_lower_bound"], 1);
+        assert_eq!(compact["status"]["files"], json!([]));
+        assert_eq!(compact["status"]["files_truncated"], true);
         assert_eq!(
             result["pointer_files"],
             json!([{"status": "A", "path": "committed", "is_submodule": false}])

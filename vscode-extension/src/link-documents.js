@@ -4,6 +4,27 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+function statusRevision(getStatus, watchedPath, getHead) {
+  let observed, watchError, watchToken, suspended = false;
+  const update = () => {
+    const status = getStatus();
+    if (suspended || (watchToken !== undefined && status?.watchTokens?.get(watchedPath) !== watchToken)) return status;
+    if (status?.watchedPaths?.includes(watchedPath)) {
+      observed = status.files.find(file => file.path === watchedPath) ?? null;
+      watchError = status.watched_errors?.find(error => error.path === watchedPath);
+    }
+    return status;
+  };
+  const revision = () => {
+    const status = update();
+    return JSON.stringify([status?.head_oid, status?.branch, observed, watchError, getHead?.()]);
+  };
+  revision.error = () => { update(); return watchError; };
+  revision.suspend = () => { suspended = true; };
+  revision.activate = token => { watchToken = token; observed = undefined; watchError = undefined; suspended = false; };
+  return revision;
+}
+
 // A Git symlink stores the link text, not the contents of the linked file.
 // Keep paths and guards in the extension host, never in the document URI.
 class LinkDocuments {
@@ -12,6 +33,7 @@ class LinkDocuments {
     this.backend = backend;
     this.output = tree.output;
     this.documents = new Map();
+    this.nextWatchToken = 0;
     this.disposed = false;
     this.activeReads = 0;
     this.waiters = [];
@@ -47,7 +69,14 @@ class LinkDocuments {
   async current(entry) {
     if (this.disposed || entry.closed) return false;
     const current = await entry.guard();
-    return !this.disposed && !entry.closed && !!current;
+    if (this.disposed || entry.closed || !current) return false;
+    const watchError = entry.revision?.error?.();
+    if (watchError) {
+      const error = new Error(`Gitpane could not read symlink ${entry.path}: ${watchError.message}`);
+      error.code = 'watched_path_error';
+      throw error;
+    }
+    return true;
   }
 
   acquire() {
@@ -91,12 +120,13 @@ class LinkDocuments {
     this.refreshing = true;
     try {
       for (const entry of this.documents.values()) {
-        let current;
-        try { current = await this.current(entry); } catch { current = false; }
+        let current, failure;
+        try { current = await this.current(entry); } catch (error) { current = false; failure = error; }
         if (this.disposed || entry.closed) continue;
-        const next = current ? this.fingerprint(entry) : 'stale';
+        const next = current ? this.fingerprint(entry) : `stale:${failure?.message || ''}`;
         if (entry.fingerprint !== next) {
           entry.fingerprint = next;
+          if (failure?.code === 'watched_path_error') this.vscode.window?.showErrorMessage(failure.message);
           this.emitter.fire(entry.uri);
         }
       }
@@ -109,14 +139,17 @@ class LinkDocuments {
   async create(fileUri, repo, relative, guard, verify, revision) {
     if (this.disposed || this.documents.size >= 256) throw new Error('Too many symlink diffs are open.');
     const entry = { repo, path: relative, guard, verify, revision, closed: false };
+    revision?.suspend?.();
     await this.read(entry);
     if (this.disposed) throw new Error('The symlink diff is no longer available.');
     if (this.documents.size >= 256) throw new Error('Too many symlink diffs are open.');
     entry.uri = fileUri.with({ scheme: 'gitpane-link', path: `/${randomUUID()}`, query: '', fragment: '' });
     const key = entry.uri.toString();
-    entry.fingerprint = this.fingerprint(entry);
     entry.timer = setTimeout(() => this.remove(key), 60000);
+    entry.watchToken = this.watchTokenFor(repo, relative) ?? ++this.nextWatchToken;
     this.documents.set(key, entry);
+    revision?.activate?.(entry.watchToken);
+    entry.fingerprint = this.fingerprint(entry);
     return entry.uri;
   }
 
@@ -136,6 +169,22 @@ class LinkDocuments {
     this.documents.delete(key);
   }
 
+  watchedPaths(repo) {
+    const target = this.repoKey(repo);
+    return [...new Set([...this.documents.values()]
+      .filter(entry => this.repoKey(entry.repo) === target).map(entry => entry.path))];
+  }
+
+  watchTokenFor(repo, relative) {
+    const target = this.repoKey(repo);
+    return [...this.documents.values()].find(entry => this.repoKey(entry.repo) === target && entry.path === relative)?.watchToken;
+  }
+
+  repoKey(value) {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
+
   dispose() {
     this.disposed = true;
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
@@ -146,4 +195,4 @@ class LinkDocuments {
   }
 }
 
-module.exports = { LinkDocuments };
+module.exports = { LinkDocuments, statusRevision };

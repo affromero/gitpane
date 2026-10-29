@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { LinkDocuments } = require('../src/link-documents');
+const { LinkDocuments, statusRevision } = require('../src/link-documents');
 
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
@@ -35,6 +35,9 @@ test('symlink documents show link text, refresh, and expire when closed', { skip
   t.after(() => links.dispose());
   let current = true;
   const document = await links.create(uri(file), repo, 'link', () => current);
+  const duplicate = await links.create(uri(file), repo, 'link', () => current);
+  assert.deepEqual(links.watchedPaths(repo), ['link']);
+  assert.deepEqual(links.watchedPaths(root), []);
   opened.fire({ uri: document });
   assert.equal(await links.provideTextDocumentContent(document), outside);
   const notifications = [];
@@ -48,12 +51,102 @@ test('symlink documents show link text, refresh, and expire when closed', { skip
   treeChanges.fire();
   t.mock.timers.tick(50);
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(notifications, [document.toString()]);
+  assert.deepEqual(notifications, [document.toString(), duplicate.toString()]);
   assert.equal(await links.provideTextDocumentContent(document), 'missing-target');
   current = false;
   await assert.rejects(links.provideTextDocumentContent(document), /no longer in the workspace/i);
   closed.fire({ uri: document });
+  assert.deepEqual(links.watchedPaths(repo), ['link']);
+  closed.fire({ uri: duplicate });
+  assert.deepEqual(links.watchedPaths(repo), []);
   await assert.rejects(links.provideTextDocumentContent(document), /no longer available/i);
+});
+
+test('an older poll cannot erase a newly watched link status', () => {
+  let status = { head_oid: 'head', branch: 'main', watchedPaths: ['link'], files: [{ path: 'link', status: 'modified' }] };
+  const revision = statusRevision(() => status, 'link');
+  const initial = revision();
+  status = { head_oid: 'head', branch: 'main', watchedPaths: [], files: [] };
+  assert.equal(revision(), initial);
+  status = { head_oid: 'head', branch: 'main', watchedPaths: ['link'], files: [{ path: 'link', status: 'modified' }] };
+  assert.equal(revision(), initial);
+  status = { head_oid: 'head', branch: 'main', watchedPaths: ['link'], files: [] };
+  assert.notEqual(revision(), initial);
+});
+
+test('a watched path error affects only its link and survives an older poll', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const treeChanges = new EventEmitter(), opened = new EventEmitter(), closed = new EventEmitter();
+  const errors = [], notifications = [];
+  const vscode = { EventEmitter, workspace: { onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event },
+    window: { showErrorMessage: message => errors.push(message) } };
+  const links = new LinkDocuments(vscode, { onDidChangeTreeData: treeChanges.event },
+    { async readWorkingSymlink(base, relative) { return { target: `target-${relative}` }; } });
+  t.after(() => links.dispose());
+  let status = { head_oid: 'head', branch: 'main', watchedPaths: ['one', 'two'], files: [], watched_errors: [] };
+  const first = await links.create(uri('/repo/one'), '/repo', 'one', () => true, undefined,
+    statusRevision(() => status, 'one'));
+  const second = await links.create(uri('/repo/two'), '/repo', 'two', () => true, undefined,
+    statusRevision(() => status, 'two'));
+  status.watchTokens = new Map([['one', links.watchTokenFor('/repo', 'one')], ['two', links.watchTokenFor('/repo', 'two')]]);
+  opened.fire({ uri: first });
+  opened.fire({ uri: second });
+  await links.refresh();
+  links.onDidChange(value => notifications.push(value.toString()));
+  status = { ...status, watched_errors: [{ path: 'one', code: 'outside_workspace', message: 'Path leaves the workspace' }] };
+  treeChanges.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notifications, [first.toString()]);
+  assert.match(errors[0], /one.*leaves the workspace/i);
+  await assert.rejects(links.provideTextDocumentContent(first), /leaves the workspace/i);
+  assert.equal(await links.provideTextDocumentContent(second), 'target-two');
+  status = { ...status, watchedPaths: [], watched_errors: [] };
+  treeChanges.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notifications, [first.toString()]);
+  await assert.rejects(links.provideTextDocumentContent(first), /leaves the workspace/i);
+  status = { ...status, watchedPaths: ['one', 'two'], watched_errors: [] };
+  treeChanges.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notifications, [first.toString(), first.toString()]);
+  assert.equal(await links.provideTextDocumentContent(first), 'target-one');
+});
+
+test('reopening a restored link ignores errors from its previous watch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const treeChanges = new EventEmitter(), opened = new EventEmitter(), closed = new EventEmitter();
+  const vscode = { EventEmitter, workspace: { onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event } };
+  const links = new LinkDocuments(vscode, { onDidChangeTreeData: treeChanges.event },
+    { async readWorkingSymlink() { return { target: 'restored' }; } });
+  t.after(() => links.dispose());
+  let status = { head_oid: 'head', branch: 'main', watchedPaths: [], files: [], watched_errors: [], watchTokens: new Map() };
+  const makeDocument = () => links.create(uri('/repo/link'), '/repo', 'link', () => true, undefined,
+    statusRevision(() => status, 'link'));
+  const first = await makeDocument();
+  opened.fire({ uri: first });
+  const oldToken = links.watchTokenFor('/repo', 'link');
+  status = { ...status, watchedPaths: ['link'], watchTokens: new Map([['link', oldToken]]),
+    watched_errors: [{ path: 'link', code: 'outside_workspace', message: 'Path leaves the workspace' }] };
+  await assert.rejects(links.provideTextDocumentContent(first), /leaves the workspace/i);
+  closed.fire({ uri: first });
+  const reopened = await makeDocument();
+  opened.fire({ uri: reopened });
+  const newToken = links.watchTokenFor('/repo', 'link');
+  assert.notEqual(newToken, oldToken);
+  assert.equal(await links.provideTextDocumentContent(reopened), 'restored');
+  status = { ...status };
+  treeChanges.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await links.provideTextDocumentContent(reopened), 'restored');
+  status = { ...status, watchTokens: new Map([['link', newToken]]), watched_errors: [] };
+  treeChanges.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await links.provideTextDocumentContent(reopened), 'restored');
 });
 
 test('unrelated repository updates do not refresh link documents', { skip: process.platform === 'win32' }, async t => {

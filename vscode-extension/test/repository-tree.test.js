@@ -20,6 +20,62 @@ function changesPage(changes) {
     previous_cursor: null, next_cursor: null, changes };
 }
 
+test('status refresh retains the watched paths sent with each request', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-watch-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.git'));
+  const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const event = () => ({ dispose() {} });
+  const repo = { rootUri: uri(root), state: { onDidChange: event }, async status() {} };
+  const api = { repositories: [repo], onDidOpenRepository: event, onDidCloseRepository: event };
+  const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    workspace: { workspaceFolders: [{ uri: uri(root) }], onDidChangeWorkspaceFolders: event } };
+  let release;
+  const calls = [];
+  let watchErrors = [];
+  const backend = { state: { status: 'ready' }, onDidChange: event, async status(value, worktrees, options) {
+    calls.push(options);
+    await new Promise(resolve => { release = resolve; });
+    return { common_dir: path.join(root, '.git'), branch: 'main', is_dirty: false, ahead: 0, behind: 0,
+      stashes: [], worktrees: [], has_dirty_submodules: false, has_unpushed_submodules: false,
+      files: [], watched_errors: watchErrors, file_count_lower_bound: 0, files_truncated: false };
+  } };
+  const load = Module._load;
+  let RepositoryTree;
+  delete require.cache[require.resolve('../src/repository-tree')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    ({ RepositoryTree } = require('../src/repository-tree'));
+  } finally { Module._load = load; }
+  const tree = new RepositoryTree(api, { appendLine() {} }, backend);
+  t.after(() => tree.dispose());
+  let watched = ['old'];
+  tree.watchedPathsFor = () => watched;
+  let token = 1;
+  tree.watchTokenFor = () => token;
+  const cycle = { generation: tree.backendGeneration, tokens: new Map([[root, tree.repositoryToken(repo)]]) };
+  const pending = tree.refreshBackend(repo, cycle, false);
+  watched = ['new'];
+  token = 2;
+  release();
+  await pending;
+  assert.deepEqual(calls[0], { summaryOnly: true, watchedPaths: ['old'] });
+  assert.deepEqual(tree.backendStatuses.get(root).watchedPaths, ['old']);
+  assert.equal(tree.backendStatuses.get(root).watchTokens.get('old'), 1);
+  watchErrors = [{ path: 'new', code: 'outside_workspace', message: 'Path leaves the workspace' }];
+  const errored = tree.refreshBackend(repo, cycle, false);
+  release();
+  await errored;
+  assert.deepEqual(tree.backendStatuses.get(root).watched_errors, watchErrors);
+  assert.equal(tree.backendErrors.size, 0);
+  watchErrors = [{ path: 'unrequested', code: 'outside_workspace', message: 'Path leaves the workspace' }];
+  const invalid = tree.refreshBackend(repo, cycle, false);
+  release();
+  await invalid;
+  assert.equal(tree.backendStatuses.has(root), false);
+  assert.match(tree.backendErrors.get(root), /invalid compact repository status/i);
+});
+
 test('slow detailed refresh finishes one sweep before scheduling another', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-page-sweep-'));
@@ -35,7 +91,8 @@ test('slow detailed refresh finishes one sweep before scheduling another', async
   const calls = [];
   const backend = { state: { status: 'ready' }, onDidChange: event,
     async status(root) { return { common_dir: path.join(root, '.git'), branch: 'main', is_dirty: false,
-      stashes: [], worktrees: [], ahead: 0, behind: 0, has_dirty_submodules: false, has_unpushed_submodules: false }; },
+      stashes: [], worktrees: [], ahead: 0, behind: 0, has_dirty_submodules: false, has_unpushed_submodules: false,
+      files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; },
     async beginChanges(root) {
     calls.push(root);
     if (hold && root === roots[0]) await new Promise(resolve => { release = resolve; });
@@ -100,7 +157,7 @@ test('reopening a repository invalidates pending status, selections, and menus',
   let holdStatus = false;
   const status = branch => ({ common_dir: path.join(root, '.git'), branch, head_oid: 'a'.repeat(40),
     is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
-    has_dirty_submodules: false, has_unpushed_submodules: false });
+    has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 1, files_truncated: true });
   const api = { repositories: [makeRepo()],
     onDidOpenRepository(handler) { onOpen = handler; return { dispose() {} }; },
     onDidCloseRepository(handler) { onClose = handler; return { dispose() {} }; } };
@@ -249,7 +306,8 @@ test('workspace repositories appear automatically and reconcile while visible', 
         branch: repoPath === root ? 'main' : 'feature', is_dirty: repoPath === root,
         ahead: 2, behind: 1, stashes: [{ index: 0 }],
         worktrees: includeWorktrees ? [{ path: addedRoot }, { path: path.join(otherWorkspace, 'external') }] : [],
-        has_dirty_submodules: true, has_unpushed_submodules: true
+        has_dirty_submodules: true, has_unpushed_submodules: true,
+        files: [], watched_errors: [], file_count_lower_bound: repoPath === root ? 1 : 0, files_truncated: repoPath === root
       };
     },
     async sortRepositories(order, repositories) {
@@ -418,7 +476,7 @@ test('workspace worktrees are opened automatically and expose their current file
       is_dirty: value === linked, ahead: 0, behind: 0, stashes: [],
       worktrees: includeWorktrees && value === root && linkedExists ? [{ path: linked, branch: 'topic', is_dirty: true, file_count: 2 },
         { path: outside, branch: 'outside' }] : [],
-      has_dirty_submodules: false, has_unpushed_submodules: false }; }
+      has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; }
   };
   const load = Module._load;
   let RepositoryTree, GitpaneViewProvider;
@@ -514,7 +572,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
       return { common_dir: common, branch: git(value, 'branch', '--show-current'), is_dirty: false,
         ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees ?
           paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item) })) : [],
-        has_dirty_submodules: false, has_unpushed_submodules: false };
+        has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false };
     }
   };
   const api = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event };
@@ -633,7 +691,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
     async status() { backendCalls++; return { common_dir: path.join(realRepo, '.git'), branch: 'main',
       is_dirty: true, ahead: 0, behind: 0, stashes: [], worktrees: [],
-      has_dirty_submodules: false, has_unpushed_submodules: false }; }
+      has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; }
     async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
     async beginChanges() {
       if (holdChanges) await new Promise(resolve => { releaseChanges = resolve; });
@@ -774,7 +832,8 @@ test('worktree graph opens for the linked repository and rejects a removed link'
     constructor() { this.state = { status: 'ready' }; this.onDidChange = event; }
     async status(value, includeWorktrees = true) { return { common_dir: common, branch: 'main', is_dirty: false,
       ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees && value === root && linkExists ?
-        [{ path: linked, branch: 'topic' }] : [], has_dirty_submodules: false, has_unpushed_submodules: false }; }
+        [{ path: linked, branch: 'topic' }] : [], has_dirty_submodules: false, has_unpushed_submodules: false,
+      files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false }; }
     async graph(value) { graphRequests.push(value); return { rows: [], branches: [] }; }
     dispose() {}
   }

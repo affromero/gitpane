@@ -7,7 +7,28 @@ use tempfile::TempDir;
 
 use crate::config::{BranchFilter, GraphConfig, SubmoduleConfig, WorktreeConfig};
 
-use super::{MAX_REQUEST_BYTES, serve};
+use super::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, serve, write_reply};
+
+#[test]
+fn oversized_response_returns_a_bounded_error_and_writer_remains_usable() {
+    let mut output = Vec::new();
+    write_reply(
+        &mut output,
+        Some(1),
+        Ok(json!({"large": "x".repeat(MAX_RESPONSE_BYTES)})),
+    )
+    .unwrap();
+    write_reply(&mut output, Some(2), Ok(json!({"ok": true}))).unwrap();
+    assert!(output.len() < 4096);
+    let replies: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(replies[0]["error"]["code"], "response_too_large");
+    assert_eq!(replies[1]["result"]["ok"], true);
+}
 
 fn create_repo(path: &Path) -> Repository {
     std::fs::create_dir_all(path).unwrap();

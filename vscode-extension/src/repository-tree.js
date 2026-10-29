@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
 const { groups } = require('./model');
+const { relativeFile } = require('./change-pager');
 
 function directoryIdentity(value) {
   try {
@@ -48,7 +49,9 @@ function validBackendStatus(status) {
     typeof status.branch === 'string' && typeof status.is_dirty === 'boolean' &&
     count(status.ahead) && count(status.behind) && Array.isArray(status.stashes) &&
     Array.isArray(status.worktrees) && status.worktrees.every(item => item && typeof item.path === 'string' && path.isAbsolute(item.path)) &&
-    typeof status.has_dirty_submodules === 'boolean' && typeof status.has_unpushed_submodules === 'boolean';
+    typeof status.has_dirty_submodules === 'boolean' && typeof status.has_unpushed_submodules === 'boolean' &&
+    Array.isArray(status.files) && Array.isArray(status.watched_errors) &&
+    count(status.file_count_lower_bound) && typeof status.files_truncated === 'boolean';
 }
 
 const SORT_ORDERS = new Set(['workspace', 'alphabetical', 'reverse', 'dirty']);
@@ -74,6 +77,8 @@ class RepositoryTree {
     this.worktreeOpenings = new Map();
     this.groupCache = new Map();
     this.backendStatuses = new Map();
+    this.watchedPathsFor = () => [];
+    this.watchTokenFor = () => undefined;
     this.backendErrors = new Map();
     this.backendGeneration = 0;
     this.backendError = undefined;
@@ -176,15 +181,24 @@ class RepositoryTree {
       this.isCurrentRepository(repo, cycle.tokens.get(key));
     if (!current()) return;
     try {
-      const status = await this.backend.status(repo.rootUri.fsPath, includeWorktrees);
+      const watchedPaths = [...new Set(this.watchedPathsFor(repo.rootUri.fsPath))];
+      const watchTokens = new Map(watchedPaths.map(value => [value, this.watchTokenFor(repo.rootUri.fsPath, value)]));
+      if (watchedPaths.length > 256 || !watchedPaths.every(relativeFile)) throw new Error('Invalid symlink paths to watch.');
+      const status = await this.backend.status(repo.rootUri.fsPath, includeWorktrees, { summaryOnly: true, watchedPaths });
       if (!current()) return;
-      if (!validBackendStatus(status)) throw new Error('Gitpane backend returned an invalid repository status.');
+      if (!validBackendStatus(status) || status.files.some(file => !file || !relativeFile(file.path) || !watchedPaths.includes(file.path)) ||
+          status.watched_errors.some(error => !error || !relativeFile(error.path) || !watchedPaths.includes(error.path) ||
+            typeof error.code !== 'string' || typeof error.message !== 'string' || status.files.some(file => file.path === error.path)) ||
+          new Set(status.watched_errors.map(error => error.path)).size !== status.watched_errors.length) {
+        throw new Error('Gitpane backend returned an invalid compact repository status. Update the backend and try again.');
+      }
       const previous = this.backendStatuses.get(key);
       const preserveWorktrees = !includeWorktrees && previous?.worktrees.length &&
         sameIdentity(directoryIdentity(previous.common_dir), directoryIdentity(status.common_dir));
-      this.backendStatuses.set(key, preserveWorktrees ? { ...status, worktrees: previous.worktrees } : status);
+      const stored = { ...status, watchedPaths, watchTokens, ...(preserveWorktrees ? { worktrees: previous.worktrees } : {}) };
+      this.backendStatuses.set(key, stored);
       this.backendErrors.delete(key);
-      if (includeWorktrees) await this.openWorkspaceWorktrees(repo, status, generation, cycle);
+      if (includeWorktrees) await this.openWorkspaceWorktrees(repo, stored, generation, cycle);
     } catch (error) {
       if (!current() || error.code === 'workspace_changed') return;
       this.backendStatuses.delete(key);

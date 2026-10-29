@@ -137,7 +137,7 @@ class BackendManager {
         throw new BridgeError('workspace_changed', 'Change scan was cancelled.');
       }
       let result;
-      if (method === 'status') result = await client.status(repo, argument);
+      if (method === 'status') result = await client.status(repo, argument.includeWorktrees, argument.options);
       else if (method === 'changes_begin') result = await client.beginChanges(repo);
       else if (method === 'changes_next') result = await client.nextChanges(repo, argument.snapshot, argument.cursor);
       else if (method === 'changes_release') result = await client.releaseChanges(repo, argument);
@@ -146,7 +146,7 @@ class BackendManager {
       else if (method === 'working_symlink') result = await client.readWorkingSymlink(repo, argument);
       else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
       else if (method === 'branch_review') result = await client.branchReview(repo);
-      else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument);
+      else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument, true);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
       else if (method === 'launchers_list') result = await client.listLaunchers(repo);
@@ -265,7 +265,7 @@ class BackendManager {
     } finally { session.close(); }
   }
 
-  status(repo, includeWorktrees) { return this.request('status', repo, includeWorktrees); }
+  status(repo, includeWorktrees, options) { return this.request('status', repo, { includeWorktrees, options }); }
 
   beginChanges(repo) { return this.request('changes_begin', repo); }
 
@@ -306,7 +306,7 @@ class BackendManager {
     if (!['tmux', 'herdr'].includes(backend) || typeof session !== 'string' || !session || typeof validateTarget !== 'function') {
       throw new BridgeError('invalid_request', 'A current session and repository are required.');
     }
-    const status = await this.status(repo);
+    const status = await this.status(repo, undefined, { summaryOnly: true, watchedPaths: [] });
     return this.sessionMutations.execute('session_goto', { repo, backend, session }, {
       lockKey: status?.common_dir, validateTarget
     });

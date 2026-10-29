@@ -16,8 +16,8 @@ const { MutationManager } = require('./mutation-manager');
 const { SidebarActions } = require('./sidebar-actions');
 const { Status, isSubmodule, richComparison, statusLabel } = require('./model');
 const { RepositoryTree } = require('./repository-tree');
-const { ChangePager, relativeFile, scopedFile, validRecord, validatePage } = require('./change-pager');
-const { LinkDocuments } = require('./link-documents');
+const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
+const { LinkDocuments, statusRevision } = require('./link-documents');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -85,8 +85,7 @@ class GitpaneViewProvider {
         previous: state?.previous_cursor != null, next: state?.next_cursor != null,
         ...(state?.error ? { error: state.error } : {}) };
     };
-    const lowerBound = status => new Set((Array.isArray(status?.files) ? status.files : [])
-      .filter(file => relativeFile(file?.path)).map(file => file.path)).size;
+    const lowerBound = status => status?.file_count_lower_bound ?? 0;
     const hierarchy = this.tree.workspaceView?.();
     const children = this.tree.getChildren(undefined, hierarchy);
     const repositories = children.filter(node => node.type === 'repo').map(node => {
@@ -413,6 +412,8 @@ async function activate(context) {
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
   const provider = new GitpaneViewProvider(tree, context.extensionUri);
   const links = new LinkDocuments(vscode, tree, backend);
+  tree.watchedPathsFor = repo => links.watchedPaths(repo);
+  tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
   const graph = new GraphProvider(tree, backend, api, context.extensionUri);
   const review = new BranchReviewProvider(tree, backend, api);
   const github = new GithubProvider(tree, backend);
@@ -539,11 +540,7 @@ async function activate(context) {
                 const result = await backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
                 return validRecord(result?.change) && JSON.stringify(result.change) === JSON.stringify(node.record);
               };
-              const revision = () => {
-                const status = tree.backendStatuses.get(node.repo.rootUri.toString());
-                return JSON.stringify([status?.head_oid, status?.branch,
-                  status?.files?.find(file => file.path === node.record.path)]);
-              };
+              const revision = statusRevision(() => tree.backendStatuses.get(node.repo.rootUri.toString()), side.filePath);
               return links.create(vscode.Uri.file(target), node.repo.rootUri.fsPath, side.filePath,
                 current, verify, revision);
             }

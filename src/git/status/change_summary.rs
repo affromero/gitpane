@@ -1,5 +1,5 @@
 use crate::config::SubmoduleConfig;
-use git2::{Repository, StatusOptions, SubmoduleStatus};
+use git2::{Repository, Status, StatusOptions, SubmoduleStatus};
 use std::path::{Path, PathBuf};
 
 use super::submodule::compute_submodule_head_and_warn;
@@ -7,6 +7,7 @@ use super::{FileEntry, FileStatus, SubmoduleInfo, SubmoduleState, SubmoduleWarn}
 
 pub(super) struct ChangeSummary {
     pub(super) files: Vec<FileEntry>,
+    pub(super) file_count_lower_bound: usize,
     pub(super) is_dirty: bool,
     pub(super) has_submodules: bool,
     pub(super) submodules: Vec<SubmoduleInfo>,
@@ -29,6 +30,48 @@ pub(super) fn status_options(
     options
 }
 
+pub(super) fn file_entry(path: PathBuf, s: Status) -> Option<FileEntry> {
+    let status = if s.is_conflicted() {
+        FileStatus::Conflicted
+    } else if s.is_index_new() || s.is_wt_new() {
+        if s.is_wt_new() && !s.is_index_new() {
+            FileStatus::Untracked
+        } else {
+            FileStatus::Added
+        }
+    } else if s.is_index_deleted() || s.is_wt_deleted() {
+        FileStatus::Deleted
+    } else if s.is_index_renamed() || s.is_wt_renamed() {
+        FileStatus::Renamed
+    } else if s.is_index_modified()
+        || s.is_wt_modified()
+        || s.is_index_typechange()
+        || s.is_wt_typechange()
+    {
+        FileStatus::Modified
+    } else {
+        return None;
+    };
+    Some(FileEntry {
+        path,
+        status,
+        staged: s.is_index_new()
+            || s.is_index_modified()
+            || s.is_index_deleted()
+            || s.is_index_renamed()
+            || s.is_index_typechange(),
+        unstaged: s.is_wt_new()
+            || s.is_wt_modified()
+            || s.is_wt_deleted()
+            || s.is_wt_renamed()
+            || s.is_wt_typechange(),
+        is_submodule: false,
+        submodule_state: None,
+        submodule_warn: SubmoduleWarn::default(),
+        submodule_head: None,
+    })
+}
+
 pub(super) fn collect_change_summary(
     repo: &Repository,
     path: &Path,
@@ -39,6 +82,7 @@ pub(super) fn collect_change_summary(
     if repo.is_bare() {
         return Ok(ChangeSummary {
             files: Vec::new(),
+            file_count_lower_bound: 0,
             is_dirty: false,
             has_submodules: false,
             submodules: Vec::new(),
@@ -63,49 +107,13 @@ pub(super) fn collect_change_summary(
             })
             .ok_or_else(|| color_eyre::eyre::eyre!("Git status entry has no path"))?;
 
-        let file_status = if s.is_conflicted() {
-            FileStatus::Conflicted
-        } else if s.is_index_new() || s.is_wt_new() {
-            if s.is_wt_new() && !s.is_index_new() {
-                FileStatus::Untracked
-            } else {
-                FileStatus::Added
-            }
-        } else if s.is_index_deleted() || s.is_wt_deleted() {
-            FileStatus::Deleted
-        } else if s.is_index_renamed() || s.is_wt_renamed() {
-            FileStatus::Renamed
-        } else if s.is_index_modified()
-            || s.is_wt_modified()
-            || s.is_index_typechange()
-            || s.is_wt_typechange()
-        {
-            FileStatus::Modified
-        } else {
-            continue;
-        };
-
-        files.push(FileEntry {
-            path: file_path,
-            status: file_status,
-            staged: s.is_index_new()
-                || s.is_index_modified()
-                || s.is_index_deleted()
-                || s.is_index_renamed()
-                || s.is_index_typechange(),
-            unstaged: s.is_wt_new()
-                || s.is_wt_modified()
-                || s.is_wt_deleted()
-                || s.is_wt_renamed()
-                || s.is_wt_typechange(),
-            is_submodule: false,
-            submodule_state: None,
-            submodule_warn: SubmoduleWarn::default(),
-            submodule_head: None,
-        });
+        if let Some(file) = file_entry(file_path, s) {
+            files.push(file);
+        }
     }
 
     let is_dirty = !files.is_empty();
+    let mut file_count_lower_bound = files.len();
 
     // Detect submodules by checking for .gitmodules
     let has_submodules = path.join(".gitmodules").is_file();
@@ -229,6 +237,9 @@ pub(super) fn collect_change_summary(
                     submodule_warn: warn,
                     submodule_head: head,
                 });
+                if has_dirty_signal {
+                    file_count_lower_bound += 1;
+                }
             }
 
             if has_dirty_signal {
@@ -242,6 +253,7 @@ pub(super) fn collect_change_summary(
 
     Ok(ChangeSummary {
         files,
+        file_count_lower_bound,
         is_dirty: is_dirty || has_dirty_submodules,
         has_submodules,
         submodules,

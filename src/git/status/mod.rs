@@ -26,6 +26,8 @@ pub(crate) struct RepoStatus {
     pub branch: String,
     pub head_oid: Option<String>,
     pub files: Vec<FileEntry>,
+    /// Number of compact dirty entries, excluding warning-only submodules.
+    pub file_count_lower_bound: usize,
     pub ahead: usize,
     pub behind: usize,
     pub is_dirty: bool,
@@ -250,6 +252,96 @@ pub(crate) fn query_status_scoped(
     )
 }
 
+/// Inspect one watched path without expanding every compact untracked directory.
+pub(crate) fn watched_file(
+    repo: &git2::Repository,
+    path: &Path,
+) -> Result<Option<FileEntry>, git2::Error> {
+    match repo.status_file(path) {
+        Ok(status) => Ok(change_summary::file_entry(path.to_path_buf(), status)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) struct WatchedSymlinkStatuses {
+    pub files: std::collections::HashMap<PathBuf, Option<FileEntry>>,
+    pub fallback: std::collections::HashSet<PathBuf>,
+}
+
+/// Resolve literal symlink paths together using the same flags as status_file.
+pub(crate) fn watched_symlinks(
+    repo: &git2::Repository,
+    paths: &[&Path],
+) -> Result<WatchedSymlinkStatuses, git2::Error> {
+    let mut files = std::collections::HashMap::new();
+    if paths.is_empty() {
+        return Ok(WatchedSymlinkStatuses {
+            files,
+            fallback: std::collections::HashSet::new(),
+        });
+    }
+    let ignore_case = match repo.config()?.get_bool("core.ignorecase") {
+        Ok(value) => value,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    let mut case_matches = std::collections::HashMap::<&Path, usize>::new();
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_ignored(true)
+        .recurse_ignored_dirs(true)
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_unmodified(true)
+        .disable_pathspec_match(true);
+    for path in paths {
+        options.pathspec(*path);
+    }
+    let requested: std::collections::HashSet<&Path> = paths.iter().copied().collect();
+    for entry in repo.statuses(Some(&mut options))?.iter() {
+        let Some(path) = entry
+            .index_to_workdir()
+            .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            .or_else(|| {
+                entry
+                    .head_to_index()
+                    .and_then(|delta| delta.new_file().path().map(Path::to_path_buf))
+            })
+        else {
+            return Err(git2::Error::from_str("Git status entry has no path"));
+        };
+        if ignore_case && let Some(found) = path.to_str() {
+            for requested_path in paths {
+                if requested_path
+                    .to_str()
+                    .is_some_and(|wanted| wanted.eq_ignore_ascii_case(found))
+                {
+                    *case_matches.entry(requested_path).or_default() += 1;
+                }
+            }
+        }
+        if requested.contains(path.as_path()) {
+            files.insert(
+                path.clone(),
+                change_summary::file_entry(path, entry.status()),
+            );
+        }
+    }
+    let fallback = if ignore_case {
+        paths
+            .iter()
+            .filter(|path| {
+                !files.contains_key(**path) || case_matches.get(**path).copied().unwrap_or(0) > 1
+            })
+            .map(|path| (*path).to_path_buf())
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    Ok(WatchedSymlinkStatuses { files, fallback })
+}
+
 /// Validate a scoped descendant separately because libgit2 may suppress errors
 /// while computing its parent's submodule status.
 pub(crate) fn validate_initialized_submodule(
@@ -317,6 +409,7 @@ fn query_status_inner(
 
     let ChangeSummary {
         files,
+        file_count_lower_bound,
         is_dirty,
         has_submodules,
         submodules,
@@ -338,6 +431,7 @@ fn query_status_inner(
         branch,
         head_oid,
         files,
+        file_count_lower_bound,
         ahead,
         behind,
         is_dirty,

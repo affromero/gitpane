@@ -9,6 +9,7 @@ pub(super) fn empty_status(branch: &str) -> RepoStatus {
         branch: branch.to_string(),
         head_oid: None,
         files: Vec::new(),
+        file_count_lower_bound: 0,
         ahead: 0,
         behind: 0,
         is_dirty: false,

@@ -1,5 +1,7 @@
 'use strict';
 
+const { statusRevision } = require('./link-documents');
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { isSubmodule, richComparison } = require('./model');
@@ -152,7 +154,7 @@ class SubmoduleProvider {
           const parent = await this.backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
           if (!currentChild() || !validRecord(parent?.change) || JSON.stringify(parent.change) !== JSON.stringify(node.record)) return false;
         }
-        const status = await this.backend.status(child.rootUri.fsPath, false);
+        const status = await this.backend.status(child.rootUri.fsPath, false, { summaryOnly: true, watchedPaths: [] });
         return currentChild() && status?.head_oid === result.head_oid;
       };
       const checkPointer = async () => {
@@ -237,7 +239,7 @@ class SubmoduleProvider {
             return true;
           };
           const verify = async () => {
-            const status = await this.backend.status(child.rootUri.fsPath, false);
+            const status = await this.backend.status(child.rootUri.fsPath, false, { summaryOnly: true, watchedPaths: [] });
             if (status?.head_oid !== result.head_oid) return false;
             if (typeof node.record?.path === 'string' && typeof node.record?.group === 'string') {
               const parent = await this.backend.verifyChanges(node.repo.rootUri.fsPath, node.record);
@@ -246,7 +248,8 @@ class SubmoduleProvider {
             const current = await this.backend.verifyChanges(child.rootUri.fsPath, record);
             return JSON.stringify(current?.change) === JSON.stringify(record);
           };
-          const revision = () => JSON.stringify([child.state?.HEAD?.commit, this.tree.backendStatuses?.get(childKey)?.head_oid]);
+          const revision = statusRevision(() => this.tree.backendStatuses?.get(childKey), side.filePath,
+            () => child.state?.HEAD?.commit);
           return this.linkDocuments.create(sideUri, child.rootUri.fsPath, side.filePath, currentLink, verify, revision);
         };
         const left = await resolve(plan.left);

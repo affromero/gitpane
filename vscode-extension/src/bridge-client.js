@@ -79,8 +79,17 @@ class BridgeClient {
     return this.call(method, params);
   }
 
-  status(repo, includeWorktrees) {
-    return this.request('status', { repo, ...(includeWorktrees === undefined ? {} : { include_worktrees: includeWorktrees }) });
+  async status(repo, includeWorktrees, options) {
+    const summary = options?.summaryOnly === true;
+    try {
+      return await this.request('status', { repo, ...(includeWorktrees === undefined ? {} : { include_worktrees: includeWorktrees }),
+        ...(summary ? { summary_only: true, watched_paths: options.watchedPaths } : {}) });
+    } catch (error) {
+      if (summary && error.code === 'invalid_request' && /unknown field.*(?:summary_only|watched_paths)/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support compact status. Update the backend and try again.');
+      }
+      throw error;
+    }
   }
 
   beginChanges(repo) { return this.request('changes_begin', { repo }); }
@@ -111,8 +120,15 @@ class BridgeClient {
     return this.request('branch_review', { repo });
   }
 
-  inspectSubmodule(repo, path) {
-    return this.request('submodule_inspect', { repo, path });
+  async inspectSubmodule(repo, path, summaryOnly = false) {
+    try {
+      return await this.request('submodule_inspect', { repo, path, ...(summaryOnly ? { summary_only: true } : {}) });
+    } catch (error) {
+      if (summaryOnly && error.code === 'invalid_request' && /unknown field.*summary_only/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support compact submodule status. Update the backend and try again.');
+      }
+      throw error;
+    }
   }
 
   graph(repo, firstParent = false, filters, collapsedSegments) {

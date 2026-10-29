@@ -23,13 +23,20 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (process.env.MODE === 'malformed') { process.stdout.write('not json\n'); return; }
   if (process.env.MODE === 'invalid_utf8') { process.stdout.write(Buffer.from([123, 34, 120, 34, 58, 34, 255, 34, 125, 10])); return; }
   if (process.env.MODE === 'oversized') { send({id: request.id, result: {text: 'x'.repeat(1024)}}); return; }
+  if (process.env.MODE === 'large_status' && request.method === 'status' && !request.params.summary_only) {
+    send({id: request.id, result: {files: 'x'.repeat(8192)}}); return;
+  }
   if (process.env.MODE === 'crash') { process.exit(9); }
   if (process.env.MODE === 'never') return;
+  if (process.env.MODE === 'old' && request.params.summary_only) {
+    send({id: request.id, error: {code: 'invalid_request', message: 'unknown field summary_only'}});
+    return;
+  }
   if (request.params.repo === '/denied') {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch};
+  const result = {method: request.method, repo: request.params.repo, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -60,6 +67,8 @@ test('status and graph responses are matched to their requests', async t => {
   const [status, graph] = await Promise.all([client.status(repo), client.graph(repo, true)]);
   assert.deepEqual(status, { method: 'status', repo, roots: [root] });
   assert.deepEqual(await client.status(repo, false), { method: 'status', repo, roots: [root], include_worktrees: false });
+  assert.deepEqual(await client.status(repo, false, { summaryOnly: true, watchedPaths: ['dir/link'] }),
+    { method: 'status', repo, roots: [root], include_worktrees: false, summary_only: true, watched_paths: ['dir/link'] });
   assert.deepEqual(graph, { method: 'graph', repo, roots: [root], first_parent: true });
   const filters = { branches: ['topic'], authors: ['Alice'], refs: ['v1'] };
   assert.deepEqual(await client.graph(repo, false, filters), { method: 'graph', repo, roots: [root], first_parent: false, filters });
@@ -67,8 +76,32 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.commitFiles(repo, 'abc123'), { method: 'commit_files', repo, roots: [root], oid: 'abc123' });
   assert.deepEqual(await client.branchReview(repo), { method: 'branch_review', repo, roots: [root] });
   assert.deepEqual(await client.inspectSubmodule(repo, 'child'), { method: 'submodule_inspect', repo, path: 'child', roots: [root] });
+  assert.deepEqual(await client.inspectSubmodule(repo, 'child', true),
+    { method: 'submodule_inspect', repo, path: 'child', roots: [root], summary_only: true });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
   assert.deepEqual(await client.planWorktree(repo, 'feature/a'), { method: 'worktree_plan', repo, roots: [root], branch: 'feature/a' });
+});
+
+test('an older backend requires an update for compact status', async t => {
+  const client = fixture('old');
+  t.after(() => client.dispose());
+  const repo = path.resolve('repo');
+  await client.initialize([path.resolve('workspace')]);
+  for (const request of [() => client.status(repo, false, { summaryOnly: true, watchedPaths: [] }),
+    () => client.inspectSubmodule(repo, 'child', true)]) {
+    await assert.rejects(request(), error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
+  }
+  assert.equal((await client.status(repo)).method, 'status');
+});
+
+test('compact status fits the response limit when a full status does not', async t => {
+  const client = fixture('large_status', { maxResponseBytes: 4096 });
+  t.after(() => client.dispose());
+  const repo = path.resolve('repo');
+  await client.initialize([path.resolve('workspace')]);
+  const result = await client.status(repo, false, { summaryOnly: true, watchedPaths: ['link'] });
+  assert.deepEqual(result.watched_paths, ['link']);
+  await assert.rejects(client.status(repo), error => error.code === 'response_too_large');
 });
 
 test('workspace updates change authorization before subsequent requests', async t => {

@@ -280,7 +280,7 @@ const scenario = String.raw`
     await tick();
     let pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
     check('unloaded repository displays a lower bound without claiming a total', pagedRepo.getAttribute('aria-expanded') === 'false' &&
-      pagedRepo.textContent.includes('[3+]') && pagedRepo.getAttribute('aria-label').includes('at least 3 files'));
+      pagedRepo.textContent.includes('[3+]') && pagedRepo.getAttribute('aria-label').includes('at least 3 changes'));
     const initialRequests = window.posted.filter(message => message.type === 'loadChanges' && message.id === 'paged').length;
     pagedRepo.querySelector('.row').click();
     check('expansion requests the selected owner using only its opaque id', window.posted.filter(message =>
@@ -296,13 +296,20 @@ const scenario = String.raw`
     check('loading is announced', [...document.querySelectorAll('[role="status"]')].some(node => node.textContent === 'Loading changes…'));
     pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
     check('loading keeps the compact-status count as a lower bound', pagedRepo.textContent.includes('[3+]') &&
-      pagedRepo.getAttribute('aria-label').includes('at least 3 files'));
+      pagedRepo.getAttribute('aria-label').includes('at least 3 changes'));
     paged.repositories[0].changesPage = { state: 'ready', page: 0, previous: false, next: true, count: 1 };
     paged.repositories[0].groups = [{ id: 'index', label: 'Staged', files: [{ id: 'page-a', status: 'A', path: 'a.txt' }] }];
     window.postMessage(paged, '*');
     await tick();
     pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
-    check('partial count is not presented as a total', pagedRepo.textContent.includes('[1+]') && pagedRepo.getAttribute('aria-label').includes('at least 1 file'));
+    check('partial count is not presented as a total', pagedRepo.textContent.includes('[1+]') && pagedRepo.getAttribute('aria-label').includes('at least 1 change'));
+    const complete = structuredClone(paged);
+    complete.repositories[0].changesPage.next = false;
+    window.postMessage(complete, '*');
+    await tick();
+    pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    check('a complete file list reports an exact file count', pagedRepo.textContent.includes('[1]') &&
+      pagedRepo.getAttribute('aria-label').includes('1 file') && !pagedRepo.getAttribute('aria-label').includes('at least'));
     const withDirectory = structuredClone(paged);
     withDirectory.repositories[0].groups.push({ id: 'untracked', label: 'Untracked', files: [
       { id: 'nested-directory', status: '?', path: 'nested-repo/', directory: true }
@@ -312,9 +319,19 @@ const scenario = String.raw`
     const directory = items().find(item => item.getAttribute('aria-label') === '? nested-repo/, untracked directory');
     check('untracked directory is visibly identified without a file menu',
       directory && directory.textContent.includes('directory') && !directory.querySelector('.menu-action'));
+    const completeDirectory = structuredClone(withDirectory);
+    completeDirectory.repositories[0].changesPage.next = false;
+    window.postMessage(completeDirectory, '*');
+    await tick();
+    pagedRepo = items().find(item => item.getAttribute('aria-label').includes('paged-repo'));
+    check('a complete list containing an embedded directory counts changes',
+      pagedRepo.getAttribute('aria-label').includes('2 changes'));
+    window.postMessage(withDirectory, '*');
+    await tick();
+    const currentDirectory = items().find(item => item.getAttribute('aria-label') === '? nested-repo/, untracked directory');
     const beforeDirectoryClick = window.posted.length;
-    directory.querySelector('.row').click();
-    directory.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    currentDirectory.querySelector('.row').click();
+    currentDirectory.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('untracked directory never opens a diff or action', window.posted.length === beforeDirectoryClick);
     window.postMessage(paged, '*');
     await tick();
@@ -386,7 +403,7 @@ const scenario = String.raw`
     window.postMessage(pagedWorktree, '*');
     await tick();
     pagedChild = items().find(item => item.getAttribute('aria-label').includes('child, worktree'));
-    check('worktree page reports a partial count', pagedChild.textContent.includes('[1+]') && pagedChild.getAttribute('aria-label').includes('at least 1 file'));
+    check('worktree page reports a partial count', pagedChild.textContent.includes('[1+]') && pagedChild.getAttribute('aria-label').includes('at least 1 change'));
     items().find(item => item.getAttribute('aria-label') === 'Next changes for child').querySelector('.row').click();
     check('worktree paging uses its owner id', window.posted.some(message => message.type === 'changesPage' &&
       message.id === 'page-child' && message.direction === 'next'));

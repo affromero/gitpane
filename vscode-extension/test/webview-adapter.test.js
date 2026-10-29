@@ -54,8 +54,8 @@ test('webview shows workspace state and opens only currently visible changes', a
       common_dir: path.join(root, '.git'), branch: 'topic', is_dirty: true, ahead: 2, behind: 1,
       stashes: [{ index: 0, message: 'WIP on topic', oid: 'stash-commit-id' }], worktrees: [{ path: worktreePath, branch: 'worktree-branch' },
         { path: path.resolve('outside/worktree'), branch: 'outside' }], has_dirty_submodules: false,
-      has_unpushed_submodules: false
-    }], [worktreePath, { common_dir: path.join(root, '.git') }]]),
+      has_unpushed_submodules: false, file_count_lower_bound: 1
+    }], [worktreePath, { common_dir: path.join(root, '.git'), file_count_lower_bound: 1 }]]),
     onDidChangeTreeData(handler) { onChange = handler; return { dispose() {} }; },
     setVisible(value) { visible = value; },
     isVisible() { return visible; },

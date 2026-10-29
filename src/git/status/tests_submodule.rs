@@ -20,6 +20,7 @@ fn test_dirty_submodule_with_real_git_submodule() {
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert!(status.has_submodules);
     assert!(status.has_dirty_submodules);
+    assert_eq!(status.file_count_lower_bound, 1);
     assert!(!status.submodules.is_empty());
 
     let sub_info = &status.submodules[0];
@@ -209,6 +210,7 @@ fn test_ignore_dirty_with_warn_unpushed_iterates_subs() {
     let status = query_status(tmp.path(), &cfg).unwrap();
     assert!(!status.has_dirty_submodules);
     assert!(status.has_unpushed_submodules);
+    assert_eq!(status.file_count_lower_bound, 0);
     let sub = status
         .submodules
         .iter()

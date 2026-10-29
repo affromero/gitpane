@@ -58,6 +58,7 @@ pub(super) fn collect_worktree_info(
             Err(error) if allow_worktree.is_some() => return Err(error),
             Err(_) => ChangeSummary {
                 files: Vec::new(),
+                file_count_lower_bound: 0,
                 is_dirty: false,
                 has_submodules: false,
                 submodules: Vec::new(),
