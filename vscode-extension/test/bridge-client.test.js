@@ -52,7 +52,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'outside_workspace', message: 'Repository is outside the workspace'}});
     return;
   }
-  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch};
+  const result = {method: request.method, repo: request.params.repo, root: request.params.root, roots, include_worktrees: request.params.include_worktrees, summary_only: request.params.summary_only, watched_paths: request.params.watched_paths, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, group: request.params.group, original_path: request.params.original_path, chain: request.params.chain, operation: request.params.operation, branch: request.params.branch, expected_repo_identity: request.params.expected_repo_identity};
   if (process.env.MODE === 'reorder' && request.method === 'status') {
     setTimeout(() => send({id: request.id, result}), 80);
   } else if (process.env.MODE === 'late' && request.method === 'status') {
@@ -109,6 +109,8 @@ test('status and graph responses are matched to their requests', async t => {
   assert.deepEqual(await client.validateSubmoduleChain(chain), { method: 'submodule_chain_validate', roots: [root], chain });
   const pinChain = [{ path: 'child', parent_identity: '1'.repeat(64), child_identity: '2'.repeat(64) }];
   assert.deepEqual(await client.validateSubmodulePin(repo, pinChain), { method: 'submodule_pin_validate', root: repo, roots: [root], chain: pinChain });
+  assert.deepEqual(await client.validateRepositoryIdentity(repo, 'e'.repeat(64)),
+    { method: 'repo_identity_validate', repo, roots: [root], expected_repo_identity: 'e'.repeat(64) });
   assert.deepEqual(await client.fileActionPreview(repo, 'file.txt', 'discard'), { method: 'file_action_preview', repo, roots: [root], path: 'file.txt', operation: 'discard' });
   assert.deepEqual(await client.previewFetch(repo), { method: 'repo_fetch_preview', repo, roots: [root] });
   assert.deepEqual(await client.previewWorktreeRemoval(repo, path.join(root, 'linked')), { method: 'worktree_remove_preview', repo, roots: [root], path: path.join(root, 'linked') });

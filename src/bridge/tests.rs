@@ -720,13 +720,20 @@ fn commit_files_returns_root_and_first_parent_merge_changes_within_scope() {
         json!({"id": 4, "method": "commit_files", "params": {"repo": outside, "oid": root_oid.to_string()}}),
         json!({"id": 5, "method": "commit_files", "params": {"repo": repo_path, "oid": "invalid"}}),
     ]);
+    assert_eq!(replies[1]["result"]["message"], "Root");
+    assert_eq!(replies[1]["result"]["parent_oid"], Value::Null);
+    assert_eq!(replies[2]["result"]["message"], "Merge");
+    assert_eq!(replies[2]["result"]["parent_oid"], initial.id().to_string());
+    for reply in &replies[1..=2] {
+        assert_eq!(
+            reply["result"]["files"],
+            json!([{"status": "A", "path": "root.txt", "is_submodule": false}])
+        );
+        assert_eq!(reply["result"]["repo_identity"].as_str().unwrap().len(), 64);
+    }
     assert_eq!(
-        replies[1]["result"],
-        json!({"message": "Root", "files": [{"status": "A", "path": "root.txt", "is_submodule": false}]})
-    );
-    assert_eq!(
-        replies[2]["result"],
-        json!({"message": "Merge", "files": [{"status": "A", "path": "root.txt", "is_submodule": false}]})
+        replies[1]["result"]["repo_identity"],
+        replies[2]["result"]["repo_identity"]
     );
     assert_eq!(replies[3]["error"]["code"], "outside_workspace");
     assert_eq!(replies[4]["error"]["code"], "repository_error");
@@ -776,7 +783,8 @@ fn commit_files_identifies_gitlink_entries() {
     ]);
     assert_eq!(
         replies[1]["result"]["files"],
-        json!([{"status": "A", "path": "child", "is_submodule": true}])
+        json!([{"status": "A", "path": "child", "is_submodule": true,
+            "gitlink": {"old": null, "new": {"kind": "gitlink", "oid": head.id().to_string(), "mode": 0o160000}}}])
     );
 }
 

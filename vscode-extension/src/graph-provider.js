@@ -22,13 +22,22 @@ function validFilePath(value) {
     !value.split(/[\\/]/).some(part => !part || part === '.' || part === '..');
 }
 
+function validGitlink(value) {
+  const side = item => item === null || (!!item && typeof item === 'object' &&
+    typeof item.oid === 'string' && /^[a-f0-9]{40,64}$/.test(item.oid) && Number.isInteger(item.mode) &&
+    ((item.kind === 'gitlink' && item.mode === 57344) || (item.kind === 'file' && (item.mode & 61440) === 32768) ||
+     (item.kind === 'symlink' && item.mode === 40960) || (item.kind === 'tree' && item.mode === 16384)));
+  return !!value && side(value.old) && side(value.new) && (value.old?.kind === 'gitlink' || value.new?.kind === 'gitlink');
+}
+
 class GraphProvider {
-  constructor(tree, backend, git, extensionUri, theme) {
+  constructor(tree, backend, git, extensionUri, theme, links) {
     this.tree = tree;
     this.backend = backend;
     this.git = git;
     this.extensionUri = extensionUri;
     this.theme = theme;
+    this.links = links;
     this.themeSubscription = theme?.onDidChange(() => this.publishTheme());
     this.panel = undefined;
     this.repoKey = undefined;
@@ -434,7 +443,8 @@ class GraphProvider {
           throw new Error('Gitpane returned an invalid commit path.');
         }
         const id = randomUUID();
-        this.files.set(id, { path: file.path, oldPath: file.old_path, status: file.status, isSubmodule: file.is_submodule, oid, parent: row.parent_oids?.[0] });
+        this.files.set(id, { path: file.path, oldPath: file.old_path, status: file.status, isSubmodule: file.is_submodule,
+          gitlink: file.gitlink, repoIdentity: result.repo_identity, parentOid: result.parent_oid, oid, parent: row.parent_oids?.[0] });
         return { id, path: file.path, status: file.status };
       });
       this.post({ type: 'commitFiles', oid, files, loading: false });
@@ -450,12 +460,49 @@ class GraphProvider {
     const file = this.files.get(id);
     if (!repo || !file || file.oid !== this.selected) return;
     if (!await this.validateGraph(repo) || this.files.get(id) !== file || this.currentRepo() !== repo) return;
-    if (file.isSubmodule) throw new Error('Submodule changes cannot be opened as a file diff yet.');
+    if (file.isSubmodule) return this.openCommitGitlink(repo, file, id);
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
     const left = file.status === 'A' || !file.parent ? empty : this.git.toGitUri(oldUri, file.parent);
     const right = file.status === 'D' ? empty : this.git.toGitUri(uri, file.oid);
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (${file.oid.slice(0, 8)})`);
+  }
+
+  async openCommitGitlink(repo, file, id) {
+    if (!this.links || !validGitlink(file.gitlink) || !/^[a-f0-9]{64}$/.test(file.repoIdentity || '') ||
+        file.parentOid !== (file.parent || null)) {
+      throw new Error('The configured Gitpane backend does not provide verified submodule pointer details. Update the backend and try again.');
+    }
+    if (file.gitlink.old?.kind === 'tree' || file.gitlink.new?.kind === 'tree') {
+      throw new Error('Submodule changes to or from a directory cannot be opened as a file diff.');
+    }
+    const panel = this.panel, detail = this.detailGeneration, graph = this.graphGeneration;
+    const repoToken = this.tree.repositoryToken(repo);
+    const current = () => this.panel === panel && panel?.visible !== false && this.detailGeneration === detail &&
+      this.graphGeneration === graph && this.currentRepo() === repo && this.selected === file.oid && this.files.get(id) === file;
+    const verify = async () => {
+      if (!current() || !await this.validateGraph(repo) || !current()) return false;
+      const latest = await this.backend.commitFiles(repo.rootUri.fsPath, file.oid);
+      if (!current() || latest?.repo_identity !== file.repoIdentity || latest.parent_oid !== file.parentOid || !Array.isArray(latest.files)) return false;
+      return latest.files.some(item => item.path === file.path && item.status === file.status &&
+        item.old_path === file.oldPath && item.is_submodule === true && JSON.stringify(item.gitlink) === JSON.stringify(file.gitlink));
+    };
+    if (!await verify()) throw new Error('The selected submodule change is no longer available.');
+    const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
+    const oldUri = file.status === 'R' ? vscode.Uri.file(path.join(repo.rootUri.fsPath, file.oldPath)) : uri;
+    const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
+    const persistent = () => this.tree.git.repositories.includes(repo) && this.tree.isCurrentRepository(repo, repoToken);
+    const documentGuard = () => this.links.validateStaticIdentity(repo.rootUri.fsPath, file.repoIdentity, persistent);
+    const group = JSON.stringify([repo.rootUri.fsPath, file.repoIdentity, repoToken]);
+    const side = async (value, target, ref) => {
+      if (!value) return empty;
+      if (value.kind === 'gitlink') return this.links.createStatic(target, `Subproject commit ${value.oid}\n`, documentGuard, persistent, group);
+      return this.git.toGitUri(target, ref);
+    };
+    const left = await side(file.gitlink.old, oldUri, file.parent);
+    const right = await side(file.gitlink.new, uri, file.oid);
+    if (!await verify()) throw new Error('The selected submodule change is no longer available.');
     await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (${file.oid.slice(0, 8)})`);
   }
 

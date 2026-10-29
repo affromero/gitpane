@@ -265,6 +265,7 @@ class BackendManager {
       else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
+      else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'theme') result = await client.theme();
@@ -288,10 +289,12 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'file_changed', 'file_too_large'].includes(error?.code);
       const invalidSubmodule = method === 'submodule_inspect' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
+      const invalidIdentity = method === 'repo_identity_validate' &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = method === 'theme' && ['theme_error', 'invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !staleChanges && !obsoleteRelease && !invalidTheme) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !staleChanges && !obsoleteRelease && !invalidTheme) {
         this.setState('error', error);
       }
       throw error;
@@ -566,6 +569,8 @@ class BackendManager {
   branchReview(repo) { return this.request('branch_review', repo); }
 
   inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
+
+  validateRepositoryIdentity(repo, identity) { return this.request('repo_identity_validate', repo, identity); }
 
   cancelSessionLiveness() {
     this.livenessEpoch++;

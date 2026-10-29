@@ -489,6 +489,41 @@ async function main() {
   assert.equal(diffs.at(-1)[1].ref, pointerC, 'working diff ends at the live child HEAD');
   console.log('PASS staged and unstaged submodule file clicks use their selected A→B and B→C native diffs');
 
+  git('commit', '-qm', 'record staged pointer');
+  const pointerCommit = git('rev-parse', 'HEAD');
+  repo.state.HEAD.commit = pointerCommit;
+  await commands.get('gitpane.refresh')();
+  let graphReceive, graphDispose;
+  const graphMessages = [];
+  const graphPanel = { visible: true, webview: { postMessage: message => graphMessages.push(message),
+    onDidReceiveMessage: handler => { graphReceive = handler; return event(); } },
+    onDidDispose: handler => { graphDispose = handler; return event(); }, onDidChangeViewState: event, reveal() {}, dispose() {} };
+  vscode.ViewColumn = { Active: 1 };
+  vscode.window.createWebviewPanel = () => graphPanel;
+  const graphRoot = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  try {
+    Module._load = function(name, ...args) {
+      if (name === './graph/html') return { getHtml: () => '<html></html>' };
+      return load.call(this, name, ...args);
+    };
+    await commands.get('gitpane.openGraph')(graphRoot.id);
+  } finally { Module._load = load; }
+  await graphReceive({ type: 'ready' });
+  await graphReceive({ type: 'selectCommit', oid: pointerCommit });
+  const committedPointer = graphMessages.at(-1).files.find(file => file.path === 'child');
+  assert.ok(committedPointer, 'committed gitlink must be listed in the graph');
+  const beforeGraphDiff = diffs.length, beforeGraphTerminals = terminals.length, beforeGraphRepos = api.repositories.length;
+  await graphReceive({ type: 'openCommitFile', id: committedPointer.id });
+  assert.equal(diffs.length, beforeGraphDiff + 1, errors.at(-1));
+  const pointerDocuments = [diffs.at(-1)[0], diffs.at(-1)[1]];
+  await graphReceive({ type: 'selectCommit', oid: git('rev-parse', 'HEAD^') });
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointerDocuments[0]), `Subproject commit ${pointerA}\n`);
+  graphDispose();
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointerDocuments[1]), `Subproject commit ${pointerB}\n`);
+  assert.equal(terminals.length, beforeGraphTerminals);
+  assert.equal(api.repositories.length, beforeGraphRepos, 'opening a pointer diff does not open a child repository');
+  console.log('PASS committed submodule pointer opens a native diff without a child checkout or terminal');
+
   const grandSource = path.join(temporary, 'grandchild-source');
   fs.mkdirSync(grandSource);
   gitAt(grandSource, 'init', '-q');

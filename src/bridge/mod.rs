@@ -75,6 +75,13 @@ struct RepositoryRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RepositoryIdentityRequest {
+    repo: PathBuf,
+    expected_repo_identity: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StatusRequest {
     repo: PathBuf,
     #[serde(default = "include_worktrees_by_default")]
@@ -118,6 +125,14 @@ fn commit_file_json(file: crate::git::commit_files::CommitFile) -> Value {
         json!({"status": file.status, "path": file.path, "is_submodule": file.is_submodule});
     if let Some(old_path) = file.old_path {
         result["old_path"] = json!(old_path);
+    }
+    if let Some(delta) = file.gitlink {
+        let side = |value: Option<crate::git::commit_files::GitlinkSide>| {
+            value.map(
+                |value| json!({"kind":value.kind,"oid":value.oid.to_string(),"mode":value.mode}),
+            )
+        };
+        result["gitlink"] = json!({"old":side(delta.old),"new":side(delta.new)});
     }
     result
 }
@@ -177,6 +192,27 @@ fn process(
             let _: EmptyRequest = params(request.params)?;
             scope.identities()
         }
+        "repo_identity_validate" => {
+            let input: RepositoryIdentityRequest = params(request.params)?;
+            let expected = &input.expected_repo_identity;
+            if expected.len() != 64
+                || !expected
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "Invalid repository identity.",
+                ));
+            }
+            let repo = scope.repository(&input.repo)?;
+            let first = changes::RepositoryIdentity::read(&repo)?;
+            let current_path = scope.repository(&input.repo)?;
+            let current = changes::RepositoryIdentity::read(&current_path)?;
+            Ok(
+                json!({"valid": current_path == repo && first == current && current.fingerprint()? == *expected}),
+            )
+        }
         "theme" => {
             let _: EmptyRequest = params(request.params)?;
             theme::query(options.theme)
@@ -222,12 +258,22 @@ fn process(
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
-            let (message, files) =
+            let identity = changes::RepositoryIdentity::read(&repo)?;
+            let (message, parent_oid, files) =
                 crate::git::commit_files::list_commit_files_detailed(&repo, &input.oid)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
-            scope.repository(&repo)?;
+            if scope.repository(&input.repo)? != repo
+                || changes::RepositoryIdentity::read(&repo)? != identity
+            {
+                return Err(BridgeError::new(
+                    "stale_target",
+                    "Repository changed while collecting commit files.",
+                ));
+            }
             Ok(json!({
                 "message": message,
+                "parent_oid": parent_oid.map(|oid| oid.to_string()),
+                "repo_identity": identity.fingerprint()?,
                 "files": files.into_iter().map(commit_file_json).collect::<Vec<_>>(),
             }))
         }

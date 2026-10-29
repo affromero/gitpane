@@ -62,15 +62,18 @@ test('commit files open native diffs against the first parent and reject stale a
       { oid: mergeOid, parent_oids: [firstParent, 'd'.repeat(40)] }
     ] }; },
     async commitFiles(_repo, oid) {
-      return { files: [
+      return { repo_identity: 'e'.repeat(64), parent_oid: oid === rootOid ? null : firstParent, files: [
         { status: oid === rootOid ? 'A' : 'M', path: 'src/file with spaces.rs' },
-        { status: 'M', path: 'vendor/module', is_submodule: true },
+        { status: 'M', path: 'vendor/module', is_submodule: true,
+          gitlink: { old: { kind: 'gitlink', oid: '1'.repeat(40), mode: 57344 }, new: { kind: 'gitlink', oid: '2'.repeat(40), mode: 57344 } } },
         { status: 'R', path: 'new/location.rs', old_path: 'old/location.rs' }
       ] };
     }
   };
   const git = { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) };
-  const provider = new GraphProvider(tree, backend, git, '/extension');
+  const links = { async validateStaticIdentity(_repo, _identity, guard) { return guard(); },
+    async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { scheme: 'gitpane-link', content, guard }; } };
+  const provider = new GraphProvider(tree, backend, git, '/extension', undefined, links);
   try {
     Module._load = function(name, ...args) {
       if (name === './graph/html') return { getHtml: () => '<html></html>' };
@@ -112,13 +115,14 @@ test('commit files open native diffs against the first parent and reject stale a
     assert.equal(commands[1][2].ref, mergeOid);
     assert.equal(commands[1][2].fsPath, path.join(root, 'src/file with spaces.rs'));
     await receive({ type: 'openCommitFile', id: messages.at(-1).files[1].id });
-    assert.equal(commands.length, 2);
-    assert.match(errors[0], /submodule/i);
+    assert.equal(commands.length, 3);
+    assert.equal(commands[2][1].content, `Subproject commit ${'1'.repeat(40)}\n`);
+    assert.equal(commands[2][2].content, `Subproject commit ${'2'.repeat(40)}\n`);
     await receive({ type: 'openCommitFile', id: messages.at(-1).files[2].id });
-    assert.equal(commands[2][1].fsPath, path.join(root, 'old/location.rs'));
-    assert.equal(commands[2][1].ref, firstParent);
-    assert.equal(commands[2][2].fsPath, path.join(root, 'new/location.rs'));
-    assert.equal(commands[2][2].ref, mergeOid);
+    assert.equal(commands[3][1].fsPath, path.join(root, 'old/location.rs'));
+    assert.equal(commands[3][1].ref, firstParent);
+    assert.equal(commands[3][2].fsPath, path.join(root, 'new/location.rs'));
+    assert.equal(commands[3][2].ref, mergeOid);
 
     await receive({ type: 'refresh' });
     assert.equal(messages.at(-1).type, 'commitFiles');
@@ -126,30 +130,112 @@ test('commit files open native diffs against the first parent and reject stale a
 
     linked = false;
     await receive({ type: 'openCommitFile', id: mergeFile.id });
-    assert.equal(commands.length, 3);
+    assert.equal(commands.length, 4);
     provider.open(repo);
     await receive({ type: 'ready' });
     await receive({ type: 'selectCommit', oid: mergeOid });
     const reopenedFile = messages.at(-1).files[0];
     await receive({ type: 'openCommitFile', id: reopenedFile.id });
-    assert.equal(commands.length, 4);
+    assert.equal(commands.length, 5);
 
     incarnation++;
     await receive({ type: 'openCommitFile', id: reopenedFile.id });
-    assert.equal(commands.length, 4);
+    assert.equal(commands.length, 5);
     provider.open(repo);
     await receive({ type: 'ready' });
     await receive({ type: 'selectCommit', oid: mergeOid });
     const newFile = messages.at(-1).files[0];
     await receive({ type: 'openCommitFile', id: newFile.id });
-    assert.equal(commands.length, 5);
+    assert.equal(commands.length, 6);
 
     visible = false;
     onTreeChange();
     await receive({ type: 'openCommitFile', id: mergeFile.id });
-    assert.equal(commands.length, 5);
+    assert.equal(commands.length, 6);
     assert.match(messages.at(-1).error, /workspace/);
   } finally { provider.dispose(); }
+});
+
+test('committed gitlinks use their tree endpoints and reject stale or unsupported selections', async () => {
+  const commands = [], messages = [];
+  const uri = value => ({ fsPath: value, toString: () => value, with: change => ({ fsPath: value, ...change }) });
+  const vscode = { Uri: { file: uri }, commands: { async executeCommand(...args) { commands.push(args); } } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    const { GraphProvider } = require('../src/graph-provider');
+    const repo = { rootUri: uri(path.resolve('workspace/repo')) };
+    let current = true, hold = false, release;
+    const tree = { git: { repositories: [repo] }, isVisible: () => current, repositoryToken: () => 1,
+      isCurrentRepository: (_repo, token) => current && token === 1,
+      onDidChangeTreeData: () => ({ dispose() {} }) };
+    const oid = 'a'.repeat(40), parent = 'b'.repeat(40), before = '1'.repeat(40), after = '2'.repeat(40);
+    let response;
+    const backend = { async commitFiles() {
+      const result = structuredClone(response);
+      if (hold) await new Promise(resolve => { release = resolve; });
+      return result;
+    } };
+    const links = { async validateStaticIdentity(_repo, _identity, guard) { return guard(); },
+      async createStatic(_uri, content, guard) { assert.equal(await guard(), true); return { content, guard }; } };
+    const provider = new GraphProvider(tree, backend, { toGitUri: (value, ref) => ({ fsPath: value.fsPath, ref }) }, '/extension', undefined, links);
+    provider.repoKey = repo.rootUri.toString();
+    provider.panel = { visible: true, webview: { postMessage: message => messages.push(message) }, dispose() {} };
+    provider.ready = true;
+    const pointer = value => ({ kind: 'gitlink', oid: value, mode: 57344 });
+    const regular = { kind: 'file', oid: '3'.repeat(40), mode: 33188 };
+    const cases = [
+      { status: 'A', parent: null, old: null, new: pointer(after), left: 'empty', right: after },
+      { status: 'D', parent, old: pointer(before), new: null, left: before, right: 'empty' },
+      { status: 'T', parent, old: pointer(before), new: regular, left: before, right: oid },
+      { status: 'T', parent, old: regular, new: pointer(after), left: parent, right: after },
+      { status: 'R', parent, old: pointer(before), new: pointer(after), left: before, right: after, oldPath: 'old-child' }
+    ];
+    for (const item of cases) {
+      response = { repo_identity: 'f'.repeat(64), parent_oid: item.parent, files: [{ path: 'child', status: item.status,
+        ...(item.oldPath ? { old_path: item.oldPath } : {}), is_submodule: true, gitlink: { old: item.old, new: item.new } }] };
+      provider.rows.set(oid, { oid, parent_oids: item.parent ? [item.parent] : [] });
+      await provider.loadCommit(oid);
+      const id = messages.at(-1).files[0].id;
+      await provider.openCommitFile(id);
+      const diff = commands.at(-1);
+      const value = side => side.content ? side.content.match(/[a-f0-9]{40}/)[0] : side.ref || (side.scheme === 'gitpane-empty' ? 'empty' : undefined);
+      assert.equal(value(diff[1]), item.left);
+      assert.equal(value(diff[2]), item.right);
+    }
+    const pointerDocument = commands.at(-1)[1];
+    provider.selected = 'c'.repeat(40);
+    assert.equal(await pointerDocument.guard(), true, 'changing the selected commit keeps the open pointer document readable');
+    const panel = provider.panel;
+    provider.panel = undefined;
+    assert.equal(await pointerDocument.guard(), true, 'closing the graph keeps the open pointer document readable');
+    provider.panel = panel;
+    provider.selected = oid;
+    response.files[0].gitlink.old = { kind: 'tree', oid: before, mode: 16384 };
+    await provider.loadCommit(oid);
+    await assert.rejects(provider.openCommitFile(messages.at(-1).files[0].id), /directory/i);
+    response.files[0].gitlink.old = pointer(before);
+    await provider.loadCommit(oid);
+    const replacedId = messages.at(-1).files[0].id;
+    response.repo_identity = 'e'.repeat(64);
+    await assert.rejects(provider.openCommitFile(replacedId), /no longer available/i);
+    response.repo_identity = 'f'.repeat(64);
+    await provider.loadCommit(oid);
+    const staleId = messages.at(-1).files[0].id;
+    const count = commands.length;
+    hold = true;
+    const pending = provider.openCommitFile(staleId);
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    current = false;
+    release();
+    await assert.rejects(pending, /no longer available/i);
+    assert.equal(commands.length, count);
+    provider.dispose();
+  } finally {
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
 });
 
 test('graph filters retain catalog choices, distinguish all and none, and reject stale picks', async () => {

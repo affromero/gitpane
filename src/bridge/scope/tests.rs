@@ -22,6 +22,62 @@ fn request(method: &str, params: Value) -> Request {
 }
 
 #[test]
+fn scoped_repository_identity_validation_detects_gitdir_replacement() {
+    let temporary = TempDir::new().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let repo = workspace.join("repo");
+    let outside = temporary.path().join("outside");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    Repository::init(&repo).unwrap();
+    Repository::init(&outside).unwrap();
+    let repo = repo.canonicalize().unwrap();
+    let token = crate::bridge::changes::RepositoryIdentity::read(&repo)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    let mut scope = Some(super::Scope::new(vec![workspace]).unwrap());
+    let mut snapshots = Snapshots::default();
+    let config = Config::default();
+    let call = |scope: &mut Option<super::Scope>,
+                snapshots: &mut Snapshots,
+                path: &std::path::Path,
+                expected: &str| {
+        process(
+            scope,
+            snapshots,
+            request(
+                "repo_identity_validate",
+                json!({"repo":path,"expected_repo_identity":expected}),
+            ),
+            &options(&config),
+        )
+    };
+    assert_eq!(
+        call(&mut scope, &mut snapshots, &repo, &token).unwrap(),
+        json!({"valid":true})
+    );
+    assert_eq!(
+        call(&mut scope, &mut snapshots, &repo, "invalid")
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    assert_eq!(
+        call(&mut scope, &mut snapshots, &outside, &token)
+            .unwrap_err()
+            .code,
+        "outside_workspace"
+    );
+    fs::rename(repo.join(".git"), temporary.path().join("old-gitdir")).unwrap();
+    Repository::init(&repo).unwrap();
+    assert_eq!(
+        call(&mut scope, &mut snapshots, &repo, &token).unwrap(),
+        json!({"valid":false})
+    );
+}
+
+#[test]
 fn captured_root_identity_blocks_replacement_before_worker_init_and_mutation() {
     let temporary = TempDir::new().unwrap();
     let workspace = temporary.path().join("workspace");

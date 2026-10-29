@@ -447,7 +447,7 @@ async function activate(context) {
   const links = new LinkDocuments(vscode, tree, backend);
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
-  const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme);
+  const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links);
   const review = new BranchReviewProvider(tree, backend, api);
   const github = new GithubProvider(tree, backend);
   const sessions = new SessionProvider(tree, backend);

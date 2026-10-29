@@ -167,6 +167,16 @@ class BridgeClient {
     }
   }
 
+  async validateRepositoryIdentity(repo, identity) {
+    try { return await this.request('repo_identity_validate', { repo, expected_repo_identity: identity }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support repository identity checks. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async previewWorktreeRemoval(repo, path) {
     try { return await this.request('worktree_remove_preview', { repo, path }); }
     catch (error) {

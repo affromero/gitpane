@@ -18,6 +18,48 @@ function uri(value, scheme = 'file') {
     with: change => uri(change.path || value, change.scheme || scheme) };
 }
 
+test('commit pointer documents are guarded, read-only, and do not watch filesystem paths', async t => {
+  const changes = new EventEmitter(), closed = new EventEmitter();
+  const vscode = { EventEmitter, workspace: { onDidCloseTextDocument: closed.event } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, {});
+  t.after(() => docs.dispose());
+  let current = true;
+  const text = `Subproject commit ${'a'.repeat(40)}\n`;
+  const document = await docs.createStatic(uri('/repo/child'), text, () => current);
+  assert.equal(await docs.provideTextDocumentContent(document), text);
+  assert.deepEqual(docs.watchedPaths('/repo'), []);
+  await assert.rejects(docs.createStatic(uri('/repo/child'), 'unexpected content', () => true), /invalid/i);
+  current = false;
+  await assert.rejects(docs.provideTextDocumentContent(document), /no longer/i);
+  closed.fire({ uri: document });
+  await assert.rejects(docs.provideTextDocumentContent(document), /no longer available/i);
+});
+
+test('many open pointer documents share lightweight identity checks and invalidate after replacement', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const changes = new EventEmitter();
+  const vscode = { EventEmitter, workspace: {} };
+  let calls = 0, valid = true;
+  const backend = { async validateRepositoryIdentity() { calls++; return { valid }; } };
+  const docs = new LinkDocuments(vscode, { onDidChangeTreeData: changes.event }, backend);
+  t.after(() => docs.dispose());
+  const guard = () => docs.validateStaticIdentity('/repo', '1'.repeat(64), () => true);
+  const pointers = [];
+  for (let index = 0; index < 20; index++) {
+    pointers.push(await docs.createStatic(uri('/repo/child'), `Subproject commit ${'a'.repeat(40)}\n`, guard, () => true, 'same-repo'));
+  }
+  const notified = [];
+  docs.onDidChange(value => notified.push(value.toString()));
+  calls = 0;
+  valid = false;
+  changes.fire();
+  t.mock.timers.tick(50);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1, 'one lightweight check validates all pointer documents for this repository');
+  assert.equal(notified.length, pointers.length);
+  await assert.rejects(docs.provideTextDocumentContent(pointers[0]), /no longer/i);
+});
+
 test('symlink documents show link text, refresh, and expire when closed', { skip: process.platform === 'win32' }, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-link-doc-'));

@@ -36,6 +36,7 @@ class LinkDocuments {
     this.nextWatchToken = 0;
     this.disposed = false;
     this.activeReads = 0;
+    this.identityChecks = new Map();
     this.waiters = [];
     this.refreshTimer = undefined;
     this.refreshing = false;
@@ -54,6 +55,7 @@ class LinkDocuments {
 
   async read(entry) {
     if (!await this.current(entry)) throw new Error('The symlink change is no longer in the workspace.');
+    if (entry.content !== undefined) return entry.content;
     await this.acquire();
     try {
       if (!await this.current(entry)) throw new Error('The symlink change is no longer in the workspace.');
@@ -92,6 +94,7 @@ class LinkDocuments {
   }
 
   fingerprint(entry) {
+    if (entry.content !== undefined) return 'static';
     let identity;
     try {
       const stat = fs.lstatSync(path.join(entry.repo, entry.path), { bigint: true });
@@ -119,9 +122,16 @@ class LinkDocuments {
     if (this.refreshing) { this.refreshAgain = true; return; }
     this.refreshing = true;
     try {
+      const checks = new Map();
       for (const entry of this.documents.values()) {
         let current, failure;
-        try { current = await this.current(entry); } catch (error) { current = false; failure = error; }
+        try {
+          if (entry.content !== undefined && entry.group) {
+            if (!checks.has(entry.group)) checks.set(entry.group, this.current(entry));
+            current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
+          } else current = await this.current(entry);
+        }
+        catch (error) { current = false; failure = error; }
         if (this.disposed || entry.closed) continue;
         const next = current ? this.fingerprint(entry) : `stale:${failure?.message || ''}`;
         if (entry.fingerprint !== next) {
@@ -153,6 +163,40 @@ class LinkDocuments {
     return entry.uri;
   }
 
+  async createStatic(fileUri, content, guard, guardSync, group) {
+    if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
+    if (typeof content !== 'string' || !/^Subproject commit [a-f0-9]{40,64}\n$/.test(content)) {
+      throw new Error('Invalid submodule pointer contents.');
+    }
+    const entry = { content, guard, guardSync, group, closed: false };
+    await this.read(entry);
+    if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
+    entry.uri = fileUri.with({ scheme: 'gitpane-link', path: `/${randomUUID()}`, query: '', fragment: '' });
+    const key = entry.uri.toString();
+    entry.timer = setTimeout(() => this.remove(key), 60000);
+    entry.fingerprint = 'static';
+    this.documents.set(key, entry);
+    return entry.uri;
+  }
+
+  async validateStaticIdentity(repo, identity, guard) {
+    if (!guard() || this.disposed) return false;
+    const key = JSON.stringify([repo, identity]);
+    let pending = this.identityChecks.get(key);
+    if (!pending) {
+      pending = (async () => {
+        await this.acquire();
+        try { return await this.backend.validateRepositoryIdentity(repo, identity); }
+        finally { this.release(); }
+      })();
+      this.identityChecks.set(key, pending);
+      pending.finally(() => { if (this.identityChecks.get(key) === pending) this.identityChecks.delete(key); }).catch(() => {});
+    }
+    const result = await pending;
+    if (!result || typeof result.valid !== 'boolean') throw new Error('Gitpane returned an invalid repository identity result.');
+    return !this.disposed && guard() && result.valid;
+  }
+
   async provideTextDocumentContent(uri) {
     const entry = this.documents.get(uri.toString());
     if (!entry) throw new Error('The symlink diff is no longer available.');
@@ -172,12 +216,12 @@ class LinkDocuments {
   watchedPaths(repo) {
     const target = this.repoKey(repo);
     return [...new Set([...this.documents.values()]
-      .filter(entry => this.repoKey(entry.repo) === target).map(entry => entry.path))];
+      .filter(entry => entry.repo && this.repoKey(entry.repo) === target).map(entry => entry.path))];
   }
 
   watchTokenFor(repo, relative) {
     const target = this.repoKey(repo);
-    return [...this.documents.values()].find(entry => this.repoKey(entry.repo) === target && entry.path === relative)?.watchToken;
+    return [...this.documents.values()].find(entry => entry.repo && this.repoKey(entry.repo) === target && entry.path === relative)?.watchToken;
   }
 
   repoKey(value) {
