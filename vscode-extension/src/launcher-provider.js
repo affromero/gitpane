@@ -11,6 +11,10 @@ function validString(value) {
   return typeof value === 'string' && value.length > 0 && !value.includes('\0');
 }
 
+function identity(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
 function supportedExecutable(value) {
   const name = path.win32.basename(path.posix.basename(value)).toLowerCase();
   if (/\.(?:bat|cmd|ps1|sh)$/.test(name)) return false;
@@ -68,6 +72,54 @@ class LauncherProvider {
     return current;
   }
 
+  async openMultiplexer(repo, generation, guard, action, plan) {
+    if (plan.fingerprint !== action.fingerprint || !identity(plan.repo_identity)) {
+      throw new Error('Launcher configuration or repository changed. Choose it again.');
+    }
+    const configured = this.vscode.workspace?.getConfiguration('gitpane').get('sessionBackend', 'auto') ?? 'auto';
+    if (!['auto', 'tmux', 'herdr'].includes(configured)) throw new Error('Choose auto, tmux, or herdr for gitpane.sessionBackend.');
+    let backend = configured;
+    if (backend === 'auto') {
+      const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr', kind: 'herdr' }];
+      const selected = await this.vscode.window.showQuickPick(backends, { placeHolder: 'Choose a session type' });
+      this.requireCurrent(repo, generation, guard);
+      if (!selected || !backends.includes(selected)) return;
+      backend = selected.kind;
+    }
+    const result = await this.backend.launcherChoices(repo.rootUri.fsPath, action.id, action.fingerprint, backend);
+    this.requireCurrent(repo, generation, guard);
+    if (!result || result.repo_identity !== plan.repo_identity || !Array.isArray(result.choices) ||
+        (result.notice != null && !validString(result.notice))) {
+      throw new Error('Gitpane returned invalid launcher placement choices.');
+    }
+    const ids = new Set();
+    const choices = result.choices.map(choice => {
+      if (!choice || !validString(choice.id) || !validString(choice.label) || !identity(choice.context_token) || ids.has(choice.id)) {
+        throw new Error('Gitpane returned invalid launcher placement choices.');
+      }
+      ids.add(choice.id);
+      return { label: text(choice.label), id: choice.id, contextToken: choice.context_token };
+    });
+    let target;
+    if (plan.kind === 'multiplexer') {
+      if (choices.length !== 1 || choices[0].id !== 'configured') throw new Error('Gitpane returned invalid configured launcher placement.');
+      target = choices[0];
+    } else {
+      if (!choices.length) {
+        await this.vscode.window.showInformationMessage(result.notice ? text(result.notice) : `No ${backend} launcher placements are available.`);
+        return;
+      }
+      target = await this.vscode.window.showQuickPick(choices, { placeHolder: result.notice ? `Choose where to open: ${text(result.notice)}` : 'Choose where to open' });
+      this.requireCurrent(repo, generation, guard);
+      if (!target || !choices.includes(target)) return;
+    }
+    const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, action.id, action.fingerprint);
+    this.requireCurrent(repo, generation, guard);
+    if (!validation || validation.valid !== true) throw new Error('Launcher configuration changed. Choose it again.');
+    await this.backend.executeLauncher(repo.rootUri.fsPath, action.id, action.fingerprint,
+      plan.repo_identity, backend, target.id, target.contextToken, () => !!this.current(repo, generation, guard));
+  }
+
   async open(repo, guard = () => true) {
     const generation = ++this.generation;
     const token = repo && this.tree.repositoryToken(repo);
@@ -94,6 +146,10 @@ class LauncherProvider {
       if (!selected || !choices.includes(selected)) return;
       const plan = await this.backend.planLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
       let current = this.requireCurrent(repo, generation, currentGuard);
+      if (plan?.kind === 'multiplexer' || plan?.kind === 'ask') {
+        await this.openMultiplexer(repo, generation, currentGuard, selected, plan);
+        return;
+      }
       const options = terminalOptions(plan, current, selected.label, selected.fingerprint);
       const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
       current = this.requireCurrent(repo, generation, currentGuard);

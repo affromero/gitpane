@@ -47,6 +47,7 @@ class BackendManager {
     this.pinValidationClient = undefined;
     this.activeValidations = 0;
     this.verifyClients = new Set();
+    this.launcherClients = new Set();
     this.pointerClients = new Set();
     this.pointerChecks = new Map();
     this.pointerEpoch = 0;
@@ -100,6 +101,7 @@ class BackendManager {
     this.cancelValidation();
     this.cancelPointerChecks();
     this.cancelSessionLiveness();
+    for (const client of this.launcherClients) client.dispose({ immediate: true });
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
     this.roots = undefined;
@@ -367,7 +369,9 @@ class BackendManager {
       const obsoleteRelease = method === 'changes_release' && ['outside_workspace', 'workspace_changed'].includes(error?.code);
       const invalidTheme = ['theme', 'themes_list', 'theme_preview'].includes(method) && ['theme_error', 'invalid_request', 'unsupported_backend', 'stale_target'].includes(error?.code);
       const invalidUiConfig = method === 'ui_config' && ['invalid_request', 'unsupported_backend'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig) {
+      const invalidLauncher = ['launchers_list', 'launcher_plan', 'launcher_validate'].includes(method) &&
+        ['invalid_request', 'unsupported', 'unsupported_backend', 'unsupported_placement', 'config_error', 'session_error', 'stale_launcher', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig && !invalidLauncher) {
         this.setState('error', error);
       }
       throw error;
@@ -810,12 +814,72 @@ class BackendManager {
 
   validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', repo, { id, fingerprint }); }
 
+  async launcherChoices(repo, id, fingerprint, backend) {
+    if (!['tmux', 'herdr'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
+    const snapshot = await this.mutationSnapshot();
+    const repoPath = await this.realpath(repo);
+    if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding launcher placements.');
+    if (this.launcherClients.size >= 4) throw new BridgeError('busy', 'Too many launcher placement checks are running.');
+    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk),
+      timeoutMs: 10000, serviceArgs: ['serve', '--liveness-worker'], killGraceMs: 3000 });
+    this.launcherClients.add(client);
+    let completed = false, initialized = false;
+    try {
+      const handshake = await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+      initialized = true;
+      if (handshake?.capabilities?.launcher_choices_worker !== true) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend lacks safe launcher placement checks. Update the backend and try again.');
+      }
+      if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding launcher placements.');
+      client.timeoutMs = 45000;
+      const result = await client.launcherChoices(repoPath, id, fingerprint, backend);
+      const currentPath = await this.realpath(repo);
+      if (!this.isCurrentMutation(snapshot, repoPath) || currentPath !== repoPath) {
+        throw new BridgeError('workspace_changed', 'Workspace changed while finding launcher placements.');
+      }
+      completed = true;
+      return result;
+    } catch (error) {
+      if (!this.isCurrentMutation(snapshot, repoPath)) {
+        throw new BridgeError('workspace_changed', 'Workspace changed while finding launcher placements.');
+      }
+      if (!initialized && error?.code === 'service_exited') {
+        throw new BridgeError('unsupported_backend', 'Gitpane could not start a dedicated launcher placement worker. Update or check the configured backend.');
+      }
+      throw error;
+    } finally {
+      try { await client.shutdown({ immediate: !completed }); }
+      finally { this.launcherClients.delete(client); }
+    }
+  }
+
+  async executeLauncher(repo, id, fingerprint, expectedRepoIdentity, backend, choice, contextToken, validateTarget) {
+    if (!['tmux', 'herdr'].includes(backend) || typeof validateTarget !== 'function') {
+      throw new BridgeError('invalid_request', 'A current launcher and repository are required.');
+    }
+    const status = await this.status(repo, undefined, { summaryOnly: true, watchedPaths: [] });
+    if (!status || status.repo_identity !== expectedRepoIdentity) {
+      throw new BridgeError('stale_target', 'Repository changed. Choose the launcher again.');
+    }
+    try {
+      return await this.sessionMutations.execute('launcher_execute', { repo, id, fingerprint,
+        expected_repo_identity: expectedRepoIdentity, backend, choice, context_token: contextToken },
+      { lockKey: status.common_dir, validateTarget });
+    } catch (error) {
+      if (error?.code === 'invalid_request' && ['unknown bridge method', 'expected a mutation request'].includes(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support multiplexer launchers. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   retry() { return this.reconfigure(); }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
     this.cancelSessionLiveness();
+    for (const client of this.launcherClients) client.dispose({ immediate: true });
     this.generation++;
     for (const subscription of this.subscriptions) subscription.dispose();
     this.client?.dispose();

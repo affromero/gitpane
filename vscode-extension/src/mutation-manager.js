@@ -17,6 +17,19 @@ function normalizeAction(method, params) {
     typeof params.session === 'string' && params.session.length > 0) {
     return { repo: params.repo, backend: params.backend, session: params.session };
   }
+  if (method === 'launcher_execute') {
+    if (!['tmux', 'herdr'].includes(params.backend) ||
+      typeof params.id !== 'string' || !params.id || params.id.includes('\0') ||
+      typeof params.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(params.fingerprint) ||
+      typeof params.expected_repo_identity !== 'string' || !/^[a-f0-9]{64}$/.test(params.expected_repo_identity) ||
+      typeof params.choice !== 'string' || !params.choice || params.choice.includes('\0') ||
+      typeof params.context_token !== 'string' || !/^[a-f0-9]{64}$/.test(params.context_token)) {
+      throw new BridgeError('invalid_request', 'A current launcher placement and context are required.');
+    }
+    return { repo: params.repo, id: params.id, fingerprint: params.fingerprint,
+      expected_repo_identity: params.expected_repo_identity, backend: params.backend,
+      choice: params.choice, context_token: params.context_token };
+  }
   if (method === 'repo_fetch' && typeof params.expected_repo_identity === 'string' && /^[a-f0-9]{64}$/.test(params.expected_repo_identity) &&
     typeof params.expected_fetch_token === 'string' && /^[a-f0-9]{64}$/.test(params.expected_fetch_token)) {
     return { repo: params.repo, expected_repo_identity: params.expected_repo_identity, expected_fetch_token: params.expected_fetch_token };
@@ -130,9 +143,10 @@ class MutationWorker {
           pending.reject(new BridgeError(response.error.code, response.error.message));
         }
       } else {
-        if (this.dispatched && pending.method === 'repo_fetch' &&
-          (!response.result || typeof response.result !== 'object' || Array.isArray(response.result))) {
-          pending.reject(new BridgeError('outcome_unknown', 'Gitpane service returned an invalid fetch result.'));
+        if (this.dispatched && ((pending.method === 'repo_fetch' &&
+          (!response.result || typeof response.result !== 'object' || Array.isArray(response.result))) ||
+          (pending.method === 'launcher_execute' && (!response.result || response.result.launched !== true)))) {
+          pending.reject(new BridgeError('outcome_unknown', `Gitpane service returned an invalid ${pending.method === 'repo_fetch' ? 'fetch' : 'launcher'} result.`));
         } else {
           if (this.dispatched) this.authoritative = true;
           pending.resolve(response.result);

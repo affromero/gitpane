@@ -171,10 +171,20 @@ The ◉ marker shows a live session for a repository or worktree. Set
 multiplexer environment. The default, `auto`, uses the detected host. Gitpane's
 `ui.show_liveness` setting also controls the marker.
 
-Configured Launchers offers Gitpane's `[open]` and custom keybinding commands
-in integrated terminals. Command and inline placements are supported; other
-placements and interpreter executables report an error rather than changing
-their behavior silently.
+Configured Launchers offers Gitpane's `[open]` and custom keybinding commands.
+Command and inline placements open integrated terminals. On Unix, tmux and
+herdr placements can open a split or window on the workspace host. Set
+`gitpane.sessionBackend` to select a multiplexer, or choose one when it is set
+to `auto`. Install and start the selected multiplexer on that host.
+
+For `ask`, tmux offers available panes and sessions; herdr offers splits in the
+inherited pane. A configured tmux placement needs a separate `-t <target>` or
+the `TMUX` and `TMUX_PANE` environment inherited by VS Code. Herdr requires
+`HERDR_SOCKET_PATH` and either a configured `-t <target>` or `HERDR_PANE_ID`.
+Herdr new-tab placement is unavailable because its workspace target cannot yet
+be verified. Herdr launchers have not been tested against a running herdr
+server. Multiplexer launchers are unavailable on Windows. Unsupported
+placements and interpreter executables report an error.
 
 Discard and delete require confirmation and check the selected file for changes
 before running Git. Files larger than 64 MiB, directories and special files

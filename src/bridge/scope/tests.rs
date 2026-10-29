@@ -14,6 +14,7 @@ fn options(config: &Config) -> BridgeOptions<'_> {
         worktree: &config.worktree,
         review_base: None,
         theme: config,
+        monitor_stdio: false,
     }
 }
 

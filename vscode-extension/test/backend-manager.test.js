@@ -25,7 +25,8 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'initialize') {
     roots = request.params.workspace_roots;
     sources = request.params.workspace_root_sources || roots;
-    send({id: request.id, result: {version: 1, capabilities: {liveness_worker: true}}});
+    send({id: request.id, result: {version: 1, capabilities: {liveness_worker: true,
+      launcher_choices_worker: process.env.GITPANE_TEST_LAUNCHER_CAPABILITY !== '0'}}});
   } else if (request.method === 'workspace_root_identities') {
     send({id: request.id, result: {roots: roots.map((path, index) => ({path, source: sources[index], identity: 'a'.repeat(64)}))}});
   } else if (request.method === 'status' && request.params.repo.endsWith('slow')) {
@@ -68,6 +69,16 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     else send({id: request.id, result});
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
+  } else if (request.method === 'launcher_choices') {
+    if (request.params.id === 'missing') send({id: request.id, error: {code: 'stale_launcher', message: 'Launcher changed'}});
+    else {
+      if (request.params.id === 'slow') {
+        process.stderr.write('launcher-check-started\n');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+      }
+      send({id: request.id, result: {repo_identity: 'b'.repeat(64), choices: [{id: 'configured', label: request.params.backend,
+        context_token: 'c'.repeat(64)}], selected_id: request.params.id, fingerprint: request.params.fingerprint}});
+    }
   } else if (request.method === 'session_liveness') {
     if (request.params.repos.some(repo => repo.endsWith('probe-error'))) {
       send({id: request.id, error: {code: 'session_error', message: 'host probe failed'}}); return;
@@ -94,7 +105,7 @@ class EventEmitter {
   dispose() { this.listeners.clear(); }
 }
 
-function fixture() {
+function fixture(options = {}) {
   const folders = new EventEmitter();
   const configuration = new EventEmitter();
   let backendPath = '';
@@ -109,13 +120,15 @@ function fixture() {
   const executed = [];
   const manager = new BackendManager({ extensionPath: path.resolve('extension') }, {
     vscode: { EventEmitter, workspace },
+    output: options.output,
     realpath: async value => path.resolve(value),
     stat: async () => ({ isDirectory: () => true, dev: 1, ino: 1 }),
     createClient: (executable, callbacks) => {
       executed.push(executable);
       return new BridgeClient(executable, {
         ...callbacks,
-        spawn: () => spawn(process.execPath, ['-e', server], { stdio: ['pipe', 'pipe', 'pipe'] })
+        spawn: () => spawn(process.execPath, ['-e', server], { stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, GITPANE_TEST_LAUNCHER_CAPABILITY: options.launcherCapability === false ? '0' : '1' } })
       });
     }
   });
@@ -184,6 +197,58 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.deepEqual(await manager.planWorktree(path.join(root, 'repo'), 'feature/a'), {
     roots: [root], method: 'worktree_plan', branch: 'feature/a'
   });
+});
+
+test('launcher choices and execution keep the selected repository identity and context', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo'), identity = 'b'.repeat(64), fingerprint = 'a'.repeat(64), token = 'c'.repeat(64);
+  const choices = await manager.launcherChoices(repo, 'open', fingerprint, 'herdr');
+  assert.equal(choices.selected_id, 'open');
+  assert.equal(choices.fingerprint, fingerprint);
+  assert.equal(choices.choices[0].label, 'herdr');
+  await assert.rejects(manager.launcherChoices(repo, 'missing', fingerprint, 'tmux'), error => error.code === 'stale_launcher');
+  assert.equal(manager.state.status, 'ready');
+  const calls = [];
+  manager.status = async () => ({ repo_identity: identity, common_dir: path.join(repo, '.git') });
+  manager.sessionMutations.execute = async (...args) => { calls.push(args); assert.equal(args[2].validateTarget(), true); return { launched: true }; };
+  assert.deepEqual(await manager.executeLauncher(repo, 'open', fingerprint, identity, 'herdr', 'configured', token, () => true), { launched: true });
+  assert.deepEqual(calls[0][1], { repo, id: 'open', fingerprint, expected_repo_identity: identity,
+    backend: 'herdr', choice: 'configured', context_token: token });
+  assert.equal(calls[0][2].lockKey, path.join(repo, '.git'));
+  manager.status = async () => ({ repo_identity: 'd'.repeat(64), common_dir: path.join(repo, '.git') });
+  await assert.rejects(manager.executeLauncher(repo, 'open', fingerprint, identity, 'herdr', 'configured', token, () => true),
+    error => error.code === 'stale_target');
+  assert.equal(calls.length, 1);
+});
+
+test('a held launcher placement probe does not block status and is canceled on workspace change', async t => {
+  let started;
+  const probing = new Promise(resolve => { started = resolve; });
+  const f = fixture({ output: { append: text => { if (text.includes('launcher-check-started')) started(); } } });
+  t.after(() => f.manager.dispose());
+  await f.manager.ready();
+  const repo = path.join(f.root, 'repo');
+  let finished = false;
+  const pending = f.manager.launcherChoices(repo, 'slow', 'a'.repeat(64), 'tmux');
+  const rejected = assert.rejects(pending, error => error.code === 'workspace_changed');
+  pending.finally(() => { finished = true; }).catch(() => {});
+  await probing;
+  assert.deepEqual((await f.manager.status(repo)).roots, [f.root]);
+  assert.equal(finished, false);
+  f.setFolders([path.resolve('new-workspace')]);
+  await rejected;
+  assert.equal(f.manager.launcherClients.size, 0);
+});
+
+test('an older backend without cooperative launcher probes is rejected', async t => {
+  const f = fixture({ launcherCapability: false });
+  t.after(() => f.manager.dispose());
+  await f.manager.ready();
+  await assert.rejects(f.manager.launcherChoices(path.join(f.root, 'repo'), 'open', 'a'.repeat(64), 'tmux'),
+    error => error.code === 'unsupported_backend');
+  assert.equal(f.manager.state.status, 'ready');
 });
 
 test('display configuration errors do not mark the repository backend unavailable', async t => {

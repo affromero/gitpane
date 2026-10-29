@@ -159,3 +159,133 @@ test('failed terminal presentation disposes the created terminal and reports the
   assert.equal(f.opened[0].disposed, true);
   assert.match(f.errors[0], /unavailable/);
 });
+
+test('configured multiplexer placement uses its verified target without a placement picker', async () => {
+  const f = fixture(), identity = 'a'.repeat(64), token = 'b'.repeat(64), execution = [];
+  f.provider.vscode.workspace = { getConfiguration: () => ({ get: () => 'herdr' }) };
+  f.backend.planLauncher = async () => ({ kind: 'multiplexer', fingerprint: 'original', repo_identity: identity });
+  f.backend.launcherChoices = async (...args) => {
+    assert.deepEqual(args, [f.root, 'editor', 'original', 'herdr']);
+    return { repo_identity: identity, notice: null, choices: [{ id: 'configured', label: 'Configured target', context_token: token }] };
+  };
+  f.backend.executeLauncher = async (...args) => { execution.push(args.slice(0, -1)); assert.equal(args.at(-1)(), true); return { launched: true }; };
+  let pickCount = 0;
+  f.window.showQuickPick = async choices => { pickCount++; return choices[0]; };
+  await f.provider.open(f.repo);
+  assert.equal(pickCount, 1);
+  assert.deepEqual(execution, [[f.root, 'editor', 'original', identity, 'herdr', 'configured', token]]);
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.errors, []);
+});
+
+test('ask placement passes the selected backend, target and context token', async () => {
+  for (const kind of ['tmux', 'herdr']) {
+    const f = fixture(), identity = 'a'.repeat(64), first = 'b'.repeat(64), second = 'c'.repeat(64), execution = [];
+    f.backend.planLauncher = async () => ({ kind: 'ask', fingerprint: 'original', repo_identity: identity });
+    f.backend.launcherChoices = async (_repo, _id, _fingerprint, backend) => {
+      assert.equal(backend, kind);
+      return { repo_identity: identity, choices: [
+        { id: 'left', label: 'Left', context_token: first },
+        { id: 'right', label: 'Right', context_token: second }
+      ] };
+    };
+    f.backend.executeLauncher = async (...args) => { execution.push(args.slice(0, -1)); assert.equal(args.at(-1)(), true); return { launched: true }; };
+    f.window.showQuickPick = async choices => choices.find(choice => choice.kind === kind) ||
+      choices.find(choice => choice.id === 'right') || choices[0];
+    await f.provider.open(f.repo);
+    assert.deepEqual(execution, [[f.root, 'editor', 'original', identity, kind, 'right', second]]);
+    assert.deepEqual(f.opened, []);
+    assert.deepEqual(f.errors, []);
+  }
+});
+
+test('cancelled or forged multiplexer selections do not launch', async () => {
+  for (const phase of ['backend', 'placement', 'forged-backend', 'forged-placement']) {
+    const f = fixture(), identity = 'a'.repeat(64), token = 'b'.repeat(64);
+    f.backend.planLauncher = async () => ({ kind: 'ask', fingerprint: 'original', repo_identity: identity });
+    f.backend.launcherChoices = async () => ({ repo_identity: identity, choices: [{ id: 'one', label: 'One', context_token: token }] });
+    f.backend.executeLauncher = async () => { throw new Error('unexpected launch'); };
+    let pick = 0;
+    f.window.showQuickPick = async choices => {
+      pick++;
+      if ((pick === 2 && phase === 'backend') || (pick === 3 && phase === 'placement')) return undefined;
+      if ((pick === 2 && phase === 'forged-backend') || (pick === 3 && phase === 'forged-placement')) return { ...choices[0] };
+      return choices[0];
+    };
+    await f.provider.open(f.repo);
+    assert.deepEqual(f.opened, [], phase);
+    assert.deepEqual(f.errors, [], phase);
+  }
+});
+
+test('placement notice remains visible while available choices can be selected', async () => {
+  const f = fixture(), identity = 'a'.repeat(64), token = 'b'.repeat(64), execution = [];
+  f.provider.vscode.workspace = { getConfiguration: () => ({ get: () => 'herdr' }) };
+  f.backend.planLauncher = async () => ({ kind: 'ask', fingerprint: 'original', repo_identity: identity });
+  f.backend.launcherChoices = async () => ({ repo_identity: identity, notice: 'New tabs are unavailable.',
+    choices: [{ id: 'split', label: 'Split', context_token: token }] });
+  f.backend.executeLauncher = async (...args) => { execution.push(args.slice(0, -1)); return { launched: true }; };
+  let placeholder;
+  f.window.showQuickPick = async (choices, options) => {
+    if (choices[0].id === 'split') placeholder = options.placeHolder;
+    return choices[0];
+  };
+  await f.provider.open(f.repo);
+  assert.match(placeholder, /New tabs are unavailable/);
+  assert.equal(execution[0][5], 'split');
+  assert.deepEqual(f.errors, []);
+});
+
+test('invalid or stale multiplexer choices never launch', async () => {
+  const identity = 'a'.repeat(64), token = 'b'.repeat(64);
+  for (const result of [
+    { repo_identity: 'c'.repeat(64), choices: [{ id: 'configured', label: 'Target', context_token: token }] },
+    { repo_identity: identity, choices: [{ id: 'configured', label: 'Target', context_token: 'invalid' }] },
+    { repo_identity: identity, choices: [{ id: 'other', label: 'Target', context_token: token }] },
+    { repo_identity: identity, choices: [{ id: 'configured', label: 'One', context_token: token },
+      { id: 'configured', label: 'Two', context_token: token }] }
+  ]) {
+    const f = fixture();
+    f.backend.planLauncher = async () => ({ kind: 'multiplexer', fingerprint: 'original', repo_identity: identity });
+    f.backend.launcherChoices = async () => result;
+    f.backend.executeLauncher = async () => { throw new Error('unexpected launch'); };
+    await f.provider.open(f.repo);
+    assert.deepEqual(f.opened, []);
+    assert.match(f.errors[0], /invalid|changed/i);
+  }
+});
+
+test('repository or worktree changes during multiplexer selection prevent execution', async () => {
+  for (const phase of ['backend', 'choices', 'placement', 'validation']) {
+    const f = fixture(), identity = 'a'.repeat(64), token = 'b'.repeat(64);
+    let linked = true, pick = 0, executed = false;
+    f.backend.planLauncher = async () => ({ kind: 'ask', fingerprint: 'original', repo_identity: identity });
+    f.backend.launcherChoices = async () => {
+      if (phase === 'choices') linked = false;
+      return { repo_identity: identity, choices: [{ id: 'one', label: 'One', context_token: token }] };
+    };
+    f.backend.validateLauncher = async () => { if (phase === 'validation') f.reopen(); return { valid: true }; };
+    f.backend.executeLauncher = async () => { executed = true; return { launched: true }; };
+    f.window.showQuickPick = async choices => {
+      pick++;
+      if ((phase === 'backend' && pick === 2) || (phase === 'placement' && pick === 3)) linked = false;
+      return choices[0];
+    };
+    await f.provider.open(f.repo, () => linked);
+    assert.equal(executed, false, phase);
+    assert.match(f.errors[0], /workspace changed/i, phase);
+  }
+});
+
+test('multiplexer execution reports partial or uncertain outcomes', async () => {
+  for (const code of ['partial_completion', 'outcome_unknown']) {
+    const f = fixture(), identity = 'a'.repeat(64), token = 'b'.repeat(64);
+    f.provider.vscode.workspace = { getConfiguration: () => ({ get: () => 'tmux' }) };
+    f.backend.planLauncher = async () => ({ kind: 'multiplexer', fingerprint: 'original', repo_identity: identity });
+    f.backend.launcherChoices = async () => ({ repo_identity: identity, choices: [{ id: 'configured', label: 'Target', context_token: token }] });
+    f.backend.executeLauncher = async () => { throw Object.assign(new Error(`launch ${code}`), { code }); };
+    await f.provider.open(f.repo);
+    assert.match(f.errors[0], new RegExp(code));
+    assert.deepEqual(f.opened, []);
+  }
+});

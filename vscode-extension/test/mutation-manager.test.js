@@ -48,7 +48,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (mode === 'exit-after-action') { process.exit(7); return; }
   const answer = () => {
     if (mode === 'git-error') reply({id: request.id, error: {code: 'git_error', message: 'git failed'}});
-    else reply({id: request.id, result: {}});
+    else reply({id: request.id, result: request.method === 'launcher_execute' && mode !== 'launcher-invalid-result' ? {launched: true} : {}});
   };
   if (mode === 'hold-action') release('release-action', answer); else answer();
 });
@@ -121,6 +121,39 @@ test('theme save uses a scoped one-shot worker and aborts if the workspace chang
   await f.mark('release-init');
   await assert.rejects(pending, code('workspace_changed'));
   assert.equal(await exists(path.join(f.dir, 'actions')), false);
+});
+
+test('launcher execution sends its selected context once through a scoped worker', async t => {
+  const f = await fixture(t);
+  const params = { repo: f.repo, id: 'key:1', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
+    backend: 'tmux', choice: 'split-window -h -t @42', context_token: 'c'.repeat(64) };
+  assert.deepEqual(await f.manager.execute('launcher_execute', params, f.opts), { launched: true });
+  const actions = await f.actions();
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].method, 'launcher_execute');
+  assert.deepEqual(actions[0].params, { ...params, repo: await fs.realpath(f.repo) });
+});
+
+test('launcher execution rejects stale selection before dispatch and invalid context tokens', async t => {
+  const f = await fixture(t, 'hold-init');
+  const params = { repo: f.repo, id: 'open', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
+    backend: 'herdr', choice: 'configured', context_token: 'c'.repeat(64) };
+  await assert.rejects(f.manager.execute('launcher_execute', { ...params, context_token: 'invalid' }, f.opts), code('invalid_request'));
+  let current = true;
+  const pending = f.manager.execute('launcher_execute', params, { ...f.opts, validateTarget: () => current });
+  await f.wait('initialized');
+  current = false;
+  await f.mark('release-init');
+  await assert.rejects(pending, code('workspace_changed'));
+  assert.equal(await exists(path.join(f.dir, 'actions')), false);
+});
+
+test('a malformed launcher result reports an unknown outcome instead of retrying', async t => {
+  const f = await fixture(t, 'launcher-invalid-result');
+  const params = { repo: f.repo, id: 'open', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
+    backend: 'tmux', choice: 'configured', context_token: 'c'.repeat(64) };
+  await assert.rejects(f.manager.execute('launcher_execute', params, f.opts), code('outcome_unknown'));
+  assert.equal((await f.actions()).length, 1);
 });
 
 test('theme save sends the guarded selection to the mutation worker', async t => {

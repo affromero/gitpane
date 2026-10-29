@@ -127,6 +127,7 @@ fn assert_changes_page(root: &Path, path: &str, kind: &str) {
         worktree: &config.worktree,
         review_base: None,
         theme: &config,
+        monitor_stdio: false,
     };
     let mut scope = Some(Scope::new(vec![root.to_owned()]).unwrap());
     let mut snapshots = changes::Snapshots::default();

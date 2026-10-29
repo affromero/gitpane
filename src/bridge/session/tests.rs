@@ -32,6 +32,7 @@ fn dedicated_worker_advertises_capability_and_rejects_other_queries() {
         worktree: &config.worktree,
         review_base: config.review.base.as_deref(),
         theme: &config,
+        monitor_stdio: false,
     };
     let requests = [
         json!({"id":1,"method":"initialize","params":{"version":1,"workspace_roots":[root]}}),

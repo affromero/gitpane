@@ -152,6 +152,52 @@ struct BridgeOptions<'a> {
     worktree: &'a WorktreeConfig,
     review_base: Option<&'a str>,
     theme: &'a Config,
+    monitor_stdio: bool,
+}
+
+#[cfg(unix)]
+fn monitor_worker_input() -> io::Result<()> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let fd = unsafe { libc::dup(libc::STDIN_FILENO) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    std::thread::spawn(move || {
+        let mut event = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        loop {
+            let status = unsafe { libc::poll(&mut event, 1, 100) };
+            if status < 0 {
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            if event.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                break;
+            }
+            if event.revents & libc::POLLIN != 0 {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn monitor_worker_input() -> io::Result<()> {
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -287,6 +333,7 @@ fn process(
         "launchers_list" => launcher::list(scope, params(request.params)?),
         "launcher_plan" => launcher::plan(scope, params(request.params)?),
         "launcher_validate" => launcher::validate(scope, params(request.params)?),
+        "launcher_choices" => launcher::mux::choices(scope, params(request.params)?),
         "worktree_plan" => worktree_plan::plan(scope, params(request.params)?, worktree_cfg),
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
@@ -365,6 +412,7 @@ fn process_mutation(scope: &Scope, request: Request) -> Result<Value, BridgeErro
         "repo_sync" => mutation::repo_sync(scope, params(request.params)?),
         "repo_fetch" => fetch::execute(scope, params(request.params)?),
         "session_goto" => session::goto(scope, params(request.params)?),
+        "launcher_execute" => launcher::mux::execute(scope, params(request.params)?),
         "submodule_action" => submodule::actions::execute(scope, params(request.params)?),
         "worktree_create" => mutation::worktree_create(scope, params(request.params)?),
         "worktree_remove" => mutation::worktree_remove(scope, params(request.params)?),
@@ -434,17 +482,24 @@ fn serve_inner(
         match serde_json::from_slice::<Request>(&line) {
             Ok(request) => {
                 let id = request.id;
-                let liveness_request = liveness_worker && request.method == "session_liveness";
+                let liveness_request = liveness_worker
+                    && matches!(
+                        request.method.as_str(),
+                        "session_liveness" | "launcher_choices"
+                    );
                 let liveness_initialization = liveness_worker && request.method == "initialize";
                 if liveness_worker
-                    && !matches!(request.method.as_str(), "initialize" | "session_liveness")
+                    && !matches!(
+                        request.method.as_str(),
+                        "initialize" | "session_liveness" | "launcher_choices"
+                    )
                 {
                     write_reply(
                         writer,
                         Some(id),
                         Err(BridgeError::new(
                             "invalid_request",
-                            "liveness worker only accepts session liveness requests",
+                            "liveness worker only accepts session liveness or launcher choice requests",
                         )),
                     )?;
                     continue;
@@ -469,9 +524,25 @@ fn serve_inner(
                     )?;
                     return Ok(());
                 }
+                if liveness_worker
+                    && request.method == "launcher_choices"
+                    && options.monitor_stdio
+                    && let Err(error) = monitor_worker_input()
+                {
+                    write_reply(
+                        writer,
+                        Some(id),
+                        Err(BridgeError::new(
+                            "session_error",
+                            format!("Cannot monitor launcher worker: {error}"),
+                        )),
+                    )?;
+                    return Ok(());
+                }
                 let mut result = process(&mut scope, &mut snapshots, request, options);
                 if liveness_initialization && let Ok(value) = &mut result {
-                    value["capabilities"] = json!({"liveness_worker": true});
+                    value["capabilities"] =
+                        json!({"liveness_worker": true, "launcher_choices_worker": true});
                 }
                 let failed = result.is_err();
                 write_reply(writer, Some(id), result)?;
@@ -515,6 +586,7 @@ fn serve(
             worktree: worktree_cfg,
             review_base,
             theme: &Config::default(),
+            monitor_stdio: false,
         },
         mutation_once,
         false,
@@ -537,6 +609,7 @@ pub(crate) fn run(
             worktree: &config.worktree,
             review_base: config.review.base.as_deref(),
             theme: config,
+            monitor_stdio: true,
         },
         mutation_once,
         liveness_worker,

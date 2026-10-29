@@ -9,6 +9,8 @@ use crate::config::Config;
 use crate::session::env::Multiplexer;
 use crate::session::launcher::{self, LaunchPlan};
 
+pub(super) mod mux;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ListRequest {
@@ -142,6 +144,27 @@ fn make_plan(action: &Action, repo: &Path) -> Result<Value, BridgeError> {
                 json!({ "kind": "shell", "script": script, "env": { "GITPANE_LAUNCH_PATH": path, "GITPANE_LAUNCH_BASE": "" }, "fingerprint": fingerprint }),
             )
         }
+        "ask" => Ok(json!({ "kind": "ask", "fingerprint": fingerprint })),
+        placement
+            if placement.starts_with("split-window") || placement.starts_with("new-window") =>
+        {
+            if command.is_some_and(|value| value.contains("{base}")) {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "A review base is not available for this launcher.",
+                ));
+            }
+            match launcher::plan(command, placement, path, None, Multiplexer::Tmux) {
+                LaunchPlan::Spawn(_) => {
+                    Ok(json!({ "kind": "multiplexer", "fingerprint": fingerprint }))
+                }
+                LaunchPlan::Error(message) => Err(BridgeError::new("invalid_request", message)),
+                _ => Err(BridgeError::new(
+                    "unsupported_placement",
+                    "The configured launcher placement is not supported.",
+                )),
+            }
+        }
         placement => Err(BridgeError::new(
             "unsupported_placement",
             format!("Launcher placement '{placement}' is not supported in VS Code."),
@@ -158,9 +181,18 @@ pub(super) fn list(scope: &Scope, input: ListRequest) -> Result<Value, BridgeErr
 
 pub(super) fn plan(scope: &Scope, input: ActionRequest) -> Result<Value, BridgeError> {
     let repo = scope.repository(&input.repo)?;
+    let identity = super::changes::RepositoryIdentity::read(&repo)?;
     let action = selected(&load()?, &input.id, &input.fingerprint)?;
-    let plan = make_plan(&action, &repo)?;
-    scope.repository(&repo)?;
+    let mut plan = make_plan(&action, &repo)?;
+    if scope.repository(&repo)? != repo
+        || super::changes::RepositoryIdentity::read(&repo)? != identity
+    {
+        return Err(BridgeError::new(
+            "stale_target",
+            "Repository changed; choose the launcher again.",
+        ));
+    }
+    plan["repo_identity"] = json!(identity.fingerprint()?);
     Ok(plan)
 }
 
@@ -202,10 +234,8 @@ mod tests {
         }
         config.open.placement = "new-window".into();
         assert_eq!(
-            make_plan(&actions(&config).remove(0), repo)
-                .unwrap_err()
-                .code,
-            "unsupported_placement"
+            make_plan(&actions(&config).remove(0), repo).unwrap()["kind"],
+            "multiplexer"
         );
     }
 }

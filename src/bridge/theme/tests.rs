@@ -236,6 +236,7 @@ fn request(config: &Config, params: Value) -> Value {
         worktree: &config.worktree,
         review_base: config.review.base.as_deref(),
         theme: config,
+        monitor_stdio: false,
     };
     let mut output = Vec::new();
     serve_inner(&mut Cursor::new(input), &mut output, &options, false, false).unwrap();

@@ -654,6 +654,7 @@ fn reinitialization_invalidates_snapshot_tokens_even_for_the_same_workspace() {
                 worktree: &WorktreeConfig::default(),
                 review_base: None,
                 theme: &crate::config::Config::default(),
+                monitor_stdio: false,
             },
         )
     };

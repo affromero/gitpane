@@ -241,6 +241,7 @@ fn bridge_validation_preserves_open_change_snapshots() {
         worktree: &config.worktree,
         review_base: None,
         theme: &config,
+        monitor_stdio: false,
     };
     let mut scope = None;
     let mut snapshots = Snapshots::default();

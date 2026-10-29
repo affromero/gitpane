@@ -345,6 +345,16 @@ class BridgeClient {
 
   validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', { repo, id, fingerprint }); }
 
+  async launcherChoices(repo, id, fingerprint, backend) {
+    try { return await this.request('launcher_choices', { repo, id, fingerprint, backend }); }
+    catch (error) {
+      if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support launcher placement choices. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   call(method, params) {
     if (!this.child) return Promise.reject(new BridgeError('service_exited', 'Gitpane service is not running.'));
     if (this.pending.size >= MAX_PENDING) return Promise.reject(new BridgeError('busy', 'Too many Gitpane service requests are pending.'));
