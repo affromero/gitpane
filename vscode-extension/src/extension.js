@@ -302,6 +302,7 @@ async function activate(context) {
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.actions = new SidebarActions({ vscode, mutations,
     previewFileAction: (repo, target, operation) => backend.fileActionPreview(repo, target, operation),
+    planWorktree: (repo, branch) => backend.planWorktree(repo, branch),
     resolveRepository: id => provider.resolveRepository(id),
     resolveChange: id => provider.resolveChange(id),
     resolveWorktree: id => provider.resolveWorktree(id),

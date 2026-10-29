@@ -16,6 +16,10 @@ function fixture() {
   let quickPick = choices => choices[0];
   let warning = () => 'Discard';
   const inputs = [];
+  const inputOptions = [];
+  const plans = [];
+  let input = () => inputs.shift();
+  let plan = async () => ({ path: path.resolve('workspace/repo-new-branch'), problem: null });
   const calls = [];
   const errors = [];
   let beforeValidation = () => {};
@@ -27,7 +31,7 @@ function fixture() {
     window: {
       showQuickPick: async choices => quickPick(choices),
       showWarningMessage: async (message, options, button) => { calls.push(['confirm', message, options]); return warning(button); },
-      showInputBox: async () => inputs.shift(),
+      showInputBox: async options => { inputOptions.push(options); return input(options); },
       showErrorMessage: async message => { errors.push(message); },
       showInformationMessage: async message => { calls.push(['info', message]); }
     },
@@ -57,16 +61,19 @@ function fixture() {
     openLauncher: async id => { calls.push(['openLauncher', id]); },
     openWorktreeGraph: async id => { calls.push(['openWorktreeGraph', id]); },
     reviewWorktree: async id => { calls.push(['reviewWorktree', id]); },
+    planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     previewFileAction: (...args) => preview(...args)
   });
   return {
-    actions, root, commonDir, uri, node, calls, errors, inputs,
+    actions, root, commonDir, uri, node, calls, errors, inputs, inputOptions, plans,
     setFile(value) { file = value; }, getFile() { return file; },
     setRepo(value) { repo = value; }, getRepo() { return repo; },
     setWorktree(value) { worktree = value; }, getWorktree() { return worktree; },
     pick(fn) { quickPick = fn; }, confirm(fn) { warning = fn; },
     setFailure(value) { failure = value; }, setRefreshFailure(value) { refreshFailure = value; },
     beforeValidation(fn) { beforeValidation = fn; },
+    setInput(fn) { input = fn; },
+    setPlan(fn) { plan = fn; },
     setPreview(fn) { preview = fn; },
     setStat(fn) { stat = fn; }
   };
@@ -207,6 +214,10 @@ test('worktree creation and removal use current opaque targets and confirm remov
   const target = path.resolve('workspace/new-worktree');
   f.inputs.push('new-branch', target);
   await f.actions.handle(action('createWorktree', 'repo'));
+  assert.deepEqual(f.plans, [[f.root, 'new-branch']]);
+  assert.equal(f.inputOptions[1].value, path.resolve('workspace/repo-new-branch'));
+  assert.equal(f.inputOptions[1].validateInput(target), undefined);
+  assert.match(f.inputOptions[1].validateInput('relative/path'), /absolute/i);
   assert.deepEqual(f.calls[0], ['mutation', 'worktree_create', { repo: f.root, branch: 'new-branch', path: target }, f.commonDir]);
   assert.deepEqual(f.calls[1], ['openWorktree', target]);
   assert.deepEqual(f.calls[2], ['refresh']);
@@ -215,6 +226,97 @@ test('worktree creation and removal use current opaque targets and confirm remov
   await f.actions.showMenu('worktree', 'worktree');
   assert.match(f.calls[0][1], /remove worktree/i);
   assert.deepEqual(f.calls[1], ['mutation', 'worktree_remove', { repo: f.root, path: f.getWorktree().path }, f.commonDir]);
+});
+
+test('an unavailable configured worktree location is shown and can be replaced', async () => {
+  const f = fixture();
+  const outside = path.resolve('outside/repo-topic');
+  const inside = path.resolve('workspace/repo-topic');
+  f.setPlan(async () => ({ path: outside, problem: 'Worktree destination is outside the workspace' }));
+  f.inputs.push('topic', inside);
+  await f.actions.handle(action('createWorktree', 'repo'));
+  assert.equal(f.inputOptions[1].value, outside);
+  assert.match(f.inputOptions[1].validateInput(outside), /outside the workspace/i);
+  assert.equal(f.inputOptions[1].validateInput(inside), undefined);
+  assert.deepEqual(f.calls[0], ['mutation', 'worktree_create', { repo: f.root, branch: 'topic', path: inside }, f.commonDir]);
+
+  const unchanged = fixture();
+  unchanged.setPlan(async () => ({ path: outside, problem: 'Worktree destination is outside the workspace' }));
+  unchanged.inputs.push('topic', outside);
+  await unchanged.actions.handle(action('createWorktree', 'repo'));
+  assert.deepEqual(unchanged.calls, []);
+});
+
+test('worktree creation reports invalid plans and planner errors before asking for a path', async () => {
+  const invalid = [undefined, {}, { path: 'relative', problem: null },
+    { path: path.resolve('workspace/repo-topic') + '\0bad', problem: null },
+    { path: path.resolve('workspace/repo-topic'), problem: 5 },
+    { path: path.resolve('workspace/repo-topic'), problem: '' }];
+  for (const result of invalid) {
+    const f = fixture();
+    f.setPlan(async () => result);
+    f.inputs.push('topic');
+    await f.actions.handle(action('createWorktree', 'repo'));
+    assert.equal(f.inputOptions.length, 1);
+    assert.deepEqual(f.calls, []);
+    assert.match(f.errors[0], /invalid.*worktree/i);
+  }
+  const f = fixture();
+  f.setPlan(async () => { throw new Error('invalid branch name'); });
+  f.inputs.push('bad branch');
+  await f.actions.handle(action('createWorktree', 'repo'));
+  assert.equal(f.inputOptions.length, 1);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.errors[0], /invalid branch name/i);
+});
+
+test('an older configured backend reports how to enable worktree creation', async () => {
+  const f = fixture();
+  f.setPlan(async () => { throw Object.assign(new Error('unknown bridge method'), { code: 'invalid_request' }); });
+  f.inputs.push('topic');
+  await f.actions.handle(action('createWorktree', 'repo'));
+  assert.equal(f.inputOptions.length, 1);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.errors[0], /update.*backend/i);
+
+  const branch = fixture();
+  branch.setPlan(async () => { throw Object.assign(new Error('invalid branch name'), { code: 'invalid_request' }); });
+  branch.inputs.push('bad branch');
+  await branch.actions.handle(action('createWorktree', 'repo'));
+  assert.match(branch.errors[0], /invalid branch name/i);
+  assert.doesNotMatch(branch.errors[0], /update.*backend/i);
+});
+
+test('cancelled or stale worktree planning and path selection cannot create a worktree', async () => {
+  const cancelledBranch = fixture();
+  await cancelledBranch.actions.handle(action('createWorktree', 'repo'));
+  assert.deepEqual(cancelledBranch.plans, []);
+  assert.deepEqual(cancelledBranch.calls, []);
+
+  const stalePlan = fixture();
+  stalePlan.inputs.push('topic');
+  stalePlan.setPlan(async () => {
+    stalePlan.setRepo(undefined);
+    return { path: path.resolve('workspace/repo-topic'), problem: null };
+  });
+  await stalePlan.actions.handle(action('createWorktree', 'repo'));
+  assert.equal(stalePlan.inputOptions.length, 1);
+  assert.deepEqual(stalePlan.calls, []);
+
+  const cancelledPath = fixture();
+  cancelledPath.inputs.push('topic', undefined);
+  await cancelledPath.actions.handle(action('createWorktree', 'repo'));
+  assert.equal(cancelledPath.inputOptions.length, 2);
+  assert.deepEqual(cancelledPath.calls, []);
+
+  const stalePath = fixture();
+  stalePath.setInput(options => {
+    if (!options.value) return 'topic';
+    stalePath.setRepo(undefined);
+    return options.value;
+  });
+  await stalePath.actions.handle(action('createWorktree', 'repo'));
+  assert.deepEqual(stalePath.calls, []);
 });
 
 test('available worktrees offer graph and review only while their repository remains current', async () => {

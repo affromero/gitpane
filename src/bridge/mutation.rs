@@ -329,15 +329,19 @@ fn absolute_path(path: &Path) -> Result<(), BridgeError> {
     Ok(())
 }
 
-pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Value, BridgeError> {
-    let repo = scope.repository(&input.repo)?;
-    absolute_path(&input.path)?;
-    if input.branch.starts_with('-')
-        || !git2::Branch::name_is_valid(&input.branch).map_err(repo_error)?
-    {
+pub(super) fn validate_worktree_branch(branch: &str) -> Result<(), BridgeError> {
+    if branch.starts_with('-') || !git2::Branch::name_is_valid(branch).map_err(repo_error)? {
         return Err(BridgeError::new("invalid_request", "invalid branch name"));
     }
-    match input.path.symlink_metadata() {
+    Ok(())
+}
+
+pub(super) fn validate_worktree_destination(
+    scope: &Scope,
+    path: &Path,
+) -> Result<PathBuf, BridgeError> {
+    absolute_path(path)?;
+    match path.symlink_metadata() {
         Ok(_) => {
             return Err(BridgeError::new(
                 "invalid_request",
@@ -347,8 +351,7 @@ pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Va
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(repo_error(error)),
     }
-    let parent = input
-        .path
+    let parent = path
         .parent()
         .ok_or_else(|| BridgeError::new("invalid_request", "worktree destination has no parent"))?;
     let canonical_parent = parent.canonicalize().map_err(repo_error)?;
@@ -358,11 +361,17 @@ pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Va
             "worktree destination is outside the workspace",
         ));
     }
-    let name = input
-        .path
+    let name = path
         .file_name()
         .ok_or_else(|| BridgeError::new("invalid_request", "worktree destination has no name"))?;
-    let target = canonical_parent.join(name);
+    Ok(canonical_parent.join(name))
+}
+
+pub(super) fn worktree_create(scope: &Scope, input: CreateWorktree) -> Result<Value, BridgeError> {
+    let repo = scope.repository(&input.repo)?;
+    absolute_path(&input.path)?;
+    validate_worktree_branch(&input.branch)?;
+    let target = validate_worktree_destination(scope, &input.path)?;
     scope.repository(&repo)?;
     let mut args = vec!["-c".to_owned(), "submodule.recurse=false".to_owned()];
     args.extend(worktree_ops::create_arguments(&input.branch, &target));

@@ -91,6 +91,10 @@ class BridgeClient {
     return this.request('file_action_preview', { repo, path, operation });
   }
 
+  planWorktree(repo, branch) {
+    return this.request('worktree_plan', { repo, branch });
+  }
+
   branchReview(repo) {
     return this.request('branch_review', { repo });
   }

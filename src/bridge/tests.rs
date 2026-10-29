@@ -5,7 +5,7 @@ use git2::{Repository, Signature};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::config::{BranchFilter, GraphConfig, SubmoduleConfig};
+use crate::config::{BranchFilter, GraphConfig, SubmoduleConfig, WorktreeConfig};
 
 use super::{MAX_REQUEST_BYTES, serve};
 
@@ -155,6 +155,7 @@ fn exchange_with_graph_config(
         &mut output,
         &SubmoduleConfig::default(),
         graph_config,
+        &WorktreeConfig::default(),
         base,
         false,
     )
@@ -855,6 +856,7 @@ fn malformed_and_oversized_requests_return_errors() {
         &mut output,
         &SubmoduleConfig::default(),
         &GraphConfig::default(),
+        &WorktreeConfig::default(),
         None,
         false,
     )

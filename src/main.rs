@@ -164,6 +164,7 @@ async fn run() -> Result<()> {
             return bridge::run(
                 &config.submodules,
                 &config.graph,
+                &config.worktree,
                 config.review.base.as_deref(),
                 mutation_once,
             );

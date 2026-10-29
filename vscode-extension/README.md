@@ -35,6 +35,10 @@ The `⋯` menus provide file actions to stage, unstage, discard or delete an
 untracked file. Repository actions include branch review, push, pull, pull with
 rebase and worktree creation. Linked worktrees inside the workspace can be
 removed from their menu.
+Worktree creation suggests Gitpane's configured `[worktree] dir`, or a sibling
+of the repository when unset. If that location is outside the workspace or
+unavailable, choose an existing parent directory inside the workspace instead.
+Restart the VS Code extension host after changing the worktree configuration.
 
 The repository menu also opens GitHub issues and pull requests for a
 `github.com` remote. Filter by open, closed or all, inspect descriptions,

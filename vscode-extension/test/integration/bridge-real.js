@@ -105,7 +105,10 @@ async function waitForFile(file) {
 
     git(repo, 'update-ref', 'refs/remotes/origin/config-check', rootOid);
     const configPath = path.join(temporary, 'graph-config.toml');
-    fs.writeFileSync(configPath, '[graph]\nbranches = "remote"\nlabel_max_len = 5\nshow_stats = false\n');
+    const configuredWorktrees = path.join(root, 'managed-worktrees');
+    fs.mkdirSync(configuredWorktrees);
+    fs.writeFileSync(configPath, '[graph]\nbranches = "remote"\nlabel_max_len = 5\nshow_stats = false\n' +
+      '\n[worktree]\ndir = "../managed-worktrees"\n');
     configuredClient = new BridgeClient(executable, {
       spawn: (program, args, options) => {
         configuredChild = spawn(program, args, { ...options, env: { ...gitEnv, GITPANE_CONFIG: configPath } });
@@ -121,6 +124,16 @@ async function waitForFile(file) {
     assert.ok(configuredGraph.rows.length > 0);
     assert.ok(configuredGraph.rows.every(row => row.diff_stat === null));
     console.log('PASS graph configuration from the workspace-host config file');
+
+    const plannedWorktree = await configuredClient.planWorktree(repoPath, 'feature/verify');
+    assert.equal(fs.realpathSync(path.dirname(plannedWorktree.path)), fs.realpathSync(configuredWorktrees));
+    assert.equal(path.basename(plannedWorktree.path), 'repo-feature-verify');
+    assert.equal(plannedWorktree.problem, null);
+    await configuredClient.initialize([repoPath]);
+    const outsidePlan = await configuredClient.planWorktree(repoPath, 'feature/verify');
+    assert.equal(outsidePlan.path, plannedWorktree.path);
+    assert.match(outsidePlan.problem, /outside the workspace/i);
+    await configuredClient.initialize([root]);
 
     const rootFiles = await client.commitFiles(repoPath, rootOid);
     assert.equal(rootFiles.message, 'root commit');
@@ -205,15 +218,15 @@ async function waitForFile(file) {
     assert.equal(git(repo, 'status', '--porcelain', '--', 'tracked.txt'), '');
     console.log('PASS real stage, unstage, stale confirmation rejection, untracked deletion and discard');
 
-    const worktree = path.join(root, 'new-worktree');
-    await runMutation('worktree_create', { repo: repoPath, path: worktree, branch: 'bridge-worktree' });
-    assert.equal(git(worktree, 'branch', '--show-current'), 'bridge-worktree');
+    const worktree = plannedWorktree.path;
+    await runMutation('worktree_create', { repo: repoPath, path: worktree, branch: 'feature/verify' });
+    assert.equal(git(worktree, 'branch', '--show-current'), 'feature/verify');
     await runMutation('worktree_remove', { repo: repoPath, path: worktree });
     assert.equal(fs.existsSync(worktree), false);
     await assert.rejects(runMutation('worktree_create', {
       repo: repoPath, path: path.join(temporary, 'external-worktree'), branch: 'external-branch'
     }), error => error.code === 'outside_workspace');
-    console.log('PASS workspace worktree creation, removal and outside rejection');
+    console.log('PASS configured worktree planning, workspace scope, creation and removal');
 
     if (process.platform !== 'win32') {
       fs.mkdirSync(sessionDir);

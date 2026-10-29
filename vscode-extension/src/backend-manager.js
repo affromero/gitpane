@@ -127,6 +127,7 @@ class BackendManager {
       if (method === 'status') result = await client.status(repo, argument);
       else if (method === 'sort_repositories') result = await client.sortRepositories(argument.order, argument.repositories);
       else if (method === 'file_action_preview') result = await client.fileActionPreview(repo, argument.path, argument.operation);
+      else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
@@ -144,7 +145,10 @@ class BackendManager {
       if (!this.disposed && generation !== this.generation) {
         throw new BridgeError('workspace_changed', 'Workspace changed before the Gitpane response arrived.');
       }
-      if (!this.disposed && generation === this.generation && client === this.client) this.setState('error', error);
+      const invalidWorktreePlan = method === 'worktree_plan' && error?.code === 'invalid_request';
+      if (!this.disposed && generation === this.generation && client === this.client && !invalidWorktreePlan) {
+        this.setState('error', error);
+      }
       throw error;
     }
   }
@@ -154,6 +158,8 @@ class BackendManager {
   sortRepositories(order, repositories) { return this.request('sort_repositories', undefined, { order, repositories }); }
 
   fileActionPreview(repo, path, operation) { return this.request('file_action_preview', repo, { path, operation }); }
+
+  planWorktree(repo, branch) { return this.request('worktree_plan', repo, branch); }
 
   branchReview(repo) { return this.request('branch_review', repo); }
 

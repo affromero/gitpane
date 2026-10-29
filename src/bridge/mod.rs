@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::{GraphConfig, SubmoduleConfig};
+use crate::config::{GraphConfig, SubmoduleConfig, WorktreeConfig};
 
 mod file_identity;
 mod github;
@@ -20,6 +20,7 @@ mod status;
 mod submodule;
 #[cfg(test)]
 mod tests;
+mod worktree_plan;
 
 use scope::Scope;
 
@@ -113,6 +114,7 @@ fn process(
     request: Request,
     sub_cfg: &SubmoduleConfig,
     graph_cfg: &GraphConfig,
+    worktree_cfg: &WorktreeConfig,
     review_base: Option<&str>,
 ) -> Result<Value, BridgeError> {
     if request.method == "initialize" {
@@ -149,6 +151,7 @@ fn process(
         "launchers_list" => launcher::list(scope, params(request.params)?),
         "launcher_plan" => launcher::plan(scope, params(request.params)?),
         "launcher_validate" => launcher::validate(scope, params(request.params)?),
+        "worktree_plan" => worktree_plan::plan(scope, params(request.params)?, worktree_cfg),
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
@@ -230,6 +233,7 @@ fn serve(
     writer: &mut impl Write,
     sub_cfg: &SubmoduleConfig,
     graph_cfg: &GraphConfig,
+    worktree_cfg: &WorktreeConfig,
     review_base: Option<&str>,
     mutation_once: bool,
 ) -> io::Result<()> {
@@ -272,7 +276,14 @@ fn serve(
                     )?;
                     return Ok(());
                 }
-                let result = process(&mut scope, request, sub_cfg, graph_cfg, review_base);
+                let result = process(
+                    &mut scope,
+                    request,
+                    sub_cfg,
+                    graph_cfg,
+                    worktree_cfg,
+                    review_base,
+                );
                 let failed = result.is_err();
                 write_reply(writer, Some(id), result)?;
                 if mutation_once && failed {
@@ -296,6 +307,7 @@ fn serve(
 pub(crate) fn run(
     sub_cfg: &SubmoduleConfig,
     graph_cfg: &GraphConfig,
+    worktree_cfg: &WorktreeConfig,
     review_base: Option<&str>,
     mutation_once: bool,
 ) -> color_eyre::Result<()> {
@@ -306,6 +318,7 @@ pub(crate) fn run(
         &mut stdout.lock(),
         sub_cfg,
         graph_cfg,
+        worktree_cfg,
         review_base,
         mutation_once,
     )?;

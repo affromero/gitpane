@@ -21,10 +21,14 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     setTimeout(() => send({id: request.id, result: {roots: snapshot}}), 100);
   } else if (request.method === 'status' && request.params.repo.endsWith('bad')) {
     send({id: request.id, error: {code: 'repository_error', message: 'Repository unavailable'}});
+  } else if (request.method === 'worktree_plan' && request.params.branch === 'bad branch') {
+    send({id: request.id, error: {code: 'invalid_request', message: 'invalid branch name'}});
+  } else if (request.method === 'worktree_plan' && request.params.branch === 'offline') {
+    process.exit(1);
   } else if (request.method === 'sessions_list') {
     send({id: request.id, result: {sessions: [request.params.backend + '-session']}});
   } else {
-    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation}});
+    send({id: request.id, result: {roots, method: request.method, include_worktrees: request.params.include_worktrees, first_parent: request.params.first_parent, filters: request.params.filters, collapsed_segments: request.params.collapsed_segments, oid: request.params.oid, path: request.params.path, operation: request.params.operation, branch: request.params.branch}});
   }
 });
 
@@ -99,6 +103,9 @@ test('backend initializes workspace roots and reads status and graph', async t =
   assert.equal((await manager.inspectSubmodule(path.join(root, 'repo'), 'child')).path, 'child');
   assert.deepEqual(await manager.fileActionPreview(path.join(root, 'repo'), 'file', 'discard'), {
     roots: [root], method: 'file_action_preview', path: 'file', operation: 'discard'
+  });
+  assert.deepEqual(await manager.planWorktree(path.join(root, 'repo'), 'feature/a'), {
+    roots: [root], method: 'worktree_plan', branch: 'feature/a'
   });
 });
 
@@ -176,6 +183,20 @@ test('backend errors are observable and a later successful request clears the er
   assert.equal((await manager.status(path.join(root, 'good'))).method, 'status');
   assert.equal(manager.state.status, 'ready');
   assert.deepEqual(changes, ['error', 'ready']);
+});
+
+test('invalid worktree branches remain action errors while backend failures stay visible', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo');
+  await assert.rejects(manager.planWorktree(repo, 'bad branch'),
+    error => error.code === 'invalid_request' && /invalid branch/i.test(error.message));
+  assert.equal(manager.state.status, 'ready');
+  assert.equal((await manager.status(repo)).method, 'status');
+  await assert.rejects(manager.planWorktree(repo, 'offline'), error => error.code === 'service_exited');
+  assert.equal(manager.state.status, 'error');
+  assert.equal(manager.state.error.code, 'service_exited');
 });
 
 test('disposal rejects pending requests and prevents further reads', async () => {

@@ -55,6 +55,7 @@ class SidebarActions {
     this.openWorktreeGraph = options.openWorktreeGraph;
     this.reviewWorktree = options.reviewWorktree;
     this.previewFileAction = options.previewFileAction;
+    this.planWorktree = options.planWorktree;
   }
 
   resolve(kind, id) {
@@ -220,12 +221,36 @@ class SidebarActions {
       } else if (action === 'createWorktree') {
         const branch = await this.vscode.window.showInputBox({ prompt: 'New worktree branch name' });
         if (!branch || !current()) return;
+        if (typeof this.planWorktree !== 'function') throw new Error('Worktree planning is unavailable.');
+        let plan;
+        try { plan = await this.planWorktree(item.repoPath, branch); }
+        catch (error) {
+          if (!current()) return;
+          if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+            throw new Error('The configured Gitpane backend does not support worktree planning. Update the backend and try again.');
+          }
+          throw error;
+        }
+        if (!current()) return;
+        if (!plan || typeof plan.path !== 'string' || !path.isAbsolute(plan.path) || plan.path.includes('\0') ||
+          !(plan.problem === null || (typeof plan.problem === 'string' && plan.problem.length > 0))) {
+          throw new Error('Gitpane returned an invalid worktree plan.');
+        }
+        const validateTarget = value => {
+          if (!path.isAbsolute(value)) return 'Enter an absolute path.';
+          if (plan.problem && value === plan.path) return plan.problem;
+          return undefined;
+        };
         const target = await this.vscode.window.showInputBox({
-          prompt: 'Absolute path for the new worktree inside a workspace folder',
-          validateInput: value => path.isAbsolute(value) ? undefined : 'Enter an absolute path.'
+          prompt: plan.problem ? `${plan.problem} Choose a path inside a workspace folder.` :
+            'Absolute path for the new worktree inside a workspace folder',
+          value: plan.path,
+          validateInput: validateTarget
         });
         if (!target) return;
-        if (!path.isAbsolute(target)) throw new Error('Worktree path must be absolute.');
+        if (!current()) return;
+        const targetProblem = validateTarget(target);
+        if (targetProblem) throw new Error(targetProblem);
         method = 'worktree_create';
         params = { repo: item.repoPath, branch, path: target };
       } else {
