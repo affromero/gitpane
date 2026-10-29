@@ -384,6 +384,13 @@ class GitpaneViewProvider {
         } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
           await this.openWorktreeGraph?.(message.id);
         } else if (message?.type === 'menu' && typeof message.id === 'string') {
+          if (message.kind === 'repo') {
+            const repo = this.currentRepository(message.id);
+            if (repo && !this.actionRepository(repo)) {
+              await vscode.window.showErrorMessage('Gitpane repository status is unavailable. Wait for it to load, or refresh and try again.');
+              return;
+            }
+          }
           if (message.kind === 'file') {
             const selected = this.changes.get(message.id);
             if (selected && !await this.waitForCurrentChange(selected)) {
