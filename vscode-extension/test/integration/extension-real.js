@@ -922,20 +922,27 @@ async function main() {
   assert.equal(terminals.length, beforeRemovedTerminals);
   assert.equal(api.repositories.length, beforeRemovedRepos, 'pointer comparison must not open a child checkout');
   gitAt(pointerRepoPath, 'reset', '-q', 'HEAD', '--', 'child');
+  const beforeChangedDiff = diffs.length, beforeChangedTerminals = terminals.length;
   fs.writeFileSync(path.join(pointerRepoPath, 'child'), 'replacement text\n');
   await commands.get('gitpane.refresh')();
   pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
   await receive({ type: 'loadChanges', id: pointerOnly.id });
   pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
-  const changedPointer = pointerOnly.groups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
-  assert.ok(changedPointer, 'working gitlink to file must appear in the overview');
-  const beforeChangedDiff = diffs.length, beforeChangedTerminals = terminals.length;
-  await receive({ type: 'openChange', id: changedPointer.id });
-  assert.equal(diffs.length, beforeChangedDiff + 1, errors.at(-1));
-  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
-  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), 'replacement text\n');
-  fs.writeFileSync(path.join(pointerRepoPath, 'child'), 'replacement next\n');
-  await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), /no longer|changed/i);
+  if (process.platform === 'win32') {
+    assert.equal(pointerOnly.statusUnavailable, true, 'Windows reports a file replacing a gitlink as unavailable');
+    assert.equal(pointerOnly.changesPage.state, 'error');
+    assert.match(pointerOnly.changesPage.error, /blocked.*files.*unavailable/i);
+    assert.equal(diffs.length, beforeChangedDiff);
+  } else {
+    const changedPointer = pointerOnly.groups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
+    assert.ok(changedPointer, 'working gitlink to file must appear in the overview');
+    await receive({ type: 'openChange', id: changedPointer.id });
+    assert.equal(diffs.length, beforeChangedDiff + 1, errors.at(-1));
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), 'replacement text\n');
+    fs.writeFileSync(path.join(pointerRepoPath, 'child'), 'replacement next\n');
+    await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), /no longer|changed/i);
+  }
   fs.unlinkSync(path.join(pointerRepoPath, 'child'));
   await commands.get('gitpane.refresh')();
   pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
@@ -943,12 +950,13 @@ async function main() {
   pointerOnly = snapshots.at(-1).repositories.find(item => item.name === 'pointer-only');
   const workingDeleted = pointerOnly.groups.find(group => group.id === 'working')?.files.find(item => item.path === 'child');
   assert.ok(workingDeleted, 'unstaged gitlink deletion must appear in the overview');
+  const beforeDeletedDiff = diffs.length;
   await receive({ type: 'openChange', id: workingDeleted.id });
-  assert.equal(diffs.length, beforeChangedDiff + 2, errors.at(-1));
+  assert.equal(diffs.length, beforeDeletedDiff + 1, errors.at(-1));
   assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
   assert.equal(diffs.at(-1)[1].scheme, 'gitpane-empty');
   assert.equal(terminals.length, beforeChangedTerminals);
-  console.log('PASS unstaged gitlink to file and deletion use guarded native diffs');
+  console.log('PASS unstaged gitlink deletion opens a guarded native diff and file replacement follows the host capability');
   api.repositories = api.repositories.filter(item => item !== pointerRepo); closedRepositories.fire(pointerRepo);
   await commands.get('gitpane.refresh')();
   console.log('PASS corrupt checkout is reported and removed checkout opens a staged pointer diff');
@@ -1352,6 +1360,16 @@ async function main() {
   childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(childPath, 'blocked'), 'replacement ancestor\n');
   await commands.get('gitpane.refresh')();
+  if (process.platform === 'win32') {
+    const blockedChild = snapshots.at(-1).repositories.find(item => item.name === 'child');
+    assert.equal(blockedChild?.statusUnavailable, true, 'Windows reports a blocked nested gitlink as unavailable');
+    await receive({ type: 'loadChanges', id: blockedChild.id });
+    const unavailable = snapshots.at(-1).repositories.find(item => item.name === 'child');
+    assert.equal(unavailable.changesPage.state, 'error');
+    assert.match(unavailable.changesPage.error, /blocked.*files.*unavailable/i);
+    console.log('PASS Windows reports unavailable status for a nested gitlink with a blocking ancestor');
+    return;
+  }
   const blockedOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   await receive({ type: 'loadChanges', id: blockedOwner.id });
   const blockedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
