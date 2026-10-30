@@ -4,6 +4,17 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-29
+
+### Added
+- Gitpane Explorer for VS Code shows workspace repositories, linked worktrees and changed files beside the file tree. It updates as workspace repositories change and opens file changes in the editor. The extension includes branch review, the commit graph, repository and worktree actions, submodule inspection, sessions, themes and configured launchers. ([#107](https://github.com/affromero/gitpane/pull/107), closes [#106](https://github.com/affromero/gitpane/issues/106))
+- Install Gitpane Explorer from the VS Code Marketplace, or download a VSIX with its bundled backend for Apple Silicon and Intel Macs, Linux ARM64 and x64, and Windows x64. The README includes a rendered preview, installation steps and settings. ([#107](https://github.com/affromero/gitpane/pull/107))
+
+### Fixed
+- Git process arguments use ordinary Windows paths while repository identity checks retain canonical paths. This fixes content reads and worktree operations that failed on canonical Windows paths. ([#107](https://github.com/affromero/gitpane/pull/107))
+- Parent repository status remains available when a registered submodule is replaced by a file or symlink. ([#107](https://github.com/affromero/gitpane/pull/107))
+- Update libz-sys to 1.1.31 for RUSTSEC-2026-0418 and include the latest merged Git and TLS dependency fixes. ([#107](https://github.com/affromero/gitpane/pull/107), [#104](https://github.com/affromero/gitpane/pull/104), [#102](https://github.com/affromero/gitpane/pull/102), [#96](https://github.com/affromero/gitpane/pull/96))
+
 ## [0.17.1] - 2026-09-23
 
 ### Fixed

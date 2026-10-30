@@ -12,6 +12,7 @@ env:
 
 jobs:
   ci:
+    needs: validate
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
@@ -43,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Validate tag, Cargo versions, and release notes
+      - name: Validate tag, Cargo and extension versions, and release notes
         # Ubuntu provides Python 3.11+ for the stdlib tomllib parser.
         run: python3 scripts/release_metadata.py --tag "$GITHUB_REF_NAME"
 
@@ -121,9 +122,33 @@ jobs:
           # Handoff to the release job only; binaries live permanently on the GitHub Release.
           retention-days: 1
 
+  marketplace:
+    name: Publish to VS Code Marketplace
+    needs: [build, ci, docs, security, coverage, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: gitpane-vscode-*
+          path: vscode-artifacts
+          merge-multiple: true
+      - name: Verify all packages and publish with trusted identity
+        run: python vscode-extension/scripts/publish_marketplace.py --artifacts vscode-artifacts
+
   release:
     name: Upload Assets
-    needs: [build, ci, docs, security, coverage, gitleaks]
+    needs: marketplace
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

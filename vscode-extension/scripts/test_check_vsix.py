@@ -1,13 +1,16 @@
 """Behavioral checks for the distributed VSIX payload."""
 
 import json
+import subprocess
 import tempfile
 import unittest
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import patch
 
-from check_vsix import verify_payload
+from check_vsix import TARGETS, verify_payload
+from publish_marketplace import publish_packages
 
 
 class PackageTests(unittest.TestCase):
@@ -19,7 +22,7 @@ class PackageTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.source = self.root / "vscode-extension"
         (self.source / "src").mkdir(parents=True)
         manifest = {
@@ -128,6 +131,54 @@ class PackageTests(unittest.TestCase):
                     verify_payload(
                         self.archive, self.source, self.backend, "darwin-arm64"
                     )
+
+    def release_packages(self) -> Path:
+        directory = self.root / "release"
+        directory.mkdir()
+        for target in TARGETS:
+            self.archive = directory / f"gitpane-explorer-{target}.vsix"
+            self.package(target=target)
+        return directory
+
+    def test_complete_release_publishes_all_verified_targets_with_oidc(self) -> None:
+        directory = self.release_packages()
+        with patch("subprocess.run") as publish:
+            publish_packages(directory, self.source, verify_only=True)
+            publish.assert_not_called()
+            publish_packages(directory, self.source, verify_only=False)
+        self.assertEqual(
+            publish.call_args.args[0],
+            ["npx", "--yes", "@vscode/vsce@4.1.0", "publish", "--oidc",
+             "--packagePath", *(str(directory / f"gitpane-explorer-{target}.vsix")
+                                for target in TARGETS)],
+        )
+
+    def test_incomplete_or_mixed_release_never_starts_publication(self) -> None:
+        directory = self.release_packages()
+        for changes in [
+            {"extension/package.json": b'{"version":"0.0.2"}'},
+            {"extension/src/view.js": b"stale sources"},
+            {"extension/bin/gitpane.exe": b""},
+        ]:
+            with self.subTest(changes=changes):
+                self.package(changes, target=TARGETS[-1])
+                with patch("subprocess.run") as publish:
+                    with self.assertRaises(ValueError):
+                        publish_packages(directory, self.source, verify_only=False)
+                    publish.assert_not_called()
+        self.archive.unlink()
+        with patch("subprocess.run") as publish:
+            with self.assertRaisesRegex(ValueError, "five platform"):
+                publish_packages(directory, self.source, verify_only=False)
+            publish.assert_not_called()
+
+    def test_failed_publication_reports_possible_public_targets(self) -> None:
+        directory = self.release_packages()
+        with patch(
+            "subprocess.run", side_effect=subprocess.CalledProcessError(1, "vsce")
+        ):
+            with self.assertRaisesRegex(ValueError, "may already be public"):
+                publish_packages(directory, self.source, verify_only=False)
 
 
 if __name__ == "__main__":

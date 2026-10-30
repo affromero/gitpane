@@ -5,6 +5,16 @@ and changed files across the repositories in your current workspace. Expand a
 repository to see staged, unstaged, untracked and conflicted files. Select a
 change to open it in the editor.
 
+![Gitpane Explorer showing repositories, worktrees and changed files](https://raw.githubusercontent.com/affromero/gitpane/main/assets/screenshot-vscode.png)
+
+Rendered preview with example repositories and a simulated Explorer header.
+
+Install **Gitpane Explorer** from the VS Code Marketplace, or run:
+
+```sh
+code --install-extension gitpane.gitpane-explorer
+```
+
 Gitpane reads changes from Git, including untracked files that VS Code's Git
 settings hide. Large change lists are shown one page at a time. When the list
 is not fully loaded, the repository's change count is a lower bound. Symlink
@@ -228,6 +238,14 @@ Choose `darwin-arm64` for Apple Silicon macOS, `darwin-x64` for Intel macOS,
 WSL or a development container, choose the package for that workspace host.
 Linux packages require glibc. CI builds all five packages and checks their
 contents and extracted backends before release assets can be uploaded.
+
+Tagged releases publish these same packages to the VS Code Marketplace using
+GitHub Trusted Publishing. The extension version must match the Gitpane release
+version in both Cargo files. All checks and package verification must pass before
+publication starts. Platform packages publish in sequence. If publication fails,
+inspect the publisher before retrying because earlier targets may already be
+public. The release workflow does not skip existing versions. GitHub Release
+creation and crates.io publication wait for Marketplace publication to succeed.
 
 To build from this checkout instead, run the packaging script on the matching
 OS and architecture. For Apple Silicon macOS:

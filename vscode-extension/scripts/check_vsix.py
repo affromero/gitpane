@@ -20,16 +20,20 @@ TARGETS = (
 
 
 def verify_payload(
-    archive: Path, source: Path, backend: Path, target: str
+    archive: Path, source: Path, backend: Path | None, target: str
 ) -> bytes:
-    """Require the same manifest, sources and backend that were built."""
+    """Verify sources and identity; optionally compare a native built backend.
+
+    Release preflight uses None for artifacts already checked on native CI hosts.
+    """
     executable = "gitpane.exe" if target.startswith("win32-") else "gitpane"
     backend_name = f"extension/bin/{executable}"
     files = {
         "extension/readme.md": source / "README.md",
         "extension/LICENSE.txt": source.parent / "LICENSE",
-        backend_name: backend,
     }
+    if backend is not None:
+        files[backend_name] = backend
     for file in (source / "src").rglob("*"):
         if file.is_file():
             files[f"extension/{file.relative_to(source).as_posix()}"] = file
@@ -37,6 +41,7 @@ def verify_payload(
         "[Content_Types].xml",
         "extension.vsixmanifest",
         "extension/package.json",
+        backend_name,
     }
     with zipfile.ZipFile(archive) as package:
         names = package.namelist()
@@ -79,7 +84,10 @@ def verify_payload(
             and not (package.getinfo(backend_name).external_attr >> 16) & 0o111
         ):
             raise ValueError("Packaged backend is not executable")
-        return package.read(backend_name)
+        data = package.read(backend_name)
+        if not data:
+            raise ValueError("Packaged backend is empty")
+        return data
 
 
 def main() -> None:

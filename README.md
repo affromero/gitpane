@@ -82,7 +82,14 @@ inside the workspace have their own rows and actions. Gitpane does not fetch
 remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
 macOS or Linux. VS Code's own Git auto-fetch setting works independently.
 
-Release builds include VSIX packages for macOS, Linux and Windows. From a
+Install [Gitpane Explorer from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=gitpane.gitpane-explorer),
+or run:
+
+```sh
+code --install-extension gitpane.gitpane-explorer
+```
+
+Release builds also include VSIX packages for macOS, Linux and Windows. From a
 [GitHub release](https://github.com/affromero/gitpane/releases) that includes
 Gitpane Explorer, download the package matching the machine hosting your
 workspace. For Apple Silicon macOS:

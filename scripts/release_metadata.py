@@ -2,9 +2,10 @@
 """Validate release metadata and extract its changelog (requires Python 3.11+)."""
 
 import argparse
-from pathlib import Path
+import json
 import re
 import sys
+from pathlib import Path
 
 if sys.version_info < (3, 11):
     sys.exit("Release validation requires Python 3.11 or newer.")
@@ -13,7 +14,9 @@ import tomllib
 
 
 def release_notes(root: Path, tag: str) -> str:
-    if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
+    if not re.fullmatch(
+        r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag
+    ):
         raise ValueError("release tag must have the form vX.Y.Z")
     version = tag[1:]
     with (root / "Cargo.toml").open("rb") as manifest_file:
@@ -24,7 +27,14 @@ def release_notes(root: Path, tag: str) -> str:
         packages = tomllib.load(lock_file)["package"]
     locked = [package for package in packages if package.get("name") == "gitpane"]
     if len(locked) != 1 or locked[0].get("version") != version:
-        raise ValueError(f"Cargo.lock must contain exactly one gitpane package at version {version}")
+        raise ValueError(
+            f"Cargo.lock must contain exactly one gitpane package at version {version}"
+        )
+    extension = json.loads(
+        (root / "vscode-extension/package.json").read_text(encoding="utf-8")
+    )
+    if extension.get("version") != version:
+        raise ValueError(f"VS Code extension must declare version {version}")
 
     lines = (root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     starts = []
@@ -33,7 +43,9 @@ def release_notes(root: Path, tag: str) -> str:
         if heading and heading[1] == version:
             starts.append(index)
     if len(starts) != 1:
-        raise ValueError(f"CHANGELOG.md must contain exactly one ## [{version}] section")
+        raise ValueError(
+            f"CHANGELOG.md must contain exactly one ## [{version}] section"
+        )
     start = starts[0]
     end = next(
         (index for index in range(start + 1, len(lines))
@@ -41,7 +53,9 @@ def release_notes(root: Path, tag: str) -> str:
         len(lines),
     )
     body = lines[start + 1:end]
-    if not any(line.strip() and not re.match(r"^#{1,6}(?:[ \t]|$)", line) for line in body):
+    if not any(
+        line.strip() and not re.match(r"^#{1,6}(?:[ \t]|$)", line) for line in body
+    ):
         raise ValueError(f"CHANGELOG.md section {version} has no release notes")
     return "\n".join(lines[start:end]).rstrip() + "\n"
 

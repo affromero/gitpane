@@ -1,11 +1,11 @@
 """Behavioral checks for the release gate, using temporary release files."""
 
-from pathlib import Path
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("release_metadata.py")
 
@@ -25,6 +25,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.notes = self.root / "release-notes.md"
 
     def write_versions(self, manifest, locked):
+        extension = self.root / "vscode-extension"
+        extension.mkdir(exist_ok=True)
+        (extension / "package.json").write_text(
+            json.dumps({"version": manifest}), encoding="utf-8"
+        )
         (self.root / "Cargo.toml").write_text(
             f'[package]\nname = "gitpane"\nversion = "{manifest}"\n', encoding="utf-8"
         )
@@ -64,6 +69,12 @@ class ReleaseMetadataTests(unittest.TestCase):
         for tag in ["1.2.3", "v1x2x3", "v1.2", "v01.2.3", "v1.2.3-rc.1"]:
             with self.subTest(tag=tag):
                 self.assert_rejected(self.validate(tag), "vX.Y.Z")
+
+    def test_stale_extension_version_is_rejected(self):
+        (self.root / "vscode-extension/package.json").write_text(
+            '{"version":"1.2.2"}', encoding="utf-8"
+        )
+        self.assert_rejected(self.validate(), "VS Code extension")
 
     def test_changelog_version_dots_are_literal(self):
         self.changelog.write_text("## [1x2x3]\n\nWrong release.\n", encoding="utf-8")
