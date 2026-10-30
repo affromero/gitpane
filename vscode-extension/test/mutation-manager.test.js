@@ -115,11 +115,11 @@ test('theme save uses a scoped one-shot worker and aborts if the workspace chang
   const f = await fixture(t, 'hold-init');
   let current = true;
   const params = { name: 'blue', expected_current: 'original', preview_token: 'a'.repeat(64) };
-  const pending = f.manager.executeTheme(params, () => current);
+  const pending = assert.rejects(f.manager.executeTheme(params, () => current), code('workspace_changed'));
   await f.wait('initialized');
   current = false;
   await f.mark('release-init');
-  await assert.rejects(pending, code('workspace_changed'));
+  await pending;
   assert.equal(await exists(path.join(f.dir, 'actions')), false);
 });
 
@@ -145,11 +145,12 @@ test('launcher execution rejects stale selection before dispatch and invalid con
     await assert.rejects(f.manager.execute('launcher_execute', { ...params, expected_base_ref }, f.opts), code('invalid_request'));
   }
   let current = true;
-  const pending = f.manager.execute('launcher_execute', params, { ...f.opts, validateTarget: () => current });
+  const pending = assert.rejects(f.manager.execute('launcher_execute', params,
+    { ...f.opts, validateTarget: () => current }), code('workspace_changed'));
   await f.wait('initialized');
   current = false;
   await f.mark('release-init');
-  await assert.rejects(pending, code('workspace_changed'));
+  await pending;
   assert.equal(await exists(path.join(f.dir, 'actions')), false);
 });
 
@@ -295,11 +296,12 @@ test('sends a selected session as a literal one-shot request', async t => {
 
 test('workspace changes during initialization cancel the action before dispatch', async t => {
   const f = await fixture(t, 'hold-init');
-  const result = f.manager.execute('file_action', { repo: f.repo, path: 'file', operation: 'stage' }, f.opts);
+  const result = assert.rejects(f.manager.execute('file_action',
+    { repo: f.repo, path: 'file', operation: 'stage' }, f.opts), code('workspace_changed'));
   await f.wait('initialized');
   f.changeWorkspace();
   await f.mark('release-init');
-  await assert.rejects(result, code('workspace_changed'));
+  await result;
   assert.equal(await exists(path.join(f.dir, 'actions')), false);
 });
 
@@ -342,14 +344,15 @@ test('worktree removal requires both identities and checks selection after worke
   await assert.rejects(f.manager.execute('worktree_remove', { repo: f.repo, path: f.linked }, f.opts), code('invalid_request'));
   await assert.rejects(f.manager.execute('worktree_remove', { ...params, expected_worktree_identity: 'BAD' }, f.opts), code('invalid_request'));
   let selected = true;
-  const pending = f.manager.execute('worktree_remove', params, { ...f.opts, validateTarget: () => selected });
+  const pending = assert.rejects(f.manager.execute('worktree_remove', params,
+    { ...f.opts, validateTarget: () => selected }), code('workspace_changed'));
   await f.wait('initialized');
   const initialized = JSON.parse(await fs.readFile(path.join(f.dir, 'initialized'), 'utf8'));
   assert.deepEqual(initialized.params.workspace_root_identities, ['a'.repeat(64)]);
   assert.deepEqual(initialized.params.workspace_root_sources, [path.join(f.dir, 'workspace')]);
   selected = false;
   await f.mark('release-init');
-  await assert.rejects(pending, code('workspace_changed'));
+  await pending;
   assert.equal(await exists(path.join(f.dir, 'actions')), false);
 });
 
