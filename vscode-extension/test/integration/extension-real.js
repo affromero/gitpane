@@ -21,6 +21,13 @@ function uri(value, scheme = 'file') {
     with: change => uri(change.path || value, change.scheme || scheme) };
 }
 
+function sameDirectory(first, second) {
+  try {
+    const a = fs.statSync(first, { bigint: true }), b = fs.statSync(second, { bigint: true });
+    return a.isDirectory() && b.isDirectory() && a.dev === b.dev && a.ino === b.ino;
+  } catch { return false; }
+}
+
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = handler => { this.listeners.add(handler); return { dispose: () => this.listeners.delete(handler) }; }; }
   fire(value) { for (const handler of this.listeners) handler(value); }
@@ -174,7 +181,7 @@ async function main() {
   const explicitlyAdded = { rootUri: uri(nestedPath), state: { HEAD: {}, onDidChange: event,
     workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
   api.openRepository = async target => {
-    if (target.fsPath !== nestedPath) throw new Error('Unexpected repository');
+    if (!sameDirectory(target.fsPath, nestedPath)) throw new Error('Unexpected repository');
     if (!api.repositories.includes(explicitlyAdded)) { api.repositories.push(explicitlyAdded); openedRepositories.fire(explicitlyAdded); }
     return explicitlyAdded;
   };
@@ -207,6 +214,7 @@ async function main() {
   pickChanges = choices => choices.find(choice => choice.action === 'refreshRepo');
   const errorsBeforeScopeRefresh = errors.length;
   await receive({ type: 'menu', kind: 'repo', id: scopeOwner.id });
+  await provider.tree.backend.ready();
   assert.equal(errors.length, errorsBeforeScopeRefresh, errors.at(-1));
   assert.ok(provider.tree.backend.roots.some(root => fs.realpathSync.native(root) === fs.realpathSync.native(scopeRoot)),
     'targeted refresh restores the original workspace identity');
@@ -779,7 +787,7 @@ async function main() {
   };
   const availableSubmodules = new Map([[childPath, childRepo]]);
   api.openRepository = async target => {
-    const submodule = availableSubmodules.get(target.fsPath);
+    const submodule = [...availableSubmodules].find(([root]) => sameDirectory(root, target.fsPath))?.[1];
     if (!submodule) throw new Error(`Unexpected repository ${target.fsPath}`);
     if (!api.repositories.includes(submodule)) { api.repositories.push(submodule); openedRepositories.fire(submodule); }
     return submodule;
@@ -1051,7 +1059,7 @@ async function main() {
   const openBeforeHistorical = api.openRepository;
   let historicalNestedOpens = 0;
   api.openRepository = async target => {
-    if (target.fsPath === grandPath) historicalNestedOpens++;
+    if (sameDirectory(target.fsPath, grandPath)) historicalNestedOpens++;
     return openBeforeHistorical(target);
   };
   fs.renameSync(grandPath, historicalParked);
@@ -1232,7 +1240,7 @@ async function main() {
   let nestedCheckoutOpens = 0;
   const previousOpenRepository = api.openRepository;
   api.openRepository = async target => {
-    if (target.fsPath === grandPath) nestedCheckoutOpens++;
+    if (sameDirectory(target.fsPath, grandPath)) nestedCheckoutOpens++;
     return previousOpenRepository(target);
   };
   pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||
