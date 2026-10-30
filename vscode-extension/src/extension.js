@@ -27,6 +27,7 @@ const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { createLiveGitSide } = require('./git-side-documents');
+const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -62,6 +63,8 @@ class GitpaneViewProvider {
     this.pager = new ChangePager(tree.backend, () => this.publish(), error => tree.output?.appendLine(`Could not release changes: ${error.message}`));
     this.refreshChangesTimer = undefined;
     this.refreshChangesInFlight = undefined;
+    this.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+    this.worktreeExpansion = undefined;
     this.subscription = tree.onDidChangeTreeData(() => { this.publish(); this.scheduleChangesRefresh(); });
   }
 
@@ -69,6 +72,18 @@ class GitpaneViewProvider {
     live.add(key);
     if (!this.ids.has(key)) this.ids.set(key, `item-${this.sessionId}-${++this.nextId}`);
     return this.ids.get(key);
+  }
+
+  configureView({ refreshInterval, worktreeExpansion }) {
+    const intervalChanged = this.refreshInterval !== refreshInterval;
+    this.refreshInterval = refreshInterval;
+    this.worktreeExpansion = worktreeExpansion;
+    if (intervalChanged && this.refreshChangesTimer !== undefined) {
+      clearTimeout(this.refreshChangesTimer);
+      this.refreshChangesTimer = undefined;
+    }
+    if (intervalChanged) this.scheduleChangesRefresh();
+    this.publish();
   }
 
   snapshot() {
@@ -180,7 +195,8 @@ class GitpaneViewProvider {
       errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : [])],
       ...(reveals.length ? { revealWorktrees: reveals } : {}),
-      ...(typeof this.worktreeDisplay?.value === 'boolean' ? { expandWorktrees: this.worktreeDisplay.value } : {}),
+      ...(typeof (this.worktreeExpansion ?? this.worktreeDisplay?.value) === 'boolean'
+        ? { expandWorktrees: this.worktreeExpansion ?? this.worktreeDisplay.value } : {}),
       launcherKeys: this.worktreeDisplay?.launcherKeys || [],
       reviewConfigured: this.worktreeDisplay?.reviewConfigured === true,
       ...(this.theme?.value ? { theme: this.theme.payload() } : {}),
@@ -272,7 +288,7 @@ class GitpaneViewProvider {
         if (this.refreshChangesInFlight === sweep) this.refreshChangesInFlight = undefined;
         this.scheduleChangesRefresh();
       }
-    }, 5000);
+    }, this.refreshInterval);
   }
 
   async revalidateChange(id) {
@@ -800,7 +816,8 @@ async function activate(context) {
       if (refreshed.includes(graph.repoKey)) await graph.pollRevision();
     },
     refresh: () => provider.refresh() });
-  context.subscriptions.push(backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
+  const settings = new ViewSettings(vscode, context, tree, provider, graph);
+  context.subscriptions.push(settings, backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
@@ -834,8 +851,7 @@ async function activate(context) {
       const selected = await vscode.window.showQuickPick(choices, { placeHolder: 'Sort Gitpane repositories' });
       if (!selected || !choices.includes(selected)) return;
       try {
-        await context.workspaceState?.update('gitpane.sortOrder', selected.order);
-        tree.setSortOrder(selected.order);
+        await settings.chooseSortOrder(selected.order);
       } catch (error) { vscode.window.showErrorMessage(`Gitpane could not save the sort order: ${error.message}`); }
     }),
     vscode.commands.registerCommand('gitpane.openGraph', id => {

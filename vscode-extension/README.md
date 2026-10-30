@@ -267,6 +267,33 @@ The extension starts its bundled `gitpane serve` backend. Set
 different compatible Gitpane build. The extension reports errors from that
 executable; it does not switch to another backend.
 
+## Settings
+
+Run **Gitpane: Open Settings** or use the cog in the Gitpane view. You can
+also search Settings for `@ext:gitpane.gitpane-explorer`.
+
+| Setting | Default | Behavior |
+|---------|---------|----------|
+| `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
+| `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
+| `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
+| `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
+| `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |
+| `gitpane.graph.labelMaxLength` | `-1` | Inherit the native graph label length. Values from 0 to 120 override it; 0 displays only an ellipsis. Hover still shows the full label. |
+| `gitpane.sessionBackend` | `auto` | Detect the multiplexer, or select `tmux` or `herdr`. Excluded from Settings Sync. |
+| `gitpane.backendPath` | empty | Use the bundled backend, or a compatible executable on the workspace host. Set this in User or Remote settings. |
+
+All view preferences support User and Workspace settings and apply without
+reloading the extension. The first-parent default affects the next graph
+opened. In `remember` mode, the sort toolbar saves only the workspace's last
+choice. With an explicit sort setting, the toolbar writes a Workspace override
+when a workspace is open, or a User setting otherwise.
+
+Theme selection remains under **Gitpane: Choose Theme**, including custom
+themes and previews. Native configuration supplies the inherited worktree and
+graph defaults. These controls do not change which repositories the workspace
+authorizes.
+
 ## Development host
 
 Build Gitpane from this checkout, then start a development host from

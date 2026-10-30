@@ -148,10 +148,14 @@ test('commit files open native diffs against the first parent and reject stale a
     labelMaxLen = 7;
     await receive({ type: 'refresh' });
     assert.equal(messages.at(-1).labelMaxLen, 7);
+    provider.configureView({ refreshInterval: 17000, graphFirstParent: true, graphLabelMaxLength: 3 });
+    await receive({ type: 'refresh' });
+    assert.equal(messages.at(-1).labelMaxLen, 3);
     labelMaxLen = -1;
     await receive({ type: 'refresh' });
     assert.match(messages.at(-1).error, /invalid graph label length/i);
     labelMaxLen = undefined;
+    provider.configureView({ refreshInterval: 5000, graphFirstParent: false, graphLabelMaxLength: undefined });
     await receive({ type: 'refresh' });
     await receive({ type: 'selectCommit', oid: rootOid });
     const rootFile = messages.at(-1).files[0];
@@ -453,12 +457,21 @@ test('graph collapses only visible side branches and does not open placeholder c
       async commitFiles() { detailCalls++; return { files: [] }; }
     };
     const provider = new GraphProvider(tree, backend, {}, '/extension');
+    provider.configureView({ refreshInterval: 5000, graphFirstParent: true, graphLabelMaxLength: undefined });
     provider.open(repo);
     try {
       await provider.receive({ type: 'ready' });
+      assert.equal(calls.at(-1).firstParent, true);
+      await provider.receive({ type: 'firstParent', value: false });
+      provider.configureView({ refreshInterval: 17000, graphFirstParent: false, graphLabelMaxLength: undefined });
+      await provider.receive({ type: 'refresh' });
+      assert.equal(calls.at(-1).firstParent, false);
+      provider.configureView({ refreshInterval: 17000, graphFirstParent: true, graphLabelMaxLength: undefined });
+      await provider.receive({ type: 'refresh' });
+      assert.equal(calls.at(-1).firstParent, false);
       assert.deepEqual(calls.at(-1).collapsed, []);
       await provider.receive({ type: 'toggleCollapse', id: 'c'.repeat(40) });
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 4);
       await provider.receive({ type: 'toggleCollapse', id: oid });
       assert.deepEqual(calls.at(-1).collapsed, [oid]);
       assert.equal(messages.at(-1).collapsedCount, 1);
@@ -484,6 +497,64 @@ test('graph collapses only visible side branches and does not open placeholder c
     Module._load = load;
     delete require.cache[require.resolve('../src/graph-provider')];
   }
+});
+
+test('changing poll intervals preserves queued HEAD updates and stops while hidden', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const messages = [];
+  let viewState, treeChanged;
+  const panel = { visible: true, webview: { postMessage: value => messages.push(value), onDidReceiveMessage() {} },
+    onDidChangeViewState(handler) { viewState = handler; }, onDidDispose() {}, dispose() {}, reveal() {} };
+  const repo = { rootUri: { fsPath: '/repo', toString: () => '/repo' }, state: { HEAD: { commit: 'initial' } } };
+  const tree = { git: { repositories: [repo] }, isVisible: () => true, repositoryToken: () => 1,
+    isCurrentRepository: () => true, onDidChangeTreeData(handler) { treeChanged = handler; return { dispose() {} }; } };
+  let revision = 'a'.repeat(64);
+  const backend = { async graphRevision() { return { revision }; },
+    async graph() { return { rows: [], branches: [repo.state.HEAD.commit] }; } };
+  const vscode = { Uri: { joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
+    window: { createWebviewPanel: () => panel } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  try {
+    Module._load = function(name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './graph/html') return { getHtml: () => '' };
+      return load.call(this, name, ...args);
+    };
+    const { GraphProvider } = require('../src/graph-provider');
+    const provider = new GraphProvider(tree, backend, {}, '/extension');
+    try {
+      provider.open(repo);
+      await provider.receive({ type: 'ready' });
+      repo.state.HEAD.commit = 'updated';
+      revision = 'b'.repeat(64);
+      treeChanged();
+      provider.configureView({ refreshInterval: 300000, graphFirstParent: false, graphLabelMaxLength: undefined });
+      t.mock.timers.tick(0);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(provider.branches, ['updated']);
+      const count = messages.length;
+      revision = 'c'.repeat(64);
+      t.mock.timers.tick(299999);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(messages.length, count);
+      t.mock.timers.tick(1);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(messages.length > count);
+      panel.visible = false;
+      viewState();
+      const hiddenCount = messages.length;
+      provider.configureView({ refreshInterval: 1000, graphFirstParent: false, graphLabelMaxLength: undefined });
+      t.mock.timers.tick(300000);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(messages.length, hiddenCount);
+      panel.visible = true;
+      viewState();
+      t.mock.timers.tick(0);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(messages.length > hiddenCount);
+    } finally { provider.dispose(); }
+  } finally { Module._load = load; delete require.cache[require.resolve('../src/graph-provider')]; }
 });
 
 test('visible graphs refresh when refs change, reject late polls, and recover from errors', async () => {

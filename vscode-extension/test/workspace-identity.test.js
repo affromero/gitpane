@@ -232,6 +232,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
     ViewColumn: { Active: 1 },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event,
+      onDidChangeConfiguration: event, getConfiguration: () => ({ get: (name, fallback) => fallback }),
       registerTextDocumentContentProvider: event, registerFileSystemProvider: event, fs: { stat: async () => ({}) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },

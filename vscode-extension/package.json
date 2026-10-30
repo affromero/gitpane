@@ -23,6 +23,7 @@
     },
     "commands": [
       { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
+      { "command": "gitpane.openSettings", "title": "Gitpane: Open Settings", "icon": "$(settings-gear)" },
       { "command": "gitpane.fetchWorkspace", "title": "Gitpane: Fetch Workspace", "icon": "$(cloud-download)" },
       { "command": "gitpane.manageSubmodulePins", "title": "Gitpane: Manage Submodule Pins", "icon": "$(pinned)" },
       { "command": "gitpane.restoreHiddenRepositories", "title": "Gitpane: Restore Hidden Repositories", "icon": "$(eye)" },
@@ -34,6 +35,7 @@
     ],
     "menus": {
       "view/title": [{ "command": "gitpane.sort", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.openSettings", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.pickTheme", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.addWorkspaceRepository", "when": "view == gitpane.repositories", "group": "navigation" },
         { "command": "gitpane.restoreHiddenRepositories", "when": "view == gitpane.repositories", "group": "navigation" },
@@ -42,12 +44,63 @@
         { "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
     },
     "configuration": {
-      "title": "Gitpane",
+      "title": "Gitpane Explorer",
       "properties": {
+        "gitpane.sortOrder": {
+          "type": "string",
+          "enum": ["remember", "workspace", "alphabetical", "reverse", "dirty"],
+          "enumDescriptions": ["Remember the last toolbar sort choice for this workspace.", "Default order: changed repositories first, then full path.", "Alphabetical order.", "Reverse alphabetical order.", "Use Gitpane's dirty-first sort."],
+          "default": "remember",
+          "scope": "window",
+          "order": 10,
+          "description": "Sort repositories in the Explorer. When a sort is configured here, toolbar choices update this workspace's setting."
+        },
+        "gitpane.worktrees.defaultVisibility": {
+          "type": "string",
+          "enum": ["native", "expanded", "collapsed"],
+          "enumDescriptions": ["Use expand_worktrees from Gitpane's configuration.", "Show worktrees by default.", "Hide worktrees by default."],
+          "default": "native",
+          "scope": "window",
+          "order": 20,
+          "description": "Default worktree visibility. Saved show/hide choices for individual repositories take precedence."
+        },
+        "gitpane.refreshInterval": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 300,
+          "scope": "window",
+          "order": 30,
+          "description": "Seconds between repository status, expanded-file and graph refreshes while their views are visible. Does not fetch remotes."
+        },
+        "gitpane.showSessionLiveness": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "order": 40,
+          "description": "Monitor live tmux or herdr sessions and show their indicators while the Explorer view is visible. Gitpane's native session configuration still applies."
+        },
+        "gitpane.graph.firstParent": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "order": 50,
+          "description": "Start newly opened repository graphs in first-parent mode. The graph's own toggle controls the current graph."
+        },
+        "gitpane.graph.labelMaxLength": {
+          "type": "integer",
+          "default": -1,
+          "minimum": -1,
+          "maximum": 120,
+          "scope": "window",
+          "order": 51,
+          "description": "Maximum characters in graph ref labels. -1 uses Gitpane's configuration; 0 shows only an ellipsis. Full labels remain available on hover."
+        },
         "gitpane.backendPath": {
           "type": "string",
           "default": "",
           "scope": "machine",
+          "order": 80,
           "description": "Path to a compatible Gitpane backend on the workspace host. Leave empty to use the bundled backend."
         },
         "gitpane.sessionBackend": {
@@ -55,7 +108,9 @@
           "enum": ["auto", "tmux", "herdr"],
           "enumDescriptions": ["Detect the multiplexer from the extension host environment.", "Check tmux sessions on the workspace host.", "Check herdr sessions on the workspace host."],
           "default": "auto",
-          "scope": "machine",
+          "scope": "window",
+          "ignoreSync": true,
+          "order": 60,
           "description": "Choose where Gitpane checks for live repository sessions. Auto stays quiet when no multiplexer is detected."
         }
       }

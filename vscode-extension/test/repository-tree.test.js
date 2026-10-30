@@ -200,7 +200,12 @@ test('slow detailed refresh finishes one sweep before scheduling another', async
     for (const owner of owners) await provider.loadChanges(owner);
     calls.length = 0;
     hold = true;
-    t.mock.timers.tick(5000);
+    provider.configureView({ refreshInterval: 17000, worktreeExpansion: undefined });
+    tree.configureView({ refreshInterval: 17000, showSessionLiveness: true });
+    t.mock.timers.tick(16999);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, []);
+    t.mock.timers.tick(1);
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls, [roots[0]]);
     t.mock.timers.tick(10000);
@@ -208,6 +213,12 @@ test('slow detailed refresh finishes one sweep before scheduling another', async
     assert.deepEqual(calls, [roots[0]]);
     hold = false;
     release();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, roots);
+    calls.length = 0;
+    provider.configureView({ refreshInterval: 1000, worktreeExpansion: undefined });
+    tree.configureView({ refreshInterval: 1000, showSessionLiveness: true });
+    t.mock.timers.tick(1000);
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls, roots);
   } finally { provider.dispose(); tree.dispose(); }
@@ -918,6 +929,7 @@ test('worktree graph opens for the linked repository and rejects a removed link'
     Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ViewColumn: { Active: 1 },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }], onDidChangeWorkspaceFolders: event,
+      onDidChangeConfiguration: event, getConfiguration: () => ({ get: (name, fallback) => fallback }),
       registerTextDocumentContentProvider: event, registerFileSystemProvider: event },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       registerWebviewViewProvider: (_name, value) => { provider = value; return event(); },

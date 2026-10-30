@@ -6,6 +6,7 @@ const path = require('node:path');
 const { groups } = require('./model');
 const { relativeFile } = require('./change-pager');
 const { SessionLiveness } = require('./session-liveness');
+const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
 
 function directoryIdentity(value) {
   try {
@@ -99,6 +100,8 @@ class RepositoryTree {
     this.allRefreshWaiters = new Set();
     this.disposed = false;
     this.visible = false;
+    this.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+    this.showSessionLiveness = true;
     this.pollTimer = undefined;
     this.pollPromise = undefined;
     this.refreshTimer = undefined;
@@ -670,9 +673,23 @@ class RepositoryTree {
     this.groupCache.delete(key);
   }
 
+  configureView({ refreshInterval, showSessionLiveness }) {
+    const intervalChanged = this.refreshInterval !== refreshInterval;
+    const livenessChanged = this.showSessionLiveness !== showSessionLiveness;
+    this.refreshInterval = refreshInterval;
+    this.showSessionLiveness = showSessionLiveness;
+    if (intervalChanged && this.pollTimer !== undefined) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    this.liveness?.setVisible(this.visible && showSessionLiveness);
+    if (intervalChanged) this.schedulePoll();
+    if (livenessChanged) this.changed();
+  }
+
   setVisible(visible) {
     this.visible = visible;
-    this.liveness?.setVisible(visible);
+    this.liveness?.setVisible(visible && this.showSessionLiveness);
     this.pins?.setVisible(visible);
     this.workspaceRepositories?.setVisible(visible);
     if (!visible && this.pollTimer !== undefined) {
@@ -694,7 +711,7 @@ class RepositoryTree {
         this.pollPromise = undefined;
         this.schedulePoll();
       });
-    }, 5000);
+    }, this.refreshInterval);
   }
 
   async reconcile() {

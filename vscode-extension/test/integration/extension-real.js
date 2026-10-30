@@ -93,6 +93,9 @@ async function main() {
   const openedRepositories = new EventEmitter();
   const closedRepositories = new EventEmitter();
   const workspaceChanged = new EventEmitter();
+  const configurationChanged = new EventEmitter();
+  const preferences = new Map();
+  const settingUpdates = [];
   const gitLookup = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['git'], { encoding: 'utf8' });
   if (gitLookup.error || gitLookup.status !== 0) throw new Error('Cannot locate the Git executable for the integration test.');
   const api = { git: { path: gitLookup.stdout.trim().split(/\r?\n/)[0], env: isolatedGitEnv() },
@@ -105,12 +108,16 @@ async function main() {
   const vscode = {
     EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
     FileType: { File: 1 }, FileChangeType: { Changed: 1 },
+    ConfigurationTarget: { Global: 1, Workspace: 2 },
     FileSystemError: { FileNotFound: () => Object.assign(new Error('File not found'), { code: 'FileNotFound' }) },
     env: { clipboard: { async writeText(value) { copied.push(value); } } },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
     workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
-      getConfiguration: () => ({ get: name => name === 'sessionBackend' ? 'auto' : executable }), onDidChangeWorkspaceFolders: workspaceChanged.event,
-      onDidChangeConfiguration: event,
+      getConfiguration: () => ({ get: (name, fallback) => preferences.has(name) ? preferences.get(name) : name === 'backendPath' ? executable : name === 'sessionBackend' ? 'auto' : fallback,
+        async update(key, value, target) { settingUpdates.push({ key, value, target }); preferences.set(key, value);
+          configurationChanged.fire({ affectsConfiguration: name => name === `gitpane.${key}` }); } }),
+      onDidChangeWorkspaceFolders: workspaceChanged.event,
+      onDidChangeConfiguration: configurationChanged.event,
       registerTextDocumentContentProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       registerFileSystemProvider: (scheme, handler) => { documents.set(scheme, handler); return event(); },
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },
@@ -162,6 +169,8 @@ async function main() {
     provider.resolveWebviewView(view);
   } finally { Module._load = load; }
   await receive({ type: 'ready' });
+  await require('./settings-real')({ vscode, provider, snapshots, preferences, configurationChanged,
+    commands, settingUpdates, workspaceState, errors, choose: value => { pickChanges = value; } });
   const shortcutOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const shortcutChild = shortcutOwner.worktrees.find(item => item.name === 'linked');
   await receive({ type: 'shortcut', id: shortcutChild.id, key: 'y' });

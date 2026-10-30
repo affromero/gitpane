@@ -112,12 +112,25 @@ install a package built for that workspace host. See the
 [extension guide](vscode-extension/README.md) for other build targets, features
 and current limitations.
 
-In VS Code Settings, search for **Gitpane**:
+Run **Gitpane: Open Settings**, use the cog in the Gitpane view, or search
+VS Code Settings for **Gitpane**:
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
+| `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace, or select workspace, alphabetical, reverse or dirty order. |
+| `gitpane.worktrees.defaultVisibility` | `native` | Use native `expand_worktrees`, or start expanded or collapsed. Saved choices for individual repositories take precedence. |
+| `gitpane.refreshInterval` | `5` | Seconds between visible repository status, expanded-file and graph refreshes, from 1 to 300. |
+| `gitpane.showSessionLiveness` | `true` | Show live session indicators and monitor sessions while the view is visible. |
+| `gitpane.graph.firstParent` | `false` | Start newly opened graphs in first-parent mode. |
+| `gitpane.graph.labelMaxLength` | `-1` | Inherit native label length, or set 0 to 120 characters. Zero displays an ellipsis. |
 | `gitpane.backendPath` | empty | Use the bundled backend, or enter an absolute path to a compatible Gitpane executable on the workspace host. |
 | `gitpane.sessionBackend` | `auto` | Detect live sessions automatically, or select `tmux` or `herdr`. |
+
+View settings apply immediately. Graph first-parent changes apply to the next
+graph opened. All preferences support User and Workspace settings except
+`backendPath`, which belongs in User or Remote settings. Session backend
+preferences are excluded from Settings Sync. With an explicit sort preference,
+toolbar choices save a Workspace override, leaving other workspaces alone.
 
 Use **Gitpane: Choose Theme** to preview and save a theme. The extension also
 uses Gitpane's theme, graph, worktree and session settings from its
