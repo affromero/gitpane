@@ -267,10 +267,15 @@ test('reopening a repository invalidates pending status, selections, and menus',
       while (!releaseStatus) await new Promise(resolve => setImmediate(resolve));
       const oldRepo = api.repositories[0];
       const revision = tree.repositoryRevision(oldRepo.rootUri);
+      const canonicalUri = uri(fs.realpathSync.native(root));
+      assert.equal(tree.repositoryRevision(canonicalUri), revision);
       api.repositories = [];
-      onClose(oldRepo);
       if (replaceDirectory) {
         fs.renameSync(root, path.join(workspace, 'old-repo'));
+      }
+      onClose(oldRepo);
+      assert.equal(tree.repositoryRevision(canonicalUri), revision + 1);
+      if (replaceDirectory) {
         fs.mkdirSync(path.join(root, '.git'), { recursive: true });
       }
       const reopened = makeRepo();

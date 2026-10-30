@@ -49,6 +49,7 @@ class SubmoduleProvider {
       const original = fs.realpathSync.native(node.change.uri.fsPath);
       const resolved = fs.realpathSync.native(childPath);
       if (original !== resolved) return false;
+      if (childRepo && fs.realpathSync.native(childRepo.rootUri.fsPath) !== resolved) return false;
       return !childRepo || this.tree.isCurrentRepository(childRepo, childToken);
     } catch { return false; }
   }
@@ -170,9 +171,9 @@ class SubmoduleProvider {
       }
       if (!this.childCurrent(node, generation, result.repo, parentToken)) throw new Error('The submodule is no longer in the workspace.');
       const childUri = this.vscode.Uri.file(result.repo);
-      const childKey = childUri.toString();
       const revision = this.tree.repositoryRevision(childUri);
-      const existingChild = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
+      const matchesChild = repo => this.childCurrent(node, generation, result.repo, parentToken, repo, this.tree.repositoryToken(repo));
+      const existingChild = this.git.repositories.find(matchesChild);
       const existingToken = existingChild && this.tree.repositoryToken(existingChild);
       const link = { repo: node.repo.rootUri.fsPath, path: relative, group, original_path: node.record.original_path,
         record: node.record, child_repo: result.repo, base_oid: result.base_oid, head_oid: result.head_oid,
@@ -182,9 +183,9 @@ class SubmoduleProvider {
       if (!await checkFrames([...ancestors, preFrame])) throw new Error('The submodule changed; refresh and try again.');
       const opened = await this.git.openRepository(childUri);
       const expectedRevision = revision + (existingToken === undefined ? 1 : 0);
-      const child = this.git.repositories.find(repo => repo.rootUri.toString() === childKey);
+      const child = this.git.repositories.find(matchesChild);
       const childToken = child && this.tree.repositoryToken(child);
-      if (!opened || opened.rootUri.toString() !== childKey || !child ||
+      if (!opened || !matchesChild(opened) || !child ||
           this.tree.repositoryRevision(childUri) !== expectedRevision ||
           (existingToken !== undefined && existingToken !== childToken) ||
           !this.childCurrent(node, generation, result.repo, parentToken, child, childToken)) {

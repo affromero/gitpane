@@ -52,7 +52,10 @@ function fixture(t, linkDocuments) {
       changes: all.slice(cursor, cursor + 128) };
   };
   const commands = [], errors = [], graphs = [], inspections = [];
-  const tree = { isVisible: () => visible, isPathInWorkspace: value => value.startsWith(parentPath + path.sep),
+  const tree = { isVisible: () => visible, isPathInWorkspace(value) {
+    try { return fs.realpathSync.native(value).startsWith(fs.realpathSync.native(parentPath) + path.sep); }
+    catch { return false; }
+  },
     onDidChangeTreeData(handler) { listeners.add(handler); return { dispose: () => listeners.delete(handler) }; },
     changed() { for (const handler of listeners) handler(); },
     repositoryToken: repo => tokens.get(repo?.rootUri.fsPath),
@@ -134,8 +137,10 @@ function fixture(t, linkDocuments) {
 
 test('opens committed rename and current dirty file comparisons using native editors', async t => {
   const f = fixture(t);
+  f.setResponse({ ...f.getResponse(), repo: fs.realpathSync.native(f.childPath) });
   f.pick(choices => choices.find(choice => choice.kind === 'pointer'));
   await f.provider.open(f.node);
+  assert.deepEqual(f.errors, []);
   assert.equal(f.commands[0][0], 'vscode.diff');
   assert.equal(f.commands[0][1].fsPath, path.join(f.childPath, 'old.txt'));
   assert.equal(f.commands[0][1].ref, f.base);

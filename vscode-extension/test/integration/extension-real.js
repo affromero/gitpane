@@ -21,7 +21,9 @@ function uri(value, scheme = 'file') {
     with: change => uri(change.path || value, change.scheme || scheme) };
 }
 
-function sameDirectory(first, second) {
+function sameLocation(first, second) {
+  const a = path.resolve(first), b = path.resolve(second);
+  if (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b) return true;
   try {
     const a = fs.statSync(first, { bigint: true }), b = fs.statSync(second, { bigint: true });
     return a.isDirectory() && b.isDirectory() && a.dev === b.dev && a.ino === b.ino;
@@ -181,7 +183,7 @@ async function main() {
   const explicitlyAdded = { rootUri: uri(nestedPath), state: { HEAD: {}, onDidChange: event,
     workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
   api.openRepository = async target => {
-    if (!sameDirectory(target.fsPath, nestedPath)) throw new Error('Unexpected repository');
+    if (!sameLocation(target.fsPath, nestedPath)) throw new Error('Unexpected repository');
     if (!api.repositories.includes(explicitlyAdded)) { api.repositories.push(explicitlyAdded); openedRepositories.fire(explicitlyAdded); }
     return explicitlyAdded;
   };
@@ -190,7 +192,8 @@ async function main() {
   await commands.get('gitpane.addWorkspaceRepository')();
   assert.equal(errors.length, errorsBeforeAdd, errors.at(-1));
   assert.ok(api.repositories.includes(explicitlyAdded));
-  assert.equal(workspaceState.get('gitpane.workspaceRepositories').repositories[0].path, nestedPath);
+  assert.equal(workspaceState.get('gitpane.workspaceRepositories').repositories[0].path,
+    process.platform === 'win32' ? nestedPath.toLowerCase() : nestedPath);
   pickChanges = choices => choices.find(choice => choice.label === 'nested-repo');
   await commands.get('gitpane.manageWorkspaceRepositories')();
   assert.equal(workspaceState.get('gitpane.workspaceRepositories').repositories.length, 0);
@@ -787,7 +790,7 @@ async function main() {
   };
   const availableSubmodules = new Map([[childPath, childRepo]]);
   api.openRepository = async target => {
-    const submodule = [...availableSubmodules].find(([root]) => sameDirectory(root, target.fsPath))?.[1];
+    const submodule = [...availableSubmodules].find(([root]) => sameLocation(root, target.fsPath))?.[1];
     if (!submodule) throw new Error(`Unexpected repository ${target.fsPath}`);
     if (!api.repositories.includes(submodule)) { api.repositories.push(submodule); openedRepositories.fire(submodule); }
     return submodule;
@@ -1059,7 +1062,7 @@ async function main() {
   const openBeforeHistorical = api.openRepository;
   let historicalNestedOpens = 0;
   api.openRepository = async target => {
-    if (sameDirectory(target.fsPath, grandPath)) historicalNestedOpens++;
+    if (sameLocation(target.fsPath, grandPath)) historicalNestedOpens++;
     return openBeforeHistorical(target);
   };
   fs.renameSync(grandPath, historicalParked);
@@ -1240,7 +1243,7 @@ async function main() {
   let nestedCheckoutOpens = 0;
   const previousOpenRepository = api.openRepository;
   api.openRepository = async target => {
-    if (sameDirectory(target.fsPath, grandPath)) nestedCheckoutOpens++;
+    if (sameLocation(target.fsPath, grandPath)) nestedCheckoutOpens++;
     return previousOpenRepository(target);
   };
   pickChanges = choices => choices.find(choice => choice.kind === 'browse') ||

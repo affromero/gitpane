@@ -73,6 +73,7 @@ class RepositoryTree {
     this.repositoryIdentities = new Map();
     this.repositoryTokens = new Map();
     this.repositoryRevisions = new Map();
+    this.repositoryRevisionKeys = new Map();
     this.contentRevisions = new Map();
     this.nextRepositoryToken = 0;
     this.sharedWorkspaceIdentities = backend.workspaceIdentities instanceof Map;
@@ -133,8 +134,11 @@ class RepositoryTree {
   observe(repo) {
     const key = repo.rootUri.toString();
     if (this.listeners.has(key)) return;
-    this.repositoryRevisions.set(key, (this.repositoryRevisions.get(key) || 0) + 1);
-    this.repositoryIdentities.set(key, directoryIdentity(repo.rootUri.fsPath));
+    const identity = directoryIdentity(repo.rootUri.fsPath);
+    const revisionKey = identity ? `file:${identity.path}` : this.repositoryRevisionKey(repo.rootUri);
+    this.repositoryRevisionKeys.set(key, revisionKey);
+    this.repositoryRevisions.set(revisionKey, (this.repositoryRevisions.get(revisionKey) || 0) + 1);
+    this.repositoryIdentities.set(key, identity);
     const token = ++this.nextRepositoryToken;
     this.repositoryTokens.set(key, token);
     this.contentRevisions.set(key, 0);
@@ -149,7 +153,8 @@ class RepositoryTree {
   unobserve(repo) {
     const key = repo.rootUri.toString();
     if (!this.listeners.has(key)) return;
-    this.repositoryRevisions.set(key, (this.repositoryRevisions.get(key) || 0) + 1);
+    const revisionKey = this.repositoryRevisionKey(repo.rootUri);
+    this.repositoryRevisions.set(revisionKey, (this.repositoryRevisions.get(revisionKey) || 0) + 1);
     this.listeners.get(key)?.dispose();
     this.listeners.delete(key);
     this.repositoryIdentities.delete(key);
@@ -710,7 +715,14 @@ class RepositoryTree {
   }
 
   repositoryRevision(uri) {
-    return this.repositoryRevisions.get(uri.toString()) || 0;
+    return this.repositoryRevisions.get(this.repositoryRevisionKey(uri)) || 0;
+  }
+
+  repositoryRevisionKey(uri) {
+    const observed = this.repositoryRevisionKeys.get(uri.toString());
+    if (observed || uri.scheme !== 'file') return observed || uri.toString();
+    const resolved = directoryIdentity(uri.fsPath)?.path || path.resolve(uri.fsPath);
+    return `file:${process.platform === 'win32' ? resolved.toLowerCase() : resolved}`;
   }
 
   isCurrentRepository(repo, token) {
