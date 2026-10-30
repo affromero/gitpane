@@ -1,0 +1,59 @@
+name: VS Code packages
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: VSIX (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            rust: aarch64-apple-darwin
+            os: macos-15
+          - target: darwin-x64
+            rust: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: linux-arm64
+            rust: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: linux-x64
+            rust: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: win32-x64
+            rust: x86_64-pc-windows-msvc
+            os: windows-latest
+            executable_suffix: .exe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vscode-${{ matrix.target }}
+      - name: Test package verification
+        run: python -B -m unittest discover -s vscode-extension/scripts -p 'test_*.py'
+      - name: Build VSIX
+        run: node vscode-extension/scripts/package-vsix.js --target ${{ matrix.target }} --out "${{ runner.temp }}/gitpane-explorer-${{ matrix.target }}.vsix"
+      - name: Verify packaged files and run backend integration checks
+        run: python vscode-extension/scripts/check_vsix.py --package "${{ runner.temp }}/gitpane-explorer-${{ matrix.target }}.vsix" --target ${{ matrix.target }} --backend "target/${{ matrix.rust }}/release/gitpane${{ matrix.executable_suffix }}" --run-integration
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gitpane-vscode-${{ matrix.target }}
+          path: ${{ runner.temp }}/gitpane-explorer-${{ matrix.target }}.vsix
+          if-no-files-found: error
+          retention-days: 1

@@ -1,6 +1,6 @@
 [package]
 name = "gitpane"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2024"
 rust-version = "1.88.0"
 description = "Multi-repo Git workspace dashboard TUI"
@@ -36,6 +36,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 ureq = "3"
 serde_json = "1"
+sha2 = "0.10"
 libc = "0.2"
 wait-timeout = "0.2.1"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
@@ -43,7 +44,7 @@ fs2 = "0.4"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tokio = { version = "1.23.1", features = ["full", "test-util"] }

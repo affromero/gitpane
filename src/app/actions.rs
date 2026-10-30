@@ -364,14 +364,7 @@ impl App {
                         crate::config::worktree_path(&self.config.worktree, repo, branch);
                     // `-b <branch>` then `--` so the path is never parsed
                     // as an option.
-                    let args = vec![
-                        "worktree".to_string(),
-                        "add".to_string(),
-                        "-b".to_string(),
-                        branch.clone(),
-                        "--".to_string(),
-                        new_path.to_string_lossy().to_string(),
-                    ];
+                    let args = crate::git::worktree_ops::create_arguments(branch, &new_path);
                     // The new row arrives with the next status poll; make
                     // sure a collapsed repo is showing by the time it does.
                     self.repo_list.expand_repo(repo);
@@ -411,12 +404,7 @@ impl App {
                 {
                     self.active_worktree = None;
                 }
-                let args = vec![
-                    "worktree".to_string(),
-                    "remove".to_string(),
-                    "--".to_string(),
-                    worktree_path.to_string_lossy().to_string(),
-                ];
+                let args = crate::git::worktree_ops::remove_arguments(worktree_path);
                 self.spawn_repo_git_op(repo.clone(), args);
             }
             Action::LiveSessionsLoaded(panes) => {

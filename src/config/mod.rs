@@ -352,6 +352,12 @@ impl Config {
     }
 
     pub(crate) fn load_with_env(env: &dyn ConfigEnv) -> Result<Self> {
+        let mut config = Self::load_without_theme(env)?;
+        config.resolve_theme(env);
+        Ok(config)
+    }
+
+    pub(crate) fn load_without_theme(env: &dyn ConfigEnv) -> Result<Self> {
         let mut config = match resolve_load(env) {
             LoadResolution::EnvOverride(path) => {
                 let exists = env.file_exists(&path);
@@ -393,7 +399,6 @@ impl Config {
             }
         };
 
-        config.resolve_theme(env);
         config.saved_snapshot = Some(toml::Value::try_from(&config)?);
         Ok(config)
     }
@@ -466,6 +471,21 @@ impl Config {
             .ok_or_else(|| eyre!("no writable config path available"))?;
 
         self.save_to_path(&config_path)
+    }
+
+    pub(crate) fn save_theme_if_current(&mut self, expected: &str) -> Result<bool> {
+        #[cfg(test)]
+        assert!(
+            self.write_target_override.is_some() || self.loaded_path.is_some(),
+            "test Config needs an explicit save target"
+        );
+        let config_path = self
+            .write_target_override
+            .clone()
+            .or_else(|| self.loaded_path.clone())
+            .or_else(|| default_write_path(&RealEnv))
+            .ok_or_else(|| eyre!("no writable config path available"))?;
+        self.save_to_path_checked(&config_path, Some(expected))
     }
 
     /// Config files that exist on disk but are ignored because another file

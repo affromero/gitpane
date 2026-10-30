@@ -321,6 +321,7 @@ fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
         branch: branch.to_string(),
         head_oid: head_oid.map(str::to_string),
         files: Vec::new(),
+        file_count_lower_bound: 0,
         ahead: 0,
         behind: 0,
         is_dirty: false,

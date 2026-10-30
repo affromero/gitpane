@@ -65,6 +65,65 @@ gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 
 `--root` and `--cwd` are run-local overrides of the configured `root_dirs`: they only affect the current run and are never written back to `config.toml`. `--cwd` scans the directory you are already standing in (an absolute `current_dir()`), so it plays nicely with subcommands — `gitpane --cwd diagnostic` just diagnoses that directory. Explicit paths stay with `--root`; when both are given, `--cwd` wins.
 
+## VS Code extension
+
+Gitpane Explorer adds a multi-repository view to VS Code's Explorer. It shows
+branches, worktrees and changed files together. Select a file to open its diff
+in the editor, or open a repository's graph and actions from its row.
+
+<img src="assets/screenshot-vscode.png" alt="Gitpane Explorer preview showing repositories, worktrees and changed files" width="800">
+
+Rendered preview with example repositories and a simulated Explorer header.
+
+The view follows VS Code's Git repository discovery within the current workspace,
+including multi-root workspaces. It updates when workspace folders or detected
+repositories change and refreshes local status while visible. Linked worktrees
+inside the workspace have their own rows and actions. Gitpane does not fetch
+remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
+macOS or Linux. VS Code's own Git auto-fetch setting works independently.
+
+Install [Gitpane Explorer from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=gitpane.gitpane-explorer),
+or run:
+
+```sh
+code --install-extension gitpane.gitpane-explorer
+```
+
+Release builds also include VSIX packages for macOS, Linux and Windows. From a
+[GitHub release](https://github.com/affromero/gitpane/releases) that includes
+Gitpane Explorer, download the package matching the machine hosting your
+workspace. For Apple Silicon macOS:
+
+```sh
+code --install-extension "$HOME/Downloads/gitpane-explorer-darwin-arm64.vsix"
+```
+
+To build a package from this checkout instead, use Node.js 22 or newer, npm
+and Rust:
+
+```sh
+node vscode-extension/scripts/package-vsix.js --target darwin-arm64 --out "$HOME/Downloads/gitpane-explorer.vsix"
+code --install-extension "$HOME/Downloads/gitpane-explorer.vsix"
+```
+
+The extension needs VS Code 1.111 or newer, Git, the built-in Git extension,
+and a trusted, non-virtual workspace. For SSH, WSL or a development container,
+install a package built for that workspace host. See the
+[extension guide](vscode-extension/README.md) for other build targets, features
+and current limitations.
+
+In VS Code Settings, search for **Gitpane**:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `gitpane.backendPath` | empty | Use the bundled backend, or enter an absolute path to a compatible Gitpane executable on the workspace host. |
+| `gitpane.sessionBackend` | `auto` | Detect live sessions automatically, or select `tmux` or `herdr`. |
+
+Use **Gitpane: Choose Theme** to preview and save a theme. The extension also
+uses Gitpane's theme, graph, worktree and session settings from its
+[configuration](#configuration). The extension guide describes which settings
+require an extension host restart.
+
 ## Update
 
 If you installed with cargo, gitpane can update itself:
@@ -506,6 +565,9 @@ Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...)
 - **List available themes**: `gitpane themes` prints every built in and custom theme, with a marker on the currently resolved one.
 
 ## Troubleshooting
+
+A corrupt or unreadable submodule index can prevent its parent repository's
+status from refreshing. Repair the affected checkout before retrying.
 
 For a copyable snapshot of the active config, scan roots, watcher settings, repo count, and CPU pressure warnings, run:
 

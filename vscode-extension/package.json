@@ -1,0 +1,65 @@
+{
+  "name": "gitpane-explorer",
+  "displayName": "Gitpane Explorer",
+  "description": "See changes across Gitpane repositories in the Explorer.",
+  "version": "0.18.0",
+  "publisher": "gitpane",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/affromero/gitpane.git" },
+  "files": ["src/**", "bin/**", "README.md", "LICENSE"],
+  "engines": { "vscode": "^1.111.0" },
+  "main": "./src/extension.js",
+  "extensionKind": ["workspace"],
+  "extensionDependencies": ["vscode.git"],
+  "categories": ["SCM Providers"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": { "supported": false }
+  },
+  "activationEvents": ["onView:gitpane.repositories"],
+  "contributes": {
+    "views": {
+      "explorer": [{ "id": "gitpane.repositories", "name": "Gitpane", "type": "webview" }]
+    },
+    "commands": [
+      { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },
+      { "command": "gitpane.fetchWorkspace", "title": "Gitpane: Fetch Workspace", "icon": "$(cloud-download)" },
+      { "command": "gitpane.manageSubmodulePins", "title": "Gitpane: Manage Submodule Pins", "icon": "$(pinned)" },
+      { "command": "gitpane.restoreHiddenRepositories", "title": "Gitpane: Restore Hidden Repositories", "icon": "$(eye)" },
+      { "command": "gitpane.addWorkspaceRepository", "title": "Gitpane: Add Workspace Repository…", "icon": "$(add)" },
+      { "command": "gitpane.manageWorkspaceRepositories", "title": "Gitpane: Manage Workspace Repositories" },
+      { "command": "gitpane.sort", "title": "Gitpane: Sort Repositories", "icon": "$(list-ordered)" },
+      { "command": "gitpane.pickTheme", "title": "Gitpane: Choose Theme…", "icon": "$(color-mode)" },
+      { "command": "gitpane.openChange", "title": "Gitpane: Open Change" }
+    ],
+    "menus": {
+      "view/title": [{ "command": "gitpane.sort", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.pickTheme", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.addWorkspaceRepository", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.restoreHiddenRepositories", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.fetchWorkspace", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.manageSubmodulePins", "when": "view == gitpane.repositories", "group": "navigation" },
+        { "command": "gitpane.refresh", "when": "view == gitpane.repositories", "group": "navigation" }]
+    },
+    "configuration": {
+      "title": "Gitpane",
+      "properties": {
+        "gitpane.backendPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to a compatible Gitpane backend on the workspace host. Leave empty to use the bundled backend."
+        },
+        "gitpane.sessionBackend": {
+          "type": "string",
+          "enum": ["auto", "tmux", "herdr"],
+          "enumDescriptions": ["Detect the multiplexer from the extension host environment.", "Check tmux sessions on the workspace host.", "Check herdr sessions on the workspace host."],
+          "default": "auto",
+          "scope": "machine",
+          "description": "Choose where Gitpane checks for live repository sessions. Auto stays quiet when no multiplexer is detected."
+        }
+      }
+    }
+  },
+  "scripts": { "test": "node --test \"test/*.test.js\"" }
+}

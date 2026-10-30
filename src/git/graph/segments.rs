@@ -107,3 +107,40 @@ pub(crate) fn compute_branch_segments(rows: &[GraphRow]) -> Vec<BranchSegment> {
     segments.sort_by_key(|s| s.row_indices[0]);
     segments
 }
+
+/// Project collapsed side-branch segments into the same placeholders used by the TUI.
+pub(crate) fn project_branch_collapses(
+    rows: &[GraphRow],
+    segments: &[BranchSegment],
+    collapsed: &HashSet<String>,
+) -> Vec<GraphRow> {
+    let mut hidden = HashSet::new();
+    let mut placeholders = HashMap::new();
+    for segment in segments {
+        if !collapsed.contains(&segment.id) {
+            continue;
+        }
+        hidden.extend(segment.row_indices.iter().copied());
+        placeholders.insert(segment.row_indices[0], segment);
+    }
+    let mut projected = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        if hidden.contains(&index) {
+            if let Some(segment) = placeholders.get(&index) {
+                let mut placeholder = row.clone();
+                let count = segment.row_indices.len();
+                placeholder.message =
+                    format!("\u{25b6} {} ({count} commits)", segment.display_name);
+                placeholder.short_id.clear();
+                placeholder.author.clear();
+                placeholder.labels.clear();
+                placeholder.diff_stat = None;
+                placeholder.collapsed = Some((segment.id.clone(), count));
+                projected.push(placeholder);
+            }
+            continue;
+        }
+        projected.push(row.clone());
+    }
+    projected
+}

@@ -48,17 +48,37 @@ fn test_stash_count_reflects_stash_save() {
     add_commit_on_head(&repo, "tracked.txt", "v1");
 
     // Modify it and stash.
-    fs::write(tmp.path().join("tracked.txt"), "v2").unwrap();
+    // Different lengths keep coarse filesystem timestamps from hiding
+    // fixture edits in libgit2's stat cache.
+    fs::write(tmp.path().join("tracked.txt"), "first stash contents").unwrap();
     let sig = git2::Signature::now("Test", "test@test.com").unwrap();
-    repo.stash_save2(&sig, None, None).unwrap();
+    let first = repo.stash_save2(&sig, None, None).unwrap();
 
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert_eq!(status.stash_count(), 1);
     assert!(!status.stashes[0].oid.is_empty());
 
     // Stash again.
-    fs::write(tmp.path().join("tracked.txt"), "v3").unwrap();
-    repo.stash_save2(&sig, None, None).unwrap();
+    fs::write(
+        tmp.path().join("tracked.txt"),
+        "second stash contents are longer",
+    )
+    .unwrap();
+    let second = repo.stash_save2(&sig, None, None).unwrap();
+
+    let stashed_content = |oid| {
+        let blob = repo
+            .find_commit(oid)
+            .unwrap()
+            .tree()
+            .unwrap()
+            .get_path(Path::new("tracked.txt"))
+            .unwrap()
+            .id();
+        repo.find_blob(blob).unwrap().content().to_vec()
+    };
+    assert_eq!(stashed_content(first), b"first stash contents");
+    assert_eq!(stashed_content(second), b"second stash contents are longer");
 
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert_eq!(status.stash_count(), 2);

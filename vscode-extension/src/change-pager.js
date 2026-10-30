@@ -1,0 +1,260 @@
+'use strict';
+
+const path = require('node:path');
+const fs = require('node:fs');
+
+const KINDS = {
+  index: new Set(['index_modified', 'index_added', 'index_deleted', 'index_renamed', 'index_copied', 'index_type_changed']),
+  working: new Set(['working_modified', 'working_deleted', 'working_renamed', 'intent_to_add', 'type_changed']),
+  untracked: new Set(['untracked', 'untracked_directory']), merge: new Set(['conflicted']),
+  attention: new Set(['submodule_attention'])
+};
+
+function relativeFile(value) {
+  if (typeof value !== 'string' || !value || value.includes('\0') || path.isAbsolute(value)) return false;
+  if (process.platform === 'win32' && (value.includes('\\') || path.win32.isAbsolute(value) || /^[a-z]:/i.test(value))) return false;
+  return !value.split('/').some(part => !part || part === '.' || part === '..');
+}
+
+function scopedFile(root, relative) {
+  if (!relativeFile(relative)) throw new Error('Gitpane returned an invalid file path.');
+  const parts = relative.split('/');
+  let current = root;
+  for (const part of parts.slice(0, -1)) {
+    current = path.join(current, part);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw Object.assign(new Error('File has an unsafe ancestor.'), { code: 'unsafe_ancestor' });
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+  }
+  return path.join(root, ...parts);
+}
+
+function validRecord(record) {
+  if (!record || !Object.hasOwn(KINDS, record.group) || !KINDS[record.group].has(record.kind) ||
+      !relativeFile(record.path) || typeof record.is_submodule !== 'boolean' ||
+      !(record.original_path === null || relativeFile(record.original_path))) return false;
+  if (record.submodule != null) {
+    const info = record.submodule, head = info.head, warn = info.warn;
+    if (!record.is_submodule || typeof info !== 'object' || Array.isArray(info) ||
+        ![null, 'modified', 'uninitialized', 'dirty'].includes(info.state) ||
+        !(head === null || (head && typeof head === 'object' && !Array.isArray(head) &&
+          ((typeof head.branch === 'string' && head.branch.length > 0 && Buffer.byteLength(head.branch, 'utf8') <= 256 * 1024 &&
+            Object.keys(head).length === 1) ||
+           (head.detached === true && Object.keys(head).length === 1)))) ||
+        !warn || typeof warn !== 'object' || Array.isArray(warn) ||
+        !Number.isSafeInteger(warn.unpushed_commits) || warn.unpushed_commits < 0 ||
+        typeof warn.pointer_unreachable !== 'boolean' || typeof warn.needs_merge_to_default !== 'boolean') return false;
+  }
+  if (['index_renamed', 'index_copied', 'working_renamed'].includes(record.kind) && !record.original_path) return false;
+  if (record.group === 'attention' && (!record.is_submodule || record.original_path !== null)) return false;
+  if (record.group !== 'merge') return record.conflict_stages === null;
+  const stages = record.conflict_stages;
+  return !!stages && ['base', 'ours', 'theirs'].every(key => stages[key] === null || relativeFile(stages[key])) &&
+    ['base', 'ours', 'theirs'].some(key => stages[key] !== null);
+}
+
+function validatePage(page, expectedSnapshot, expectedCursor) {
+  const cursor = value => value === null || (Number.isSafeInteger(value) && value >= 0);
+  if (!page || typeof page.snapshot !== 'string' || !page.snapshot || page.snapshot.length > 256 ||
+      (expectedSnapshot && page.snapshot !== expectedSnapshot) ||
+      typeof page.revision !== 'string' || !/^[a-f0-9]{64}$/.test(page.revision) ||
+      !Number.isSafeInteger(page.cursor) || page.cursor < 0 || page.cursor !== expectedCursor ||
+      !cursor(page.previous_cursor) || !cursor(page.next_cursor) ||
+      (page.cursor === 0 && page.previous_cursor !== null) ||
+      (page.cursor > 0 && page.previous_cursor === null) ||
+      (page.previous_cursor !== null && page.previous_cursor >= page.cursor) ||
+      (page.next_cursor !== null && page.next_cursor <= page.cursor) ||
+      !Array.isArray(page.changes) || page.changes.length > 128 ||
+      (page.next_cursor !== null && (!page.changes.length || page.next_cursor !== page.cursor + page.changes.length)) ||
+      !page.changes.every(validRecord)) throw new Error('Gitpane returned an invalid changes page.');
+  const keys = new Set();
+  for (const record of page.changes) {
+    const key = JSON.stringify([record.group, record.path]);
+    if (keys.has(key)) throw new Error('Gitpane returned duplicate changes.');
+    keys.add(key);
+  }
+  return page;
+}
+
+class ChangePager {
+  constructor(backend, changed, onError = () => {}) {
+    this.backend = backend;
+    this.changed = changed;
+    this.onError = onError;
+    this.entries = new Map();
+    this.disposed = false;
+  }
+
+  get(id) { return this.entries.get(id); }
+
+  async refresh(id, repo, guard) {
+    if (this.disposed || !guard()) return;
+    let state = this.entries.get(id);
+    if (state?.pending) return state.pending;
+    if (!state || state.repo !== repo) {
+      state = { repo, guard, phase: 'idle', page: 0, cursor: 0, changes: [], revision: undefined };
+      this.entries.set(id, state);
+    }
+    state.guard = guard;
+    const activeSearch = state.search;
+    const previous = { revision: state.revision, cursor: state.cursor, page: state.page };
+    state.phase = 'loading';
+    state.error = undefined;
+    this.changed();
+    const current = () => !this.disposed && this.entries.get(id) === state && state.guard();
+    const pending = Promise.resolve().then(async () => {
+      try {
+        let page = validatePage(await this.backend.beginChanges(repo), undefined, 0);
+        if (!current()) { if (this.entries.size) this.releaseSnapshot(repo, page.snapshot); return; }
+        let pageNumber = 0;
+        if (previous.cursor && previous.revision === page.revision) {
+          const retained = validatePage(await this.backend.nextChanges(repo, page.snapshot, previous.cursor), page.snapshot, previous.cursor);
+          if (!current()) return;
+          if (retained.revision !== page.revision) throw new Error('Gitpane returned inconsistent changes pages.');
+          page = retained;
+          pageNumber = previous.page;
+        }
+        Object.assign(state, page, { page: pageNumber, phase: 'ready', error: undefined });
+      } catch (error) {
+        if (!current()) return;
+        state.phase = 'error';
+        state.error = error.code === 'invalid_request' && error.message === 'unknown bridge method' ?
+          'The configured Gitpane backend does not support change paging. Update the backend and retry.' :
+          error.code === 'snapshot_stale' ? 'Changes expired. Retry to refresh.' : error.message || String(error);
+        state.changes = [];
+        state.snapshot = undefined;
+        state.revision = undefined;
+      } finally {
+        if (this.entries.get(id) === state) { state.pending = undefined; this.changed(); }
+      }
+    });
+    state.pending = pending;
+    await pending;
+    if (activeSearch?.query && state.search === activeSearch && state.phase === 'ready' && state.guard() &&
+        (activeSearch.phase !== 'ready' || state.revision !== previous.revision)) {
+      await this.search(id, activeSearch.query);
+    }
+  }
+
+  async move(id, direction) {
+    const state = this.entries.get(id);
+    if (!state || state.phase !== 'ready' || state.pending || !state.guard()) return;
+    const cursor = direction === 'next' ? state.next_cursor : direction === 'previous' ? state.previous_cursor : null;
+    if (cursor === null || cursor === undefined) return;
+    const snapshot = state.snapshot;
+    const revision = state.revision;
+    const nextPage = state.page + (direction === 'next' ? 1 : -1);
+    state.phase = 'loading';
+    this.changed();
+    const current = () => !this.disposed && this.entries.get(id) === state && state.guard();
+    const pending = Promise.resolve().then(async () => {
+      try {
+        const page = validatePage(await this.backend.nextChanges(state.repo, snapshot, cursor), snapshot, cursor);
+        if (!current()) { if (this.entries.size) this.releaseSnapshot(state.repo, snapshot); return; }
+        if (page.revision !== revision) throw new Error('Gitpane returned inconsistent changes pages.');
+        Object.assign(state, page, { page: nextPage, phase: 'ready', error: undefined });
+      } catch (error) {
+        if (!current()) return;
+        state.phase = 'error';
+        state.error = error.code === 'snapshot_stale' ? 'Changes expired. Retry to refresh.' : error.message || String(error);
+        state.changes = [];
+      } finally {
+        if (this.entries.get(id) === state) { state.pending = undefined; this.changed(); }
+      }
+    });
+    state.pending = pending;
+    return pending;
+  }
+
+  async search(id, query, direction = 'first') {
+    const state = this.entries.get(id);
+    if (!state || !state.guard() || typeof query !== 'string' || Buffer.byteLength(query, 'utf8') > 512 ||
+        query.includes('\0') || !['first', 'next', 'previous'].includes(direction)) return;
+    const generation = state.searchGeneration = (state.searchGeneration || 0) + 1;
+    const previous = state.search;
+    if (!query) {
+      state.search = undefined;
+      this.changed();
+      return;
+    }
+    const position = direction !== 'first' && previous?.query === query && previous.phase === 'ready' ? previous.position : null;
+    state.search = { query, phase: 'loading' };
+    this.changed();
+    if (state.pending) await state.pending;
+    const current = () => !this.disposed && this.entries.get(id) === state && state.guard() &&
+      state.searchGeneration === generation && state.search?.query === query;
+    if (!current()) return;
+    if (state.phase !== 'ready' || !state.snapshot) {
+      state.search = { query, phase: 'error', error: state.error || 'Changes are unavailable. Refresh and try again.' };
+      this.changed();
+      return;
+    }
+    const snapshot = state.snapshot, revision = state.revision;
+    const pending = (async () => {
+      try {
+        const result = await this.backend.searchChanges(state.repo, snapshot, query, direction, position);
+        if (!current() || state.snapshot !== snapshot) return;
+        const found = Number.isSafeInteger(result?.count) && result.count > 0;
+        if (!result || result.snapshot !== snapshot || result.revision !== revision ||
+            !Number.isSafeInteger(result.count) || result.count < 0 ||
+            (found ? !(Number.isSafeInteger(result.position) && result.position >= 0 && result.position < result.count &&
+              Number.isSafeInteger(result.cursor) && result.cursor >= 0 && Number.isSafeInteger(result.page) && result.page >= 0 &&
+              relativeFile(result.path) && Object.hasOwn(KINDS, result.group)) :
+              [result.position, result.cursor, result.page, result.path, result.group].some(value => value !== null))) {
+          throw new Error('Gitpane returned an invalid search result.');
+        }
+        let page;
+        if (found && result.cursor !== state.cursor) {
+          page = validatePage(await this.backend.nextChanges(state.repo, snapshot, result.cursor), snapshot, result.cursor);
+          if (!current() || state.snapshot !== snapshot) return;
+          if (page.revision !== revision) throw new Error('Gitpane returned inconsistent changes pages.');
+        }
+        const changes = page?.changes || state.changes;
+        if (found && !changes.some(record => record.path === result.path && record.group === result.group)) {
+          throw new Error('Gitpane returned a search match outside its changes page.');
+        }
+        if (page) Object.assign(state, page, { page: result.page });
+        state.search = { query, phase: 'ready', count: result.count, position: result.position,
+          path: result.path, group: result.group };
+      } catch (error) {
+        if (!current() || state.snapshot !== snapshot) return;
+        state.search = { query, phase: 'error', error: error.code === 'snapshot_stale' ?
+          'Changes expired. Refresh and try again.' : error.message || String(error) };
+      } finally {
+        if (state.pending === pending) state.pending = undefined;
+        if (this.entries.get(id) === state) this.changed();
+      }
+    })();
+    state.pending = pending;
+    return pending;
+  }
+
+  release(id) {
+    const state = this.entries.get(id);
+    this.entries.delete(id);
+    if (!this.entries.size && typeof this.backend.cancelChanges === 'function') {
+      this.backend.cancelChanges();
+      return;
+    }
+    if (state?.snapshot && !state.pending && state.guard()) this.releaseSnapshot(state.repo, state.snapshot);
+  }
+
+  releaseSnapshot(repo, snapshot) {
+    Promise.resolve().then(() => this.backend.releaseChanges(repo, snapshot)).catch(error => {
+      if (!['snapshot_stale', 'workspace_changed', 'outside_workspace', 'disposed'].includes(error?.code)) this.onError(error);
+    });
+  }
+
+  dispose() {
+    this.disposed = true;
+    for (const id of this.entries.keys()) this.release(id);
+  }
+}
+
+module.exports = { ChangePager, relativeFile, scopedFile, validRecord, validatePage };

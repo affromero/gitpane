@@ -13,6 +13,8 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+mod process;
+
 /// Rolled-up CI/checks result for a pull request, from `gh`'s
 /// `statusCheckRollup`. `None` on an item means no checks (every issue, and a
 /// PR with an empty rollup).
@@ -144,13 +146,33 @@ fn parse_github_owner_repo(url: &str) -> Option<(String, String)> {
     Some((owner.to_string(), repo.to_string()))
 }
 
+/// Restrict targets used for externally constructed GitHub URLs and gh arguments.
+pub(crate) fn safe_repository_pair(owner: &str, repo: &str) -> bool {
+    let owner_valid = !owner.is_empty()
+        && owner.len() <= 39
+        && owner
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        && owner.as_bytes()[0].is_ascii_alphanumeric()
+        && owner.as_bytes()[owner.len() - 1].is_ascii_alphanumeric();
+    let repo_valid = !repo.is_empty()
+        && repo.len() <= 100
+        && repo != "."
+        && repo != ".."
+        && !repo.starts_with('-')
+        && repo
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'));
+    owner_valid && repo_valid
+}
+
 /// Fetch open issues and PRs for `owner/repo` in one call each via `gh`.
 /// `state` is passed to `--state` ("open", "closed", or "all"). A failure on one
 /// list (e.g. issues disabled on the repo) does not sink the other; only when
 /// both calls fail is an `Err` returned, carrying the first error.
 pub(crate) fn fetch(owner: &str, repo: &str, state: &str) -> Result<GithubData, String> {
-    let issues = fetch_list(owner, repo, false, state);
-    let prs = fetch_list(owner, repo, true, state);
+    let issues = fetch_list(owner, repo, false, state, false);
+    let prs = fetch_list(owner, repo, true, state, false);
     match (issues, prs) {
         (Err(e), Err(_)) => Err(e),
         (issues, prs) => Ok(GithubData {
@@ -160,8 +182,25 @@ pub(crate) fn fetch(owner: &str, repo: &str, state: &str) -> Result<GithubData, 
     }
 }
 
+pub(crate) fn fetch_partial(
+    owner: &str,
+    repo: &str,
+    state: &str,
+) -> (Result<Vec<GhItem>, String>, Result<Vec<GhItem>, String>) {
+    (
+        fetch_list(owner, repo, false, state, true),
+        fetch_list(owner, repo, true, state, true),
+    )
+}
+
 /// One `gh issue list` / `gh pr list` invocation, parsed into [`GhItem`]s.
-fn fetch_list(owner: &str, repo: &str, is_pr: bool, state: &str) -> Result<Vec<GhItem>, String> {
+fn fetch_list(
+    owner: &str,
+    repo: &str,
+    is_pr: bool,
+    state: &str,
+    bounded: bool,
+) -> Result<Vec<GhItem>, String> {
     let sub = if is_pr { "pr" } else { "issue" };
     // PRs carry `isDraft`; issues do not, so request the field only for PRs.
     let fields = if is_pr {
@@ -170,87 +209,93 @@ fn fetch_list(owner: &str, repo: &str, is_pr: bool, state: &str) -> Result<Vec<G
         "number,title,state,author,updatedAt,url"
     };
     let repo_arg = format!("{owner}/{repo}");
-    let output = Command::new("gh")
-        .args([
+    let output = run(
+        &[
             sub, "list", "-R", &repo_arg, "--state", state, "--limit", "50", "--json", fields,
-        ])
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "gh is not installed or not on PATH".to_string()
-            } else {
-                e.to_string()
-            }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("gh failed")
-            .trim()
-            .to_string();
-        return Err(msg);
-    }
-
-    let raw: Vec<RawItem> = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+        ],
+        bounded,
+    )?;
+    let raw: Vec<RawItem> = serde_json::from_slice(&output).map_err(|e| e.to_string())?;
     Ok(raw.into_iter().map(RawItem::into_item).collect())
 }
 
 /// Fetch the body and comment thread of one issue/PR by its web URL. `is_pr`
 /// picks the `gh issue view` vs `gh pr view` subcommand; both accept the URL.
 pub(crate) fn fetch_detail(url: &str, is_pr: bool) -> Result<ItemDetail, String> {
+    fetch_detail_with(url, is_pr, false).map(|(detail, _)| detail)
+}
+
+pub(crate) fn fetch_detail_partial(
+    url: &str,
+    is_pr: bool,
+) -> Result<(ItemDetail, Option<String>), String> {
+    fetch_detail_with(url, is_pr, true)
+}
+
+fn fetch_detail_with(
+    url: &str,
+    is_pr: bool,
+    bounded: bool,
+) -> Result<(ItemDetail, Option<String>), String> {
     let sub = if is_pr { "pr" } else { "issue" };
-    let output = Command::new("gh")
-        .args([
+    let output = run(
+        &[
             sub,
             "view",
             url,
             "--json",
             "number,title,author,body,comments",
-        ])
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "gh is not installed or not on PATH".to_string()
-            } else {
-                e.to_string()
-            }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("gh failed")
-            .trim()
-            .to_string();
-        return Err(msg);
-    }
-
-    let raw: RawDetail = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+        ],
+        bounded,
+    )?;
+    let raw: RawDetail = serde_json::from_slice(&output).map_err(|e| e.to_string())?;
     let mut detail = raw.into_detail();
-    if is_pr {
-        detail.diff = pr_diff(url);
-    }
-    Ok(detail)
+    let diff_error = if is_pr {
+        match pr_diff(url, bounded) {
+            Ok(diff) => {
+                detail.diff = diff;
+                None
+            }
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+    Ok((detail, diff_error))
 }
 
-/// Best-effort unified diff for a PR (`gh pr diff <url>`). Returns `None` on any
-/// failure — the diff is a bonus shown under the body and comments.
-fn pr_diff(url: &str) -> Option<String> {
-    let output = Command::new("gh").args(["pr", "diff", url]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
+/// Fetch the optional unified diff for a PR (`gh pr diff <url>`).
+fn pr_diff(url: &str, bounded: bool) -> Result<Option<String>, String> {
+    let output = run(&["pr", "diff", url], bounded)?;
+    let text = String::from_utf8_lossy(&output).to_string();
     if text.trim().is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(text)
+        Ok(Some(text))
     }
+}
+
+fn run(args: &[&str], bounded: bool) -> Result<Vec<u8>, String> {
+    if bounded {
+        return process::run(args);
+    }
+    let output = Command::new("gh").args(args).output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "gh is not installed or not on PATH".to_owned()
+        } else {
+            e.to_string()
+        }
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("gh failed")
+            .trim()
+            .to_owned());
+    }
+    Ok(output.stdout)
 }
 
 #[derive(Deserialize)]
@@ -464,6 +509,25 @@ mod tests {
             parse_github_owner_repo("https://github.com/owner/repo/extra"),
             None
         );
+    }
+
+    #[test]
+    fn rejects_remote_names_that_could_change_a_gh_argument_or_url() {
+        for url in [
+            "https://github.com/-owner/repo",
+            "https://github.com/owner/-repo",
+            "https://github.com/owner/..",
+            "https://github.com/owner/repo?other=1",
+            "https://github.com/owner/repo%2fother",
+            "https://github.com/owner/repo#fragment",
+            "https://github.com@evil.test/owner/repo",
+        ] {
+            assert!(
+                !parse_github_owner_repo(url)
+                    .is_some_and(|(owner, repo)| safe_repository_pair(&owner, &repo)),
+                "{url}"
+            );
+        }
     }
 
     #[test]

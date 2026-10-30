@@ -44,6 +44,14 @@ impl Config {
     }
 
     pub(super) fn save_to_path(&mut self, path: &Path) -> Result<()> {
+        self.save_to_path_checked(path, None).map(|_| ())
+    }
+
+    pub(super) fn save_to_path_checked(
+        &mut self,
+        path: &Path,
+        expected_theme: Option<&str>,
+    ) -> Result<bool> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -72,7 +80,16 @@ impl Config {
             .open(lock_name)?;
         fs2::FileExt::lock_exclusive(&lock)?;
         let local = toml::Value::try_from(&*self)?;
-        let mut merged = match read_config(path)? {
+        let disk_config = read_config(path)?;
+        if let Some(expected) = expected_theme
+            && disk_config
+                .as_ref()
+                .map_or("default", |config| config.theme_name.as_str())
+                != expected
+        {
+            return Ok(false);
+        }
+        let mut merged = match disk_config {
             Some(disk) => toml::Value::try_from(disk)?,
             None => local.clone(),
         };
@@ -94,7 +111,7 @@ impl Config {
             self.excluded_repos = adopted.excluded_repos;
         }
         self.saved_snapshot = Some(toml::Value::try_from(&*self)?);
-        Ok(())
+        Ok(true)
     }
 }
 

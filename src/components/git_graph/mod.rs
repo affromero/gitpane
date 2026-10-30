@@ -788,48 +788,11 @@ impl GitGraph {
             return;
         }
 
-        // Collect all hidden row indices and prepare placeholders
-        let mut hidden: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        // (tip_row_idx, segment_id, display_name, count)
-        let mut placeholders: Vec<(usize, String, String, usize)> = Vec::new();
-
-        for seg in &self.segments {
-            if !self.collapsed_branches.contains(&seg.id) {
-                continue;
-            }
-            for &row_idx in &seg.row_indices {
-                hidden.insert(row_idx);
-            }
-            let tip_idx = seg.row_indices[0];
-            placeholders.push((
-                tip_idx,
-                seg.id.clone(),
-                seg.display_name.clone(),
-                seg.row_indices.len(),
-            ));
-        }
-
-        let mut rows = Vec::new();
-        for (i, row) in self.all_rows.iter().enumerate() {
-            if hidden.contains(&i) {
-                if let Some((_, seg_id, name, count)) =
-                    placeholders.iter().find(|(tip, _, _, _)| *tip == i)
-                {
-                    let mut placeholder = row.clone();
-                    placeholder.message = format!("\u{25b6} {name} ({count} commits)");
-                    placeholder.short_id = String::new();
-                    placeholder.author = String::new();
-                    placeholder.labels = Vec::new();
-                    placeholder.diff_stat = None;
-                    placeholder.collapsed = Some((seg_id.clone(), *count));
-                    rows.push(placeholder);
-                }
-                continue;
-            }
-            rows.push(row.clone());
-        }
-
-        self.rows = rows;
+        self.rows = crate::git::graph::project_branch_collapses(
+            &self.all_rows,
+            &self.segments,
+            &self.collapsed_branches,
+        );
         self.restore_selection(selected_oid, selected);
     }
 

@@ -152,3 +152,122 @@ fn same_leaf_name_on_two_remotes_collapses_each_into_its_own_local() {
         "each tracked upstream must collapse into its own local; got: {names:?}"
     );
 }
+
+fn revision(path: &std::path::Path, filter: BranchFilter) -> String {
+    GraphBuilder::revision_scoped(path, &filter, &|_| true).unwrap()
+}
+
+#[test]
+fn graph_revision_follows_refs_catalog_head_and_stashes() {
+    let tmp = TempDir::new().unwrap();
+    let mut repo = Repository::init(tmp.path()).unwrap();
+    let unborn = revision(tmp.path(), BranchFilter::All);
+    let oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(oid).unwrap();
+    let initial = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(unborn, initial);
+    assert_eq!(initial, revision(tmp.path(), BranchFilter::All));
+
+    repo.branch("feature", &root, false).unwrap();
+    let branch = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(initial, branch);
+    let second = create_commit_no_ref(&repo, "feature commit", &[&root]);
+    repo.reference("refs/heads/feature", second, true, "test")
+        .unwrap();
+    let before_tag = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(branch, before_tag);
+    repo.reference("refs/tags/v1", oid, false, "test").unwrap();
+    let tag = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(before_tag, tag);
+
+    repo.reference("refs/remotes/origin/feature", oid, false, "test")
+        .unwrap();
+    repo.remote("origin", "https://example.com/repo.git")
+        .unwrap();
+    let separate = revision(tmp.path(), BranchFilter::All);
+    let mut feature = repo
+        .find_branch("feature", git2::BranchType::Local)
+        .unwrap();
+    feature.set_upstream(Some("origin/feature")).unwrap();
+    let tracking = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(separate, tracking);
+    let local_only = revision(tmp.path(), BranchFilter::Local);
+    repo.reference("refs/remotes/origin/other", oid, false, "test")
+        .unwrap();
+    assert_eq!(local_only, revision(tmp.path(), BranchFilter::Local));
+    assert_ne!(tracking, revision(tmp.path(), BranchFilter::All));
+
+    let attached = revision(tmp.path(), BranchFilter::All);
+    repo.set_head_detached(oid).unwrap();
+    let detached = revision(tmp.path(), BranchFilter::All);
+    assert_ne!(detached, attached);
+    repo.set_head("refs/heads/feature").unwrap();
+    assert_ne!(detached, revision(tmp.path(), BranchFilter::All));
+
+    std::fs::write(tmp.path().join("stash.txt"), "stashed\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("stash.txt")).unwrap();
+    index.write().unwrap();
+    drop(index);
+    let before_stash = revision(tmp.path(), BranchFilter::All);
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    drop(feature);
+    drop(root);
+    repo.stash_save2(&signature, Some("test stash"), None)
+        .unwrap();
+    assert_ne!(before_stash, revision(tmp.path(), BranchFilter::All));
+}
+
+#[test]
+fn graph_revision_accepts_noncommit_tags_and_rejects_missing_objects() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    create_commit(&repo, "root", &[]);
+    let blob_id = repo.blob(b"tagged content").unwrap();
+    repo.reference("refs/tags/blob", blob_id, false, "test")
+        .unwrap();
+    let blob = repo.find_object(blob_id, None).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    repo.tag("annotated-blob", &blob, &signature, "test", false)
+        .unwrap();
+    revision(tmp.path(), BranchFilter::All);
+
+    let bad_ref = tmp.path().join(".git/refs/tags/missing");
+    std::fs::write(bad_ref, "1111111111111111111111111111111111111111\n").unwrap();
+    let error =
+        GraphBuilder::revision_scoped(tmp.path(), &BranchFilter::All, &|_| true).unwrap_err();
+    assert!(!error.to_string().is_empty());
+}
+
+#[test]
+fn graph_revision_respects_worktree_scope() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    let repo_path = tmp.path().join("repo");
+    std::fs::create_dir(&repo_path).unwrap();
+    let repo = Repository::init(&repo_path).unwrap();
+    let oid = create_commit(&repo, "root", &[]);
+    let root = repo.find_commit(oid).unwrap();
+    repo.branch("feature", &root, false).unwrap();
+    let included =
+        || GraphBuilder::revision_scoped(&repo_path, &BranchFilter::All, &|_| true).unwrap();
+    let excluded =
+        || GraphBuilder::revision_scoped(&repo_path, &BranchFilter::All, &|_| false).unwrap();
+    let before_included = included();
+    let before_excluded = excluded();
+    let output = crate::git::process::git_command(&repo_path)
+        .args(["worktree", "add"])
+        .arg(tmp.path().join("linked"))
+        .arg("feature")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_ne!(before_included, included());
+    assert_eq!(before_excluded, excluded());
+}

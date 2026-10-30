@@ -14,6 +14,19 @@ pub(super) fn substitute(template: &str, path: &str, base: Option<&str>) -> Resu
     if !template.contains("{path}") && !template.contains("{base}") {
         return Ok(template.to_string());
     }
+    let script = compile(template, base)?;
+    Ok(format!(
+        "GITPANE_LAUNCH_PATH={} GITPANE_LAUNCH_BASE={} sh -c {}",
+        shell_single_quote(path),
+        shell_single_quote(base.unwrap_or_default()),
+        shell_single_quote(&script),
+    ))
+}
+
+pub(super) fn compile(template: &str, base: Option<&str>) -> Result<String, String> {
+    if !template.contains("{path}") && !template.contains("{base}") {
+        return Ok(template.to_string());
+    }
     let mut script = String::new();
     let mut quote = Quote::None;
     let mut rest = template;
@@ -86,10 +99,5 @@ pub(super) fn substitute(template: &str, path: &str, base: Option<&str>) -> Resu
     if quote != Quote::None {
         return Err("command has an unterminated shell quote".into());
     }
-    Ok(format!(
-        "GITPANE_LAUNCH_PATH={} GITPANE_LAUNCH_BASE={} sh -c {}",
-        shell_single_quote(path),
-        shell_single_quote(base.unwrap_or_default()),
-        shell_single_quote(&script),
-    ))
+    Ok(script)
 }

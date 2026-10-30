@@ -1,0 +1,134 @@
+:root {
+  color-scheme: light dark;
+  --red: var(--vscode-terminal-ansiRed, #e78088);
+  --green: var(--vscode-terminal-ansiGreen, #85bf87);
+  --yellow: var(--vscode-terminal-ansiYellow, #e3be70);
+  --blue: var(--vscode-terminal-ansiBlue, #85a5e0);
+  --magenta: var(--vscode-terminal-ansiMagenta, #cc8acb);
+  --cyan: var(--vscode-terminal-ansiCyan, #7cc9c6);
+  --muted: var(--vscode-descriptionForeground, #aaa);
+  --text: var(--vscode-editor-foreground, #eee);
+}
+
+body.vscode-light, body.vscode-high-contrast-light {
+  --red: var(--vscode-terminal-ansiRed, #ad2734);
+  --green: var(--vscode-terminal-ansiGreen, #216b35);
+  --yellow: var(--vscode-terminal-ansiYellow, #805800);
+  --blue: var(--vscode-terminal-ansiBlue, #275c9d);
+  --magenta: var(--vscode-terminal-ansiMagenta, #833b82);
+  --cyan: var(--vscode-terminal-ansiCyan, #006a70);
+  --muted: var(--vscode-descriptionForeground, #595959);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--vscode-editor-background);
+  color: var(--text);
+  font: var(--vscode-editor-font-size, 13px)/1.5 var(--vscode-editor-font-family, monospace);
+}
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
+.search-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#search, #file-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 5px 8px;
+  color: var(--vscode-input-foreground, var(--text));
+  background: var(--vscode-input-background, transparent);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 0;
+  font: inherit;
+}
+#search:focus-visible, #file-search:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.first-parent { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
+.first-parent input { accent-color: var(--vscode-focusBorder, var(--cyan)); }
+#filters, #refresh, #search-prev, #search-next, #collapse, #expand-all, #commit-actions {
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+#filters:hover, #refresh:hover, #search-prev:hover, #search-next:hover, #collapse:hover, #expand-all:hover, #commit-actions:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--text); }
+#filters:focus-visible, #refresh:focus-visible, #search-prev:focus-visible, #search-next:focus-visible, #collapse:focus-visible, #expand-all:focus-visible, #commit-actions:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+#search-prev:disabled, #search-next:disabled, #collapse:disabled, #expand-all:disabled, #commit-actions:disabled { opacity: .5; cursor: default; }
+.search-status, .message { color: var(--muted); }
+.search-status:empty, .message:empty { display: none; }
+.message.error { color: var(--vscode-errorForeground, var(--red)); }
+
+.graph { overflow: auto; outline: none; max-height: 65vh; }
+.commit {
+  display: flex;
+  gap: 1ch;
+  align-items: baseline;
+  width: 100%;
+  min-width: max-content;
+  min-height: 22px;
+  padding: 1px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.commit:hover { background: var(--vscode-list-hoverBackground); }
+.commit[aria-selected="true"] { background: var(--vscode-list-inactiveSelectionBackground); }
+.graph:focus .commit.active { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.lane { display: inline-block; width: 2ch; white-space: pre; flex: none; }
+.lane-0 { color: var(--red); }
+.lane-1 { color: var(--green); }
+.lane-2 { color: var(--yellow); }
+.lane-3 { color: var(--blue); }
+.lane-4 { color: var(--magenta); }
+.lane-5 { color: var(--cyan); }
+.remote { color: var(--gitpane-graph-remote-label, var(--red)); }
+.deleted, .conflicted { color: var(--gitpane-graph-commit-files-status-deleted, var(--red)); }
+.head { color: var(--gitpane-graph-head-marker, var(--green)); }
+.added { color: var(--gitpane-graph-commit-files-status-added, var(--green)); }
+.addition { color: var(--gitpane-graph-addition, var(--green)); }
+.hash { color: var(--gitpane-graph-commit-id, var(--yellow)); }
+.modified { color: var(--gitpane-graph-commit-files-status-modified, var(--yellow)); }
+.renamed { color: var(--gitpane-graph-commit-files-status-renamed, var(--blue)); }
+.stash { color: var(--gitpane-graph-stash-label, var(--magenta)); }
+.local { color: var(--gitpane-graph-local-branch-label, var(--cyan)); }
+.worktree { color: var(--gitpane-graph-worktree-marker, var(--yellow)); }
+.tag { color: var(--gitpane-graph-tag-label, var(--yellow)); }
+.labels { white-space: nowrap; }
+.parenthesis { color: var(--gitpane-graph-paren, var(--muted)); }
+.time { color: var(--gitpane-graph-time, var(--muted)); }
+.nonmatch .summary, .nonmatch .author { color: var(--gitpane-graph-dimmed, var(--muted)) !important; }
+.untracked { color: var(--gitpane-graph-commit-files-status-other, var(--muted)); }
+.summary { white-space: pre; color: var(--gitpane-graph-commit-message, inherit); }
+.summary.merge { color: var(--gitpane-graph-merge-message, inherit); }
+.author, .time, .stats { white-space: nowrap; }
+.deletion { color: var(--gitpane-graph-deletion, var(--red)); }
+.commit[aria-selected="true"] span { color: var(--vscode-list-inactiveSelectionForeground, var(--text)) !important; }
+
+.details { margin-top: 16px; border-top: 1px solid var(--vscode-panel-border, var(--muted)); }
+.details h2 { margin: 8px 0 4px; color: var(--cyan); font: inherit; }
+#file-search { width: 100%; margin: 0 0 5px; }
+.files { margin: 0; padding: 0; list-style: none; }
+.file {
+  display: flex;
+  gap: 1ch;
+  width: 100%;
+  padding: 1px 4px;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.file:hover { background: var(--vscode-list-hoverBackground); }
+.file:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gitpane-graph-commit-files-path, inherit); }
+
+@media (forced-colors: active) {
+  .lane, .lane span, .hash, .labels span, .addition, .deletion, .file-status { color: CanvasText !important; }
+  .graph:focus .commit.active, .file:focus-visible { outline: 1px solid Highlight; }
+}

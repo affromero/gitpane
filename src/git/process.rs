@@ -33,7 +33,8 @@ pub(crate) fn clear_inherited_git_env(cmd: &mut std::process::Command) {
 pub(crate) fn git_command(path: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
     clear_inherited_git_env(&mut cmd);
-    cmd.arg("-C").arg(path);
+    cmd.arg("-C")
+        .arg(crate::repo_id::boundary_path(path).as_ref());
     cmd
 }
 
@@ -163,12 +164,39 @@ pub(crate) fn run_git_op_capturing(
     path: &Path,
     args: &[String],
 ) -> std::io::Result<std::process::Output> {
+    capture_git_op(path, args, MUTATING_OP_TIMEOUT, false)
+}
+
+/// Run a bounded Git operation without prompting on service stdin.
+#[cfg(unix)]
+pub(crate) fn run_git_op_noninteractive(
+    path: &Path,
+    args: &[String],
+    timeout: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    capture_git_op(path, args, timeout, true)
+}
+
+#[cfg(unix)]
+fn capture_git_op(
+    path: &Path,
+    args: &[String],
+    timeout: std::time::Duration,
+    noninteractive: bool,
+) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     let mut cmd = git_command(path);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if noninteractive {
+        cmd.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
+    }
     let mut child = spawn_killable(&mut cmd)?;
     let pid = child.id() as i32;
-    let result = capture_with_timeout(&mut child, MUTATING_OP_TIMEOUT);
+    let result = if noninteractive {
+        capture_with_limit(&mut child, timeout, 64 * 1024)
+    } else {
+        capture_with_timeout(&mut child, timeout)
+    };
     unregister_killable_pid(pid);
     result
 }
@@ -201,6 +229,15 @@ pub(super) fn capture_with_timeout(
     child: &mut std::process::Child,
     timeout: std::time::Duration,
 ) -> std::io::Result<std::process::Output> {
+    capture_with_limit(child, timeout, usize::MAX)
+}
+
+#[cfg(unix)]
+fn capture_with_limit(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+    limit: usize,
+) -> std::io::Result<std::process::Output> {
     let deadline = std::time::Instant::now() + timeout;
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
@@ -212,8 +249,8 @@ pub(super) fn capture_with_timeout(
     // fill a pipe and block itself (which would otherwise turn a long op into a
     // false timeout).
     let status = loop {
-        read_ready(stdout.as_mut(), &mut out, &mut chunk);
-        read_ready(stderr.as_mut(), &mut err, &mut chunk);
+        read_ready(stdout.as_mut(), &mut out, &mut chunk, limit);
+        read_ready(stderr.as_mut(), &mut err, &mut chunk, limit);
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {}
@@ -238,9 +275,9 @@ pub(super) fn capture_with_timeout(
             // without killing that (possibly legitimate) descendant — a
             // success-path group kill would. Both pipes are polled together so
             // stderr (which carries error messages) can't be starved.
-            let (o2, e2) = drain_pipes(stdout.as_mut(), stderr.as_mut(), DRAIN_GRACE);
-            out.extend(o2);
-            err.extend(e2);
+            let (o2, e2) = drain_pipes(stdout.as_mut(), stderr.as_mut(), DRAIN_GRACE, limit);
+            out.extend_from_slice(&o2[..o2.len().min(limit.saturating_sub(out.len()))]);
+            err.extend_from_slice(&e2[..e2.len().min(limit.saturating_sub(err.len()))]);
             Ok(std::process::Output {
                 status: st,
                 stdout: out,
@@ -266,7 +303,7 @@ pub(super) fn capture_with_timeout(
 /// a fixed number of reads per pass so a child streaming stdout without pause
 /// can't starve the stderr drain and the `try_wait`/deadline checks.
 #[cfg(unix)]
-fn read_ready<R>(r: Option<&mut R>, buf: &mut Vec<u8>, chunk: &mut [u8])
+fn read_ready<R>(r: Option<&mut R>, buf: &mut Vec<u8>, chunk: &mut [u8], limit: usize)
 where
     R: std::io::Read + std::os::fd::AsRawFd,
 {
@@ -283,7 +320,7 @@ where
         }
         match r.read(chunk) {
             Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Ok(n) => buf.extend_from_slice(&chunk[..n.min(limit.saturating_sub(buf.len()))]),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
@@ -301,6 +338,7 @@ fn drain_pipes(
     mut stdout: Option<&mut std::process::ChildStdout>,
     mut stderr: Option<&mut std::process::ChildStderr>,
     grace: std::time::Duration,
+    limit: usize,
 ) -> (Vec<u8>, Vec<u8>) {
     use std::io::Read;
     use std::os::fd::AsRawFd;
@@ -352,7 +390,9 @@ fn drain_pipes(
         if fds[0].revents != 0 && !done[0] {
             match stdout.as_deref_mut().map(|o| o.read(&mut chunk)) {
                 Some(Ok(0)) => done[0] = true,
-                Some(Ok(n)) => out.extend_from_slice(&chunk[..n]),
+                Some(Ok(n)) => {
+                    out.extend_from_slice(&chunk[..n.min(limit.saturating_sub(out.len()))])
+                }
                 Some(Err(e)) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Some(Err(_)) => done[0] = true,
                 None => done[0] = true,
@@ -361,7 +401,9 @@ fn drain_pipes(
         if fds[1].revents != 0 && !done[1] {
             match stderr.as_deref_mut().map(|e| e.read(&mut chunk)) {
                 Some(Ok(0)) => done[1] = true,
-                Some(Ok(n)) => err.extend_from_slice(&chunk[..n]),
+                Some(Ok(n)) => {
+                    err.extend_from_slice(&chunk[..n.min(limit.saturating_sub(err.len()))])
+                }
                 Some(Err(e)) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Some(Err(_)) => done[1] = true,
                 None => done[1] = true,
@@ -397,33 +439,6 @@ pub(crate) fn kill_process_group(child: &mut std::process::Child) {
 pub(crate) fn kill_process_group(child: &mut std::process::Child) {
     let _ = child.kill();
 }
-
-/// Test RAII guard that resets the one-way `SHUTTING_DOWN` flag on drop, so a
-/// test that drives the exit-kill cannot leave the process-global flag set (even
-/// if the test panics) and poison a later test that spawns a killable git
-/// process.
-#[cfg(all(test, unix))]
-pub(super) struct ResetsShuttingDown;
-
-#[cfg(all(test, unix))]
-impl ResetsShuttingDown {
-    pub(super) fn new() -> Self {
-        Self
-    }
-}
-
-#[cfg(all(test, unix))]
-impl Drop for ResetsShuttingDown {
-    fn drop(&mut self) {
-        SHUTTING_DOWN.store(false, Ordering::SeqCst);
-    }
-}
-
-/// Serializes the tests that touch the process-global `KILLABLE_GIT_PIDS` /
-/// `SHUTTING_DOWN` state, so a test that sets `SHUTTING_DOWN` cannot race a
-/// test that spawns a killable git process.
-#[cfg(all(test, unix))]
-static TEST_KILL_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod tests;

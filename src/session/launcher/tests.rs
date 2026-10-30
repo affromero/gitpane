@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn herdr_new_tab_can_target_a_verified_workspace_without_changing_default() {
+    let path = "/work/name $(touch unsafe)";
+    let ordinary = plan(
+        Some("printf %s {path}"),
+        "new-window",
+        path,
+        None,
+        Multiplexer::Herdr,
+    );
+    let targeted =
+        plan_with_herdr_workspace(Some("printf %s {path}"), "new-window", path, None, "w1");
+    let (
+        LaunchPlan::Herdr {
+            create: normal,
+            command: normal_command,
+        },
+        LaunchPlan::Herdr {
+            create: pinned,
+            command: pinned_command,
+        },
+    ) = (ordinary, targeted)
+    else {
+        panic!("Herdr tab plans were not produced");
+    };
+    assert_eq!(
+        normal,
+        ["herdr", "tab", "create", "--cwd", path, "--no-focus"]
+    );
+    assert_eq!(
+        pinned,
+        [
+            "herdr",
+            "tab",
+            "create",
+            "--workspace",
+            "w1",
+            "--cwd",
+            path,
+            "--no-focus"
+        ]
+    );
+    assert_eq!(normal_command, pinned_command);
+    assert!(matches!(
+        plan_with_herdr_workspace(None, "new-window", path, None, "--bad"),
+        LaunchPlan::Error(_)
+    ));
+}
+
 fn argv(parts: &[&str]) -> LaunchPlan {
     LaunchPlan::Spawn(parts.iter().map(|s| s.to_string()).collect())
 }

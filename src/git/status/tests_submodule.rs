@@ -4,6 +4,480 @@ use git2::Repository;
 use std::{fs, path::Path};
 
 #[test]
+fn relative_dot_submodule_paths_remain_readable() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let mut modules = git2::Config::open(&tmp.path().join(".gitmodules")).unwrap();
+    modules
+        .set_str("submodule.my-sub.path", "./my-sub")
+        .unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    assert!(repo.statuses(None).is_ok());
+    query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+}
+
+#[test]
+fn metadata_registrations_keep_head_index_and_conflict_stages_distinct() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let original = repo
+        .index()
+        .unwrap()
+        .get_path(Path::new("my-sub"), 0)
+        .unwrap()
+        .id;
+    let staged = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    stage_submodule_pointer(tmp.path(), "my-sub");
+    let mut index = repo.index().unwrap();
+    index.read(true).unwrap();
+    let mut link = index.get_path(Path::new("my-sub"), 0).unwrap();
+    link.path = b"index-only".to_vec();
+    index.add(&link).unwrap();
+    index.write().unwrap();
+    let registrations = super::submodule::submodule_registrations(&repo).unwrap();
+    let module = registrations
+        .iter()
+        .find(|module| module.path == Path::new("my-sub"))
+        .unwrap();
+    assert_eq!(module.head_oid, Some(original));
+    assert_eq!(module.index_oid, Some(staged));
+    index.remove_path(Path::new("my-sub")).unwrap();
+    link.path = b"conflict-only".to_vec();
+    for stage in [1, 2, 3] {
+        link.flags = (link.flags & !0x3000) | (stage << 12);
+        index.add(&link).unwrap();
+    }
+    index.write().unwrap();
+    let fresh = Repository::open(tmp.path()).unwrap();
+    let registrations = super::submodule::submodule_registrations(&fresh).unwrap();
+    assert!(
+        !registrations
+            .iter()
+            .any(|module| module.path == Path::new("conflict-only"))
+    );
+    assert!(
+        !fresh
+            .submodules()
+            .unwrap()
+            .iter()
+            .any(|module| module.path() == Path::new("conflict-only"))
+    );
+    let head_only = registrations
+        .iter()
+        .find(|module| module.path == Path::new("my-sub"))
+        .unwrap();
+    assert_eq!(head_only.head_oid, Some(original));
+    assert_eq!(head_only.index_oid, None);
+    let index_only = registrations
+        .iter()
+        .find(|module| module.path == Path::new("index-only"))
+        .unwrap();
+    assert_eq!(index_only.head_oid, None);
+    assert_eq!(index_only.index_oid, Some(staged));
+}
+
+#[test]
+fn invalid_or_unregistered_submodule_settings_remain_errors() {
+    for config in [
+        "[submodule \"a\"]\npath = my-sub\n[submodule \"b\"]\npath = my-sub\n",
+        "[submodule \"my-sub\"]\nignore = invalid\n",
+        "[submodule \"my-sub\"]\nupdate = invalid\n",
+        "[submodule \"my-sub\"]\nfetchRecurseSubmodules = invalid\n",
+        "[submodule \"unregistered\"]\nunknown = value\n",
+        "[submodule \"unregistered\"]\nurl = -option\n",
+    ] {
+        let (tmp, _source, _child) = init_repo_with_submodule();
+        fs::write(tmp.path().join(".gitmodules"), config).unwrap();
+        let repo = Repository::open(tmp.path()).unwrap();
+        assert!(repo.submodules().is_err(), "{config}");
+        assert!(
+            super::submodule::submodule_registrations(&repo).is_err(),
+            "{config}"
+        );
+    }
+}
+
+#[test]
+fn metadata_registrations_match_libgit2_without_inspecting_checkouts() {
+    for ignore_case in [false, true] {
+        for config in [
+            None,
+            Some(""),
+            Some("[submodule \"my-sub\"]\nurl = source\n"),
+            Some("[submodule \"alias.with.dots\"]\npath = my-sub\nignore = untracked\n"),
+            Some("[submodule \"my-sub\"]\npath = -option\nunknown = value\n"),
+            Some("[submodule \"url-only\"]\nurl = source\n"),
+            Some("[submodule \"case-alias\"]\npath = MY-SUB\n"),
+            Some("[submodule \"my-sub\"]\npath = ./my-sub\n"),
+            Some("[submodule \"first\"]\npath = my-sub\n[submodule \"second\"]\npath = my-sub/\n"),
+            Some("[include]\npath = included.config\n"),
+            Some("[submodule \"alias\"]\npath = my-sub\npath = -option\n"),
+            Some(
+                "[submodule \"my-sub\"]\nignore = invalid\nignore = dirty\nupdate = invalid\nupdate = checkout\nfetchRecurseSubmodules = invalid\nfetchRecurseSubmodules = on-demand\n",
+            ),
+            Some("[submodule \"my-sub\"]\nignore\nupdate\nfetchRecurseSubmodules\n"),
+            Some(
+                "[submodule \"my-sub\"]\nignore = true\nupdate = merge\nfetchRecurseSubmodules = on-demand\n",
+            ),
+        ] {
+            let (tmp, _source, _child) = init_repo_with_submodule();
+            match config {
+                Some(text) => fs::write(tmp.path().join(".gitmodules"), text).unwrap(),
+                None => fs::remove_file(tmp.path().join(".gitmodules")).unwrap(),
+            }
+            fs::write(
+                tmp.path().join("included.config"),
+                "[submodule \"included\"]\npath = my-sub\nignore = false\n",
+            )
+            .unwrap();
+            let repo = Repository::open(tmp.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_bool("core.ignorecase", ignore_case)
+                .unwrap();
+            let mut expected = repo
+                .submodules()
+                .unwrap()
+                .iter()
+                .map(|module| {
+                    (
+                        module.name_bytes().to_vec(),
+                        module.path().to_path_buf(),
+                        module.ignore_rule(),
+                        module.head_id(),
+                        module.index_id(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut observed = super::submodule::submodule_registrations(&repo)
+                .unwrap()
+                .into_iter()
+                .map(|module| {
+                    (
+                        module.name,
+                        module.path,
+                        module.ignore,
+                        module.head_oid,
+                        module.index_oid,
+                    )
+                })
+                .collect::<Vec<_>>();
+            expected.sort_by(|a, b| a.0.cmp(&b.0));
+            observed.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(observed, expected, "{config:?}, ignorecase={ignore_case}");
+        }
+    }
+}
+
+#[test]
+fn corrupt_child_index_is_reported_instead_of_a_clean_child_observation() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+    fs::write(child.path().join("index"), b"not a Git index").unwrap();
+    drop(child);
+    let error = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap_err();
+    assert!(error.to_string().to_lowercase().contains("index"));
+}
+
+#[test]
+fn direct_child_observations_match_git_submodule_ignore_modes() {
+    use git2::{SubmoduleIgnore, SubmoduleStatus};
+    let mask = SubmoduleStatus::WD_ADDED
+        | SubmoduleStatus::WD_DELETED
+        | SubmoduleStatus::WD_MODIFIED
+        | SubmoduleStatus::WD_INDEX_MODIFIED
+        | SubmoduleStatus::WD_WD_MODIFIED
+        | SubmoduleStatus::WD_UNTRACKED;
+    for scenario in [
+        "clean",
+        "untracked",
+        "working",
+        "staged",
+        "pointer",
+        "mixed",
+    ] {
+        let (tmp, _source, _child) = init_repo_with_submodule();
+        let parent = Repository::open(tmp.path()).unwrap();
+        let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+        let recorded = parent
+            .index()
+            .unwrap()
+            .get_path(Path::new("my-sub"), 0)
+            .unwrap()
+            .id;
+        if matches!(scenario, "pointer" | "mixed") {
+            add_commit_on_head(&child, "committed.rs", "committed change");
+        }
+        if scenario == "untracked" {
+            fs::write(tmp.path().join("my-sub/new.rs"), "untracked").unwrap();
+        }
+        if matches!(scenario, "working" | "staged" | "mixed") {
+            fs::write(tmp.path().join("my-sub/lib.rs"), "changed").unwrap();
+            if matches!(scenario, "staged" | "mixed") {
+                let mut index = child.index().unwrap();
+                index.add_path(Path::new("lib.rs")).unwrap();
+                index.write().unwrap();
+            }
+        }
+        for ignore in [
+            SubmoduleIgnore::None,
+            SubmoduleIgnore::Untracked,
+            SubmoduleIgnore::Dirty,
+            SubmoduleIgnore::All,
+        ] {
+            let expected = parent.submodule_status("my-sub", ignore).unwrap();
+            let observed = super::submodule::observe_child(&child, Some(recorded), ignore).unwrap();
+            assert_eq!(
+                observed.status & mask,
+                expected & mask,
+                "{scenario} {ignore:?}"
+            );
+            assert_eq!(observed.head_oid, child.head().unwrap().target());
+        }
+    }
+}
+
+#[test]
+fn ignored_submodule_addition_keeps_staged_and_working_type_change() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    let mut link = index.get_path(Path::new("my-sub"), 0).unwrap();
+    link.path = b"new-sub".to_vec();
+    index.add(&link).unwrap();
+    index.write().unwrap();
+    fs::write(tmp.path().join("new-sub"), "replacement file").unwrap();
+    let config = SubmoduleConfig {
+        ignore_dirty: true,
+        warn_unpushed: false,
+    };
+    let records = serde_json::to_value(collect_changes(&repo, &config, 100).unwrap()).unwrap();
+    let records = records.as_array().unwrap();
+    assert!(
+        records
+            .iter()
+            .any(|record| record["path"] == "new-sub" && record["kind"] == "index_added")
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["path"] == "new-sub" && record["kind"] == "type_changed")
+    );
+}
+
+#[test]
+fn staged_and_working_gitlink_changes_are_independent() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let committed = repo
+        .head()
+        .unwrap()
+        .peel_to_tree()
+        .unwrap()
+        .get_name("my-sub")
+        .unwrap()
+        .id();
+    let staged = add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    assert_ne!(staged, committed);
+    stage_submodule_pointer(tmp.path(), "my-sub");
+    let record_kinds = || {
+        let records = collect_changes(&repo, &SubmoduleConfig::default(), 100).unwrap();
+        let records = serde_json::to_value(records).unwrap();
+        records
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["path"] == "my-sub")
+            .map(|record| {
+                (
+                    record["group"].as_str().unwrap().to_owned(),
+                    record["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        record_kinds(),
+        vec![("index".to_owned(), "index_modified".to_owned())]
+    );
+    let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+    let working = add_commit_on_head(&child, "next.rs", "next change");
+    assert_ne!(working, staged);
+    assert_eq!(
+        repo.index()
+            .unwrap()
+            .get_path(Path::new("my-sub"), 0)
+            .unwrap()
+            .id,
+        staged
+    );
+    assert_eq!(
+        record_kinds(),
+        vec![
+            ("index".to_owned(), "index_modified".to_owned()),
+            ("working".to_owned(), "working_modified".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn submodule_candidates_preserve_config_paths_includes_and_recorded_links() {
+    for (config, extra) in [
+        ("[submodule \"my-sub\"]\nurl = source\n", None),
+        (
+            "[submodule \"alias.with.dots\"]\npath = my-sub\nurl = source\n",
+            None,
+        ),
+        (
+            "[submodule \"my-sub\"]\npath = -invalid\nurl = source\n",
+            None,
+        ),
+        ("[submodule \"other\"]\nurl = source\n", Some("other")),
+        ("[include]\npath = modules.config\n", None),
+    ] {
+        let (tmp, _source, _child) = init_repo_with_submodule();
+        fs::write(tmp.path().join(".gitmodules"), config).unwrap();
+        fs::write(
+            tmp.path().join("modules.config"),
+            "[submodule \"included\"]\npath = my-sub\nurl = source\n",
+        )
+        .unwrap();
+        let repo = Repository::open(tmp.path()).unwrap();
+        let candidates = submodule_candidate_paths(&repo).unwrap();
+        assert!(candidates.contains(&Path::new("my-sub").to_path_buf()));
+        if let Some(extra) = extra {
+            assert!(candidates.contains(&Path::new(extra).to_path_buf()));
+        }
+        for module in repo.submodules().unwrap() {
+            assert!(
+                candidates.contains(&module.path().to_path_buf()),
+                "{config}"
+            );
+        }
+        fs::remove_file(tmp.path().join(".gitmodules")).unwrap();
+        assert!(
+            submodule_candidate_paths(&repo)
+                .unwrap()
+                .contains(&Path::new("my-sub").to_path_buf())
+        );
+    }
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    fs::write(
+        tmp.path().join(".gitmodules"),
+        "[submodule \"my-sub\"]\npath\n",
+    )
+    .unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let error = submodule_candidate_paths(&repo).unwrap_err();
+    assert!(error.message().contains("no value"));
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_candidates_preserve_native_paths_and_unrelated_tree_names() {
+    use std::os::unix::ffi::OsStrExt;
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let original = parent.tree().unwrap();
+    let mut directory = repo.treebuilder(None).unwrap();
+    directory
+        .insert("file", repo.blob(b"ordinary file").unwrap(), 0o100644)
+        .unwrap();
+    let mut root = repo.treebuilder(Some(&original)).unwrap();
+    root.insert(
+        b"directory-\xff".as_slice(),
+        directory.write().unwrap(),
+        0o040000,
+    )
+    .unwrap();
+    root.insert(
+        b"module-\xfe".as_slice(),
+        original.get_name("my-sub").unwrap().id(),
+        0o160000,
+    )
+    .unwrap();
+    let tree = repo.find_tree(root.write().unwrap()).unwrap();
+    let signature = git2::Signature::now("Test", "test@test.com").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Native paths",
+        &tree,
+        &[&parent],
+    )
+    .unwrap();
+    let mut config = fs::read(tmp.path().join(".gitmodules")).unwrap();
+    config.extend_from_slice(b"\n[submodule \"native\"]\npath = configured-\xfd\n");
+    fs::write(tmp.path().join(".gitmodules"), config).unwrap();
+    let paths = submodule_candidate_paths(&repo).unwrap();
+    for expected in [b"my-sub".as_slice(), b"module-\xfe", b"configured-\xfd"] {
+        assert!(paths.contains(&Path::new(std::ffi::OsStr::from_bytes(expected)).to_path_buf()));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_candidate_paths_remain_available_when_checkout_is_a_symlink() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let outside = tempfile::TempDir::new().unwrap();
+    fs::write(outside.path().join(".git"), "invalid Git directory file\n").unwrap();
+    fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), tmp.path().join("my-sub")).unwrap();
+    let repo = Repository::open(tmp.path()).unwrap();
+    assert_eq!(
+        submodule_candidate_paths(&repo).unwrap(),
+        vec![Path::new("my-sub").to_path_buf()]
+    );
+    let registrations = super::submodule::submodule_registrations(&repo).unwrap();
+    assert_eq!(registrations.len(), 1);
+    assert_eq!(registrations[0].path, Path::new("my-sub"));
+    assert_eq!(registrations[0].head_oid, registrations[0].index_oid);
+    assert!(registrations[0].head_oid.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn replaced_submodule_symlinks_leave_unrelated_changes_visible() {
+    for (dangling, ignore_all) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
+        let outside = tempfile::TempDir::new().unwrap();
+        let destination = if dangling {
+            outside.path().join("missing")
+        } else {
+            outside.path().to_path_buf()
+        };
+        let parent = Repository::open(tmp.path()).unwrap();
+        fs::write(tmp.path().join("other.txt"), "original\n").unwrap();
+        let mut index = parent.index().unwrap();
+        index.add_path(Path::new("other.txt")).unwrap();
+        index.write().unwrap();
+        commit_index(&parent, "Track unrelated file");
+        fs::write(tmp.path().join("other.txt"), "changed\n").unwrap();
+        fs::remove_dir_all(tmp.path().join("my-sub")).unwrap();
+        std::os::unix::fs::symlink(&destination, tmp.path().join("my-sub")).unwrap();
+        if ignore_all {
+            let mut config = git2::Config::open(&tmp.path().join(".gitmodules")).unwrap();
+            config.set_str("submodule.my-sub.ignore", "all").unwrap();
+        }
+
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let file = status
+            .files
+            .iter()
+            .find(|entry| entry.path == Path::new("other.txt"))
+            .expect("unrelated changes must remain visible when a submodule is replaced");
+        assert_eq!(file.status, FileStatus::Modified);
+        assert!(file.unstaged);
+        assert!(!file.staged);
+        assert!(status.is_dirty);
+        if ignore_all {
+            assert!(!status.has_dirty_submodules);
+        }
+    }
+}
+
+#[test]
 fn test_dirty_submodule_with_real_git_submodule() {
     let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
@@ -20,6 +494,7 @@ fn test_dirty_submodule_with_real_git_submodule() {
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert!(status.has_submodules);
     assert!(status.has_dirty_submodules);
+    assert_eq!(status.file_count_lower_bound, 1);
     assert!(!status.submodules.is_empty());
 
     let sub_info = &status.submodules[0];
@@ -209,6 +684,7 @@ fn test_ignore_dirty_with_warn_unpushed_iterates_subs() {
     let status = query_status(tmp.path(), &cfg).unwrap();
     assert!(!status.has_dirty_submodules);
     assert!(status.has_unpushed_submodules);
+    assert_eq!(status.file_count_lower_bound, 0);
     let sub = status
         .submodules
         .iter()

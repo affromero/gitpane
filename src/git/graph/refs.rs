@@ -1,15 +1,18 @@
 use crate::config::BranchFilter;
 use git2::{BranchType, Oid, Repository};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use super::BranchLabel;
 
 pub(super) fn resolve_refs(
     repo: &Repository,
     filter: &BranchFilter,
-) -> HashMap<Oid, Vec<BranchLabel>> {
+    allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+    strict: bool,
+) -> color_eyre::Result<HashMap<Oid, Vec<BranchLabel>>> {
     if *filter == BranchFilter::None {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
 
     let head_oid = repo.head().ok().and_then(|r| r.target());
@@ -17,36 +20,54 @@ pub(super) fn resolve_refs(
         .head()
         .ok()
         .and_then(|r| r.shorthand().ok().map(String::from));
-    let wt_branches = collect_worktree_branches(repo);
+    let wt_branches = collect_worktree_branches(repo, allow_worktree, strict)?;
 
     // Map a remote-tracking branch's short name (e.g. `origin/main`) to the
     // local branch that tracks it, so a merged catalog entry can collapse a
     // local↔upstream pair into one. Only `All` collects both sides, so only
     // that mode merges; a remote-only view keeps each remote branch distinct.
     let mut upstream_to_local: HashMap<String, String> = HashMap::new();
-    if *filter == BranchFilter::All
-        && let Ok(branches) = repo.branches(Some(BranchType::Local))
-    {
+    if *filter == BranchFilter::All {
+        let branches = match repo.branches(Some(BranchType::Local)) {
+            Ok(branches) => Some(branches),
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => None,
+        };
         // Collect every local branch that tracks each remote-tracking ref, so a
         // collapse is only applied when it is unambiguous.
         let mut tracking: HashMap<String, Vec<String>> = HashMap::new();
-        for branch_result in branches {
-            let Ok((branch, _)) = branch_result else {
-                continue;
+        for branch_result in branches.into_iter().flatten() {
+            let (branch, _) = match branch_result {
+                Ok(branch) => branch,
+                Err(error) if strict => return Err(error.into()),
+                Err(_) => continue,
             };
-            let Ok(Some(name)) = branch.name() else {
-                continue;
+            let name = match branch.name() {
+                Ok(Some(name)) => name,
+                Ok(None) if strict => {
+                    return Err(color_eyre::eyre::eyre!("branch name is not UTF-8"));
+                }
+                Err(error) if strict => return Err(error.into()),
+                _ => continue,
             };
-            let Ok(upstream) = branch.upstream() else {
-                continue;
+            let upstream = match branch.upstream() {
+                Ok(upstream) => upstream,
+                Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+                Err(error) if strict => return Err(error.into()),
+                Err(_) => continue,
             };
             // Only remote-tracking upstreams merge; a branch tracking
             // another local branch must stay two distinct entries.
             if !upstream.get().is_remote() {
                 continue;
             }
-            let Some(up_name) = upstream.name().ok().flatten() else {
-                continue;
+            let up_name = match upstream.name() {
+                Ok(Some(name)) => name,
+                Ok(None) if strict => {
+                    return Err(color_eyre::eyre::eyre!("upstream name is not UTF-8"));
+                }
+                Err(error) if strict => return Err(error.into()),
+                _ => continue,
             };
             tracking
                 .entry(up_name.to_string())
@@ -73,11 +94,13 @@ pub(super) fn resolve_refs(
     for bt in branch_types {
         let branches = match repo.branches(Some(bt)) {
             Ok(b) => b,
+            Err(error) if strict => return Err(error.into()),
             Err(_) => continue,
         };
         for branch_result in branches {
             let (branch, _) = match branch_result {
                 Ok(b) => b,
+                Err(error) if strict => return Err(error.into()),
                 Err(_) => continue,
             };
             let target = match branch.get().target() {
@@ -86,6 +109,10 @@ pub(super) fn resolve_refs(
             };
             let name = match branch.name() {
                 Ok(Some(n)) => n.to_string(),
+                Ok(None) if strict => {
+                    return Err(color_eyre::eyre::eyre!("branch name is not UTF-8"));
+                }
+                Err(error) if strict => return Err(error.into()),
                 _ => continue,
             };
             let is_remote = bt == BranchType::Remote;
@@ -114,16 +141,32 @@ pub(super) fn resolve_refs(
     }
 
     // Tags
-    if let Ok(tag_names) = repo.tag_names(None) {
+    let tag_names = match repo.tag_names(None) {
+        Ok(names) => Some(names),
+        Err(error) if strict => return Err(error.into()),
+        Err(_) => None,
+    };
+    if let Some(tag_names) = tag_names {
         for i in 0..tag_names.len() {
             let name = match tag_names.get(i) {
                 Ok(Some(n)) => n,
+                Ok(None) if strict => return Err(color_eyre::eyre::eyre!("tag name is not UTF-8")),
+                Err(error) if strict => return Err(error.into()),
                 _ => continue,
             };
             let refname = format!("refs/tags/{}", name);
-            let Ok(reference) = repo.find_reference(&refname) else {
-                continue;
+            let reference = match repo.find_reference(&refname) {
+                Ok(reference) => reference,
+                Err(error) if strict => return Err(error.into()),
+                Err(_) => continue,
             };
+            if strict {
+                let resolved = reference.resolve()?;
+                if let Some(target) = resolved.target() {
+                    repo.find_object(target, None)?;
+                }
+                reference.peel(git2::ObjectType::Any)?;
+            }
             let oid = reference
                 .peel_to_commit()
                 .ok()
@@ -154,26 +197,37 @@ pub(super) fn resolve_refs(
         });
     }
 
-    map
+    Ok(map)
 }
 
 /// Attach a `stash@{n}` label to the commit each stash was created on top of
 /// (i.e. the stash entry's first parent). The stash commit itself is not
 /// pushed into the revwalk, so its index/untracked tree parents don't
 /// pollute the graph. Existing labels for that oid are preserved.
-pub(super) fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, Vec<BranchLabel>>) {
+pub(super) fn merge_stash_labels(
+    repo: &mut Repository,
+    map: &mut HashMap<Oid, Vec<BranchLabel>>,
+    strict: bool,
+) -> color_eyre::Result<()> {
     let mut stash_entries: Vec<(usize, Oid)> = Vec::new();
-    let _ = repo.stash_foreach(|index, _msg, oid| {
+    let result = repo.stash_foreach(|index, _msg, oid| {
         stash_entries.push((index, *oid));
         true
     });
+    if strict {
+        result?;
+    }
 
     for (index, oid) in stash_entries {
-        let Ok(commit) = repo.find_commit(oid) else {
-            continue;
+        let commit = match repo.find_commit(oid) {
+            Ok(commit) => commit,
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => continue,
         };
-        let Ok(parent_oid) = commit.parent_id(0) else {
-            continue;
+        let parent_oid = match commit.parent_id(0) {
+            Ok(parent_oid) => parent_oid,
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => continue,
         };
         map.entry(parent_oid).or_default().push(BranchLabel {
             name: format!("stash@{{{index}}}"),
@@ -185,32 +239,62 @@ pub(super) fn merge_stash_labels(repo: &mut Repository, map: &mut HashMap<Oid, V
             is_stash: true,
         });
     }
+    Ok(())
 }
 
-fn collect_worktree_branches(repo: &Repository) -> HashSet<String> {
+fn collect_worktree_branches(
+    repo: &Repository,
+    allow_worktree: Option<&dyn Fn(&Path) -> bool>,
+    strict: bool,
+) -> color_eyre::Result<HashSet<String>> {
     let mut branches = HashSet::new();
     let wt_names = match repo.worktrees() {
         Ok(names) => names,
-        Err(_) => return branches,
+        Err(error) if allow_worktree.is_some() => return Err(error.into()),
+        Err(_) => return Ok(branches),
     };
     for i in 0..wt_names.len() {
         let name = match wt_names.get(i) {
             Ok(Some(n)) => n,
+            Ok(None) if allow_worktree.is_some() => {
+                return Err(color_eyre::eyre::eyre!("worktree name is not valid UTF-8"));
+            }
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             _ => continue,
         };
         let wt = match repo.find_worktree(name) {
             Ok(wt) => wt,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
+        if allow_worktree.is_some_and(|allow| !allow(wt.path())) {
+            continue;
+        }
         let wt_repo = match Repository::open(wt.path()) {
             Ok(r) => r,
+            Err(error) if allow_worktree.is_some() => return Err(error.into()),
             Err(_) => continue,
         };
-        if let Ok(head) = wt_repo.head()
-            && let Ok(shorthand) = head.shorthand()
-        {
-            branches.insert(shorthand.to_string());
+        let head = match wt_repo.head() {
+            Ok(head) => head,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+                ) =>
+            {
+                continue;
+            }
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => continue,
+        };
+        match head.shorthand() {
+            Ok(shorthand) => {
+                branches.insert(shorthand.to_string());
+            }
+            Err(error) if strict => return Err(error.into()),
+            Err(_) => {}
         }
     }
-    branches
+    Ok(branches)
 }

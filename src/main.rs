@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod bridge;
 mod components;
 mod config;
 mod diagnostic;
@@ -53,6 +54,21 @@ enum Command {
     /// Print configuration and workspace diagnostics
     #[command(alias = "diagnostics")]
     Diagnostic,
+    /// Run the workspace-scoped editor bridge over standard input and output
+    Serve {
+        /// Handle one authorized mutation after initialization and exit.
+        #[arg(long)]
+        mutation_once: bool,
+        /// Run a cancellable worker dedicated to editor session liveness.
+        #[arg(long, conflicts_with = "mutation_once")]
+        liveness_worker: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_exec", "content_guard"])]
+        content_worker: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_worker", "content_guard"])]
+        content_exec: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["mutation_once", "liveness_worker", "content_worker", "content_exec"])]
+        content_guard: bool,
+    },
 }
 
 /// Run the app on an explicitly-owned multi-thread runtime, then drop it
@@ -81,11 +97,28 @@ enum Command {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let cli = Cli::parse();
+    if let Some(Command::Serve {
+        content_guard,
+        content_worker,
+        content_exec,
+        ..
+    }) = &cli.command
+    {
+        if *content_guard {
+            bridge::run_content_guard();
+        }
+        if *content_worker || *content_exec {
+            bridge::run_content_worker(*content_exec);
+        }
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run())));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(run(cli))));
 
     // A panic skipped the app's quit gating, so a mutating git child may
     // still be running with piped stdio; give it a bounded window before
@@ -142,14 +175,25 @@ fn apply_libgit2_limits(cfg: &config::Git2Config) {
     }
 }
 
-async fn run() -> Result<()> {
-    let cli = Cli::parse();
-
+async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Command::Update) => return self_update(),
         Some(Command::Themes) => return list_themes(cli.theme.as_deref()),
         Some(Command::Diagnostic) => {
             return run_diagnostic(cli.root, cli.cwd, cli.theme.as_deref());
+        }
+        Some(Command::Serve {
+            mutation_once,
+            liveness_worker,
+            ..
+        }) => {
+            if liveness_worker {
+                session::liveness::install_worker_cancellation()?;
+            }
+            let mut config = config::Config::load()?;
+            config.runtime_theme_override = cli.theme;
+            apply_libgit2_limits(&config.git2);
+            return bridge::run(&config, mutation_once, liveness_worker);
         }
         None => {}
     }
