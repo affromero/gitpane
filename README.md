@@ -73,7 +73,7 @@ at the top, changes in the middle and the commit graph below. Select a repositor
 or worktree to update both lower sections. Select a file to open its native diff
 in the editor.
 
-<img src="assets/screenshot-vscode.png" alt="Gitpane for VS Code with stacked repositories, changes and commit graph" width="440">
+<img src="assets/screenshot-vscode-stacked.png" alt="Gitpane for VS Code with stacked repositories, changes and commit graph" width="440">
 
 Rendered preview with example repositories and simulated Explorer section headers.
 
