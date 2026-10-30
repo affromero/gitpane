@@ -6,6 +6,7 @@ const path = require('node:path');
 const { groups } = require('./model');
 const { relativeFile } = require('./change-pager');
 const { SessionLiveness } = require('./session-liveness');
+const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
 
 function directoryIdentity(value) {
   try {
@@ -99,6 +100,8 @@ class RepositoryTree {
     this.allRefreshWaiters = new Set();
     this.disposed = false;
     this.visible = false;
+    this.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+    this.showSessionLiveness = true;
     this.pollTimer = undefined;
     this.pollPromise = undefined;
     this.refreshTimer = undefined;
@@ -106,11 +109,11 @@ class RepositoryTree {
       git.onDidOpenRepository(repo => {
         this.observe(repo);
         if (this.isVisible(repo)) this.scheduleRefresh();
+        else this.scheduleChanged();
       }),
       git.onDidCloseRepository(repo => {
-        const wasVisible = this.isVisible(repo);
         this.unobserve(repo);
-        if (wasVisible) this.scheduleChanged();
+        this.scheduleChanged();
       }),
       backend.onDidChange(state => this.backendChanged(state)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -620,6 +623,15 @@ class RepositoryTree {
     this.workspacePaths = folders.map(folder => folder.uri.fsPath);
   }
 
+  workspaceHasRepository(folder, current) {
+    const roots = [folder, this.workspaceIdentities.get(folder)?.path, current?.path].filter(Boolean);
+    return this.git.repositories.some(repo => {
+      if (repo.rootUri.scheme !== 'file') return false;
+      const paths = [repo.rootUri.fsPath, this.repositoryIdentities.get(repo.rootUri.toString())?.path].filter(Boolean);
+      return roots.some(root => paths.some(value => inside(root, value)));
+    });
+  }
+
   isPathInWorkspace(value) {
     const target = directoryIdentity(value);
     return this.containsIdentity(target);
@@ -661,9 +673,23 @@ class RepositoryTree {
     this.groupCache.delete(key);
   }
 
+  configureView({ refreshInterval, showSessionLiveness }) {
+    const intervalChanged = this.refreshInterval !== refreshInterval;
+    const livenessChanged = this.showSessionLiveness !== showSessionLiveness;
+    this.refreshInterval = refreshInterval;
+    this.showSessionLiveness = showSessionLiveness;
+    if (intervalChanged && this.pollTimer !== undefined) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    this.liveness?.setVisible(this.visible && showSessionLiveness);
+    if (intervalChanged) this.schedulePoll();
+    if (livenessChanged) this.changed();
+  }
+
   setVisible(visible) {
     this.visible = visible;
-    this.liveness?.setVisible(visible);
+    this.liveness?.setVisible(visible && this.showSessionLiveness);
     this.pins?.setVisible(visible);
     this.workspaceRepositories?.setVisible(visible);
     if (!visible && this.pollTimer !== undefined) {
@@ -685,7 +711,7 @@ class RepositoryTree {
         this.pollPromise = undefined;
         this.schedulePoll();
       });
-    }, 5000);
+    }, this.refreshInterval);
   }
 
   async reconcile() {
@@ -847,11 +873,10 @@ class RepositoryTree {
     if (!node) {
       const missingFolders = this.workspacePaths.flatMap(folder => {
         const current = directoryIdentity(folder);
+        if (sameIdentity(this.workspaceIdentities.get(folder), current)) return [];
+        if (!this.workspaceHasRepository(folder, current)) return [];
         if (!current) return [`Workspace folder unavailable: ${folder}`];
-        if (!sameIdentity(this.workspaceIdentities.get(folder), current)) {
-          return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
-        }
-        return [];
+        return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
       });
       const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.workspaceRepositories?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.presentationView();

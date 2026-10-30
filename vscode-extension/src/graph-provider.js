@@ -6,6 +6,7 @@ const vscode = require('vscode');
 const { openGitlinkDiff } = require('./gitlink-diff');
 const { createLiveGitSide } = require('./git-side-documents');
 const { relativeFile } = require('./change-pager');
+const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
 
 function defaultFilters() {
   return { branches: null, authors: null, refs: { local: true, remote: true, tags: true, stashes: true } };
@@ -51,6 +52,10 @@ class GraphProvider {
     this.lastHead = undefined;
     this.revision = undefined;
     this.pollTimer = undefined;
+    this.pollImmediate = false;
+    this.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+    this.defaultFirstParent = false;
+    this.labelMaxLength = undefined;
     this.pollPending = false;
     this.pollAgain = false;
     this.pollEpoch = 0;
@@ -103,7 +108,7 @@ class GraphProvider {
     this.revision = undefined;
     this.unstableLoads = 0;
     this.retryBackoff = false;
-    this.firstParent = false;
+    this.firstParent = this.defaultFirstParent;
     this.filters = defaultFilters();
     this.branches = [];
     this.authors.clear();
@@ -176,13 +181,31 @@ class GraphProvider {
     this.pollEpoch++;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
+    this.pollImmediate = false;
     this.pollAgain = false;
   }
 
-  schedulePoll(delay = 5000) {
+  configureView({ refreshInterval, graphFirstParent, graphLabelMaxLength }) {
+    const intervalChanged = this.refreshInterval !== refreshInterval;
+    const labelsChanged = this.labelMaxLength !== graphLabelMaxLength;
+    this.refreshInterval = refreshInterval;
+    this.defaultFirstParent = graphFirstParent;
+    this.labelMaxLength = graphLabelMaxLength;
+    if (intervalChanged && this.pollTimer && !this.pollImmediate) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    if (labelsChanged) {
+      this.revision = undefined;
+      if (this.ready && this.panel?.visible !== false) void this.loadGraph();
+    } else if (intervalChanged && !this.pollImmediate && !this.loading && !this.pollPending) this.schedulePoll();
+  }
+
+  schedulePoll(delay = this.refreshInterval) {
     if (!this.ready || !this.panel || this.panel.visible === false) return;
     if (this.pollTimer) clearTimeout(this.pollTimer);
-    this.pollTimer = setTimeout(() => { this.pollTimer = undefined; void this.pollRevision(); }, delay);
+    this.pollImmediate = delay === 0;
+    this.pollTimer = setTimeout(() => { this.pollTimer = undefined; this.pollImmediate = false; void this.pollRevision(); }, delay);
     this.pollTimer.unref?.();
   }
 
@@ -256,7 +279,7 @@ class GraphProvider {
     } finally {
       this.pollPending = false;
       if (this.ready && this.panel && this.panel.visible !== false) {
-        const delay = this.pollAgain ? 0 : 5000;
+        const delay = this.pollAgain ? 0 : this.refreshInterval;
         this.pollAgain = false;
         this.schedulePoll(delay);
       }
@@ -322,10 +345,11 @@ class GraphProvider {
       }
       if (!Array.isArray(result?.rows) || !Array.isArray(result?.branches) ||
         result.branches.some(branch => typeof branch !== 'string')) throw new Error('Gitpane returned an invalid graph.');
-      const labelMaxLen = result.label_max_len === undefined ? 24 : result.label_max_len;
-      if (!Number.isSafeInteger(labelMaxLen) || labelMaxLen < 0) {
+      const nativeLabelMaxLen = result.label_max_len === undefined ? 24 : result.label_max_len;
+      if (!Number.isSafeInteger(nativeLabelMaxLen) || nativeLabelMaxLen < 0) {
         throw new Error('Gitpane returned an invalid graph label length.');
       }
+      const labelMaxLen = this.labelMaxLength ?? nativeLabelMaxLen;
       this.rows = new Map(result.rows.filter(row => typeof row?.oid === 'string' && /^[a-f0-9]{40,64}$/.test(row.oid)).map(row => [row.oid, row]));
       if (this.rows.size !== result.rows.length) throw new Error('Gitpane returned an invalid graph commit.');
       const segments = new Set();
@@ -370,7 +394,7 @@ class GraphProvider {
       if (generation === this.graphGeneration) {
         this.loading = false;
         if (!this.pollPending) {
-          const delay = this.pollAgain ? 0 : 5000;
+          const delay = this.pollAgain ? 0 : this.refreshInterval;
           this.pollAgain = false;
           this.schedulePoll(delay);
         }

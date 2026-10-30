@@ -25,10 +25,13 @@ class PackageTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.source = self.root / "vscode-extension"
         (self.source / "src").mkdir(parents=True)
+        (self.source / "media").mkdir()
+        (self.source / "media/gitpane.png").write_bytes(b"\x89PNG\x00\r\n\xff")
         manifest = {
             "name": "gitpane-explorer",
             "publisher": "gitpane",
             "version": "0.0.1",
+            "icon": "media/gitpane.png",
         }
         (self.source / "package.json").write_text(
             json.dumps(manifest), encoding="utf-8"
@@ -62,6 +65,9 @@ class PackageTests(unittest.TestCase):
             "extension/LICENSE.txt": (self.root / "LICENSE").read_bytes(),
             "extension/src/view.js": (
                 self.source / "src/view.js"
+            ).read_bytes(),
+            "extension/media/gitpane.png": (
+                self.source / "media/gitpane.png"
             ).read_bytes(),
             "extension/bin/gitpane.exe"
             if target.startswith("win32-")
@@ -101,6 +107,8 @@ class PackageTests(unittest.TestCase):
     def test_altered_and_incomplete_packages_are_rejected(self) -> None:
         for changes in [
             {"extension/src/view.js": b"stale sources"},
+            {"extension/media/gitpane.png": b"stale icon"},
+            {"extension/media/gitpane.png": None},
             {"extension/bin/gitpane": b"stale backend"},
             {"extension/readme.md": b"stale documentation"},
             {"extension/src/view.js": None},

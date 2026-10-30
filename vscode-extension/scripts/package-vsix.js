@@ -65,6 +65,7 @@ function main(args) {
       fs.copyFileSync(path.join(extension, name), path.join(staging, name));
     }
     fs.cpSync(path.join(extension, 'src'), path.join(staging, 'src'), { recursive: true });
+    fs.cpSync(path.join(extension, 'media'), path.join(staging, 'media'), { recursive: true });
     fs.copyFileSync(path.join(repository, 'LICENSE'), path.join(staging, 'LICENSE'));
     fs.mkdirSync(path.join(staging, 'bin'));
     const executable = target.platform === 'win32' ? 'gitpane.exe' : 'gitpane';
