@@ -1,7 +1,7 @@
 <div align="center">
   <h1>gitpane</h1>
   <p align="center">
-    <strong>Multi repo Git workspace dashboard for the terminal</strong>
+    <strong>Multi repo Git workspace dashboard for the terminal and VS Code</strong>
   </p>
   <p align="center">
     <a href="https://github.com/affromero/gitpane/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/affromero/gitpane/ci.yml?branch=main&label=CI&logo=github&style=flat-square" alt="CI"></a>
@@ -25,7 +25,7 @@
   </p>
 </div>
 
-Monitor **all your repos at a glance**. See branch, dirty state, ahead/behind, active worktrees, changed files, and commit history without leaving the terminal.
+Monitor **all your repos at a glance**. See branches, local changes, worktrees and commit history in the terminal or VS Code's Explorer.
 
 <p align="center">
   <img src="assets/demo.gif" alt="gitpane demo" width="800">

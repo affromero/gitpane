@@ -4,6 +4,15 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-30
+
+### Fixed
+- Align repository and worktree branch labels in Gitpane Explorer and keep them closer to their names. Crowded status badges wrap inside narrow panes. ([#110](https://github.com/affromero/gitpane/pull/110), closes [#109](https://github.com/affromero/gitpane/issues/109))
+- Preserve SHA-256 hash encoding after upgrading sha2. ([#108](https://github.com/affromero/gitpane/pull/108))
+
+### Changed
+- Update tokio, ureq, sha2, libc and arboard. ([#108](https://github.com/affromero/gitpane/pull/108))
+
 ## [0.18.0] - 2026-10-29
 
 ### Added
