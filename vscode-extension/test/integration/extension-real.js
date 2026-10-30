@@ -560,6 +560,9 @@ async function main() {
   const onlyVisible = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   pickChanges = choices => choices.find(choice => choice.action === 'hideRepository');
   await receive({ type: 'menu', kind: 'repo', id: onlyVisible.id });
+  for (let attempt = 0; attempt < 100 && snapshots.at(-1).loading; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
   assert.equal(snapshots.at(-1).repositories.length, 0);
   assert.match(snapshots.at(-1).emptyMessage, /repositories are hidden/i);
   pickChanges = choices => choices.find(choice => choice.label === 'repo');
