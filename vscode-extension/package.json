@@ -2,7 +2,7 @@
   "name": "gitpane-explorer",
   "displayName": "Gitpane Explorer",
   "description": "See changes across Gitpane repositories in the Explorer.",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "publisher": "gitpane",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/affromero/gitpane.git" },
