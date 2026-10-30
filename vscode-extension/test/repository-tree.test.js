@@ -599,7 +599,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
   if (version.error?.code === 'ENOENT') return t.skip('Git is not installed');
   assert.ifError(version.error);
   assert.equal(version.status, 0, version.stderr);
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-worktree-topology-'));
+  const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-worktree-topology-')));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const workspace = path.join(temporary, 'workspace');
   const root = path.join(workspace, 'main');
@@ -630,7 +630,11 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
   const one = makeRepo(first, 'worktree');
   const two = makeRepo(second, 'worktree');
   const repos = [main, one, two];
-  const common = fs.realpathSync(path.resolve(root, git(root, 'rev-parse', '--git-common-dir')));
+  const common = fs.realpathSync.native(path.resolve(root, git(root, 'rev-parse', '--git-common-dir')));
+  const canonical = value => {
+    const real = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+  };
   const statusRequests = [];
   let pauseDetails = false;
   let releaseDetails;
@@ -639,7 +643,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
       statusRequests.push([value, includeWorktrees]);
       if (includeWorktrees && pauseDetails) await new Promise(resolve => { releaseDetails = resolve; });
       const lines = git(value, 'worktree', 'list', '--porcelain').split('\n');
-      const paths = lines.filter(line => line.startsWith('worktree ')).map(line => line.slice(9));
+      const paths = lines.filter(line => line.startsWith('worktree ')).map(line => fs.realpathSync.native(line.slice(9)));
       return { common_dir: common, repo_identity: 'a'.repeat(64), branch: git(value, 'branch', '--show-current'), is_dirty: false,
         ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees ?
           paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item), repo_identity: 'a'.repeat(64) })) : [],
@@ -732,12 +736,12 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     assert.deepEqual(rows.find(row => row.name === 'one').worktrees, []);
     let explicitId = rows.find(row => row.name === 'one').id;
     const sessionTargets = tree.sessionTargets();
-    assert.deepEqual(sessionTargets.map(target => target.path).sort(), [root, first, second].map(value => fs.realpathSync(value)).sort());
-    assert.ok(sessionTargets.find(target => target.path === fs.realpathSync(second)).references.some(reference => reference.includes('worktree')));
+    assert.deepEqual(sessionTargets.map(target => target.path).sort(), [root, first, second].map(canonical).sort());
+    assert.ok(sessionTargets.find(target => target.path === canonical(second)).references.some(reference => reference.includes('worktree')));
     const fetchTargets = tree.fetchTargets();
-    assert.deepEqual(fetchTargets.map(target => target.path).sort(), [root, first, second].map(value => fs.realpathSync(value)).sort());
+    assert.deepEqual(fetchTargets.map(target => target.path).sort(), [root, first, second].map(canonical).sort());
     assert.equal(new Set(fetchTargets.map(target => target.commonIdentity)).size, 1, 'linked worktrees share one mutation lock');
-    const beforeHeadChange = fetchTargets.find(target => target.path === fs.realpathSync(root));
+    const beforeHeadChange = fetchTargets.find(target => target.path === canonical(root));
     tree.backendStatuses.get(root).head_oid = '1'.repeat(40);
     assert.equal(tree.fetchTargets().find(target => target.path === beforeHeadChange.path).guard, beforeHeadChange.guard,
       'a changed commit alone does not invalidate a fetch');

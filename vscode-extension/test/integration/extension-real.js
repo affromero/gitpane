@@ -170,7 +170,7 @@ async function main() {
   assert.equal(provider.theme.value?.name, 'default');
   assert.equal(provider.theme.value.values['repo-list-worktree-count'], 'rgb(255, 175, 0)');
   assert.ok(provider.theme.value.lanes.length > 0);
-  const nestedPath = fs.realpathSync(path.join(repoPath, 'nested-repo'));
+  const nestedPath = fs.realpathSync.native(path.join(repoPath, 'nested-repo'));
   const explicitlyAdded = { rootUri: uri(nestedPath), state: { HEAD: {}, onDidChange: event,
     workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
   api.openRepository = async target => {
@@ -208,7 +208,8 @@ async function main() {
   const errorsBeforeScopeRefresh = errors.length;
   await receive({ type: 'menu', kind: 'repo', id: scopeOwner.id });
   assert.equal(errors.length, errorsBeforeScopeRefresh, errors.at(-1));
-  assert.ok(provider.tree.backend.roots.includes(fs.realpathSync(scopeRoot)), 'targeted refresh restores the original workspace identity');
+  assert.ok(provider.tree.backend.roots.some(root => fs.realpathSync.native(root) === fs.realpathSync.native(scopeRoot)),
+    'targeted refresh restores the original workspace identity');
   vscode.workspace.workspaceFolders = originalFolders;
   workspaceChanged.fire({});
   await commands.get('gitpane.refresh')();
@@ -764,7 +765,7 @@ async function main() {
   git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'child');
   git('commit', '-qm', 'add submodule');
   repo.state.HEAD.commit = git('rev-parse', 'HEAD');
-  const childPath = fs.realpathSync(path.join(repoPath, 'child'));
+  const childPath = fs.realpathSync.native(path.join(repoPath, 'child'));
   for (let index = 0; index < 130; index++) {
     fs.writeFileSync(path.join(childPath, `child-${String(index).padStart(3, '0')}.txt`), `child change ${index}\n`);
   }
@@ -1037,7 +1038,7 @@ async function main() {
   gitAt(childPath, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', grandSource, 'nested');
   gitAt(childPath, 'commit', '-qm', 'add nested submodule');
   childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
-  const grandPath = fs.realpathSync(path.join(childPath, 'nested'));
+  const grandPath = fs.realpathSync.native(path.join(childPath, 'nested'));
   const grandRepo = { rootUri: uri(grandPath), state: { HEAD: { commit: gitAt(grandPath, 'rev-parse', 'HEAD') },
     onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {},
     async buffer(ref, relative) { return gitBuffer(grandPath, ref, relative); } };

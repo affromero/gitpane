@@ -13,7 +13,8 @@ async function waitFor(predicate) {
 }
 
 function fixture(t) {
-  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-added-')));
+  const resolved = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-added-')));
+  const workspace = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const root = path.join(workspace, 'project', 'repo');
   fs.mkdirSync(root, { recursive: true });

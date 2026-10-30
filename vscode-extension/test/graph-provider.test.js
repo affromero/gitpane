@@ -696,9 +696,10 @@ test('backend and ancestor validation errors do not cause rapid graph retries', 
     let failing = true;
     let revisions = 0, guardCalls = 0, guardFailure = false;
     const oid = 'a'.repeat(40);
+    let initializedRoots = [];
     const manager = new BackendManager({ extensionPath: root }, { vscode,
-      createClient: () => ({ async initialize() {}, async workspaceRootIdentities() {
-        return { roots: [{ path: fs.realpathSync(root), source: root, identity: 'a'.repeat(64) }] };
+      createClient: () => ({ async initialize(roots) { initializedRoots = roots; }, async workspaceRootIdentities() {
+        return { roots: initializedRoots.map(path => ({ path, source: root, identity: 'a'.repeat(64) })) };
       }, dispose() {},
         async graphRevision() { revisions++; if (failing) throw new Error('offline'); return { revision: 'a'.repeat(64) }; },
         async graph() { return { branches: [], rows: [{ oid, parent_oids: [] }] }; },

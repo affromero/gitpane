@@ -1,9 +1,7 @@
 'use strict';
 
-const os = require('node:os');
-
 function isolatedGitEnv(base = process.env) {
-  const env = { ...base, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+  const env = { ...base, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
   for (const key of Object.keys(env)) {
     if ([
       'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR',

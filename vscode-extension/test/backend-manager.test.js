@@ -105,12 +105,17 @@ class EventEmitter {
   dispose() { this.listeners.clear(); }
 }
 
+function workspacePath(value) {
+  const absolute = path.resolve(value);
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
 function fixture(options = {}) {
   const folders = new EventEmitter();
   const configuration = new EventEmitter();
   let backendPath = '';
   let sessionBackend = 'auto';
-  const root = path.resolve('workspace');
+  const root = workspacePath('workspace');
   const workspace = {
     workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
     getConfiguration: () => ({ get: name => name === 'sessionBackend' ? sessionBackend : backendPath }),
@@ -386,7 +391,7 @@ test('missing workspace folders do not block remaining roots and do not widen sc
   const { manager, root, setFolders } = fixture();
   t.after(() => manager.dispose());
   await manager.ready();
-  const removed = path.resolve('removed-workspace');
+  const removed = workspacePath('removed-workspace');
   let missing = false;
   let replaced = false;
   const realpath = manager.realpath;
@@ -430,7 +435,7 @@ test('workspace identity survives temporary disappearance and rejects replacemen
   manager.stat = fs.stat;
   setFolders([root, missing]);
   await manager.ready();
-  const canonical = await fs.realpath(root);
+  const canonical = workspacePath(await fs.realpath(root));
   assert.deepEqual((await manager.mutationSnapshot()).roots, [canonical]);
   await fs.mkdir(missing);
   await manager.syncWorkspaceRoots();
@@ -488,7 +493,7 @@ test('overlapping mutation snapshots wait for workspace scope reinitialization',
   const { manager, root, setFolders } = fixture();
   t.after(() => manager.dispose());
   await manager.ready();
-  const removed = path.resolve('removed-workspace');
+  const removed = workspacePath('removed-workspace');
   setFolders([root, removed]);
   await manager.ready();
   const realpath = manager.realpath;
@@ -514,7 +519,7 @@ test('workspace removal during initialization is retried with the remaining scop
   const { manager, root, workspace } = fixture();
   t.after(() => manager.dispose());
   await manager.ready();
-  const removed = path.resolve('removed-workspace');
+  const removed = workspacePath('removed-workspace');
   let missing = false;
   const realpath = manager.realpath;
   manager.realpath = async value => {
@@ -637,7 +642,7 @@ test('workspace changes reject stale reads and authorize the new roots', async t
     assert.rejects(queued, error => error.code === 'workspace_changed')
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  const nextRoot = path.resolve('other-workspace');
+  const nextRoot = workspacePath('other-workspace');
   setFolders([nextRoot]);
   await rejected;
   assert.deepEqual((await manager.status(path.join(nextRoot, 'repo'))).roots, [nextRoot]);
@@ -656,7 +661,7 @@ test('mutation snapshots track configured executable and current workspace scope
   setFolders([path.resolve('other-workspace')]);
   assert.equal(manager.isCurrentMutation(first, path.join(root, 'repo')), false);
   const second = await manager.mutationSnapshot();
-  assert.deepEqual(second.roots, [path.resolve('other-workspace')]);
+  assert.deepEqual(second.roots, [workspacePath('other-workspace')]);
   setBackendPath('relative');
   await assert.rejects(manager.mutationSnapshot(), error => error.code === 'invalid_backend_path');
   assert.equal(manager.isCurrentMutation(second, path.join(second.roots[0], 'repo')), false);

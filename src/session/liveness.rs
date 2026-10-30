@@ -49,14 +49,13 @@ mod worker_tests;
 
 /// Probe the selected host multiplexer without hiding process or parse errors.
 pub(crate) fn checked_pane_sessions(kind: &str) -> color_eyre::Result<Vec<(String, PathBuf)>> {
-    checked_pane_sessions_with(kind, kind)
+    checked_pane_sessions_with(kind, std::process::Command::new(kind))
 }
 
 fn checked_pane_sessions_with(
     kind: &str,
-    program: &str,
+    mut command: std::process::Command,
 ) -> color_eyre::Result<Vec<(String, PathBuf)>> {
-    let mut command = std::process::Command::new(program);
     match kind {
         "tmux" => {
             command.args([
@@ -488,34 +487,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn checked_probe_reads_real_host_output_and_reports_host_failure() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().join("nested");
         std::fs::create_dir(&cwd).unwrap();
-        let script = temp.path().join("fake-tmux");
-        let escaped = cwd.to_str().unwrap().replace('\'', "'\\''");
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\nprintf '%s\\t%s\\n' '{escaped}' session\n"),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let panes = checked_pane_sessions_with("tmux", script.to_str().unwrap()).unwrap();
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "printf '%s\\t%s\\n' \"$1\" session", "probe"])
+            .arg(&cwd);
+        let panes = checked_pane_sessions_with("tmux", command).unwrap();
         assert_eq!(panes, vec![("session".into(), cwd.canonicalize().unwrap())]);
-        std::fs::write(&script, "#!/bin/sh\nprintf 'host failed' >&2\nexit 1\n").unwrap();
-        let error = checked_pane_sessions_with("tmux", script.to_str().unwrap()).unwrap_err();
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "printf 'host failed' >&2; exit 1"]);
+        let error = checked_pane_sessions_with("tmux", command).unwrap_err();
         assert!(error.to_string().contains("host failed"));
     }
 
     #[cfg(unix)]
     #[test]
     fn checked_probe_reports_unresolvable_session_directories() {
-        use std::os::unix::fs::PermissionsExt;
-        let temp = tempfile::tempdir().unwrap();
-        let script = temp.path().join("fake-herdr");
-        std::fs::write(&script, "#!/bin/sh\nprintf '%s' '{\"result\":{\"panes\":[{\"tab_id\":\"tab\",\"cwd\":\"/gitpane-nonexistent-session-test\"}]}}'\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let error = checked_pane_sessions_with("herdr", script.to_str().unwrap()).unwrap_err();
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "printf '%s' '{\"result\":{\"panes\":[{\"tab_id\":\"tab\",\"cwd\":\"/gitpane-nonexistent-session-test\"}]}}'"]);
+        let error = checked_pane_sessions_with("herdr", command).unwrap_err();
         assert!(
             error
                 .to_string()

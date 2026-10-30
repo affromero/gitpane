@@ -16,7 +16,7 @@ async function waitFor(predicate) {
 }
 
 function fixture(t, initiallyOpen = false) {
-  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-pin-')));
+  const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-pin-')));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, 'root');
   const child = path.join(root, 'child');
@@ -537,16 +537,16 @@ test('removing a pin fails fast until its already-dispatched VS Code open finish
   const f = fixture(t);
   f.setSaved({ version: 1, pins: [{ root: f.root, chain: [f.first] }] });
   const originalOpen = f.git.openRepository.bind(f.git);
-  let release, started;
-  const opening = new Promise(resolve => { started = resolve; });
+  let release, started = false;
+  t.after(() => release?.());
   f.git.openRepository = async value => {
-    started();
+    started = true;
     await new Promise(resolve => { release = resolve; });
     return originalOpen(value);
   };
   const pins = f.manager({ restoreDelayMs: 0 });
   t.after(() => pins.dispose());
-  await opening;
+  await waitFor(() => started);
   await assert.rejects(pins.manage(), /still opening.*try removing/i);
   assert.equal(f.saved.pins.length, 1);
   release();
@@ -563,16 +563,16 @@ test('workspace changes during an already-dispatched open do not save or restore
   const f = fixture(t);
   f.setSaved({ version: 1, pins: [{ root: f.root, chain: [f.first] }] });
   const originalOpen = f.git.openRepository.bind(f.git);
-  let release, started;
-  const opening = new Promise(resolve => { started = resolve; });
+  let release, started = false;
+  t.after(() => release?.());
   f.git.openRepository = async value => {
-    started();
+    started = true;
     await new Promise(resolve => { release = resolve; });
     return originalOpen(value);
   };
   const pins = f.manager({ restoreDelayMs: 0 });
   t.after(() => pins.dispose());
-  await opening;
+  await waitFor(() => started);
   await assert.rejects(pins.manage(), /still opening/i);
   f.backend.generation++;
   f.setVisible(false);
@@ -588,15 +588,14 @@ test('a never-settling open does not block other pins, actions, or worker cleanu
   const f = fixture(t);
   f.setSaved({ version: 1, pins: [{ root: f.root, chain: [f.first] }, { root: f.root, chain: [f.first, f.second] }] });
   const originalOpen = f.git.openRepository.bind(f.git);
-  let started;
-  const opening = new Promise(resolve => { started = resolve; });
+  let started = false;
   f.git.openRepository = async value => {
-    if (value.fsPath === f.child) { started(); return new Promise(() => {}); }
+    if (value.fsPath === f.child) { started = true; return new Promise(() => {}); }
     return originalOpen(value);
   };
   const pins = f.manager({ restoreDelayMs: 0, revalidateIntervalMs: 10000, openTimeoutMs: 10000 });
   t.after(() => pins.dispose());
-  await opening;
+  await waitFor(() => started);
   f.setPick(choices => choices.find(choice => choice.label === 'child'));
   await assert.rejects(pins.manage(), /still opening.*try removing/i);
   await waitFor(() => pins.isPinned(f.nestedRepo) && !pins.restoreQueued);
