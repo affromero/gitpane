@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readPreferences } = require('../src/settings');
+const { ViewSettings, readPreferences } = require('../src/settings');
 
 const configuration = values => ({ get: (key, fallback) => Object.hasOwn(values, key) ? values[key] : fallback });
 
@@ -41,4 +41,30 @@ test('settings are discoverable in the manifest at their supported scopes', () =
   assert.ok(contributes.commands.some(item => item.command === 'gitpane.openSettings'));
   assert.ok(contributes.menus['view/title'].some(item => item.command === 'gitpane.openSettings' &&
     item.when === 'view == gitpane.repositories'));
+});
+
+test('open settings searches the running extension identity after a publisher migration', async () => {
+  let openSettings;
+  const requests = [];
+  const disposable = { dispose() {} };
+  const vscode = {
+    workspace: { onDidChangeConfiguration: () => disposable,
+      getConfiguration: () => configuration({}) },
+    commands: {
+      registerCommand(name, handler) {
+        assert.equal(name, 'gitpane.openSettings');
+        openSettings = handler;
+        return disposable;
+      },
+      executeCommand: async (...args) => requests.push(args)
+    }
+  };
+  const context = { extension: { id: 'affromero.gitpane-vscode' } };
+  const tree = { configureView() {}, setSortOrder() {} };
+  const view = { configureView() {} };
+  const settings = new ViewSettings(vscode, context, tree, view, view);
+  try {
+    await openSettings();
+    assert.deepEqual(requests, [['workbench.action.openSettings', '@ext:affromero.gitpane-vscode']]);
+  } finally { settings.dispose(); }
 });

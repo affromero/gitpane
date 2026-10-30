@@ -1,9 +1,9 @@
 {
-  "name": "gitpane-explorer",
-  "displayName": "Gitpane Explorer",
+  "name": "gitpane-vscode",
+  "displayName": "Gitpane for VS Code",
   "description": "See changes across Gitpane repositories in the Explorer.",
   "version": "0.18.2",
-  "publisher": "gitpane",
+  "publisher": "affromero",
   "icon": "media/gitpane.png",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/affromero/gitpane.git" },

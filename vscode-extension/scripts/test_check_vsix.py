@@ -41,15 +41,15 @@ class PackageTests(unittest.TestCase):
         (self.source / "media").mkdir()
         (self.source / "media/gitpane.png").write_bytes(png_image(256, 256))
         manifest = {
-            "name": "gitpane-explorer",
-            "publisher": "gitpane",
+            "name": "gitpane-vscode",
+            "publisher": "affromero",
             "version": "0.0.1",
             "icon": "media/gitpane.png",
         }
         (self.source / "package.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )
-        (self.source / "README.md").write_bytes(b"Gitpane Explorer\n")
+        (self.source / "README.md").write_bytes(b"Gitpane for VS Code\n")
         (self.source / "src/view.js").write_bytes(b"visible sources\n")
         (self.root / "LICENSE").write_bytes(b"license\n")
         self.backend = self.root / "gitpane"
@@ -67,8 +67,8 @@ class PackageTests(unittest.TestCase):
             "extension.vsixmanifest": (
                 "<PackageManifest "
                 'xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">'
-                '<Metadata><Identity Id="gitpane-explorer" '
-                'Publisher="gitpane" Version="0.0.1" '
+                '<Metadata><Identity Id="gitpane-vscode" '
+                'Publisher="affromero" Version="0.0.1" '
                 f'TargetPlatform="{target}"/></Metadata>'
                 '<Assets><Asset '
                 'Type="Microsoft.VisualStudio.Services.Icons.Default" '

@@ -36,7 +36,7 @@ class ViewSettings {
       if (KEYS.some(key => event.affectsConfiguration(`gitpane.${key}`))) this.apply();
     });
     this.command = vscode.commands.registerCommand('gitpane.openSettings', () =>
-      vscode.commands.executeCommand('workbench.action.openSettings', '@ext:gitpane.gitpane-explorer'));
+      vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`));
     this.apply();
   }
 

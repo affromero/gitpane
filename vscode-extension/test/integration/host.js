@@ -66,7 +66,8 @@ function codeExecutable() {
 }
 
 async function activatedProvider(vscode, extensionPath) {
-  const extension = vscode.extensions.getExtension('gitpane.gitpane-explorer');
+  const { publisher, name } = require(path.join(extensionPath, 'package.json'));
+  const extension = vscode.extensions.getExtension(`${publisher}.${name}`);
   if (!extension) throw new Error('Gitpane extension must be registered');
   const { GitpaneViewProvider } = require(path.join(fs.realpathSync(extensionPath), 'src/extension.js'));
   const prototype = GitpaneViewProvider.prototype;

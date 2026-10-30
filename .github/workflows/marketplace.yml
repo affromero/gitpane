@@ -1,0 +1,74 @@
+name: Marketplace
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Marketplace migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require merged main and the new publisher identity
+        env:
+          EXPECTED_REF: refs/heads/main
+        run: |
+          test "$GITHUB_REF" = "$EXPECTED_REF"
+          python3 scripts/release_metadata.py --tag v0.18.2
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          extension = json.loads(Path('vscode-extension/package.json').read_text())
+          assert extension['publisher'] == 'affromero'
+          assert extension['name'] == 'gitpane-vscode'
+          assert extension['displayName'] == 'Gitpane for VS Code'
+          PY
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  docs:
+    needs: validate
+    uses: ./.github/workflows/docs.yml
+
+  security:
+    needs: validate
+    uses: ./.github/workflows/security.yml
+
+  coverage:
+    needs: validate
+    uses: ./.github/workflows/coverage.yml
+
+  gitleaks:
+    needs: validate
+    uses: ./.github/workflows/gitleaks.yml
+
+  publish:
+    name: Publish to VS Code Marketplace
+    needs: [ci, docs, security, coverage, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: gitpane-vscode-*
+          path: vscode-artifacts
+          merge-multiple: true
+      - name: Verify all packages and publish with trusted identity
+        run: python vscode-extension/scripts/publish_marketplace.py --artifacts vscode-artifacts
