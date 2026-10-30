@@ -2,7 +2,7 @@
   "name": "gitpane-explorer",
   "displayName": "Gitpane Explorer",
   "description": "See changes across Gitpane repositories in the Explorer.",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "publisher": "gitpane",
   "icon": "media/gitpane.png",
   "license": "MIT",
