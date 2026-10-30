@@ -61,9 +61,8 @@ def verify_payload(
             raise ValueError(
                 "Packaged extension manifest does not match source"
             )
-        identity = ET.fromstring(package.read("extension.vsixmanifest")).find(
-            ".//{*}Identity"
-        )
+        metadata = ET.fromstring(package.read("extension.vsixmanifest"))
+        identity = metadata.find(".//{*}Identity")
         if identity is None or identity.get("TargetPlatform") != target:
             raise ValueError(
                 "VSIX target platform does not match the requested target"
@@ -88,6 +87,33 @@ def verify_payload(
                 raise ValueError(
                     f"Packaged file does not match source: {name}"
                 )
+        icon = manifest.get("icon")
+        icon_name = f"extension/{icon}"
+        if not isinstance(icon, str) or icon_name not in files:
+            raise ValueError(
+                "Declared extension icon must be included in the package"
+            )
+        image = package.read(icon_name)
+        if (len(image) < 33 or image[:8] != b"\x89PNG\r\n\x1a\n"
+                or image[8:16] != b"\x00\x00\x00\rIHDR"):
+            raise ValueError("Extension icon must have a PNG IHDR header")
+        width = int.from_bytes(image[16:20], "big")
+        height = int.from_bytes(image[20:24], "big")
+        if not (128 <= width <= 1024 and 128 <= height <= 1024):
+            raise ValueError(
+                f"Extension icon dimensions {width}x{height} must be between "
+                "128x128 and 1024x1024 pixels"
+            )
+        if not any(
+            asset.get("Type") == (
+                "Microsoft.VisualStudio.Services.Icons.Default"
+            )
+            and asset.get("Path") == icon_name
+            for asset in metadata.findall(".//{*}Asset")
+        ):
+            raise ValueError(
+                "VSIX icon asset must match the declared extension icon"
+            )
         if (
             not target.startswith("win32-")
             and not (package.getinfo(backend_name).external_attr >> 16) & 0o111
