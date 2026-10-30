@@ -124,9 +124,9 @@ open pointer comparisons. Historical nested gitlink additions, deletions and
 pointer changes also open comparisons without requiring the nested checkout.
 Historical nested type changes involving files or symlinks open as read-only
 comparisons. Type changes involving directories cannot be compared
-yet. On Windows, a regular file replacing a submodule or blocking one of its
-ancestors makes that repository's status unavailable until the path is restored
-or removed. The parent repository's file actions cannot stage, unstage, discard or
+yet. On Windows, a regular file replacing a submodule makes that repository's
+status unavailable until the path is restored or removed. The parent repository's
+file actions cannot stage, unstage, discard or
 delete a submodule entry. Gitpane's push and pull actions do not recurse into
 submodules. On Unix, the repository menu can sync direct submodules, update
 submodules recursively, or pull the latest changes in direct submodules. It

@@ -30,6 +30,17 @@ function sameLocation(first, second) {
   } catch { return false; }
 }
 
+async function renameCheckout(source, target) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try { await fs.promises.rename(source, target); return; }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EBUSY', 'EPERM'].includes(error.code) || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
+
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = handler => { this.listeners.add(handler); return { dispose: () => this.listeners.delete(handler) }; }; }
   fire(value) { for (const handler of this.listeners) handler(value); }
@@ -1040,7 +1051,7 @@ async function main() {
   await commands.get('gitpane.refresh')();
   const reviewRoot = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const parkedChild = `${childPath}-parked`;
-  fs.renameSync(childPath, parkedChild);
+  await renameCheckout(childPath, parkedChild);
   try {
     pickChanges = choices => choices.find(choice => choice.action === 'reviewBranch') ||
       choices.find(choice => choice.file?.path === 'child');
@@ -1051,7 +1062,7 @@ async function main() {
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), `Subproject commit ${pointerB}\n`);
     assert.equal(terminals.length, beforeReviewTerminals);
   } finally {
-    fs.renameSync(parkedChild, childPath);
+    await renameCheckout(parkedChild, childPath);
     git('update-ref', 'refs/remotes/origin/main', previousReviewBase);
   }
   console.log('PASS branch review opens a native gitlink diff without an initialized child or terminal');
@@ -1081,7 +1092,7 @@ async function main() {
     if (sameLocation(target.fsPath, grandPath)) historicalNestedOpens++;
     return openBeforeHistorical(target);
   };
-  fs.renameSync(grandPath, historicalParked);
+  await renameCheckout(grandPath, historicalParked);
   try {
     const openHistorical = async (oldOid, newOid, text = {}) => {
       await commands.get('gitpane.refresh')();
@@ -1190,7 +1201,7 @@ async function main() {
     git('reset', '-q', 'HEAD', '--', 'child');
   } finally {
     api.openRepository = openBeforeHistorical;
-    fs.renameSync(historicalParked, grandPath);
+    await renameCheckout(historicalParked, grandPath);
   }
   console.log('PASS historical nested pointers and file/symlink type changes open without a nested checkout and reject changed ancestors');
   await commands.get('gitpane.refresh')();
@@ -1360,16 +1371,6 @@ async function main() {
   childRepo.state.HEAD.commit = gitAt(childPath, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(childPath, 'blocked'), 'replacement ancestor\n');
   await commands.get('gitpane.refresh')();
-  if (process.platform === 'win32') {
-    const blockedChild = snapshots.at(-1).repositories.find(item => item.name === 'child');
-    assert.equal(blockedChild?.statusUnavailable, true, 'Windows reports a blocked nested gitlink as unavailable');
-    await receive({ type: 'loadChanges', id: blockedChild.id });
-    const unavailable = snapshots.at(-1).repositories.find(item => item.name === 'child');
-    assert.equal(unavailable.changesPage.state, 'error');
-    assert.match(unavailable.changesPage.error, /blocked.*files.*unavailable/i);
-    console.log('PASS Windows reports unavailable status for a nested gitlink with a blocking ancestor');
-    return;
-  }
   const blockedOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   await receive({ type: 'loadChanges', id: blockedOwner.id });
   const blockedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
