@@ -651,8 +651,11 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     }
   };
   const api = { get repositories() { return repos.map(repo => ({ ...repo })); }, onDidOpenRepository: event, onDidCloseRepository: event };
+  const copied = [], shortcutErrors = [];
   let onWorkspaceChange;
   const vscode = { EventEmitter: class { constructor() { this.event = event; } fire() {} dispose() {} },
+    env: { clipboard: { async writeText(value) { copied.push(value); } } },
+    window: { async showErrorMessage(message) { shortcutErrors.push(message); } },
     workspace: { workspaceFolders: [{ uri: uri(workspace) }],
       onDidChangeWorkspaceFolders(handler) { onWorkspaceChange = handler; return { dispose() {} }; } } };
   const load = Module._load;
@@ -684,6 +687,12 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     let rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['main']);
     assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    const { SidebarActions } = require('../src/sidebar-actions');
+    provider.actions = new SidebarActions({ vscode, resolveRepository: id => provider.resolveRepository(id) });
+    await provider.handleShortcut({ key: 'y', id: rows[0].id });
+    await provider.handleShortcut({ key: 'y', id: rows[0].worktrees.find(row => row.name === 'one').id });
+    assert.deepEqual(copied, [root, first], 'repository wrappers preserve keyboard selection identity');
+    assert.deepEqual(shortcutErrors, []);
     statusRequests.length = 0;
     await tree.refresh();
     assert.deepEqual(statusRequests.filter(([, include]) => include).map(([value]) => value), [root]);

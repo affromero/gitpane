@@ -505,8 +505,10 @@ class GitpaneViewProvider {
       const id = worktree?.childRepoId || message.id;
       if (!repo) return;
       const token = this.tree.repositoryToken(repo);
-      const guard = () => this.tree.isCurrentRepository(repo, token) &&
-        (worktree ? this.currentWorktreeRepository(message.id) === repo : this.currentRepository(message.id) === repo);
+      const guard = () => {
+        const current = worktree ? this.currentWorktreeRepository(message.id) : this.currentRepository(message.id);
+        return !!current && current.rootUri.toString() === repo.rootUri.toString() && this.tree.isCurrentRepository(current, token);
+      };
       if (message.key === 'g') {
         if (worktree) await this.openWorktreeGraph?.(message.id, guard);
         else await vscode.commands.executeCommand('gitpane.openGraph', id);
