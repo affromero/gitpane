@@ -31,7 +31,7 @@ class ViewSettings {
     this.context = context;
     this.tree = tree;
     this.provider = provider;
-    this.graph = graph;
+    this.graphs = Array.isArray(graph) ? graph : [graph];
     this.subscription = vscode.workspace.onDidChangeConfiguration(event => {
       if (KEYS.some(key => event.affectsConfiguration(`gitpane.${key}`))) this.apply();
     });
@@ -46,7 +46,7 @@ class ViewSettings {
       const preferences = readPreferences(configuration, this.context.workspaceState?.get('gitpane.sortOrder'));
       this.tree.configureView(preferences);
       this.provider.configureView(preferences);
-      this.graph.configureView(preferences);
+      for (const graph of this.graphs) graph.configureView(preferences);
       this.tree.setSortOrder(preferences.sortOrder);
     } catch (error) { this.vscode.window.showErrorMessage(`Gitpane settings: ${error.message}`); }
   }

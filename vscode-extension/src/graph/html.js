@@ -2,7 +2,7 @@
 
 const vscode = require('vscode');
 
-function getHtml(webview, extensionUri) {
+function getHtml(webview, extensionUri, sidebar = false) {
   const resource = name => webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'src', 'graph', name)
   );
@@ -16,7 +16,7 @@ function getHtml(webview, extensionUri) {
   <link rel="stylesheet" href="${resource('styles.css')}">
   <title>Gitpane Graph</title>
 </head>
-<body>
+<body${sidebar ? ' class="sidebar"' : ''}>
   <header class="toolbar">
     <label class="search-label" for="search">Search commits</label>
     <input id="search" type="search" placeholder="Search commits" autocomplete="off" spellcheck="false">

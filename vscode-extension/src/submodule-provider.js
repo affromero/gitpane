@@ -23,11 +23,12 @@ class SubmoduleProvider {
     this.generation = 0;
     this.disposed = false;
     this.graphWatch = undefined;
+    this.openingGuard = undefined;
     this.graphSubscription = tree.onDidChangeTreeData?.(() => this.scheduleGraphCheck());
   }
 
   current(node, generation, token) {
-    if (this.disposed || generation !== this.generation || !this.tree.isCurrentRepository(node?.repo, token)) return undefined;
+    if (this.disposed || generation !== this.generation || this.openingGuard?.() === false || !this.tree.isCurrentRepository(node?.repo, token)) return undefined;
     const now = this.resolveChange(node);
     if (!now || !this.tree.isVisible(now.repo) || now.group !== node.group ||
       now.change.status !== node.change.status || now.change.uri.toString() !== node.change.uri.toString()) return undefined;
@@ -35,7 +36,7 @@ class SubmoduleProvider {
   }
 
   childCurrent(node, generation, childPath, parentToken, childRepo, childToken, persistent = false) {
-    if (this.disposed || (!persistent && generation !== this.generation) ||
+    if (this.disposed || (!persistent && (generation !== this.generation || this.openingGuard?.() === false)) ||
         !this.tree.isCurrentRepository(node?.repo, parentToken) || !this.tree.isPathInWorkspace(childPath)) return false;
     if (node.parentWorktree) {
       const parent = this.git.repositories.find(repo => repo.rootUri.toString() === node.parentWorktree.repoKey);
@@ -122,14 +123,16 @@ class SubmoduleProvider {
     catch (error) { if (this.graphWatch === watch) this.clearGraphWatch(); throw error; }
   }
 
-  async open(selected, pinDirect = false) {
+  async open(selected, pinDirect = false, guard = () => true) {
+    if (!guard()) return;
     this.clearGraphWatch();
     const generation = ++this.generation;
+    this.openingGuard = guard;
     try {
       await this.openLevel(selected, generation, [], pinDirect);
     } catch (error) {
-      await this.vscode.window.showErrorMessage(`Gitpane submodule: ${error.message}`);
-    }
+      if (guard()) await this.vscode.window.showErrorMessage(`Gitpane submodule: ${error.message}`);
+    } finally { if (this.generation === generation) this.openingGuard = undefined; }
   }
 
   async openLevel(selected, generation, ancestors, pinDirect = false) {

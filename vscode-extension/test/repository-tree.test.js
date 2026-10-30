@@ -932,7 +932,7 @@ test('worktree graph opens for the linked repository and rejects a removed link'
       onDidChangeConfiguration: event, getConfiguration: () => ({ get: (name, fallback) => fallback }),
       registerTextDocumentContentProvider: event, registerFileSystemProvider: event },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
-      registerWebviewViewProvider: (_name, value) => { provider = value; return event(); },
+      registerWebviewViewProvider: (name, value) => { if (name === 'gitpane.repositories') provider = value; return event(); },
       createWebviewPanel: () => panel, showErrorMessage: message => { throw new Error(message); } },
     commands: { registerCommand: event, executeCommand: async () => {} }
   };

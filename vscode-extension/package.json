@@ -17,10 +17,14 @@
     "untrustedWorkspaces": { "supported": false },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onView:gitpane.repositories"],
+  "activationEvents": ["onView:gitpane.repositories", "onView:gitpane.changes", "onView:gitpane.commitGraph"],
   "contributes": {
     "views": {
-      "explorer": [{ "id": "gitpane.repositories", "name": "Gitpane", "type": "webview" }]
+      "explorer": [
+        { "id": "gitpane.repositories", "name": "Repositories", "type": "webview" },
+        { "id": "gitpane.changes", "name": "Changes", "type": "webview" },
+        { "id": "gitpane.commitGraph", "name": "Git Graph", "type": "webview" }
+      ]
     },
     "commands": [
       { "command": "gitpane.refresh", "title": "Gitpane: Refresh", "icon": "$(refresh)" },

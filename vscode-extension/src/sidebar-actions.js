@@ -175,7 +175,7 @@ class SidebarActions {
         return;
       }
       if (action === 'open') {
-        await this.vscode.commands.executeCommand('gitpane.openChange', item.node);
+        await this.vscode.commands.executeCommand('gitpane.openChange', item.node, current);
         return;
       }
       if (action === 'pinSubmodule') {
