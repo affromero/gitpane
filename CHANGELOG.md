@@ -4,6 +4,16 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-10-30
+
+### Added
+- Configure repository sorting, default worktree visibility, refresh timing, session indicators and graph defaults in VS Code Settings. Open these controls with **Gitpane: Open Settings** or the view's settings button. ([#115](https://github.com/affromero/gitpane/pull/115), closes [#114](https://github.com/affromero/gitpane/issues/114))
+- Add the Gitpane logo to both READMEs and the VS Code extension icon. ([#115](https://github.com/affromero/gitpane/pull/115))
+
+### Fixed
+- Deleting and recreating a workspace folder with no detected Git repositories no longer leaves an unrelated workspace-change warning. Repository identity checks still reject replaced roots. ([#115](https://github.com/affromero/gitpane/pull/115), closes [#113](https://github.com/affromero/gitpane/issues/113))
+- Changing the refresh interval preserves an immediate graph update already queued after a HEAD change. ([#115](https://github.com/affromero/gitpane/pull/115))
+
 ## [0.18.1] - 2026-10-30
 
 ### Fixed
