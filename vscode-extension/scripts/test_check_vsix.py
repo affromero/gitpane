@@ -1,16 +1,29 @@
 """Behavioral checks for the distributed VSIX payload."""
 
 import json
+import struct
 import subprocess
 import tempfile
 import unittest
 import zipfile
+import zlib
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 
 from check_vsix import TARGETS, verify_payload
 from publish_marketplace import publish_packages
+
+
+def png_image(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data)))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    pixels = (b"\x00" + b"\xff\x00\x00" * width) * height
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
 
 
 class PackageTests(unittest.TestCase):
@@ -26,7 +39,7 @@ class PackageTests(unittest.TestCase):
         self.source = self.root / "vscode-extension"
         (self.source / "src").mkdir(parents=True)
         (self.source / "media").mkdir()
-        (self.source / "media/gitpane.png").write_bytes(b"\x89PNG\x00\r\n\xff")
+        (self.source / "media/gitpane.png").write_bytes(png_image(256, 256))
         manifest = {
             "name": "gitpane-explorer",
             "publisher": "gitpane",
@@ -56,7 +69,11 @@ class PackageTests(unittest.TestCase):
                 'xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">'
                 '<Metadata><Identity Id="gitpane-explorer" '
                 'Publisher="gitpane" Version="0.0.1" '
-                f'TargetPlatform="{target}"/></Metadata></PackageManifest>'
+                f'TargetPlatform="{target}"/></Metadata>'
+                '<Assets><Asset '
+                'Type="Microsoft.VisualStudio.Services.Icons.Default" '
+                'Path="extension/media/gitpane.png"/>'
+                '</Assets></PackageManifest>'
             ).encode(),
             "extension/package.json": (
                 self.source / "package.json"
@@ -143,6 +160,66 @@ class PackageTests(unittest.TestCase):
             self.archive = directory / f"gitpane-explorer-{target}.vsix"
             self.package(target=target)
         return directory
+
+    def test_icon_dimension_boundaries_are_verified_in_the_payload(
+        self,
+    ) -> None:
+        icon = self.source / "media/gitpane.png"
+        for width, height in [(128, 128), (256, 256), (1024, 1024)]:
+            with self.subTest(width=width, height=height):
+                icon.write_bytes(png_image(width, height))
+                self.package()
+                self.assertEqual(
+                    verify_payload(
+                        self.archive, self.source, None, "darwin-arm64"
+                    ),
+                    b"built backend",
+                )
+        for width, height in [(127, 256), (256, 127), (1025, 256),
+                              (256, 1025), (1254, 1254)]:
+            with self.subTest(width=width, height=height):
+                icon.write_bytes(png_image(width, height))
+                self.package()
+                with self.assertRaisesRegex(ValueError, "icon dimensions"):
+                    verify_payload(
+                        self.archive, self.source, None, "darwin-arm64"
+                    )
+
+    def test_oversized_icons_stop_before_the_publisher_runs(self) -> None:
+        (self.source / "media/gitpane.png").write_bytes(png_image(1254, 1254))
+        directory = self.release_packages()
+        with patch("subprocess.run") as publish:
+            with self.assertRaisesRegex(ValueError, "icon dimensions"):
+                publish_packages(directory, self.source, verify_only=False)
+            publish.assert_not_called()
+
+    def test_invalid_png_headers_and_missing_icon_declarations_are_rejected(
+        self,
+    ) -> None:
+        icon = self.source / "media/gitpane.png"
+        for image in [b"not a PNG", png_image(256, 256)[:24]]:
+            with self.subTest(image=image):
+                icon.write_bytes(image)
+                self.package()
+                with self.assertRaisesRegex(ValueError, "PNG IHDR"):
+                    verify_payload(
+                        self.archive, self.source, None, "darwin-arm64"
+                    )
+        icon.write_bytes(png_image(256, 256))
+        self.package()
+        with zipfile.ZipFile(self.archive) as package:
+            metadata = package.read("extension.vsixmanifest")
+        self.package({"extension.vsixmanifest": metadata.replace(
+            b'Path="extension/media/gitpane.png"',
+            b'Path="extension/media/missing.png"')})
+        with self.assertRaisesRegex(ValueError, "icon asset"):
+            verify_payload(self.archive, self.source, None, "darwin-arm64")
+        manifest = json.loads((self.source / "package.json").read_text())
+        manifest["icon"] = "media/missing.png"
+        (self.source / "package.json").write_text(json.dumps(manifest))
+        self.package()
+        with self.assertRaisesRegex(ValueError, "icon must be included"):
+            verify_payload(self.archive, self.source, None, "darwin-arm64")
 
     def test_complete_release_publishes_all_verified_targets_with_oidc(self) -> None:
         directory = self.release_packages()
