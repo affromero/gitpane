@@ -1,21 +1,33 @@
-# Gitpane Explorer
+# Gitpane for VS Code
 
 <img src="https://raw.githubusercontent.com/affromero/gitpane/main/vscode-extension/media/gitpane.png" alt="Gitpane logo" width="128" height="128">
 
-Gitpane Explorer adds a repository overview to VS Code's Explorer. See branches
+Gitpane for VS Code adds a repository overview to VS Code's Explorer. See branches
 and changed files across the repositories in your current workspace. Expand a
 repository to see staged, unstaged, untracked and conflicted files. Select a
 change to open it in the editor.
 
-![Gitpane Explorer showing repositories, worktrees and changed files](https://raw.githubusercontent.com/affromero/gitpane/main/assets/screenshot-vscode.png)
+![Gitpane for VS Code showing repositories, worktrees and changed files](https://raw.githubusercontent.com/affromero/gitpane/main/assets/screenshot-vscode.png)
 
 Rendered preview with example repositories and a simulated Explorer header.
 
-Install **Gitpane Explorer** from the VS Code Marketplace, or run:
+Install [Gitpane for VS Code](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode)
+from the VS Code Marketplace, or run:
 
 ```sh
-code --install-extension gitpane.gitpane-explorer
+code --install-extension affromero.gitpane-vscode
 ```
+
+## Moving from Gitpane Explorer
+
+Uninstall **Gitpane Explorer** (`gitpane.gitpane-explorer`) before installing
+`affromero.gitpane-vscode`. Both extensions contribute the same Gitpane view and
+commands, so keep only one enabled. Auto-update does not switch publishers.
+
+Your `gitpane.*` settings and Gitpane TOML still apply. The new extension has
+separate workspace storage. Re-add manually added repositories using
+**Gitpane: Add Workspace Repository…** and restore hidden repositories,
+submodule pins and remembered view choices from the Gitpane menus.
 
 Gitpane reads changes from Git, including untracked files that VS Code's Git
 settings hide. Large change lists are shown one page at a time. When the list
@@ -227,13 +239,12 @@ verified locally.
 
 ## Package and install
 
-The VSIX bundles the Gitpane backend. Download a package from a
-[GitHub release](https://github.com/affromero/gitpane/releases) that includes
-Gitpane Explorer, then install it in VS Code:
-
-```sh
-code --install-extension "$HOME/Downloads/gitpane-explorer-darwin-arm64.vsix"
-```
+The VSIX bundles the Gitpane backend. The Marketplace provides packages for
+macOS, Linux and Windows. Published
+[GitHub release](https://github.com/affromero/gitpane/releases) packages through
+v0.18.2 install the old `gitpane.gitpane-explorer` identity. Those assets remain
+unchanged. Use the Marketplace or build from this checkout for
+`affromero.gitpane-vscode`.
 
 Choose `darwin-arm64` for Apple Silicon macOS, `darwin-x64` for Intel macOS,
 `linux-arm64` or `linux-x64` for Linux, and `win32-x64` for Windows. For SSH,
@@ -241,13 +252,18 @@ WSL or a development container, choose the package for that workspace host.
 Linux packages require glibc. CI builds all five packages and checks their
 contents and extracted backends before release assets can be uploaded.
 
-Tagged releases publish these same packages to the VS Code Marketplace using
+Future tagged releases publish their packages to the VS Code Marketplace using
 GitHub Trusted Publishing. The extension version must match the Gitpane release
 version in both Cargo files. All checks and package verification must pass before
 publication starts. Platform packages publish in sequence. If publication fails,
 inspect the publisher before retrying because earlier targets may already be
 public. The release workflow does not skip existing versions. GitHub Release
 creation and crates.io publication wait for Marketplace publication to succeed.
+
+The initial publisher migration uses the manual **Marketplace** workflow on
+`main`. It runs the release quality checks and publishes all five platform
+packages under the new identity at version 0.18.2. It does not create a GitHub
+release, change tags or publish to crates.io.
 
 To build from this checkout instead, run the packaging script on the matching
 OS and architecture. For Apple Silicon macOS:
@@ -272,7 +288,7 @@ executable; it does not switch to another backend.
 ## Settings
 
 Run **Gitpane: Open Settings** or use the cog in the Gitpane view. You can
-also search Settings for `@ext:gitpane.gitpane-explorer`.
+also search Settings for `@ext:affromero.gitpane-vscode`.
 
 | Setting | Default | Behavior |
 |---------|---------|----------|

@@ -11,6 +11,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-host-capture-'));
   const source = path.join(root, 'src');
   fs.mkdirSync(source);
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ publisher: 'fixture-owner', name: 'gitpane' }));
   const modulePath = path.join(source, 'extension.js');
   fs.writeFileSync(modulePath, 'module.exports = { GitpaneViewProvider: class { refresh(value) { this.value = value; } } };\n');
   t.after(() => { delete require.cache[require.resolve(modulePath)]; fs.rmSync(root, { recursive: true, force: true }); });
@@ -22,7 +23,10 @@ test('host harness captures the command-owned provider and restores its refresh 
   const { root, GitpaneViewProvider, original } = fixture(t);
   const provider = new GitpaneViewProvider();
   const vscode = {
-    extensions: { getExtension: () => ({ activate: async () => {} }) },
+    extensions: { getExtension: id => {
+      assert.equal(id, 'fixture-owner.gitpane');
+      return { activate: async () => {} };
+    } },
     commands: { executeCommand: async name => {
       assert.equal(name, 'gitpane.refresh');
       await provider.refresh(true);

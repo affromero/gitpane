@@ -68,11 +68,11 @@ gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 
 ## VS Code extension
 
-Gitpane Explorer adds a multi-repository view to VS Code's Explorer. It shows
+Gitpane for VS Code adds a multi-repository view to VS Code's Explorer. It shows
 branches, worktrees and changed files together. Select a file to open its diff
 in the editor, or open a repository's graph and actions from its row.
 
-<img src="assets/screenshot-vscode.png" alt="Gitpane Explorer preview showing repositories, worktrees and changed files" width="800">
+<img src="assets/screenshot-vscode.png" alt="Gitpane for VS Code preview showing repositories, worktrees and changed files" width="800">
 
 Rendered preview with example repositories and a simulated Explorer header.
 
@@ -83,23 +83,23 @@ inside the workspace have their own rows and actions. Gitpane does not fetch
 remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
 macOS or Linux. VS Code's own Git auto-fetch setting works independently.
 
-Install [Gitpane Explorer from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=gitpane.gitpane-explorer),
+Install [Gitpane for VS Code from the Marketplace](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode),
 or run:
 
 ```sh
-code --install-extension gitpane.gitpane-explorer
+code --install-extension affromero.gitpane-vscode
 ```
 
-Release builds also include VSIX packages for macOS, Linux and Windows. From a
-[GitHub release](https://github.com/affromero/gitpane/releases) that includes
-Gitpane Explorer, download the package matching the machine hosting your
-workspace. For Apple Silicon macOS:
+If you have **Gitpane Explorer** (`gitpane.gitpane-explorer`), uninstall it before
+installing the new extension. Publisher changes require a one-time installation;
+auto-update does not switch extension IDs. Your `gitpane.*` settings and Gitpane
+TOML still apply. Hidden repositories, submodule pins, manually added repositories
+and remembered view choices must be restored in the new extension.
 
-```sh
-code --install-extension "$HOME/Downloads/gitpane-explorer-darwin-arm64.vsix"
-```
+Published GitHub VSIX packages through v0.18.2 still install the old extension.
+Use the Marketplace for the new publisher, or build a package from this checkout.
 
-To build a package from this checkout instead, use Node.js 22 or newer, npm
+To build a package from this checkout, use Node.js 22 or newer, npm
 and Rust:
 
 ```sh
