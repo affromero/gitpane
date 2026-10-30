@@ -30,17 +30,6 @@ function sameLocation(first, second) {
   } catch { return false; }
 }
 
-async function renameCheckout(source, target) {
-  const deadline = Date.now() + 5000;
-  for (;;) {
-    try { await fs.promises.rename(source, target); return; }
-    catch (error) {
-      if (process.platform !== 'win32' || !['EBUSY', 'EPERM'].includes(error.code) || Date.now() >= deadline) throw error;
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-  }
-}
-
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = handler => { this.listeners.add(handler); return { dispose: () => this.listeners.delete(handler) }; }; }
   fire(value) { for (const handler of this.listeners) handler(value); }
@@ -1046,12 +1035,26 @@ async function main() {
   assert.equal(api.repositories.length, beforeGraphRepos, 'opening a pointer diff does not open a child repository');
   console.log('PASS committed submodule pointer opens a native diff without a child checkout or terminal');
 
-  const previousReviewBase = git('rev-parse', 'refs/remotes/origin/main');
-  git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD^'));
+  const reviewPath = path.join(path.dirname(repoPath), 'review-no-checkout');
+  fs.mkdirSync(reviewPath);
+  gitAt(reviewPath, 'init', '-q');
+  gitAt(reviewPath, 'config', '-f', '.gitmodules', 'submodule.child.path', 'child');
+  gitAt(reviewPath, 'config', '-f', '.gitmodules', 'submodule.child.url', source);
+  gitAt(reviewPath, 'add', '.gitmodules');
+  gitAt(reviewPath, 'update-index', '--add', '--cacheinfo', '160000', pointerA, 'child');
+  gitAt(reviewPath, 'commit', '-qm', 'base submodule pointer');
+  gitAt(reviewPath, 'update-ref', 'refs/remotes/origin/main', gitAt(reviewPath, 'rev-parse', 'HEAD'));
+  gitAt(reviewPath, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  gitAt(reviewPath, 'update-index', '--cacheinfo', '160000', pointerB, 'child');
+  gitAt(reviewPath, 'commit', '-qm', 'review submodule pointer');
+  const reviewRepo = { rootUri: uri(reviewPath), state: { HEAD: { commit: gitAt(reviewPath, 'rev-parse', 'HEAD') },
+    onDidChange: event, submodules: [], workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  api.repositories.push(reviewRepo); openedRepositories.fire(reviewRepo);
   await commands.get('gitpane.refresh')();
-  const reviewRoot = snapshots.at(-1).repositories.find(item => item.name === 'repo');
-  const parkedChild = `${childPath}-parked`;
-  await renameCheckout(childPath, parkedChild);
+  const reviewRoot = snapshots.at(-1).repositories.find(item => item.name === 'review-no-checkout');
+  assert.equal(fs.existsSync(path.join(reviewPath, 'child')), false);
+  const reviewOpenRequests = [], originalReviewOpen = api.openRepository;
+  api.openRepository = async target => { reviewOpenRequests.push(target.fsPath); return originalReviewOpen(target); };
   try {
     pickChanges = choices => choices.find(choice => choice.action === 'reviewBranch') ||
       choices.find(choice => choice.file?.path === 'child');
@@ -1061,9 +1064,11 @@ async function main() {
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), `Subproject commit ${pointerB}\n`);
     assert.equal(terminals.length, beforeReviewTerminals);
+    assert.deepEqual(reviewOpenRequests, [], 'branch review must not try to open the missing submodule checkout');
   } finally {
-    await renameCheckout(parkedChild, childPath);
-    git('update-ref', 'refs/remotes/origin/main', previousReviewBase);
+    api.openRepository = originalReviewOpen;
+    api.repositories = api.repositories.filter(item => item !== reviewRepo); closedRepositories.fire(reviewRepo);
+    await commands.get('gitpane.refresh')();
   }
   console.log('PASS branch review opens a native gitlink diff without an initialized child or terminal');
 
@@ -1092,7 +1097,7 @@ async function main() {
     if (sameLocation(target.fsPath, grandPath)) historicalNestedOpens++;
     return openBeforeHistorical(target);
   };
-  await renameCheckout(grandPath, historicalParked);
+  fs.renameSync(grandPath, historicalParked);
   try {
     const openHistorical = async (oldOid, newOid, text = {}) => {
       await commands.get('gitpane.refresh')();
@@ -1201,7 +1206,7 @@ async function main() {
     git('reset', '-q', 'HEAD', '--', 'child');
   } finally {
     api.openRepository = openBeforeHistorical;
-    await renameCheckout(historicalParked, grandPath);
+    fs.renameSync(historicalParked, grandPath);
   }
   console.log('PASS historical nested pointers and file/symlink type changes open without a nested checkout and reject changed ancestors');
   await commands.get('gitpane.refresh')();
