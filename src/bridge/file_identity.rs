@@ -415,7 +415,7 @@ pub(super) fn working_text(path: &Path, limit: usize) -> Result<(String, String)
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| BridgeError::new("invalid_request", "Pointer side is not UTF-8 text."))?;
-    Ok((text, format!("{:x}", hash.finalize())))
+    Ok((text, crate::hash::hex(hash.finalize().as_ref())))
 }
 
 #[cfg(not(unix))]
@@ -512,7 +512,7 @@ pub(super) fn plan(
         }
         working_entry(&mut hash, &repo_path.join(path), false, None)?;
     }
-    Ok((format!("{:x}", hash.finalize()), args))
+    Ok((crate::hash::hex(hash.finalize().as_ref()), args))
 }
 
 #[cfg(test)]

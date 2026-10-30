@@ -203,7 +203,7 @@ impl GraphBuilder {
         }
         entries.sort();
         let input = serde_json::to_vec(&(branch_filter, symbolic, direct, resolved, entries))?;
-        Ok(format!("{:x}", Sha256::digest(input)))
+        Ok(crate::hash::hex(Sha256::digest(input).as_ref()))
     }
 
     pub fn build(self, path: &Path, options: &GraphOptions) -> color_eyre::Result<Vec<GraphRow>> {

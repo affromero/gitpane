@@ -74,7 +74,7 @@ pub(super) struct DirectoryIdentity {
 impl DirectoryIdentity {
     pub(super) fn fingerprint(&self) -> Result<String, BridgeError> {
         let bytes = serde_json::to_vec(self).map_err(repository_error)?;
-        Ok(format!("{:x}", Sha256::digest(bytes)))
+        Ok(crate::hash::hex(Sha256::digest(bytes).as_ref()))
     }
 
     pub(super) fn read(path: &Path) -> Result<Self, BridgeError> {
@@ -147,7 +147,7 @@ impl RepositoryIdentity {
 
     pub(super) fn fingerprint(&self) -> Result<String, BridgeError> {
         let bytes = serde_json::to_vec(self).map_err(repository_error)?;
-        Ok(format!("{:x}", Sha256::digest(bytes)))
+        Ok(crate::hash::hex(Sha256::digest(bytes).as_ref()))
     }
 
     pub(super) fn read(repo: &Path) -> Result<Self, BridgeError> {
@@ -451,7 +451,7 @@ impl Snapshots {
             records.push(encoded.into_boxed_slice());
         }
         let starts = page_boundaries(&sizes)?;
-        let revision = format!("{:x}", hash.finalize());
+        let revision = crate::hash::hex(hash.finalize().as_ref());
         let sequence = self.sequence.checked_add(1).ok_or_else(|| {
             BridgeError::new(
                 "snapshot_capacity",
