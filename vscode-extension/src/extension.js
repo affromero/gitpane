@@ -28,6 +28,8 @@ const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { createLiveGitSide } = require('./git-side-documents');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
+const { receiveViewMessage } = require('./view-messages');
+const { WorkspaceViews } = require('./workspace-views');
 
 const RICH_STATUS = {
   index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
@@ -207,9 +209,12 @@ class GitpaneViewProvider {
   }
 
   publish() {
+    if (this.workspaceViews) return this.workspaceViews.publish();
     if (!this.view || !this.ready) return;
     this.view.webview.postMessage(this.snapshot());
   }
+
+  get visible() { return this.workspaceViews ? this.workspaceViews.visible : this.view?.visible; }
 
   captureWorktreeReveal(id) {
     const selected = this.repositories.get(id);
@@ -268,13 +273,13 @@ class GitpaneViewProvider {
   }
 
   scheduleChangesRefresh() {
-    if (this.refreshChangesTimer !== undefined || this.refreshChangesInFlight || !this.view?.visible || !this.pager.entries.size) return;
+    if (this.refreshChangesTimer !== undefined || this.refreshChangesInFlight || !this.visible || !this.pager.entries.size) return;
     this.refreshChangesTimer = setTimeout(async () => {
       this.refreshChangesTimer = undefined;
-      if (!this.view?.visible) return;
+      if (!this.visible) return;
       const sweep = (async () => {
         for (const id of [...this.pager.entries.keys()]) {
-          if (!this.view?.visible) return;
+          if (!this.visible) return;
           if (!this.currentOwner(id)) { this.pager.release(id); continue; }
           await this.loadChanges(id);
         }
@@ -506,15 +511,16 @@ class GitpaneViewProvider {
     return child && this.tree.isCurrentRepository(child, selected.childToken) ? child : undefined;
   }
 
-  async handleShortcut(message) {
+  async handleShortcut(message, selectedGuard = () => true) {
     try {
+      if (!selectedGuard()) return;
       if (typeof message.key !== 'string' || [...message.key].length !== 1 || ['q', '=', '?'].includes(message.key)) return;
       const commands = { r: 'gitpane.refresh', R: 'gitpane.refresh', t: 'gitpane.pickTheme',
         a: 'gitpane.addWorkspaceRepository', s: 'gitpane.sort' };
       if (commands[message.key]) { await vscode.commands.executeCommand(commands[message.key]); return; }
       const worktree = this.worktrees.get(message.id);
       if (worktree && message.key === 'd') {
-        await this.actions?.handle({ type: 'action', action: 'removeWorktree', id: message.id });
+        await this.actions?.handle({ type: 'action', action: 'removeWorktree', id: message.id }, undefined, selectedGuard);
         return;
       }
       const repo = worktree ? this.currentWorktreeRepository(message.id) : this.currentRepository(message.id);
@@ -522,6 +528,7 @@ class GitpaneViewProvider {
       if (!repo) return;
       const token = this.tree.repositoryToken(repo);
       const guard = () => {
+        if (!selectedGuard()) return false;
         const current = worktree ? this.currentWorktreeRepository(message.id) : this.currentRepository(message.id);
         return !!current && current.rootUri.toString() === repo.rootUri.toString() && this.tree.isCurrentRepository(current, token);
       };
@@ -561,60 +568,12 @@ class GitpaneViewProvider {
     };
     const { getHtml } = require('./webview/html');
     view.webview.html = getHtml(view.webview, this.extensionUri);
-    this.tree.setVisible(view.visible);
+    if (this.workspaceViews) this.workspaceViews.visibilityChanged();
+    else this.tree.setVisible(view.visible);
     this.viewDisposables.push(
-      view.webview.onDidReceiveMessage(async message => {
-        if (message?.type === 'ready') {
-          this.ready = true;
-          this.publish();
-        } else if (message?.type === 'ackWorktreeReveal' && typeof message.id === 'string') {
-          this.worktreeReveals.delete(message.id);
-          if (this.worktreeRevealError && this.worktreeReveals.size < 128) { this.worktreeRevealError = undefined; this.publish(); }
-        } else if (message?.type === 'refresh') {
-          try { await this.refresh(true); }
-          catch (error) {
-            this.tree.fail(`Could not refresh repository status: ${error.message}`);
-            this.tree.changed();
-          }
-        } else if (message?.type === 'openChange' && typeof message.id === 'string') {
-          const selected = this.changes.get(message.id);
-          const node = selected && await this.waitForCurrentChange(selected);
-          if (node) await vscode.commands.executeCommand('gitpane.openChange', node);
-          else if (selected) await vscode.window.showErrorMessage('Gitpane change is no longer available. Refresh and try again.');
-        } else if (message?.type === 'loadChanges' && typeof message.id === 'string') {
-          await this.loadChanges(message.id);
-        } else if (message?.type === 'changesPage' && typeof message.id === 'string') {
-          await this.pager.move(message.id, message.direction);
-        } else if (message?.type === 'searchChanges' && typeof message.id === 'string' &&
-                   typeof message.query === 'string' && ['first', 'next', 'previous'].includes(message.direction)) {
-          const request = ++this.nextSearchRequest;
-          this.searchRequests.set(message.id, request);
-          if (!this.currentOwner(message.id)) return;
-          if (!this.pager.get(message.id)) await this.loadChanges(message.id);
-          if (this.searchRequests.get(message.id) !== request || !this.currentOwner(message.id)) return;
-          await this.pager.search(message.id, message.query, message.direction);
-        } else if (message?.type === 'releaseChanges' && typeof message.id === 'string') {
-          this.searchRequests.delete(message.id);
-          this.pager.release(message.id);
-          this.publish();
-        } else if (message?.type === 'openGraph' && typeof message.id === 'string') {
-          if (this.currentRepository(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
-        } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
-          await this.openWorktreeGraph?.(message.id);
-        } else if (message?.type === 'shortcut' && typeof message.id === 'string' && typeof message.key === 'string') {
-          await this.handleShortcut(message);
-        } else if (message?.type === 'menu' && typeof message.id === 'string') {
-          if (message.kind === 'file') {
-            const selected = this.changes.get(message.id);
-            if (selected && !await this.waitForCurrentChange(selected)) {
-              await vscode.window.showErrorMessage('Gitpane change is no longer available. Refresh and try again.');
-              return;
-            }
-          }
-          await this.actions?.showMenu(message.kind, message.id);
-        }
-      }),
+      view.webview.onDidReceiveMessage(message => receiveViewMessage(this, vscode, message)),
       view.onDidChangeVisibility(() => {
+        if (this.workspaceViews) return this.workspaceViews.visibilityChanged();
         this.tree.setVisible(view.visible);
         if (!view.visible) {
           if (this.refreshChangesTimer !== undefined) clearTimeout(this.refreshChangesTimer);
@@ -627,6 +586,12 @@ class GitpaneViewProvider {
       }),
       view.onDidDispose(() => {
         if (this.view !== view) return;
+        if (this.workspaceViews) {
+          this.view = undefined;
+          this.ready = false;
+          this.workspaceViews.visibilityChanged();
+          return;
+        }
         this.tree.setVisible(false);
         for (const id of this.pager.entries.keys()) this.pager.release(id);
         this.view = undefined;
@@ -690,6 +655,7 @@ async function activate(context) {
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
   const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links);
+  const sidebarGraph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links, { sidebar: true });
   const review = new BranchReviewProvider(tree, backend, api, { links });
   const github = new GithubProvider(tree, backend);
   const sessions = new SessionProvider(tree, backend);
@@ -706,7 +672,7 @@ async function activate(context) {
     onStderr: text => output.append(text)
   });
   const workspaceFetch = new WorkspaceFetch({ tree, backend, mutations, vscode, output,
-    refresh: async () => { await provider.refresh(); await graph.pollRevision(); } });
+    refresh: async () => { await provider.refresh(); await Promise.all([graph.pollRevision(), sidebarGraph.pollRevision()]); } });
   const worktreeContext = (id, repo) => {
     const link = provider.worktrees.get(id);
     const parent = api.repositories.find(item => item.rootUri.toString() === link?.repoKey);
@@ -716,15 +682,20 @@ async function activate(context) {
       tree.workspaceWorktrees(parent).some(item => item.path === link.path) &&
       tree.worktreeRepository(parent, link.path)?.rootUri.toString() === repo.rootUri.toString(), contextKey: JSON.stringify(link) };
   };
-  const openWorktreeGraph = async (id, guard = () => true) => {
+  const openWorktreeGraph = async (id, guard = () => true, target = graph) => {
     const repo = provider.currentWorktreeRepository(id);
     const persistent = worktreeContext(id, repo);
     if (!persistent) return;
     const current = () => guard() && provider.currentWorktreeRepository(id)?.rootUri.toString() === repo.rootUri.toString();
     if (!current()) return;
-    try { graph.open(repo, current, undefined, persistent); }
+    try { target.open(repo, current, undefined, persistent); }
     catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }
   };
+  const workspaceViews = new WorkspaceViews(vscode, context, provider, sidebarGraph, (id, kind, guard) => {
+    if (kind === 'worktree') return openWorktreeGraph(id, guard, sidebarGraph);
+    const repo = provider.currentRepository(id);
+    if (repo && guard()) sidebarGraph.open(repo, () => guard() && !!provider.currentRepository(id));
+  });
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.openLauncherShortcut = (repo, guard, selector) => launchers.open(repo, guard, selector);
   provider.actions = new SidebarActions({ vscode, mutations,
@@ -748,11 +719,11 @@ async function activate(context) {
     },
     pinSubmodule: async (id, guard) => {
       const node = provider.currentChange(provider.changes.get(id));
-      if (node && guard()) await submodules.open(node, true);
+      if (node && guard()) await submodules.open(node, true, guard);
     },
     inspectSubmodule: async (id, guard) => {
       const node = provider.currentChange(provider.changes.get(id));
-      if (node && guard()) await submodules.open(node);
+      if (node && guard()) await submodules.open(node, false, guard);
     },
     unpinSubmodule: async (id, guard) => {
       const repo = provider.currentRepository(id);
@@ -814,11 +785,14 @@ async function activate(context) {
     refreshRepository: async (id, kind, guard) => {
       const refreshed = await provider.refreshTarget(id, kind, guard);
       if (refreshed.includes(graph.repoKey)) await graph.pollRevision();
+      if (refreshed.includes(sidebarGraph.repoKey)) await sidebarGraph.pollRevision();
     },
     refresh: () => provider.refresh() });
-  const settings = new ViewSettings(vscode, context, tree, provider, graph);
-  context.subscriptions.push(settings, backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
+  const settings = new ViewSettings(vscode, context, tree, provider, [graph, sidebarGraph]);
+  context.subscriptions.push(settings, backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, workspaceViews, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
+    vscode.window.registerWebviewViewProvider('gitpane.changes', { resolveWebviewView: view => workspaceViews.resolveChangesView(view) }),
+    vscode.window.registerWebviewViewProvider('gitpane.commitGraph', { resolveWebviewView: view => workspaceViews.resolveGraphView(view) }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-empty', { provideTextDocumentContent: () => '' }),
     vscode.workspace.registerTextDocumentContentProvider('gitpane-link', links),
     vscode.workspace.registerFileSystemProvider('gitpane-blob', links, { isReadonly: true, isCaseSensitive: true }),
@@ -862,22 +836,26 @@ async function activate(context) {
       }
       catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }
     }),
-    vscode.commands.registerCommand('gitpane.openChange', async selected => {
+    vscode.commands.registerCommand('gitpane.openChange', async (selected, selectedGuard = () => true) => {
       try {
+        if (!selectedGuard()) return;
         let node = await provider.waitForCurrentChange(selected);
+        if (!selectedGuard()) return;
         if (!node) throw new Error('The change is no longer in the workspace.');
         if (!await provider.revalidateChange(node.fileId)) throw new Error('The change has changed; refresh and try again.');
+        if (!selectedGuard()) return;
         node = await provider.waitForCurrentChange(node);
+        if (!selectedGuard()) return;
         if (!node) throw new Error('The change is no longer in the workspace.');
         if (isPointerComparison(node.record)) {
-          await openPointerDiff(node, provider, tree, backend, links, vscode);
+          await openPointerDiff(node, provider, tree, backend, links, vscode, { openGuard: selectedGuard });
           return;
         }
         if (node.record.is_submodule || isSubmodule(node.repo.rootUri.fsPath, node.change.uri.fsPath, node.repo.state.submodules)) {
           if (node.group === 'working' && node.record.kind === 'working_renamed') {
             throw new Error('Working submodule renames cannot be compared yet.');
           }
-          await submodules.open(node);
+          await submodules.open(node, false, selectedGuard);
           return;
         }
         const plan = richComparison(node.record);
@@ -916,12 +894,15 @@ async function activate(context) {
           return uri;
         };
         const left = await resolve(plan.left);
+        if (!selectedGuard()) return;
         const right = await resolve(plan.right);
+        if (!selectedGuard()) return;
         const title = `${path.basename(node.change.uri.fsPath)} (${node.group})`;
-        if (!await provider.withCurrentChange(node, () => vscode.commands.executeCommand('vscode.diff', left, right, title))) {
+        if (!await provider.withCurrentChange(node, () => selectedGuard() && vscode.commands.executeCommand('vscode.diff', left, right, title))) {
           throw new Error('The change is no longer in the workspace.');
         }
       } catch (error) {
+        if (!selectedGuard()) return;
         output.appendLine(`Could not open change: ${error.message}`);
         vscode.window.showErrorMessage(`Gitpane could not open the change: ${error.message}`);
       }

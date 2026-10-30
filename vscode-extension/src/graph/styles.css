@@ -60,6 +60,16 @@ body {
 .message.error { color: var(--vscode-errorForeground, var(--red)); }
 
 .graph { overflow: auto; outline: none; max-height: 65vh; }
+body.sidebar { padding: 4px 8px; background: var(--vscode-sideBar-background); color: var(--vscode-sideBar-foreground, var(--text));
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.sidebar .toolbar { gap: 2px; margin-bottom: 3px; }
+.sidebar #search { flex-basis: 100%; padding: 1px 3px; }
+.sidebar #filters, .sidebar #refresh, .sidebar #search-prev, .sidebar #search-next,
+.sidebar #collapse, .sidebar #expand-all, .sidebar #commit-actions { padding: 0 3px; }
+.sidebar .first-parent { font-size: .9em; gap: 2px; }
+.sidebar .graph { max-height: none; flex: 1; min-height: 44px; }
+.sidebar .details { margin-top: 6px; flex: 0 1 40%; min-height: 0; overflow: auto; }
+.sidebar:not(.has-commit-detail) .details { display: none; }
 .commit {
   display: flex;
   gap: 1ch;

@@ -108,7 +108,10 @@ test('file actions wait for a refresh and still reject a changed selection', asy
   f.setFile({ repoPath: f.root, commonDir: f.commonDir, path: 'file.txt', group: 'working', status: 5, uri: f.uri, node: f.node });
   f.setWaitForChange(async () => true);
   await f.actions.handle(action('open', 'file'));
-  assert.deepEqual(f.calls, [['gitpane.openChange', f.node]]);
+  assert.deepEqual(f.calls[0].slice(0, 2), ['gitpane.openChange', f.node]);
+  assert.equal(f.calls[0][2](), true);
+  f.setFile(undefined);
+  assert.equal(f.calls[0][2](), false);
 });
 
 test('repository and unavailable worktree menus offer a scoped refresh', async () => {
@@ -152,7 +155,7 @@ test('submodule rows offer inspection but no file mutations', async () => {
     await f.actions.showMenu('file', 'file');
     for (const name of ['stage', 'unstage', 'discard']) await f.actions.handle(action(name, 'file'));
   }
-  assert.deepEqual(f.calls, Array.from({ length: 5 }, () => ['gitpane.openChange', f.node]));
+  assert.deepEqual(f.calls.map(call => call.slice(0, 2)), Array.from({ length: 5 }, () => ['gitpane.openChange', f.node]));
 });
 
 test('submodule file and pinned repository menus expose scoped pin actions', async () => {
@@ -247,7 +250,7 @@ test('confirmation requires a valid current file identity before a destructive a
 test('open, reveal and copy use only the current resolved file', async () => {
   const f = fixture();
   for (const name of ['open', 'reveal', 'copy']) await f.actions.handle(action(name, 'file'));
-  assert.deepEqual(f.calls, [
+  assert.deepEqual(f.calls.map(call => call.slice(0, 2)), [
     ['gitpane.openChange', f.node], ['revealInExplorer', f.uri], ['copy', path.join(f.root, 'file.txt')]
   ]);
   await f.actions.handle({ ...action('copy', 'forged'), path: '/outside' });

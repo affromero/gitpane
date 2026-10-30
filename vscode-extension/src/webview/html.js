@@ -2,7 +2,7 @@
 
 const vscode = require('vscode');
 
-function getHtml(webview, extensionUri) {
+function getHtml(webview, extensionUri, mode = 'repositories') {
   const resource = name => webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'src', 'webview', name)
   );
@@ -18,7 +18,7 @@ function getHtml(webview, extensionUri) {
   <link rel="stylesheet" href="${stylesheet}">
   <title>Gitpane</title>
 </head>
-<body>
+<body data-view="${mode === 'changes' ? 'changes' : 'repositories'}">
   <div id="messages" aria-live="polite"></div>
   <div class="search-toolbar">
     <button id="start-search" type="button" aria-label="Search changed files" title="Search changed files">⌕</button>
@@ -30,7 +30,7 @@ function getHtml(webview, extensionUri) {
       <div id="search-status" role="status" aria-live="polite"></div>
     </div>
   </div>
-  <div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
+  <div id="repositories" role="tree" aria-label="Gitpane ${mode === 'changes' ? 'changes' : 'repositories'}"></div>
   <script src="${theme}"></script>
   <script src="${script}"></script>
 </body>

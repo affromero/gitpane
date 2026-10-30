@@ -2,14 +2,20 @@
 
 <img src="https://raw.githubusercontent.com/affromero/gitpane/main/vscode-extension/media/gitpane.png" alt="Gitpane logo" width="128" height="128">
 
-Gitpane for VS Code adds a repository overview to VS Code's Explorer. See branches
-and changed files across the repositories in your current workspace. Expand a
-repository to see staged, unstaged, untracked and conflicted files. Select a
-change to open it in the editor.
+Gitpane for VS Code brings the terminal layout to the Explorer. See repositories
+at the top, changes in the middle and the commit graph below. Select a repository
+or worktree to update both lower sections. Select a changed file to open its
+native diff in the editor.
 
-![Gitpane for VS Code showing repositories, worktrees and changed files](https://raw.githubusercontent.com/affromero/gitpane/main/assets/screenshot-vscode.png)
+![Gitpane for VS Code with stacked repositories, changes and commit graph](https://raw.githubusercontent.com/affromero/gitpane/main/assets/screenshot-vscode-stacked.png)
 
-Rendered preview with example repositories and a simulated Explorer header.
+Rendered preview with example repositories and simulated Explorer section headers.
+
+Resize, collapse or move the three sections using VS Code's view controls.
+Gitpane remembers the selected repository for this workspace. Each selection
+shows its staged, unstaged, untracked and conflicted groups in **Changes** and
+its history in **Git Graph**, including when there are no changed files.
+Hide **Changes** to show changed files inline under repositories instead.
 
 Install [Gitpane for VS Code](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode)
 from the VS Code Marketplace, or run:
@@ -36,8 +42,8 @@ diffs show the link target text stored by Git. A repository with more than
 200,000 change records shows an error instead of an incomplete list. Expanded
 repositories and worktrees share a 64 MiB cache for retained snapshots and
 their metadata. Git status scans also use temporary memory. If the cache is
-full, collapse another repository or worktree and retry. A single snapshot
-larger than 64 MiB cannot be loaded.
+full, select another repository or collapse an inline file list and retry. A
+single snapshot larger than 64 MiB cannot be loaded.
 
 Git sides of diffs read from the selected repository, including when another
 repository overlaps the file path. They update as its Git state changes.
@@ -62,8 +68,8 @@ choice for the workspace. Restart the extension host after editing the setting.
 The view updates as workspace folders and detected repositories change. While
 visible, it also refreshes local Git status periodically. The `$` indicator
 opens a repository's stash list. Stash entries are view-only.
-Select a repository or worktree and press `/` or the search button to search
-all of its changed paths. Use the arrow keys to move between matches, Enter to
+Focus **Changes** and press `/` or the search button to search all of the selected
+repository's changed paths. Use the arrow keys to move between matches, Enter to
 open a file diff, and Escape to clear the search.
 An untracked embedded Git repository appears as an informational directory;
 open or add that repository in VS Code to inspect its files.
@@ -76,7 +82,9 @@ repositories appear. Gitpane opens detected linked worktrees inside the
 workspace through VS Code's Git API, which also adds them to Source Control
 and can reopen a worktree closed there.
 
-Select the `●` beside a repository to open its commit graph. Search highlights
+The sidebar graph follows repository and worktree selection. Select the `●`
+beside a repository to open a larger graph in an editor tab. Each graph keeps
+its own filters. Search highlights
 matches among the loaded commits, with next and previous navigation. The graph
 shows up to 200 commits and offers first-parent, branch, author and ref filters,
 and branch collapse. Author choices come from commits loaded so far. Select a
@@ -324,7 +332,8 @@ code --new-window --extensionDevelopmentPath="$(pwd)"
 
 In the development host, set `gitpane.backendPath` to the absolute path of the
 built `target/debug/gitpane` executable. Open a folder or workspace, then expand
-Gitpane in the Explorer. On Windows, the executable is `target/debug/gitpane.exe`.
+**Repositories**, **Changes** and **Git Graph** in the Explorer. On Windows, the
+executable is `target/debug/gitpane.exe`.
 For SSH, WSL or a development container, install a
 VSIX built for that workspace host. Virtual and untrusted workspaces are not
 supported. Git and VS Code's built-in Git extension must be available on the
@@ -332,6 +341,7 @@ workspace host. VS Code's Git settings may enable automatic fetching.
 
 Run the JavaScript tests with `npm test` in this directory. The extension has
 no npm dependencies. To check the view in headless Chrome, run
-`node test/integration/browser.js` and `node test/integration/graph-browser.js`.
+`node test/integration/browser.js`, `node test/integration/graph-browser.js`
+and `node test/integration/stacked-browser.js`.
 The optional VS Code host test at
 `node test/integration/run.js` opens a separate VS Code window.

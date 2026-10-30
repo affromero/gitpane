@@ -22,16 +22,21 @@ function selectionSummary(values) {
 }
 
 class GraphProvider {
-  constructor(tree, backend, git, extensionUri, theme, links) {
+  constructor(tree, backend, git, extensionUri, theme, links, { sidebar = false } = {}) {
     this.tree = tree;
     this.backend = backend;
     this.git = git;
     this.extensionUri = extensionUri;
     this.theme = theme;
     this.links = links;
+    this.sidebar = sidebar;
+    this.panelDisposables = [];
+    this.emptyMessage = 'Select a repository to see its commit graph.';
+    this.emptyError = false;
     this.themeSubscription = theme?.onDidChange(() => this.publishTheme());
     this.panel = undefined;
     this.repoKey = undefined;
+    this.repoName = undefined;
     this.guard = () => true;
     this.validateGuard = undefined;
     this.ownerEpoch = 0;
@@ -65,7 +70,7 @@ class GraphProvider {
     this.unstableLoads = 0;
     this.retryBackoff = false;
     this.subscription = tree.onDidChangeTreeData(() => {
-      if (!this.panel) return;
+      if (!this.panel || (this.sidebar && !this.repoKey)) return;
       const repo = this.currentRepo();
       if (!repo) return this.invalidate('Repository is no longer in the workspace.');
       const head = repo.state?.HEAD?.commit;
@@ -97,7 +102,9 @@ class GraphProvider {
     if (!repo || !currentGuard() || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
       throw new Error('Repository is no longer in the workspace.');
     }
+    const wasReady = this.ready;
     this.repoKey = repo.rootUri.toString();
+    this.repoName = path.basename(repo.rootUri.fsPath);
     this.ownerEpoch++;
     this.guard = currentGuard;
     this.validateGuard = validateGuard;
@@ -122,21 +129,38 @@ class GraphProvider {
     this.graphGeneration++;
     this.detailGeneration++;
     if (this.panel) {
-      this.panel.title = `Gitpane: ${path.basename(repo.rootUri.fsPath)}`;
-      this.panel.reveal();
-      this.ready = true;
-      this.loadGraph();
+      this.panel.title = `${this.sidebar ? 'Git Graph' : 'Gitpane'}: ${path.basename(repo.rootUri.fsPath)}`;
+      if (!this.sidebar) this.panel.reveal();
+      this.ready = wasReady;
+      if (this.ready) this.loadGraph();
       return;
     }
+    if (this.sidebar) return;
     const panel = vscode.window.createWebviewPanel('gitpane.graph',
       `Gitpane: ${path.basename(repo.rootUri.fsPath)}`, vscode.ViewColumn.Active, {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src')]
       });
+    this.attachPanel(panel);
+  }
+
+  resolveWebviewView(view) {
+    if (!this.sidebar) throw new Error('This graph is an editor view.');
+    view.webview.options = { enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'src')] };
+    this.attachPanel(view);
+  }
+
+  attachPanel(panel) {
+    for (const disposable of this.panelDisposables) disposable?.dispose();
+    this.panelDisposables = [];
     this.panel = panel;
-    panel.webview.html = require('./graph/html').getHtml(panel.webview, this.extensionUri);
-    panel.webview.onDidReceiveMessage(message => this.receive(message));
-    panel.onDidChangeViewState?.(() => {
+    this.ready = false;
+    if (this.sidebar && this.repoName) panel.title = `Git Graph: ${this.repoName}`;
+    panel.webview.html = require('./graph/html').getHtml(panel.webview, this.extensionUri, this.sidebar);
+    this.panelDisposables.push(panel.webview.onDidReceiveMessage(message => this.receive(message)));
+    const onVisibility = panel.onDidChangeViewState || panel.onDidChangeVisibility;
+    const visibility = onVisibility?.call(panel, () => {
       if (this.panel !== panel || !this.ready) return;
       if (panel.visible === false) {
         this.stopPolling();
@@ -148,15 +172,18 @@ class GraphProvider {
         this.interactive = false;
       } else this.schedulePoll(0);
     });
-    panel.onDidDispose(() => {
+    if (visibility) this.panelDisposables.push(visibility);
+    this.panelDisposables.push(panel.onDidDispose(() => {
       if (this.panel !== panel) return;
       this.panel = undefined;
       this.stopPolling();
       this.ready = false;
       this.interactive = false;
-      this.repoKey = undefined;
-      this.guard = () => true;
-      this.validateGuard = undefined;
+      if (!this.sidebar) {
+        this.repoKey = undefined;
+        this.guard = () => true;
+        this.validateGuard = undefined;
+      }
       this.ownerEpoch++;
       this.graphGeneration++;
       this.detailGeneration++;
@@ -164,7 +191,20 @@ class GraphProvider {
       this.segments.clear();
       this.collapsedSegments.clear();
       this.files.clear();
-    });
+    }));
+  }
+
+  clearSelection(message, error = false) {
+    this.repoKey = undefined;
+    this.repoName = undefined;
+    this.guard = () => false;
+    this.validateGuard = undefined;
+    this.persistent = undefined;
+    this.emptyMessage = message;
+    this.emptyError = error;
+    this.ownerEpoch++;
+    this.stopPolling();
+    this.invalidate(message, false, !error);
   }
 
   post(message) {
@@ -286,7 +326,7 @@ class GraphProvider {
     }
   }
 
-  invalidate(message, preserve = false) {
+  invalidate(message, preserve = false, empty = false) {
     const previousRows = preserve ? this.displayedRows : [];
     this.graphGeneration++;
     this.loading = false;
@@ -301,11 +341,12 @@ class GraphProvider {
     if (!preserve) this.retryBackoff = false;
     this.files.clear();
     if (!preserve) this.selected = undefined;
-    this.post({ type: 'graph', rows: previousRows, loading: false, error: message, firstParent: this.firstParent,
+    this.post({ type: 'graph', rows: previousRows, loading: false, ...(empty ? { emptyMessage: message } : { error: message }), firstParent: this.firstParent,
       filters: copyFilters(this.filters) });
   }
 
   async loadGraph() {
+    if (this.sidebar && !this.repoKey) return this.invalidate(this.emptyMessage, false, !this.emptyError);
     const repo = this.currentRepo();
     if (!repo) {
       this.invalidate('Repository is no longer in the workspace.');
@@ -577,7 +618,12 @@ class GraphProvider {
 
   async receive(message) {
     if (!message || typeof message.type !== 'string') return;
-    if (message.type === 'ready') { this.ready = true; this.publishTheme(); return this.loadGraph(); }
+    if (message.type === 'ready') {
+      this.ready = true;
+      this.publishTheme();
+      if (this.sidebar && !this.repoKey) return this.invalidate(this.emptyMessage, false, !this.emptyError);
+      return this.loadGraph();
+    }
     if (message.type === 'refresh') return this.loadGraph();
     if (message.type === 'openFilters') {
       try { return await this.openFilters(); }
@@ -636,7 +682,9 @@ class GraphProvider {
     this.ready = false;
     this.stopPolling();
     this.subscription.dispose();
-    this.panel?.dispose();
+    for (const disposable of this.panelDisposables) disposable?.dispose();
+    this.panelDisposables = [];
+    this.panel?.dispose?.();
     this.panel = undefined;
     this.rows.clear();
     this.segments.clear();

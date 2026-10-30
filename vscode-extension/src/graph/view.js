@@ -165,6 +165,7 @@ function statusClass(status) {
 }
 
 function renderFiles() {
+  document.body.classList.toggle('has-commit-detail', !!detail);
   files.replaceChildren();
   fileSearch.disabled = true;
   const selectedRow = rows.find(row => row.oid === selected);
@@ -324,7 +325,7 @@ window.addEventListener('message', event => {
     return;
   }
   if (message?.type === 'graph') {
-    graphInteractive = !message.loading && !message.error;
+    graphInteractive = !message.loading && !message.error && !message.emptyMessage;
     if (message.loading || message.error) { detail = undefined; pendingCommitAction = undefined; }
     rows = Array.isArray(message.rows) ? message.rows : [];
     labelMaxLen = Number.isSafeInteger(message.labelMaxLen) && message.labelMaxLen >= 0 ? message.labelMaxLen : 24;
@@ -349,7 +350,7 @@ window.addEventListener('message', event => {
     active = Math.max(0, rows.findIndex(row => row.oid === selected));
     graphStatus.className = message.error ? 'message error' : 'message';
     const limitReached = Number.isSafeInteger(message.limit) && message.limit > 0 && rows.length >= message.limit;
-    graphStatus.textContent = message.error || (message.loading ? 'Loading graph…' : !rows.length ? 'No commits.' :
+    graphStatus.textContent = message.error || message.emptyMessage || (message.loading ? 'Loading graph…' : !rows.length ? 'No commits.' :
       limitReached ? `Showing up to ${message.limit} commits.` : '');
     graph.setAttribute('aria-busy', message.loading ? 'true' : 'false');
     graph.setAttribute('aria-disabled', graphInteractive ? 'false' : 'true');

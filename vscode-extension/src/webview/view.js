@@ -1,6 +1,10 @@
 'use strict';
 
-const vscode = acquireVsCodeApi();
+const api = acquireVsCodeApi();
+const changesMode = document.body.dataset.view === 'changes';
+const vscode = { getState: () => api.getState(), setState: state => api.setState(state),
+  postMessage: message => api.postMessage(changesMode ?
+    { ...message, ownerId: snapshot.selectedOwnerId, selectionEpoch: snapshot.selectionEpoch } : message) };
 const tree = document.getElementById('repositories');
 const messages = document.getElementById('messages');
 const startSearchButton = document.getElementById('start-search');
@@ -20,6 +24,8 @@ const appliedWorktreeReveals = new Set((Array.isArray(saved.appliedWorktreeRevea
   .filter(id => typeof id === 'string' && id.length > 0 && id.length <= 128).slice(-128));
 let selected = typeof saved.selected === 'string' ? saved.selected : undefined;
 let snapshot = { repositories: [], errors: [], loading: true };
+let changesOwner;
+let hostSelectedOwner;
 let visible = [];
 const pendingLoads = new Map();
 const pendingPages = new Map();
@@ -185,7 +191,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
         button.addEventListener('click', event => {
           event.stopPropagation();
           if (open) expandedStashes.delete(key);
-          else { expanded.add(`repo:${repo.id}`); expandedStashes.add(key); requestChanges(repo); }
+          else { expanded.add(`repo:${repo.id}`); expandedStashes.add(key); if (!snapshot.separateChanges) requestChanges(repo); }
           render();
         });
         tail.appendChild(button);
@@ -207,7 +213,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
     if (repo.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
     if (info.count || (info.unknown && repo.dirty)) {
       const value = info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`;
-      add(tail, 'count', `${isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
+      add(tail, 'count', `${snapshot.separateChanges ? '' : isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
     }
   }
   const graphButton = element('button', 'graph-action', '●');
@@ -323,7 +329,7 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
   for (const group of groups) {
     const groupKey = `group:${JSON.stringify([ownerId, group.id])}`;
     const files = Array.isArray(group.files) ? group.files : [];
-    const owner = visible.find(item => item.owner?.id === ownerId)?.owner;
+    const owner = changesMode ? changesOwner?.owner : visible.find(item => item.owner?.id === ownerId)?.owner;
     const match = owner?.changesPage?.search;
     if (searchOwner === ownerId && match?.phase === 'ready' && match.query === searchInput.value && match.group === group.id) {
       collapsedGroups.delete(groupKey);
@@ -413,10 +419,31 @@ function renderMessages() {
     button.addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
     messages.appendChild(button);
   }
-  if (!snapshot.repositories.length && !errors.length) {
+  if (!changesMode && !snapshot.repositories.length && !errors.length) {
     messages.appendChild(element('div', 'message', snapshot.loading ? 'Loading repositories…' :
       snapshot.emptyMessage || 'No repositories in this workspace'));
   }
+}
+
+function renderSelectedChanges(owners) {
+  const owner = snapshot.selectedOwner;
+  changesOwner = undefined;
+  startSearchButton.disabled = !owner || owner.available === false || owner.statusUnavailable;
+  if (!owner) {
+    messages.appendChild(element('div', 'message', 'Select a repository to see its changes.'));
+    return;
+  }
+  owners.add(owner.id);
+  if (owner.available === false || owner.statusUnavailable) {
+    messages.appendChild(element('div', 'message error', 'Repository status is unavailable.'));
+    return;
+  }
+  changesOwner = { key: `owner:${owner.id}`, owner, expandable: true, isExpanded: true,
+    filesExpanded: true, fileExpandable: true, ...(snapshot.selectedKind === 'worktree' ? { worktreeId: owner.id } : {}) };
+  reconcilePending(owner);
+  requestChanges(owner);
+  renderGroups(tree, owner.groups || [], changesOwner.key, owner.id, countInfo(owner).partial);
+  renderPage(tree, owner, changesOwner.key);
 }
 
 function render() {
@@ -431,7 +458,9 @@ function render() {
   const owners = new Set();
   tree.replaceChildren();
   renderMessages();
-  for (const repo of snapshot.repositories) {
+  document.body.dataset.separateChanges = String(!changesMode && !!snapshot.separateChanges);
+  if (changesMode) renderSelectedChanges(owners);
+  for (const repo of changesMode ? [] : snapshot.repositories) {
     owners.add(repo.id);
     reconcilePending(repo);
     const key = `repo:${repo.id}`;
@@ -439,7 +468,7 @@ function render() {
     const groups = Array.isArray(repo.groups) ? repo.groups : [];
     const worktrees = !repo.statusUnavailable && Array.isArray(repo.worktrees) ? repo.worktrees : [];
     const stashes = !repo.statusUnavailable && Array.isArray(repo.stashes) ? repo.stashes : [];
-    const filesExpanded = expanded.has(key);
+    const filesExpanded = !snapshot.separateChanges && expanded.has(key);
     const showWorktrees = worktrees.length > 0 && worktreesVisible(repo);
     const stashOpen = stashes.length > 0 && expandedStashes.has(`stash-group:${repo.id}`);
     const hasPage = !!repo.changesPage && (repo.dirty || repo.hasUnpushedSubmodules || repo.changesPage.state === 'loading' ||
@@ -479,7 +508,7 @@ function render() {
       if (!worktree.available) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
       const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
-      const worktreeExpanded = expanded.has(worktreeKey);
+      const worktreeExpanded = !snapshot.separateChanges && expanded.has(worktreeKey);
       const worktreeHasPage = worktree.available && !!worktree.changesPage &&
         (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
           worktree.changesPage.previous || worktree.changesPage.next);
@@ -526,6 +555,11 @@ function render() {
   for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
   for (const id of transientWorktreeVisibility.keys()) if (!owners.has(id)) transientWorktreeVisibility.delete(id);
   syncSearch();
+  if (!changesMode && snapshot.selectedOwnerId !== hostSelectedOwner) {
+    const owner = visible.find(item => item.owner?.id === snapshot.selectedOwnerId);
+    if (owner) selected = owner.key;
+    hostSelectedOwner = snapshot.selectedOwnerId;
+  }
   if (!visible.some(item => item.key === selected)) {
     const alternate = previousSelection?.pageOwner && visible.find(item =>
       item.pageOwner === previousSelection.pageOwner && !item.pageDisabled);
@@ -559,6 +593,7 @@ function select(item, focus = true) {
 }
 
 function searchOwnerItem(item) {
+  if (changesMode) return changesOwner;
   while (item && !item.owner) item = visible.find(candidate => candidate.key === item.parent);
   return item;
 }
@@ -602,7 +637,7 @@ function beginSearch() {
 
 function syncSearch() {
   if (!searchOwner) return;
-  const item = visible.find(value => value.owner?.id === searchOwner);
+  const item = changesMode ? changesOwner : visible.find(value => value.owner?.id === searchOwner);
   if (!item) {
     searchOwner = undefined;
     searchBox.hidden = true;
@@ -714,10 +749,14 @@ function toggle(item) {
 
 function activate(item) {
   if (!item) return;
+  if (snapshot.separateChanges && item.owner) {
+    vscode.postMessage({ type: 'selectOwner', id: item.owner.id });
+    return;
+  }
   if (item.expandable) toggle(item);
   else if (item.pageOwner && !item.pageDisabled) {
     if (item.pageDirection === 'retry') {
-      const owner = visible.find(value => value.key === item.parent)?.owner;
+      const owner = changesMode ? changesOwner?.owner : visible.find(value => value.key === item.parent)?.owner;
       requestChanges(owner, true);
     } else requestPage(item.pageOwner, item.pageDirection, item.pageNumber);
     render();
@@ -727,6 +766,7 @@ function activate(item) {
 }
 
 tree.addEventListener('focusin', event => {
+  if (event.target.closest('button')) return;
   const key = event.target.closest('.treeitem')?.dataset.key;
   const item = visible.find(value => value.key === key);
   if (item && selected !== key) select(item, false);
@@ -738,6 +778,7 @@ tree.addEventListener('click', event => {
   const item = visible.find(value => value.key === key);
   if (!item) return;
   select(item);
+  if (!changesMode && !snapshot.separateChanges && item.owner) vscode.postMessage({ type: 'selectOwner', id: item.owner.id });
   activate(item);
 });
 
@@ -804,7 +845,11 @@ tree.addEventListener('keydown', event => {
     case ' ': activate(current); break;
     default: handled = false;
   }
-  if (handled) event.preventDefault();
+  if (handled) {
+    event.preventDefault();
+    const owner = visible.find(item => item.key === selected);
+    if (!changesMode && owner?.owner && owner !== current) vscode.postMessage({ type: 'selectOwner', id: owner.owner.id });
+  }
 });
 
 window.addEventListener('message', event => {
@@ -813,8 +858,19 @@ window.addEventListener('message', event => {
   if (event.data.theme && !window.GitpaneTheme?.set(event.data.theme)) {
     event.data.errors = [...(event.data.errors || []), 'Gitpane returned an invalid theme.'];
   }
+  if (changesMode && event.data.selectedOwnerId !== snapshot.selectedOwnerId) {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = undefined;
+    searchOwner = undefined;
+    searchInput.value = '';
+    searchBox.hidden = true;
+    searchStatus.textContent = '';
+    pendingLoads.clear();
+    pendingPages.clear();
+    selected = undefined;
+  }
   snapshot = { ...event.data, repositories: Array.isArray(event.data.repositories) ? event.data.repositories : [] };
-  for (const reveal of Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
+  for (const reveal of !changesMode && Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
     if (!reveal || typeof reveal.id !== 'string' || reveal.id.length > 128 ||
         typeof reveal.identity !== 'string' || !/^[a-f0-9]{64}$/.test(reveal.identity)) continue;
     const repo = snapshot.repositories.find(item => item.worktreeStateKey === reveal.identity);

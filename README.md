@@ -68,13 +68,18 @@ gitpane diagnostic          # Print config, watcher, and workspace diagnostics
 
 ## VS Code extension
 
-Gitpane for VS Code adds a multi-repository view to VS Code's Explorer. It shows
-branches, worktrees and changed files together. Select a file to open its diff
-in the editor, or open a repository's graph and actions from its row.
+Gitpane for VS Code brings the terminal layout to the Explorer: repositories
+at the top, changes in the middle and the commit graph below. Select a repository
+or worktree to update both lower sections. Select a file to open its native diff
+in the editor.
 
-<img src="assets/screenshot-vscode.png" alt="Gitpane for VS Code preview showing repositories, worktrees and changed files" width="800">
+<img src="assets/screenshot-vscode-stacked.png" alt="Gitpane for VS Code with stacked repositories, changes and commit graph" width="440">
 
-Rendered preview with example repositories and a simulated Explorer header.
+Rendered preview with example repositories and simulated Explorer section headers.
+
+The sections resize and collapse independently. Hide **Changes** to show changed
+files inline under repositories instead. The `●` action opens a larger graph
+in an editor tab; selecting a repository keeps the graph in the sidebar.
 
 The view follows VS Code's Git repository discovery within the current workspace,
 including multi-root workspaces. It updates when workspace folders or detected

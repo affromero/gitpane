@@ -38,6 +38,7 @@ class EventEmitter {
 
 const event = () => ({ dispose() {} });
 const commands = new Map();
+const views = new Map();
 const documents = new Map();
 const diffs = [];
 const copied = [];
@@ -123,7 +124,11 @@ async function main() {
       fs: { stat: async value => fs.promises.stat(value.fsPath) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
       createTerminal: options => { terminals.push(options); return { show() {}, dispose() {} }; },
-      registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
+      registerWebviewViewProvider: (name, value) => {
+        views.set(name, value);
+        if (name === 'gitpane.repositories') provider = value;
+        return event();
+      },
       withProgress: async (_options, operation) => operation({ report() {} }),
       showQuickPick: async choices => pickChanges?.(choices),
       showOpenDialog: async () => selectedWorkspaceRepository,
@@ -188,6 +193,7 @@ async function main() {
   assert.equal(provider.theme.value?.name, 'default');
   assert.equal(provider.theme.value.values['repo-list-worktree-count'], 'rgb(255, 175, 0)');
   assert.ok(provider.theme.value.lanes.length > 0);
+  await require('./stacked-real')({ views, receive, snapshots, diffs, errors, repoPath, worktreePath });
   const nestedPath = fs.realpathSync.native(path.join(repoPath, 'nested-repo'));
   const explicitlyAdded = { rootUri: uri(nestedPath), state: { HEAD: {}, onDidChange: event,
     workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };

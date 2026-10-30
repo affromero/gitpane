@@ -53,6 +53,9 @@ body {
 .retry:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 
 .search-toolbar { padding: 0 9px 3px; }
+body[data-separate-changes="true"] .search-toolbar { display: none; }
+body[data-view="changes"] #repositories { display: block; }
+body[data-view="changes"] #repositories > .treeitem { display: block; }
 .search-toolbar button { color: var(--text); background: transparent; border: 0; font: inherit; cursor: pointer; }
 .search-toolbar button:focus-visible, #file-search:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 #search-box:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }

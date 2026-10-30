@@ -238,7 +238,7 @@ test('replaced repository and workspace symlinks cannot authorize stale actions'
       onDidChangeConfiguration: event, getConfiguration: () => ({ get: (name, fallback) => fallback }),
       registerTextDocumentContentProvider: event, registerFileSystemProvider: event, fs: { stat: async () => ({}) } },
     window: { createOutputChannel: () => ({ append() {}, appendLine() {}, dispose() {} }),
-      registerWebviewViewProvider: (_name, value) => { provider = value; return { dispose() {} }; },
+      registerWebviewViewProvider: (name, value) => { if (name === 'gitpane.repositories') provider = value; return { dispose() {} }; },
       createWebviewPanel: () => panel,
       showErrorMessage: message => errors.push(message) },
     commands: { registerCommand: (name, handler) => { handlers.set(name, handler); return { dispose() {} }; },

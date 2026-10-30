@@ -65,7 +65,8 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
       tree.workspaceWorktrees(parent).some(item => item.path === node.parentWorktree.path) &&
       tree.worktreeRepository(parent, node.parentWorktree.path)?.rootUri.toString() === repo.rootUri.toString();
   };
-  const selected = async () => current() && !!await provider.waitForCurrentChange(node) && current();
+  const canOpen = () => !options.openGuard || options.openGuard();
+  const selected = async () => canOpen() && current() && !!await provider.waitForCurrentChange(node) && canOpen() && current();
   if (!await selected()) throw new Error('The selected submodule change is no longer available.');
   const repoPath = repo.rootUri.fsPath;
   if (options.verifyAncestors && !await options.verifyAncestors()) throw new Error('The parent submodule changed.');
@@ -113,7 +114,7 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
   if (!await selected() || !await provider.revalidateChange(node.fileId) || !await selected() || !await verify()) {
     throw new Error('The selected submodule pointer changed. Refresh and try again.');
   }
-  const opened = await provider.withCurrentChange(node, () => current() &&
+  const opened = await provider.withCurrentChange(node, () => canOpen() && current() &&
     vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(record.path)} (${record.group})`));
   if (!opened) throw new Error('The selected submodule pointer changed. Refresh and try again.');
 }

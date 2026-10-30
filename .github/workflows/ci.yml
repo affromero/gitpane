@@ -53,6 +53,7 @@ jobs:
           npm test
           node test/integration/browser.js
           node test/integration/graph-browser.js
+          node test/integration/stacked-browser.js
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
