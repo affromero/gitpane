@@ -126,7 +126,7 @@ fn selection(scope: &Scope, input: &Path) -> Result<Selection, BridgeError> {
     Ok(Selection {
         repo,
         identity: identity.fingerprint()?,
-        token: format!("{:x}", hash.finalize()),
+        token: crate::hash::hex(hash.finalize().as_ref()),
     })
 }
 

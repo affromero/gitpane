@@ -6,6 +6,7 @@ mod config;
 mod diagnostic;
 mod event;
 mod git;
+mod hash;
 mod repo_id;
 mod session;
 mod theme;

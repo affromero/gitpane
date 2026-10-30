@@ -41,7 +41,7 @@ struct Action {
 impl Action {
     fn fingerprint(&self) -> String {
         let data = serde_json::to_vec(self).expect("launcher action is serializable");
-        format!("{:x}", Sha256::digest(data))
+        crate::hash::hex(Sha256::digest(data).as_ref())
     }
 
     fn summary(&self) -> Value {

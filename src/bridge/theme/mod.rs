@@ -125,7 +125,7 @@ fn resolve(config: &Config, env: &dyn ConfigEnv, name: &str) -> Result<Value, Br
 
 fn token(theme: &Value) -> Result<String, BridgeError> {
     let encoded = serde_json::to_vec(theme).map_err(theme_error)?;
-    Ok(format!("{:x}", Sha256::digest(encoded)))
+    Ok(crate::hash::hex(Sha256::digest(encoded).as_ref()))
 }
 
 pub(super) fn query(config: &Config) -> Result<Value, BridgeError> {

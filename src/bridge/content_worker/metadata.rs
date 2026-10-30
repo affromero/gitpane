@@ -51,7 +51,7 @@ fn error(code: &str, message: &str) -> Value {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hash::hex(Sha256::digest(bytes).as_ref())
 }
 
 fn checked(

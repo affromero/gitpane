@@ -104,9 +104,8 @@ fn valid_id(value: &str, prefix: char) -> bool {
 
 fn token(identity: &str, action: &Action, backend: &str, context: &str, placement: &str) -> String {
     let data = json!([identity, action.fingerprint(), backend, context, placement]);
-    format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&data).expect("context is serializable"))
+    crate::hash::hex(
+        Sha256::digest(serde_json::to_vec(&data).expect("context is serializable")).as_ref(),
     )
 }
 
