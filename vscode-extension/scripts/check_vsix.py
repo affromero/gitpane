@@ -25,6 +25,7 @@ def verify_payload(
     """Verify sources and identity; optionally compare a native built backend.
 
     Release preflight uses None for artifacts already checked on native CI hosts.
+    Only that preflight accepts Git checkout CRLF/LF differences in known text.
     """
     executable = "gitpane.exe" if target.startswith("win32-") else "gitpane"
     backend_name = f"extension/bin/{executable}"
@@ -75,7 +76,13 @@ def verify_payload(
                     "VSIX identity does not match the extension manifest"
                 )
         for name, file in files.items():
-            if package.read(name) != file.read_bytes():
+            actual, expected = package.read(name), file.read_bytes()
+            if backend is None and name.endswith(
+                (".js", ".css", ".md", ".txt")
+            ):
+                actual = actual.replace(b"\r\n", b"\n")
+                expected = expected.replace(b"\r\n", b"\n")
+            if actual != expected:
                 raise ValueError(
                     f"Packaged file does not match source: {name}"
                 )

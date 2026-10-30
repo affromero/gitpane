@@ -33,13 +33,9 @@ class PackageTests(unittest.TestCase):
         (self.source / "package.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )
-        (self.source / "README.md").write_text(
-            "Gitpane Explorer", encoding="utf-8"
-        )
-        (self.source / "src/view.js").write_text(
-            "visible sources", encoding="utf-8"
-        )
-        (self.root / "LICENSE").write_text("license", encoding="utf-8")
+        (self.source / "README.md").write_bytes(b"Gitpane Explorer\n")
+        (self.source / "src/view.js").write_bytes(b"visible sources\n")
+        (self.root / "LICENSE").write_bytes(b"license\n")
         self.backend = self.root / "gitpane"
         self.backend.write_bytes(b"built backend")
         self.archive = self.root / "package.vsix"
@@ -179,6 +175,47 @@ class PackageTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "may already be public"):
                 publish_packages(directory, self.source, verify_only=False)
+
+    def test_release_preflight_accepts_text_checkout_line_endings(self) -> None:
+        files = {
+            "extension/readme.md": self.source / "README.md",
+            "extension/src/view.js": self.source / "src/view.js",
+            "extension/LICENSE.txt": self.root / "LICENSE",
+        }
+        original = {name: file.read_bytes() for name, file in files.items()}
+        for source_ending, package_ending in [
+            (b"\n", b"\r\n"), (b"\r\n", b"\n")
+        ]:
+            with self.subTest(source_ending=source_ending):
+                for name, file in files.items():
+                    file.write_bytes(original[name].replace(b"\n", source_ending))
+                self.package(
+                    {name: data.replace(b"\n", package_ending)
+                     for name, data in original.items()},
+                    target="win32-x64",
+                )
+                self.assertEqual(
+                    verify_payload(self.archive, self.source, None, "win32-x64"),
+                    b"built backend",
+                )
+                with self.assertRaisesRegex(ValueError, "match source"):
+                    verify_payload(
+                        self.archive, self.source, self.backend, "win32-x64"
+                    )
+
+    def test_binary_assets_and_native_backends_keep_exact_bytes(self) -> None:
+        asset = self.source / "src/asset.bin"
+        asset.write_bytes(b"binary\nasset")
+        self.package({"extension/src/asset.bin": b"binary\r\nasset"})
+        with self.assertRaisesRegex(ValueError, "match source"):
+            verify_payload(self.archive, self.source, None, "darwin-arm64")
+        self.backend.write_bytes(b"binary\nbackend")
+        self.package({"extension/src/asset.bin": b"binary\nasset",
+                      "extension/bin/gitpane": b"binary\r\nbackend"})
+        with self.assertRaisesRegex(ValueError, "match source"):
+            verify_payload(
+                self.archive, self.source, self.backend, "darwin-arm64"
+            )
 
 
 if __name__ == "__main__":
