@@ -559,7 +559,7 @@ async function main() {
   api.repositories = api.repositories.filter(item => item !== worktree);
   closedRepositories.fire(worktree);
   provider.tree.backendStatuses.set(parentStatusKey, { ...originalParentStatus,
-    worktrees: originalParentStatus.worktrees.map(item => fs.realpathSync(item.path) === fs.realpathSync(worktreePath)
+    worktrees: originalParentStatus.worktrees.map(item => sameLocation(item.path, worktreePath)
       ? { ...item, repo_identity: undefined } : item) });
   provider.tree.changed();
   assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'linked'));
@@ -647,10 +647,18 @@ async function main() {
   const warningsBeforeFetch = warnings.length;
   await commands.get('gitpane.fetchWorkspace')();
   assert.equal(errors.length, errorsBeforeFetch, errors.at(-1));
-  assert.equal(warnings.length, warningsBeforeFetch, warnings.at(-1));
-  assert.equal(git('rev-parse', 'refs/remotes/origin/main'), gitAt(mainWriter, 'rev-parse', 'HEAD'));
-  assert.equal(git('rev-parse', 'refs/remotes/review/main'), gitAt(linkedWriter, 'rev-parse', 'HEAD'));
-  console.log('PASS explicit workspace fetch respects different worktree remotes');
+  if (process.platform === 'win32') {
+    assert.equal(warnings.length, warningsBeforeFetch + 1);
+    assert.match(warnings.at(-1), /fetch.*not supported.*platform/i);
+    assert.equal(git('rev-parse', 'refs/remotes/origin/main'), oldMain);
+    assert.equal(git('rev-parse', 'refs/remotes/review/main'), oldLinked);
+    console.log('PASS unavailable Windows workspace fetch reports its limitation and leaves remote refs unchanged');
+  } else {
+    assert.equal(warnings.length, warningsBeforeFetch, warnings.at(-1));
+    assert.equal(git('rev-parse', 'refs/remotes/origin/main'), gitAt(mainWriter, 'rev-parse', 'HEAD'));
+    assert.equal(git('rev-parse', 'refs/remotes/review/main'), gitAt(linkedWriter, 'rev-parse', 'HEAD'));
+    console.log('PASS explicit workspace fetch respects different worktree remotes');
+  }
 
   vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }, { uri: uri(worktreePath) }];
   workspaceChanged.fire({});
