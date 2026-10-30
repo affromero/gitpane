@@ -9,7 +9,7 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
     let (_source_tmp, source, _source_repo) = setup();
     let output = crate::git::process::git_command(&path)
         .args(["-c", "protocol.file.allow=always", "submodule", "add", "--"])
-        .arg(&source)
+        .arg(crate::repo_id::boundary_path(&source).as_ref())
         .arg("child")
         .output()
         .unwrap();

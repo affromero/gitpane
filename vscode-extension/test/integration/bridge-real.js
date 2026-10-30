@@ -84,9 +84,9 @@ async function waitForFile(file) {
         return child;
       }
     });
-    const root = fs.realpathSync(workspace);
-    const repoPath = fs.realpathSync(repo);
-    const outsidePath = fs.realpathSync(outside);
+    const root = fs.realpathSync.native(workspace);
+    const repoPath = fs.realpathSync.native(repo);
+    const outsidePath = fs.realpathSync.native(outside);
     assert.deepEqual(await client.initialize([root]), { version: 1 });
 
     if (process.platform !== 'win32') {
@@ -116,7 +116,7 @@ async function waitForFile(file) {
       fs.mkdirSync(directory);
       git(directory, 'init', '-q');
       fs.writeFileSync(path.join(directory, 'change.txt'), 'change\n');
-      many.push({ path: fs.realpathSync(directory) });
+      many.push({ path: fs.realpathSync.native(directory) });
     }
     const openedAt = process.hrtime.bigint();
     for (const entry of many) {

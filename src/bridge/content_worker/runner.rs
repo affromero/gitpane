@@ -17,11 +17,11 @@ pub(super) fn command(request: &Request) -> Command {
     let mut command = Command::new(&request.git_executable);
     crate::git::process::clear_inherited_git_env(&mut command);
     let mut git_dir = OsString::from("--git-dir=");
-    git_dir.push(request.repo.join(".git"));
+    git_dir.push(crate::repo_id::boundary_path(&request.repo.join(".git")).as_ref());
     let mut work_tree = OsString::from("--work-tree=");
-    work_tree.push(&request.repo);
+    work_tree.push(crate::repo_id::boundary_path(&request.repo).as_ref());
     command
-        .current_dir(&request.repo)
+        .current_dir(crate::repo_id::boundary_path(&request.repo).as_ref())
         .arg(git_dir)
         .arg(work_tree);
     command

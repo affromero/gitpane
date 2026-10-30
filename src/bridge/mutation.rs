@@ -582,8 +582,8 @@ pub(super) fn worktree_remove(scope: &Scope, input: RemoveWorktree) -> Result<Va
         return Err(stale_worktree());
     }
     if current.repo == current.target {
-        let common = current
-            .common_dir
+        let common_path = crate::repo_id::boundary_path(&current.common_dir);
+        let common = common_path
             .to_str()
             .ok_or_else(|| repo_error("Git common directory path is not valid UTF-8"))?;
         let mut args = vec![format!("--git-dir={common}")];

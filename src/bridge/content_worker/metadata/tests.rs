@@ -245,14 +245,17 @@ fn configuration_fingerprint_tracks_canonical_git_configuration() {
     fs::write(&global, "").unwrap();
     repo.config()
         .unwrap()
-        .set_str("include.path", included.to_str().unwrap())
+        .set_str(
+            "include.path",
+            crate::repo_id::boundary_path(&included).to_str().unwrap(),
+        )
         .unwrap();
     for mode in ["normal", "environment"] {
         fs::write(&included, "").unwrap();
         fs::write(&global, "").unwrap();
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command.args(["--exact", "bridge::content_worker::metadata::tests::configuration_fingerprint_tracks_canonical_git_configuration", "--nocapture"])
-            .env(MODE, mode).env(REPO, &root).env("GIT_CONFIG_GLOBAL", &global)
+            .env(MODE, mode).env(REPO, &root).env("GIT_CONFIG_GLOBAL", crate::repo_id::boundary_path(&global).as_ref())
             .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG", root.join("ignored.conf"))
             .env_remove("GIT_CONFIG_COUNT").env_remove("GIT_CONFIG_PARAMETERS");
         if mode == "environment" {

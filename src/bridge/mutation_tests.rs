@@ -13,6 +13,10 @@ mod self_removal;
 fn repo_with_files(path: &Path) -> Repository {
     std::fs::create_dir_all(path).unwrap();
     let repo = Repository::init(path).unwrap();
+    repo.config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
     let mut index = repo.index().unwrap();
     for name in ["file.txt", "sentinel.txt"] {
         std::fs::write(path.join(name), "original\n").unwrap();
@@ -368,7 +372,8 @@ fn worktree_actions_create_inside_workspace_and_refuse_dirty_removal() {
         create(&worktree, "-bad")["error"]["code"],
         "invalid_request"
     );
-    assert_eq!(create(&worktree, "feature")["result"], json!({}));
+    let result = create(&worktree, "feature");
+    assert_eq!(result["result"], json!({}), "{result}");
     let remove = |path: &Path| {
         mutation(
             &workspace,
@@ -395,16 +400,14 @@ fn worktree_removal_preview_revalidates_identity_and_respects_git_safety_checks(
     let repo_path = workspace.join("repo");
     let _repo = repo_with_files(&repo_path);
     let worktree = workspace.join("worktree");
-    assert_eq!(
-        mutation(
-            &workspace,
-            "worktree_create",
-            json!({
-                "repo": repo_path, "path": worktree, "branch": "feature"
-            })
-        )["result"],
-        json!({})
+    let result = mutation(
+        &workspace,
+        "worktree_create",
+        json!({
+            "repo": repo_path, "path": worktree, "branch": "feature"
+        }),
     );
+    assert_eq!(result["result"], json!({}), "{result}");
     let preview = worktree_preview(&workspace, &repo_path, &worktree);
     let repo_identity = preview["result"]["repo_identity"].as_str().unwrap();
     let worktree_identity = preview["result"]["worktree_identity"].as_str().unwrap();
@@ -523,16 +526,14 @@ fn worktree_removal_rejects_replaced_anchor_git_metadata() {
     let head = repo.head().unwrap().target().unwrap();
     drop(repo);
     let worktree = workspace.join("worktree");
-    assert_eq!(
-        mutation(
-            &workspace,
-            "worktree_create",
-            json!({
-                "repo": repo_path, "path": worktree, "branch": "feature"
-            })
-        )["result"],
-        json!({})
+    let result = mutation(
+        &workspace,
+        "worktree_create",
+        json!({
+            "repo": repo_path, "path": worktree, "branch": "feature"
+        }),
     );
+    assert_eq!(result["result"], json!({}), "{result}");
     let preview = worktree_preview(&workspace, &repo_path, &worktree);
     let gitdir = repo_path.join(".git");
     let backup = temporary.path().join("old-anchor-gitdir");
@@ -876,6 +877,10 @@ fn repo_sync_pushes_pulls_and_rebases_using_configured_remote() {
     }
     let peer_path = temporary.path().join("peer");
     let peer = Repository::clone(remote_path.to_str().unwrap(), &peer_path).unwrap();
+    peer.config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
     let push_peer = || {
         let output = crate::git::process::git_command(&peer_path)
             .args(["push", "origin", &format!("HEAD:{refname}")])

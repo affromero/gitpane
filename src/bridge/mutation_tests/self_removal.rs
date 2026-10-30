@@ -111,10 +111,8 @@ fn lone_linked_root_can_be_removed_only_with_current_identity_and_git_safety() {
     );
     assert!(linked.exists());
     let fresh = worktree_preview(&linked, &linked, &linked);
-    assert_eq!(
-        mutation(&linked, "worktree_remove", params(&linked, &fresh))["result"],
-        json!({})
-    );
+    let result = mutation(&linked, "worktree_remove", params(&linked, &fresh));
+    assert_eq!(result["result"], json!({}), "{result}");
     assert!(!linked.exists());
     assert!(main.exists());
     assert_eq!(
@@ -154,10 +152,8 @@ fn self_removal_supports_bare_and_separate_git_directories() {
         ],
     );
     let preview = worktree_preview(&linked, &linked, &linked);
-    assert_eq!(
-        mutation(&linked, "worktree_remove", params(&linked, &preview))["result"],
-        json!({})
-    );
+    let result = mutation(&linked, "worktree_remove", params(&linked, &preview));
+    assert_eq!(result["result"], json!({}), "{result}");
     assert!(bare.exists());
 
     let main = temp.path().join("separate main");

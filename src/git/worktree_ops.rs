@@ -7,7 +7,9 @@ pub(crate) fn create_arguments(branch: &str, path: &Path) -> Vec<String> {
         "-b".into(),
         branch.into(),
         "--".into(),
-        path.to_string_lossy().into_owned(),
+        crate::repo_id::boundary_path(path)
+            .to_string_lossy()
+            .into_owned(),
     ]
 }
 
@@ -16,6 +18,8 @@ pub(crate) fn remove_arguments(path: &Path) -> Vec<String> {
         "worktree".into(),
         "remove".into(),
         "--".into(),
-        path.to_string_lossy().into_owned(),
+        crate::repo_id::boundary_path(path)
+            .to_string_lossy()
+            .into_owned(),
     ]
 }

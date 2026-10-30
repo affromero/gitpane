@@ -351,7 +351,7 @@ mod tests {
         let linked = repo.join("linked");
         let output = crate::git::process::git_command(&repo)
             .args(["worktree", "add", "-b", "linked"])
-            .arg(&linked)
+            .arg(crate::repo_id::boundary_path(&linked).as_ref())
             .output()
             .unwrap();
         assert!(

@@ -33,7 +33,8 @@ pub(crate) fn clear_inherited_git_env(cmd: &mut std::process::Command) {
 pub(crate) fn git_command(path: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
     clear_inherited_git_env(&mut cmd);
-    cmd.arg("-C").arg(path);
+    cmd.arg("-C")
+        .arg(crate::repo_id::boundary_path(path).as_ref());
     cmd
 }
 

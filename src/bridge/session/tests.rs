@@ -121,7 +121,7 @@ fn liveness_matches_nested_panes_and_linked_worktrees() {
     repo(&sibling);
     let output = crate::git::process::git_command(&main)
         .args(["worktree", "add", "-b", "linked"])
-        .arg(&linked)
+        .arg(crate::repo_id::boundary_path(&linked).as_ref())
         .output()
         .unwrap();
     assert!(
