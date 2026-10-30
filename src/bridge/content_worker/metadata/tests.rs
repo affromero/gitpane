@@ -131,7 +131,12 @@ fn canonical_metadata_observes_replacements_stages_and_configuration() {
     fs::write(&config_file, "[diff \"custom\"]\ntextconv = first\n").unwrap();
     repo.config()
         .unwrap()
-        .set_str("include.path", config_file.to_str().unwrap())
+        .set_str(
+            "include.path",
+            crate::repo_id::boundary_path(&config_file)
+                .to_str()
+                .unwrap(),
+        )
         .unwrap();
     let configured = metadata(&request(&root), &items).unwrap();
     assert_eq!(configured["volatile"], true);

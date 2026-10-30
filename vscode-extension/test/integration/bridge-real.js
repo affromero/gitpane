@@ -206,7 +206,9 @@ async function waitForFile(file) {
     console.log('PASS configured review bases are pinned across pending launcher choices');
 
     const plannedWorktree = await configuredClient.planWorktree(repoPath, 'feature/verify');
-    assert.equal(fs.realpathSync(path.dirname(plannedWorktree.path)), fs.realpathSync(configuredWorktrees));
+    const plannedParent = fs.statSync(path.dirname(plannedWorktree.path), { bigint: true });
+    const configuredParent = fs.statSync(configuredWorktrees, { bigint: true });
+    assert.deepEqual([plannedParent.dev, plannedParent.ino], [configuredParent.dev, configuredParent.ino]);
     assert.equal(path.basename(plannedWorktree.path), 'repo-feature-verify');
     assert.equal(plannedWorktree.problem, null);
     await configuredClient.initialize([repoPath]);

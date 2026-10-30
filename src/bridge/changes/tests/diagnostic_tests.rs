@@ -8,7 +8,15 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
     let (_temporary, path, repo) = setup();
     let (_source_tmp, source, _source_repo) = setup();
     let output = crate::git::process::git_command(&path)
-        .args(["-c", "protocol.file.allow=always", "submodule", "add", "--"])
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            "core.autocrlf=true",
+            "submodule",
+            "add",
+            "--",
+        ])
         .arg(crate::repo_id::boundary_path(&source).as_ref())
         .arg("child")
         .output()
@@ -21,7 +29,14 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
     commit_index(&repo, "add submodule");
 
     let child_path = path.join("child");
+    let initial_contents = fs::read(child_path.join("mixed.txt")).unwrap();
     let child = Repository::open(&child_path).unwrap();
+    child
+        .config()
+        .unwrap()
+        .set_bool("core.autocrlf", true)
+        .unwrap();
+    assert!(initial_contents.ends_with(b"\r\n"));
     fs::write(child_path.join("new.txt"), "local commit\n").unwrap();
     let mut child_index = child.index().unwrap();
     child_index.add_path(Path::new("new.txt")).unwrap();
@@ -128,7 +143,7 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
         "submodule_attention"
     );
 
-    fs::write(child_path.join("mixed.txt"), "initial\n").unwrap();
+    fs::write(child_path.join("mixed.txt"), initial_contents).unwrap();
     fs::write(child_path.join("second.txt"), "second local commit\n").unwrap();
     let mut index = child.index().unwrap();
     index.add_path(Path::new("second.txt")).unwrap();
@@ -162,7 +177,24 @@ fn warned_submodule_is_visible_without_making_parent_dirty() {
         )
         .unwrap();
     let published = begin(&mut store, &scope, &path);
-    assert!(published["changes"].as_array().unwrap().is_empty());
+    let child_status = crate::git::process::git_command(&child_path)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert!(
+        child_status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&child_status.stderr)
+    );
+    assert!(
+        child_status.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&child_status.stdout)
+    );
+    assert!(
+        published["changes"].as_array().unwrap().is_empty(),
+        "{published}"
+    );
     assert!(
         !crate::git::status::query_status(&path, &options)
             .unwrap()
