@@ -153,6 +153,16 @@ async function main() {
     provider.resolveWebviewView(view);
   } finally { Module._load = load; }
   await receive({ type: 'ready' });
+  const shortcutOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  const shortcutChild = shortcutOwner.worktrees.find(item => item.name === 'linked');
+  await receive({ type: 'shortcut', id: shortcutChild.id, key: 'y' });
+  assert.equal(fs.realpathSync(copied.at(-1)), fs.realpathSync(worktreePath));
+  await receive({ type: 'shortcut', id: shortcutOwner.id, key: 'y' });
+  assert.equal(fs.realpathSync(copied.at(-1)), fs.realpathSync(repoPath));
+  await receive({ type: 'shortcut', id: shortcutChild.id, key: 'o' });
+  assert.equal(fs.realpathSync(terminals.at(-1).cwd.fsPath), fs.realpathSync(worktreePath));
+  assert.deepEqual(errors, []);
+  console.log('PASS keyboard actions target the selected repository and linked worktree');
   for (let attempt = 0; attempt < 100 && !provider.theme.value && !provider.theme.error; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
@@ -486,6 +496,24 @@ async function main() {
     console.log('PASS symlink diff shows link text and remains current after paging');
   } else console.log('SKIP symlink diff on Windows: creating symlinks requires host privileges');
 
+  await commands.get('gitpane.refresh')();
+  confirmAction = false;
+  for (const available of [true, false]) {
+    if (!available) {
+      api.repositories = api.repositories.filter(item => item !== worktree);
+      closedRepositories.fire(worktree);
+      provider.tree.changed();
+    }
+    const row = snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.find(item => item.name === 'linked');
+    assert.equal(row.available, available);
+    const before = confirmations.length;
+    await receive({ type: 'shortcut', id: row.id, key: 'd' });
+    assert.equal(confirmations.length, before + 1, errors.at(-1));
+    assert.ok(fs.existsSync(worktreePath));
+  }
+  confirmAction = true;
+  api.repositories.push(worktree);
+  openedRepositories.fire(worktree);
   await commands.get('gitpane.refresh')();
   const parent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const linked = parent?.worktrees.find(item => item.name === 'linked');

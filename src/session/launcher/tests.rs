@@ -10,7 +10,8 @@ fn herdr_new_tab_can_target_a_verified_workspace_without_changing_default() {
         None,
         Multiplexer::Herdr,
     );
-    let targeted = plan_with_herdr_workspace(Some("printf %s {path}"), "new-window", path, "w1");
+    let targeted =
+        plan_with_herdr_workspace(Some("printf %s {path}"), "new-window", path, None, "w1");
     let (
         LaunchPlan::Herdr {
             create: normal,
@@ -43,7 +44,7 @@ fn herdr_new_tab_can_target_a_verified_workspace_without_changing_default() {
     );
     assert_eq!(normal_command, pinned_command);
     assert!(matches!(
-        plan_with_herdr_workspace(None, "new-window", path, "--bad"),
+        plan_with_herdr_workspace(None, "new-window", path, None, "--bad"),
         LaunchPlan::Error(_)
     ));
 }

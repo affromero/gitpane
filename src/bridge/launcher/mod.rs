@@ -23,6 +23,8 @@ pub(super) struct ActionRequest {
     repo: PathBuf,
     id: String,
     fingerprint: String,
+    #[serde(default)]
+    expected_base_ref: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -33,6 +35,7 @@ struct Action {
     key: Option<String>,
     command: Option<String>,
     placement: String,
+    review_base: Option<String>,
 }
 
 impl Action {
@@ -42,7 +45,7 @@ impl Action {
     }
 
     fn summary(&self) -> Value {
-        json!({ "id": self.id, "label": self.label, "kind": self.kind, "fingerprint": self.fingerprint() })
+        json!({ "id": self.id, "label": self.label, "kind": self.kind, "key": self.key, "fingerprint": self.fingerprint() })
     }
 }
 
@@ -54,7 +57,24 @@ fn actions(config: &Config) -> Vec<Action> {
         key: None,
         command: config.open.command.clone(),
         placement: config.open.placement.clone(),
+        review_base: None,
     }];
+    if config
+        .review
+        .command
+        .as_deref()
+        .is_some_and(|command| !command.trim().is_empty())
+    {
+        result.push(Action {
+            id: "review".into(),
+            label: "Gitpane Review".into(),
+            kind: "review",
+            key: None,
+            command: config.review.command.clone(),
+            placement: config.review.placement.clone(),
+            review_base: config.review.base.clone(),
+        });
+    }
     result.extend(
         config
             .keybindings
@@ -71,6 +91,7 @@ fn actions(config: &Config) -> Vec<Action> {
                 key: Some(binding.key.clone()),
                 command: Some(binding.command.clone()),
                 placement: binding.placement.clone(),
+                review_base: None,
             }),
     );
     result
@@ -99,7 +120,64 @@ fn selected(config: &Config, id: &str, fingerprint: &str) -> Result<Action, Brid
     Ok(action)
 }
 
+fn review_base(action: &Action, repo: &Path) -> Result<Option<String>, BridgeError> {
+    if action.kind != "review" {
+        if !action
+            .command
+            .as_deref()
+            .is_some_and(|command| command.contains("{base}"))
+        {
+            return Ok(None);
+        }
+        return Err(BridgeError::new(
+            "invalid_request",
+            "A review base is not available for this launcher.",
+        ));
+    }
+    let repository = git2::Repository::open(repo)
+        .map_err(|error| BridgeError::new("git_error", error.to_string()))?;
+    crate::git::commit_files::resolve_review_base(&repository, action.review_base.as_deref())
+        .map(Some)
+        .ok_or_else(|| {
+            BridgeError::new(
+                "invalid_request",
+                "No review base resolved; set [review] base in config",
+            )
+        })
+}
+
+fn selected_with_base(
+    repo: &Path,
+    id: &str,
+    fingerprint: &str,
+    expected: Option<&str>,
+) -> Result<Action, BridgeError> {
+    let mut action = selected(&load()?, id, fingerprint)?;
+    let base = review_base(&action, repo)?;
+    if base.as_deref() != expected {
+        return Err(BridgeError::new(
+            "stale_launcher",
+            "The review base changed. Select the launcher again.",
+        ));
+    }
+    action.review_base = base;
+    Ok(action)
+}
+
 fn make_plan(action: &Action, repo: &Path) -> Result<Value, BridgeError> {
+    let base = review_base(action, repo)?;
+    let mut plan = make_plan_with_base(action, repo, base.as_deref())?;
+    if action.kind == "review" {
+        plan["base_ref"] = json!(base);
+    }
+    Ok(plan)
+}
+
+fn make_plan_with_base(
+    action: &Action,
+    repo: &Path,
+    base: Option<&str>,
+) -> Result<Value, BridgeError> {
     let path = repo.to_str().ok_or_else(|| {
         BridgeError::new("invalid_request", "Repository path is not valid UTF-8.")
     })?;
@@ -114,13 +192,7 @@ fn make_plan(action: &Action, repo: &Path) -> Result<Value, BridgeError> {
         }
         "command" => {
             let command = command.expect("command was checked");
-            if command.contains("{base}") {
-                return Err(BridgeError::new(
-                    "invalid_request",
-                    "A review base is not available for this launcher.",
-                ));
-            }
-            match launcher::plan(Some(command), "command", path, None, Multiplexer::None) {
+            match launcher::plan(Some(command), "command", path, base, Multiplexer::None) {
                 LaunchPlan::Spawn(argv) if !argv.is_empty() => {
                     Ok(json!({ "kind": "argv", "argv": argv, "fingerprint": fingerprint }))
                 }
@@ -138,23 +210,18 @@ fn make_plan(action: &Action, repo: &Path) -> Result<Value, BridgeError> {
                     "Inline shell launchers are not supported on this platform.",
                 ));
             }
-            let script = launcher::integrated_shell_script(command.expect("command was checked"))
-                .map_err(|message| BridgeError::new("invalid_request", message))?;
+            let script =
+                launcher::integrated_shell_script(command.expect("command was checked"), base)
+                    .map_err(|message| BridgeError::new("invalid_request", message))?;
             Ok(
-                json!({ "kind": "shell", "script": script, "env": { "GITPANE_LAUNCH_PATH": path, "GITPANE_LAUNCH_BASE": "" }, "fingerprint": fingerprint }),
+                json!({ "kind": "shell", "script": script, "env": { "GITPANE_LAUNCH_PATH": path, "GITPANE_LAUNCH_BASE": base.unwrap_or("") }, "fingerprint": fingerprint }),
             )
         }
         "ask" => Ok(json!({ "kind": "ask", "fingerprint": fingerprint })),
         placement
             if placement.starts_with("split-window") || placement.starts_with("new-window") =>
         {
-            if command.is_some_and(|value| value.contains("{base}")) {
-                return Err(BridgeError::new(
-                    "invalid_request",
-                    "A review base is not available for this launcher.",
-                ));
-            }
-            match launcher::plan(command, placement, path, None, Multiplexer::Tmux) {
+            match launcher::plan(command, placement, path, base, Multiplexer::Tmux) {
                 LaunchPlan::Spawn(_) => {
                     Ok(json!({ "kind": "multiplexer", "fingerprint": fingerprint }))
                 }
@@ -198,14 +265,82 @@ pub(super) fn plan(scope: &Scope, input: ActionRequest) -> Result<Value, BridgeE
 
 pub(super) fn validate(scope: &Scope, input: ActionRequest) -> Result<Value, BridgeError> {
     let repo = scope.repository(&input.repo)?;
-    selected(&load()?, &input.id, &input.fingerprint)?;
+    let action = selected_with_base(
+        &repo,
+        &input.id,
+        &input.fingerprint,
+        input.expected_base_ref.as_deref(),
+    )?;
     scope.repository(&repo)?;
-    Ok(json!({ "valid": true }))
+    Ok(json!({ "valid": true, "base_ref": action.review_base }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_launchers_preserve_raw_configured_bases_and_quote_shell_data() {
+        let directory = tempfile::tempdir().unwrap();
+        git2::Repository::init(directory.path()).unwrap();
+        let mut config = Config::default();
+        config.review.command = Some("reviewer {base} {path}".into());
+        config.review.placement = "command".into();
+        for base in ["", "missing-ref", "topic $(touch unsafe); 'quoted'"] {
+            config.review.base = Some(base.into());
+            let action = actions(&config).remove(1);
+            let plan = make_plan(&action, directory.path()).unwrap();
+            assert_eq!(plan["base_ref"], base);
+            assert_eq!(
+                plan["argv"],
+                json!(["reviewer", base, directory.path().to_str().unwrap()])
+            );
+        }
+        config.review.base = None;
+        assert_eq!(
+            make_plan(&actions(&config).remove(1), directory.path())
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+        config.review.command = Some("reviewer {path}".into());
+        assert_eq!(
+            make_plan(&actions(&config).remove(1), directory.path())
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+        #[cfg(unix)]
+        {
+            config.review.base = Some("topic $(touch unsafe); 'quoted'".into());
+            config.review.command = Some("printf '%s\\n' {base} {path}".into());
+            config.review.placement = "inline".into();
+            let plan = make_plan(&actions(&config).remove(1), directory.path()).unwrap();
+            let output = std::process::Command::new("sh")
+                .args(["-c", plan["script"].as_str().unwrap()])
+                .env(
+                    "GITPANE_LAUNCH_BASE",
+                    plan["env"]["GITPANE_LAUNCH_BASE"].as_str().unwrap(),
+                )
+                .env(
+                    "GITPANE_LAUNCH_PATH",
+                    plan["env"]["GITPANE_LAUNCH_PATH"].as_str().unwrap(),
+                )
+                .current_dir(directory.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "{}\n{}\n",
+                    config.review.base.unwrap(),
+                    directory.path().display()
+                )
+            );
+            assert!(!directory.path().join("unsafe").exists());
+        }
+    }
 
     #[test]
     fn configured_launchers_keep_paths_as_data_and_reject_changes() {

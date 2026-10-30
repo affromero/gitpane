@@ -17,6 +17,9 @@ env:
   MSRV: 1.88.0
 
 jobs:
+  vscode-packages:
+    uses: ./.github/workflows/vscode.yml
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

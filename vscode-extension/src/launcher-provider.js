@@ -40,7 +40,8 @@ function terminalOptions(plan, repo, title, fingerprint) {
     const env = plan.env;
     if (process.platform === 'win32' || !validString(plan.script) || !env || typeof env !== 'object' ||
         Array.isArray(env) || Object.keys(env).sort().join(',') !== 'GITPANE_LAUNCH_BASE,GITPANE_LAUNCH_PATH' ||
-        env.GITPANE_LAUNCH_BASE !== '' || !validString(env.GITPANE_LAUNCH_PATH)) {
+        typeof env.GITPANE_LAUNCH_BASE !== 'string' || env.GITPANE_LAUNCH_BASE.includes('\0') ||
+        env.GITPANE_LAUNCH_BASE !== (plan.base_ref ?? '') || !validString(env.GITPANE_LAUNCH_PATH)) {
       throw new Error('Unsupported or invalid shell launcher plan.');
     }
     options.shellPath = 'sh';
@@ -86,7 +87,8 @@ class LauncherProvider {
       if (!selected || !backends.includes(selected)) return;
       backend = selected.kind;
     }
-    const result = await this.backend.launcherChoices(repo.rootUri.fsPath, action.id, action.fingerprint, backend);
+    const baseArgs = action.kind === 'review' ? [plan.base_ref] : [];
+    const result = await this.backend.launcherChoices(repo.rootUri.fsPath, action.id, action.fingerprint, backend, ...baseArgs);
     this.requireCurrent(repo, generation, guard);
     if (!result || result.repo_identity !== plan.repo_identity || !Array.isArray(result.choices) ||
         (result.notice != null && !validString(result.notice))) {
@@ -113,14 +115,14 @@ class LauncherProvider {
       this.requireCurrent(repo, generation, guard);
       if (!target || !choices.includes(target)) return;
     }
-    const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, action.id, action.fingerprint);
+    const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, action.id, action.fingerprint, ...baseArgs);
     this.requireCurrent(repo, generation, guard);
-    if (!validation || validation.valid !== true) throw new Error('Launcher configuration changed. Choose it again.');
+    if (!validation || validation.valid !== true || (action.kind === 'review' && validation.base_ref !== plan.base_ref)) throw new Error('Launcher configuration changed. Choose it again.');
     await this.backend.executeLauncher(repo.rootUri.fsPath, action.id, action.fingerprint,
-      plan.repo_identity, backend, target.id, target.contextToken, () => !!this.current(repo, generation, guard));
+      plan.repo_identity, backend, target.id, target.contextToken, () => !!this.current(repo, generation, guard), ...baseArgs);
   }
 
-  async open(repo, guard = () => true) {
+  async open(repo, guard = () => true, selector) {
     const generation = ++this.generation;
     const token = repo && this.tree.repositoryToken(repo);
     const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
@@ -132,28 +134,34 @@ class LauncherProvider {
       if (!result || !Array.isArray(result.actions)) throw new Error('Gitpane returned an invalid launcher list.');
       const ids = new Set();
       const choices = result.actions.map(action => {
-        if (!action || !validString(action.id) || !validString(action.label) || !['open', 'keybinding'].includes(action.kind) ||
+        if (!action || !validString(action.id) || !validString(action.label) || !['open', 'review', 'keybinding'].includes(action.kind) ||
             !validString(action.fingerprint) || ids.has(action.id)) throw new Error('Gitpane returned an invalid launcher list.');
         ids.add(action.id);
-        return { label: text(action.label), id: action.id, fingerprint: action.fingerprint };
+        return { label: text(action.label), id: action.id, kind: action.kind, key: action.key, fingerprint: action.fingerprint };
       });
       if (!choices.length) {
         await this.vscode.window.showInformationMessage('No configured Gitpane launchers for this repository.');
         return;
       }
-      const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane launcher' });
+      const selected = selector
+        ? choices.find(action => selector.id ? action.id === selector.id : action.kind === 'keybinding' && action.key === selector.key)
+        : await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane launcher' });
+      if (selector && !selected) throw new Error('The configured launcher changed. Refresh and try again.');
       this.requireCurrent(repo, generation, currentGuard);
       if (!selected || !choices.includes(selected)) return;
       const plan = await this.backend.planLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
       let current = this.requireCurrent(repo, generation, currentGuard);
+      if (selected.kind === 'review' && !(plan?.base_ref === null ||
+          (typeof plan?.base_ref === 'string' && !plan.base_ref.includes('\0')))) throw new Error('Gitpane returned an invalid review base.');
       if (plan?.kind === 'multiplexer' || plan?.kind === 'ask') {
         await this.openMultiplexer(repo, generation, currentGuard, selected, plan);
         return;
       }
       const options = terminalOptions(plan, current, selected.label, selected.fingerprint);
-      const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint);
+      const validation = await this.backend.validateLauncher(repo.rootUri.fsPath, selected.id, selected.fingerprint,
+        ...(selected.kind === 'review' ? [plan.base_ref] : []));
       current = this.requireCurrent(repo, generation, currentGuard);
-      if (!validation || validation.valid !== true) throw new Error('Launcher configuration changed. Choose it again.');
+      if (!validation || validation.valid !== true || (selected.kind === 'review' && validation.base_ref !== plan.base_ref)) throw new Error('Launcher configuration changed. Choose it again.');
       options.cwd = current.rootUri;
       terminal = this.vscode.window.createTerminal(options);
       terminal.show();

@@ -23,12 +23,15 @@ function normalizeAction(method, params) {
       typeof params.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(params.fingerprint) ||
       typeof params.expected_repo_identity !== 'string' || !/^[a-f0-9]{64}$/.test(params.expected_repo_identity) ||
       typeof params.choice !== 'string' || !params.choice || params.choice.includes('\0') ||
-      typeof params.context_token !== 'string' || !/^[a-f0-9]{64}$/.test(params.context_token)) {
+      typeof params.context_token !== 'string' || !/^[a-f0-9]{64}$/.test(params.context_token) ||
+      (params.expected_base_ref !== undefined && params.expected_base_ref !== null &&
+        (typeof params.expected_base_ref !== 'string' || params.expected_base_ref.includes('\0')))) {
       throw new BridgeError('invalid_request', 'A current launcher placement and context are required.');
     }
     return { repo: params.repo, id: params.id, fingerprint: params.fingerprint,
       expected_repo_identity: params.expected_repo_identity, backend: params.backend,
-      choice: params.choice, context_token: params.context_token };
+      choice: params.choice, context_token: params.context_token,
+      ...(params.expected_base_ref !== undefined ? { expected_base_ref: params.expected_base_ref } : {}) };
   }
   if (method === 'repo_fetch' && typeof params.expected_repo_identity === 'string' && /^[a-f0-9]{64}$/.test(params.expected_repo_identity) &&
     typeof params.expected_fetch_token === 'string' && /^[a-f0-9]{64}$/.test(params.expected_fetch_token)) {

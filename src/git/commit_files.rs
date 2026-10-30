@@ -171,18 +171,25 @@ fn changed_tree_files(
     Ok(files)
 }
 
+/// Select the configured review ref or the repository's detected default branch.
+pub(crate) fn resolve_review_base(
+    repo: &Repository,
+    configured_base: Option<&str>,
+) -> Option<String> {
+    configured_base
+        .map(str::to_owned)
+        .or_else(|| crate::git::status::default_branch_name(repo))
+}
+
 /// Compare committed HEAD against the merge base with the configured review base.
 pub(crate) fn list_review_files(
     path: &Path,
     configured_base: Option<&str>,
 ) -> color_eyre::Result<(String, Oid, Oid, Vec<CommitFile>)> {
     let repo = Repository::open(path)?;
-    let base_ref = configured_base
-        .map(str::to_owned)
-        .or_else(|| crate::git::status::default_branch_name(&repo))
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("No review base resolved; set [review] base in config")
-        })?;
+    let base_ref = resolve_review_base(&repo, configured_base).ok_or_else(|| {
+        color_eyre::eyre::eyre!("No review base resolved; set [review] base in config")
+    })?;
     let base = repo.revparse_single(&base_ref)?.peel_to_commit()?;
     let head = repo.head()?.peel_to_commit()?;
     let merge_base = repo.merge_base(base.id(), head.id())?;

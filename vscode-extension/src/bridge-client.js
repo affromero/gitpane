@@ -343,10 +343,14 @@ class BridgeClient {
 
   planLauncher(repo, id, fingerprint) { return this.request('launcher_plan', { repo, id, fingerprint }); }
 
-  validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', { repo, id, fingerprint }); }
+  validateLauncher(repo, id, fingerprint, expectedBaseRef) {
+    return this.request('launcher_validate', { repo, id, fingerprint,
+      ...(expectedBaseRef !== undefined ? { expected_base_ref: expectedBaseRef } : {}) });
+  }
 
-  async launcherChoices(repo, id, fingerprint, backend) {
-    try { return await this.request('launcher_choices', { repo, id, fingerprint, backend }); }
+  async launcherChoices(repo, id, fingerprint, backend, expectedBaseRef) {
+    try { return await this.request('launcher_choices', { repo, id, fingerprint, backend,
+      ...(expectedBaseRef !== undefined ? { expected_base_ref: expectedBaseRef } : {}) }); }
     catch (error) {
       if (error.code === 'invalid_request' && error.message === 'unknown bridge method') {
         throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support launcher placement choices. Update the backend and try again.');

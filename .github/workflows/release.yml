@@ -145,6 +145,12 @@ jobs:
           echo "Full changelog: https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md" >> release-notes.md
           cat release-notes.md
 
+      - name: Require all VS Code packages
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
+            test -s "artifacts/gitpane-explorer-$target.vsix" || exit 1
+          done
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v3.0.3
         with:

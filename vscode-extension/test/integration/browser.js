@@ -230,6 +230,7 @@ const scenario = String.raw`
     stashRepo = items().find(item => item.getAttribute('aria-label').includes('web-app'));
     stashRepo.querySelector('.row').click();
     const withWorktree = JSON.parse(JSON.stringify(snapshot));
+    withWorktree.launcherKeys = ['j', 'w', 'p', 'q', '=', '?'];
     withWorktree.theme = themed.theme;
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
       name: 'web-review', branch: 'review', dirty: true, live: true, fileCount: 2, ahead: 1, behind: 0, available: true,
@@ -284,6 +285,20 @@ const scenario = String.raw`
     nestedFile.querySelector('.row').click();
     check('clicking a worktree file opens its native change', window.posted.some(message =>
       message.type === 'openChange' && message.id === 'worktree-working' && !('path' in message)));
+    for (const key of ['p', 'P', 'v', 'o', 'G', 'g', 'y', 'j', 'w']) {
+      nestedFile.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      const message = window.posted.at(-1);
+      check('shortcut targets the selected worktree ' + key,
+        message.type === 'shortcut' && message.id === 'opaque-worktree' && message.key === key &&
+        (key !== 'y' || message.fileId === 'worktree-working'));
+    }
+    const beforeModified = window.posted.length;
+    for (const modifiers of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }, { repeat: true }]) {
+      nestedFile.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', bubbles: true, ...modifiers }));
+    }
+    check('modified and repeated shortcuts never launch actions', window.posted.length === beforeModified);
+    for (const key of ['q', '=', '?']) nestedFile.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    check('reserved native keys never invoke custom launchers', window.posted.length === beforeModified);
     worktree.querySelector('.row').click();
     worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));

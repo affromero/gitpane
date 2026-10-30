@@ -188,6 +188,23 @@ async function waitForFile(file) {
     git(repo, 'update-ref', 'refs/remotes/origin/config-check', rootOid);
     console.log('PASS graph configuration from the workspace-host config file');
 
+    const graphConfig = fs.readFileSync(configPath, 'utf8');
+    git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/config-check');
+    fs.appendFileSync(configPath, '\n[review]\ncommand = "reviewer {base} {path}"\nplacement = "command"\n');
+    const reviewAction = (await configuredClient.listLaunchers(repoPath)).actions.find(action => action.id === 'review');
+    const reviewPlan = await configuredClient.planLauncher(repoPath, reviewAction.id, reviewAction.fingerprint);
+    assert.equal(reviewPlan.base_ref, 'origin/config-check');
+    assert.deepEqual(reviewPlan.argv, ['reviewer', 'origin/config-check', repoPath]);
+    assert.equal((await configuredClient.validateLauncher(repoPath, reviewAction.id, reviewAction.fingerprint, reviewPlan.base_ref)).valid, true);
+    git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    git(repo, 'update-ref', 'refs/remotes/origin/main', rootOid);
+    await assert.rejects(configuredClient.validateLauncher(repoPath, reviewAction.id, reviewAction.fingerprint, reviewPlan.base_ref),
+      error => error.code === 'stale_launcher');
+    await assert.rejects(configuredClient.launcherChoices(repoPath, reviewAction.id, reviewAction.fingerprint, 'tmux', reviewPlan.base_ref),
+      error => error.code === 'stale_launcher');
+    fs.writeFileSync(configPath, graphConfig);
+    console.log('PASS configured review bases are pinned across pending launcher choices');
+
     const plannedWorktree = await configuredClient.planWorktree(repoPath, 'feature/verify');
     assert.equal(fs.realpathSync(path.dirname(plannedWorktree.path)), fs.realpathSync(configuredWorktrees));
     assert.equal(path.basename(plannedWorktree.path), 'repo-feature-verify');

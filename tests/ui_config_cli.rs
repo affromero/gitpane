@@ -41,12 +41,25 @@ fn worktree_visibility_uses_the_effective_config_and_requires_initialization() {
         json!({"id":3,"method":"ui_config","params":{}}),
         json!({"id":4,"method":"ui_config","params":{"unexpected":true}}),
     ];
-    for (text, expected) in [("", true), ("[ui]\nexpand_worktrees = false\n", false)] {
+    for (text, expected, keys, review) in [
+        ("", true, json!([]), false),
+        ("[ui]\nexpand_worktrees = false\n", false, json!([]), false),
+        (
+            "[review]\ncommand = 'viewer'\n[[keybindings]]\nkey = 'j'\ncommand = 'editor'\n[[keybindings]]\nkey = 'Ctrl+j'\ncommand = 'editor'\n[[keybindings]]\nkey = '🦀'\ncommand = 'editor'\n",
+            true,
+            json!(["j", "🦀"]),
+            true,
+        ),
+    ] {
         std::fs::write(&config, text).unwrap();
         let replies = exchange(&config, &requests);
         assert_eq!(replies[0]["error"]["code"], "not_initialized");
         assert_eq!(replies[1]["result"]["version"], 1);
-        assert_eq!(replies[2]["result"], json!({"expand_worktrees": expected}));
+        assert_eq!(
+            replies[2]["result"],
+            json!({"expand_worktrees": expected,
+            "launcher_keys": keys, "review_configured": review})
+        );
         assert_eq!(replies[3]["error"]["code"], "invalid_request");
     }
 }

@@ -181,6 +181,8 @@ class GitpaneViewProvider {
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : [])],
       ...(reveals.length ? { revealWorktrees: reveals } : {}),
       ...(typeof this.worktreeDisplay?.value === 'boolean' ? { expandWorktrees: this.worktreeDisplay.value } : {}),
+      launcherKeys: this.worktreeDisplay?.launcherKeys || [],
+      reviewConfigured: this.worktreeDisplay?.reviewConfigured === true,
       ...(this.theme?.value ? { theme: this.theme.payload() } : {}),
       ...(this.theme && !this.theme.value ? { themeClear: true } : {}),
       emptyMessage: children.find(node => node.type === 'info')?.message,
@@ -488,6 +490,48 @@ class GitpaneViewProvider {
     return child && this.tree.isCurrentRepository(child, selected.childToken) ? child : undefined;
   }
 
+  async handleShortcut(message) {
+    try {
+      if (typeof message.key !== 'string' || [...message.key].length !== 1 || ['q', '=', '?'].includes(message.key)) return;
+      const commands = { r: 'gitpane.refresh', R: 'gitpane.refresh', t: 'gitpane.pickTheme',
+        a: 'gitpane.addWorkspaceRepository', s: 'gitpane.sort' };
+      if (commands[message.key]) { await vscode.commands.executeCommand(commands[message.key]); return; }
+      const worktree = this.worktrees.get(message.id);
+      if (worktree && message.key === 'd') {
+        await this.actions?.handle({ type: 'action', action: 'removeWorktree', id: message.id });
+        return;
+      }
+      const repo = worktree ? this.currentWorktreeRepository(message.id) : this.currentRepository(message.id);
+      const id = worktree?.childRepoId || message.id;
+      if (!repo) return;
+      const token = this.tree.repositoryToken(repo);
+      const guard = () => this.tree.isCurrentRepository(repo, token) &&
+        (worktree ? this.currentWorktreeRepository(message.id) === repo : this.currentRepository(message.id) === repo);
+      if (message.key === 'g') {
+        if (worktree) await this.openWorktreeGraph?.(message.id, guard);
+        else await vscode.commands.executeCommand('gitpane.openGraph', id);
+        return;
+      }
+      if (message.key === 'o' || (message.key === 'v' && this.worktreeDisplay?.reviewConfigured) ||
+          (!['p', 'P', 'G', 'y', 'v', 'd'].includes(message.key) && this.worktreeDisplay?.launcherKeys?.includes(message.key))) {
+        await this.openLauncherShortcut?.(repo, guard, message.key === 'o' ? { id: 'open' } :
+          message.key === 'v' ? { id: 'review' } : { key: message.key });
+        return;
+      }
+      let action = { p: 'pull', P: 'push', G: 'session', v: 'reviewBranch', y: 'copyRepo',
+        d: worktree ? 'removeWorktree' : 'hideRepository' }[message.key];
+      if (message.key === 'y' && typeof message.fileId === 'string') {
+        const change = this.changes.get(message.fileId);
+        if (!change || change.ownerId !== message.id) return;
+        await this.actions?.handle({ type: 'action', action: 'copy', id: message.fileId }, undefined, guard);
+      } else if (action) {
+        if (worktree && message.key === 'v') action = 'reviewWorktree';
+        await this.actions?.handle({ type: 'action', action,
+          id: worktree && ['v', 'd'].includes(message.key) ? message.id : id }, undefined, guard);
+      }
+    } catch (error) { await vscode.window.showErrorMessage(`Gitpane shortcut: ${error.message}`); }
+  }
+
   resolveWebviewView(view) {
     for (const disposable of this.viewDisposables) disposable.dispose();
     this.viewDisposables = [];
@@ -539,6 +583,8 @@ class GitpaneViewProvider {
           if (this.currentRepository(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
         } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
           await this.openWorktreeGraph?.(message.id);
+        } else if (message?.type === 'shortcut' && typeof message.id === 'string' && typeof message.key === 'string') {
+          await this.handleShortcut(message);
         } else if (message?.type === 'menu' && typeof message.id === 'string') {
           if (message.kind === 'file') {
             const selected = this.changes.get(message.id);
@@ -662,6 +708,7 @@ async function activate(context) {
     catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }
   };
   provider.openWorktreeGraph = openWorktreeGraph;
+  provider.openLauncherShortcut = (repo, guard, selector) => launchers.open(repo, guard, selector);
   provider.actions = new SidebarActions({ vscode, mutations,
     removeWorkspaceRepository: async (id, guard) => {
       const repo = provider.currentRepository(id);

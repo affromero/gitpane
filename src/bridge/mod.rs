@@ -274,7 +274,21 @@ fn process(
         }
         "ui_config" => {
             let _: EmptyRequest = params(request.params)?;
-            Ok(json!({"expand_worktrees": options.theme.ui.expand_worktrees}))
+            let launcher_keys = options
+                .theme
+                .keybindings
+                .iter()
+                .filter_map(|binding| {
+                    let mut chars = binding.key.chars();
+                    let key = chars.next()?;
+                    (chars.next().is_none() && !key.is_control()).then_some(&binding.key)
+                })
+                .collect::<Vec<_>>();
+            Ok(
+                json!({"expand_worktrees": options.theme.ui.expand_worktrees,
+                "launcher_keys": launcher_keys,
+                "review_configured": options.theme.review.command.as_deref().is_some_and(|command| !command.trim().is_empty())}),
+            )
         }
         "themes_list" => {
             let _: EmptyRequest = params(request.params)?;

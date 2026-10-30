@@ -340,7 +340,7 @@ class BackendManager {
       else if (method === 'commit_files') result = await client.commitFiles(repo, argument);
       else if (method === 'launchers_list') result = await client.listLaunchers(repo);
       else if (method === 'launcher_plan') result = await client.planLauncher(repo, argument.id, argument.fingerprint);
-      else if (method === 'launcher_validate') result = await client.validateLauncher(repo, argument.id, argument.fingerprint);
+      else if (method === 'launcher_validate') result = await client.validateLauncher(repo, argument.id, argument.fingerprint, argument.expected_base_ref);
       else throw new BridgeError('invalid_request', 'Unsupported Gitpane backend request.');
       if (this.disposed || generation !== this.generation || !current()) {
         throw new BridgeError('workspace_changed', 'Workspace changed before the Gitpane response arrived.');
@@ -812,9 +812,12 @@ class BackendManager {
 
   planLauncher(repo, id, fingerprint) { return this.request('launcher_plan', repo, { id, fingerprint }); }
 
-  validateLauncher(repo, id, fingerprint) { return this.request('launcher_validate', repo, { id, fingerprint }); }
+  validateLauncher(repo, id, fingerprint, expectedBaseRef) {
+    return this.request('launcher_validate', repo, { id, fingerprint,
+      ...(expectedBaseRef !== undefined ? { expected_base_ref: expectedBaseRef } : {}) });
+  }
 
-  async launcherChoices(repo, id, fingerprint, backend) {
+  async launcherChoices(repo, id, fingerprint, backend, expectedBaseRef) {
     if (!['tmux', 'herdr'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
     const snapshot = await this.mutationSnapshot();
     const repoPath = await this.realpath(repo);
@@ -832,7 +835,7 @@ class BackendManager {
       }
       if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding launcher placements.');
       client.timeoutMs = 45000;
-      const result = await client.launcherChoices(repoPath, id, fingerprint, backend);
+      const result = await client.launcherChoices(repoPath, id, fingerprint, backend, expectedBaseRef);
       const currentPath = await this.realpath(repo);
       if (!this.isCurrentMutation(snapshot, repoPath) || currentPath !== repoPath) {
         throw new BridgeError('workspace_changed', 'Workspace changed while finding launcher placements.');
@@ -853,7 +856,7 @@ class BackendManager {
     }
   }
 
-  async executeLauncher(repo, id, fingerprint, expectedRepoIdentity, backend, choice, contextToken, validateTarget) {
+  async executeLauncher(repo, id, fingerprint, expectedRepoIdentity, backend, choice, contextToken, validateTarget, expectedBaseRef) {
     if (!['tmux', 'herdr'].includes(backend) || typeof validateTarget !== 'function') {
       throw new BridgeError('invalid_request', 'A current launcher and repository are required.');
     }
@@ -863,7 +866,8 @@ class BackendManager {
     }
     try {
       return await this.sessionMutations.execute('launcher_execute', { repo, id, fingerprint,
-        expected_repo_identity: expectedRepoIdentity, backend, choice, context_token: contextToken },
+        expected_repo_identity: expectedRepoIdentity, backend, choice, context_token: contextToken,
+        ...(expectedBaseRef !== undefined ? { expected_base_ref: expectedBaseRef } : {}) },
       { lockKey: status.common_dir, validateTarget });
     } catch (error) {
       if (error?.code === 'invalid_request' && ['unknown bridge method', 'expected a mutation request'].includes(error.message)) {

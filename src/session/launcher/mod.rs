@@ -13,8 +13,11 @@ use crate::session::env::Multiplexer;
 mod shell;
 
 /// Compile a configured command with values supplied separately in the environment.
-pub(crate) fn integrated_shell_script(template: &str) -> Result<String, String> {
-    shell::compile(template, None)
+pub(crate) fn integrated_shell_script(
+    template: &str,
+    base: Option<&str>,
+) -> Result<String, String> {
+    shell::compile(template, base)
 }
 
 /// How a verb places the command it runs.
@@ -168,6 +171,7 @@ pub(crate) fn plan_with_herdr_workspace(
     command: Option<&str>,
     placement: &str,
     dir: &str,
+    base: Option<&str>,
     workspace: &str,
 ) -> LaunchPlan {
     if workspace.is_empty()
@@ -184,7 +188,7 @@ pub(crate) fn plan_with_herdr_workspace(
         placement,
         dir,
         dir,
-        None,
+        base,
         Multiplexer::Herdr,
         Some(workspace),
     )

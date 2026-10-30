@@ -124,14 +124,16 @@ test('theme save uses a scoped one-shot worker and aborts if the workspace chang
 });
 
 test('launcher execution sends its selected context once through a scoped worker', async t => {
-  const f = await fixture(t);
-  const params = { repo: f.repo, id: 'key:1', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
-    backend: 'tmux', choice: 'split-window -h -t @42', context_token: 'c'.repeat(64) };
-  assert.deepEqual(await f.manager.execute('launcher_execute', params, f.opts), { launched: true });
-  const actions = await f.actions();
-  assert.equal(actions.length, 1);
-  assert.equal(actions[0].method, 'launcher_execute');
-  assert.deepEqual(actions[0].params, { ...params, repo: await fs.realpath(f.repo) });
+  for (const base of [undefined, null, '', 'topic $(touch unsafe)']) {
+    const f = await fixture(t);
+    const params = { repo: f.repo, id: 'review', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
+      backend: 'tmux', choice: 'split-window -h -t @42', context_token: 'c'.repeat(64),
+      ...(base !== undefined ? { expected_base_ref: base } : {}) };
+    assert.deepEqual(await f.manager.execute('launcher_execute', params, f.opts), { launched: true });
+    const action = (await f.actions()).at(-1);
+    assert.equal(action.method, 'launcher_execute');
+    assert.deepEqual(action.params, { ...params, repo: await fs.realpath(f.repo) });
+  }
 });
 
 test('launcher execution rejects stale selection before dispatch and invalid context tokens', async t => {
@@ -139,6 +141,9 @@ test('launcher execution rejects stale selection before dispatch and invalid con
   const params = { repo: f.repo, id: 'open', fingerprint: 'a'.repeat(64), expected_repo_identity: 'b'.repeat(64),
     backend: 'herdr', choice: 'configured', context_token: 'c'.repeat(64) };
   await assert.rejects(f.manager.execute('launcher_execute', { ...params, context_token: 'invalid' }, f.opts), code('invalid_request'));
+  for (const expected_base_ref of [42, 'base\0suffix']) {
+    await assert.rejects(f.manager.execute('launcher_execute', { ...params, expected_base_ref }, f.opts), code('invalid_request'));
+  }
   let current = true;
   const pending = f.manager.execute('launcher_execute', params, { ...f.opts, validateTarget: () => current });
   await f.wait('initialized');

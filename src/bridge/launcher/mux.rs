@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Action, BridgeError, Scope, load, selected};
+use super::{Action, BridgeError, Scope, selected_with_base};
 use crate::bridge::changes::RepositoryIdentity;
 use crate::session::env::Multiplexer;
 use crate::session::launcher::LaunchPlan;
@@ -18,6 +18,8 @@ pub(in crate::bridge) struct ChoicesRequest {
     id: String,
     fingerprint: String,
     backend: String,
+    #[serde(default)]
+    expected_base_ref: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +32,8 @@ pub(in crate::bridge) struct ExecuteRequest {
     backend: String,
     choice: String,
     context_token: String,
+    #[serde(default)]
+    expected_base_ref: Option<String>,
 }
 
 struct Choice {
@@ -505,10 +509,11 @@ fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeE
 }
 
 fn collect(action: &Action, identity: &str, backend: &str) -> Result<Vec<Choice>, BridgeError> {
-    if action
-        .command
-        .as_deref()
-        .is_some_and(|value| value.contains("{base}"))
+    if action.kind != "review"
+        && action
+            .command
+            .as_deref()
+            .is_some_and(|value| value.contains("{base}"))
     {
         return Err(error(
             "invalid_request",
@@ -540,8 +545,19 @@ pub(in crate::bridge) fn choices(
     let repo = scope.repository(&input.repo)?;
     let identity = RepositoryIdentity::read(&repo)?;
     let fingerprint = identity.fingerprint()?;
-    let action = selected(&load()?, &input.id, &input.fingerprint)?;
+    let action = selected_with_base(
+        &repo,
+        &input.id,
+        &input.fingerprint,
+        input.expected_base_ref.as_deref(),
+    )?;
     let choices = collect(&action, &fingerprint, &input.backend)?;
+    selected_with_base(
+        &repo,
+        &input.id,
+        &input.fingerprint,
+        input.expected_base_ref.as_deref(),
+    )?;
     if scope.repository(&input.repo)? != repo || RepositoryIdentity::read(&repo)? != identity {
         return Err(stale());
     }
@@ -685,7 +701,12 @@ pub(in crate::bridge) fn execute(
     if fingerprint != input.expected_repo_identity {
         return Err(stale());
     }
-    let action = selected(&load()?, &input.id, &input.fingerprint)?;
+    let action = selected_with_base(
+        &repo,
+        &input.id,
+        &input.fingerprint,
+        input.expected_base_ref.as_deref(),
+    )?;
     let choices = collect(&action, &fingerprint, &input.backend)?;
     let choice = choices
         .iter()
@@ -704,6 +725,7 @@ pub(in crate::bridge) fn execute(
             action.command.as_deref(),
             &choice.placement,
             path,
+            action.review_base.as_deref(),
             workspace,
         )
     } else {
@@ -711,14 +733,19 @@ pub(in crate::bridge) fn execute(
             action.command.as_deref(),
             &choice.placement,
             path,
-            None,
+            action.review_base.as_deref(),
             mux,
         )
     };
     if scope.repository(&input.repo)? != repo || RepositoryIdentity::read(&repo)? != identity {
         return Err(stale());
     }
-    selected(&load()?, &input.id, &input.fingerprint)?;
+    selected_with_base(
+        &repo,
+        &input.id,
+        &input.fingerprint,
+        input.expected_base_ref.as_deref(),
+    )?;
     match plan {
         LaunchPlan::Spawn(argv) => {
             launch(&argv, &repo, false)?;
@@ -736,11 +763,19 @@ pub(in crate::bridge) fn execute(
                         "Herdr created a tab but the repository changed.",
                     ));
                 }
-                if !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
-                    values
-                        .iter()
-                        .any(|value| value.id == input.choice && value.token == input.context_token)
-                }) {
+                if selected_with_base(
+                    &repo,
+                    &input.id,
+                    &input.fingerprint,
+                    input.expected_base_ref.as_deref(),
+                )
+                .is_err()
+                    || !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
+                        values.iter().any(|value| {
+                            value.id == input.choice && value.token == input.context_token
+                        })
+                    })
+                {
                     return Err(error(
                         "partial_completion",
                         "Herdr created a tab but the launcher context changed.",
@@ -748,11 +783,19 @@ pub(in crate::bridge) fn execute(
                 }
                 let pane =
                     verified_created_tab(&output.stdout, workspace, &choice.existing_terminals)?;
-                if !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
-                    values
-                        .iter()
-                        .any(|value| value.id == input.choice && value.token == input.context_token)
-                }) {
+                if selected_with_base(
+                    &repo,
+                    &input.id,
+                    &input.fingerprint,
+                    input.expected_base_ref.as_deref(),
+                )
+                .is_err()
+                    || !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
+                        values.iter().any(|value| {
+                            value.id == input.choice && value.token == input.context_token
+                        })
+                    })
+                {
                     return Err(error(
                         "partial_completion",
                         "Herdr created a tab but the launcher context changed.",
@@ -794,9 +837,13 @@ pub(in crate::bridge) fn execute(
                         "Herdr pane was created but the repository changed before the command ran.",
                     ));
                 }
-                if load()
-                    .and_then(|config| selected(&config, &input.id, &input.fingerprint))
-                    .is_err()
+                if selected_with_base(
+                    &repo,
+                    &input.id,
+                    &input.fingerprint,
+                    input.expected_base_ref.as_deref(),
+                )
+                .is_err()
                     || !collect(&action, &fingerprint, &input.backend).is_ok_and(|values| {
                         values.iter().any(|value| {
                             value.id == input.choice && value.token == input.context_token

@@ -176,7 +176,9 @@ The ◉ marker shows a live session for a repository or worktree. Set
 multiplexer environment. The default, `auto`, uses the detected host. Gitpane's
 `ui.show_liveness` setting also controls the marker.
 
-Configured Launchers offers Gitpane's `[open]` and custom keybinding commands.
+Configured Launchers offers Gitpane's `[open]`, `[review]`, and custom
+keybinding commands. Review commands receive `{base}` from `[review] base` or
+the repository's detected default branch. A missing base reports an error.
 Command and inline placements open integrated terminals. On Unix, tmux and
 herdr placements can open a split or window on the workspace host. Set
 `gitpane.sessionBackend` to select a multiplexer, or choose one when it is set
@@ -190,6 +192,20 @@ VS Code. Herdr requires `HERDR_SOCKET_PATH` and either a configured
 Multiplexer launchers are unavailable on Windows. Unsupported placements and
 direct command placements using interpreter executables report an error.
 
+With focus in Gitpane, use `j`/`k` to move and `h`/`l` to collapse or expand.
+`w` toggles worktrees and `S` toggles stashes. `g` opens the commit graph,
+`p` pulls, `P` pushes, and `G` opens sessions for the selected repository or
+worktree. `y` copies its path or the selected file's path. `o` runs `[open]`.
+`v` runs a configured `[review]` command, or opens the native branch review
+when no command is configured. `r` refreshes, `t` selects a theme, `s` opens
+the sort picker, and `a` adds a workspace repository. `d` hides a repository
+or confirms worktree removal. File clicks continue to open VS Code diffs.
+Single-character `[[keybindings]]` entries run directly from the view.
+Built-in global keys take precedence. Custom bindings can replace local
+keys such as `w` and `j`; the first matching binding wins. VS Code keeps
+modified shortcuts. Search inputs keep their normal typing behavior.
+Reload the window after changing Gitpane's TOML configuration.
+
 Discard and delete require confirmation and check the selected file for changes
 before running Git. Files larger than 64 MiB, directories and special files
 cannot be discarded or deleted through these actions. Another process can still
@@ -199,8 +215,22 @@ verified locally.
 
 ## Package and install
 
-The VSIX bundles Gitpane from this checkout. Build and install it on the machine
-where the extension will run. For Apple Silicon macOS:
+The VSIX bundles the Gitpane backend. Download a package from a
+[GitHub release](https://github.com/affromero/gitpane/releases) that includes
+Gitpane Explorer, then install it in VS Code:
+
+```sh
+code --install-extension "$HOME/Downloads/gitpane-explorer-darwin-arm64.vsix"
+```
+
+Choose `darwin-arm64` for Apple Silicon macOS, `darwin-x64` for Intel macOS,
+`linux-arm64` or `linux-x64` for Linux, and `win32-x64` for Windows. For SSH,
+WSL or a development container, choose the package for that workspace host.
+Linux packages require glibc. CI builds all five packages and checks their
+contents and extracted backends before release assets can be uploaded.
+
+To build from this checkout instead, run the packaging script on the matching
+OS and architecture. For Apple Silicon macOS:
 
 ```sh
 node vscode-extension/scripts/package-vsix.js --target darwin-arm64 --out "$HOME/Downloads/gitpane-explorer.vsix"

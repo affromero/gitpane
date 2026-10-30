@@ -94,6 +94,7 @@ fn tmux_alias_launch_is_pinned_and_rejects_changed_target_or_config() {
         choices(
             &scope,
             ChoicesRequest {
+                expected_base_ref: None,
                 repo: repo.clone(),
                 id: "open".into(),
                 fingerprint: fp.clone(),
@@ -109,6 +110,7 @@ fn tmux_alias_launch_is_pinned_and_rejects_changed_target_or_config() {
         .unwrap()
         .to_owned();
     let request = || ExecuteRequest {
+        expected_base_ref: None,
         repo: repo.clone(),
         id: "open".into(),
         fingerprint: fp.clone(),
@@ -125,6 +127,82 @@ fn tmux_alias_launch_is_pinned_and_rejects_changed_target_or_config() {
     fs::remove_file(root.join("launched")).unwrap();
     fs::write(root.join("pane"), "%8").unwrap();
     assert_eq!(execute(&scope, request()).unwrap_err().code, "stale_target");
+    assert!(!root.join("launched").exists());
+
+    fs::write(
+        root.join("config.toml"),
+        "[review]\ncommand = 'printf %s {base} {path}'\nplacement = 'split-window -h -t agents'\n",
+    )
+    .unwrap();
+    let repository = git2::Repository::open(&repo).unwrap();
+    let tree_id = repository.treebuilder(None).unwrap().write().unwrap();
+    let tree = repository.find_tree(tree_id).unwrap();
+    let signature = git2::Signature::now("Gitpane Test", "test@example.invalid").unwrap();
+    let commit = repository
+        .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .unwrap();
+    for branch in ["main", "topic"] {
+        repository
+            .reference(
+                &format!("refs/remotes/origin/{branch}"),
+                commit,
+                true,
+                "test",
+            )
+            .unwrap();
+    }
+    repository
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test",
+        )
+        .unwrap();
+    let action = actions(&load().unwrap()).remove(1);
+    let selection = choices(
+        &scope,
+        ChoicesRequest {
+            repo: repo.clone(),
+            id: "review".into(),
+            fingerprint: action.fingerprint(),
+            backend: "tmux".into(),
+            expected_base_ref: Some("origin/main".into()),
+        },
+    )
+    .unwrap();
+    let review_request = || ExecuteRequest {
+        repo: repo.clone(),
+        id: "review".into(),
+        fingerprint: action.fingerprint(),
+        backend: "tmux".into(),
+        expected_base_ref: Some("origin/main".into()),
+        expected_repo_identity: selection["repo_identity"].as_str().unwrap().into(),
+        choice: "configured".into(),
+        context_token: selection["choices"][0]["context_token"]
+            .as_str()
+            .unwrap()
+            .into(),
+    };
+    assert_eq!(execute(&scope, review_request()).unwrap()["launched"], true);
+    assert!(
+        fs::read_to_string(root.join("launched"))
+            .unwrap()
+            .contains("origin/main")
+    );
+    fs::remove_file(root.join("launched")).unwrap();
+    repository
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/topic",
+            true,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        execute(&scope, review_request()).unwrap_err().code,
+        "stale_launcher"
+    );
     assert!(!root.join("launched").exists());
     fs::write(root.join("pane"), "%7").unwrap();
     fs::write(
@@ -170,6 +248,7 @@ fn herdr_partial_failure_reports_created_pane() {
     let result = choices(
         &scope,
         ChoicesRequest {
+            expected_base_ref: None,
             repo: repo.clone(),
             id: "open".into(),
             fingerprint: fp.clone(),
@@ -178,6 +257,7 @@ fn herdr_partial_failure_reports_created_pane() {
     )
     .unwrap();
     let request = ExecuteRequest {
+        expected_base_ref: None,
         repo: repo.clone(),
         id: "open".into(),
         fingerprint: fp,
@@ -234,6 +314,7 @@ fn herdr_new_tab_is_pinned_to_verified_workspace_and_rejects_stale_context() {
         choices(
             &scope,
             ChoicesRequest {
+                expected_base_ref: None,
                 repo: repo.clone(),
                 id: "open".into(),
                 fingerprint: fingerprint.clone(),
@@ -250,6 +331,7 @@ fn herdr_new_tab_is_pinned_to_verified_workspace_and_rejects_stale_context() {
         .find(|value| value["id"] == "new-tab")
         .unwrap();
     let request = || ExecuteRequest {
+        expected_base_ref: None,
         repo: repo.clone(),
         id: "open".into(),
         fingerprint: fingerprint.clone(),

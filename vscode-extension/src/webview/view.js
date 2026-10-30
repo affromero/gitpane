@@ -739,11 +739,22 @@ tree.addEventListener('click', event => {
 });
 
 tree.addEventListener('keydown', event => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
       event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action')) &&
       (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
+  const globals = ['p', 'P', 'o', 'v', 'G', 'y', 'g', 'r', 'R', 't', 'a', 's', 'd'];
+  if (['q', '=', '?'].includes(event.key)) return;
+  if (globals.includes(event.key) || (Array.isArray(snapshot.launcherKeys) && snapshot.launcherKeys.includes(event.key))) {
+    event.preventDefault();
+    if (event.repeat) return;
+    const owner = searchOwnerItem(current);
+    if (owner?.owner?.id) vscode.postMessage({ type: 'shortcut', id: owner.owner.id, key: event.key,
+      ...(event.key === 'y' && current.fileId !== undefined ? { fileId: current.fileId } : {}) });
+    return;
+  }
   const index = visible.indexOf(current);
   let handled = true;
   switch (event.key) {
@@ -757,15 +768,25 @@ tree.addEventListener('keydown', event => {
       toggleWorktrees(repo.owner);
       break;
     }
+    case 'S': {
+      const button = parentRepository(current)?.item.querySelector('.stash-action');
+      if (button) button.click();
+      else handled = false;
+      break;
+    }
+    case 'j':
     case 'ArrowDown': select(visible[Math.min(index + 1, visible.length - 1)]); break;
+    case 'k':
     case 'ArrowUp': select(visible[Math.max(index - 1, 0)]); break;
     case 'Home': select(visible[0]); break;
     case 'End': select(visible[visible.length - 1]); break;
+    case 'l':
     case 'ArrowRight':
       if (current.key.startsWith('repo:') && current.fileExpandable && !current.filesExpanded) toggle(current);
       else if (current.expandable && !current.isExpanded) toggle(current);
       else if (visible[index + 1]?.parent === current.key) select(visible[index + 1]);
       break;
+    case 'h':
     case 'ArrowLeft':
       if (current.key.startsWith('repo:') && current.filesExpanded) toggle(current);
       else if (current.key.startsWith('repo:') && current.showWorktrees) toggleWorktrees(current.owner);

@@ -82,9 +82,17 @@ inside the workspace have their own rows and actions. Gitpane does not fetch
 remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
 macOS or Linux. VS Code's own Git auto-fetch setting works independently.
 
-Build a VSIX for the machine hosting the workspace. This requires a Gitpane
-source checkout, Node.js 22 or newer, npm and Rust. From the checkout, for Apple
-Silicon macOS:
+Release builds include VSIX packages for macOS, Linux and Windows. From a
+[GitHub release](https://github.com/affromero/gitpane/releases) that includes
+Gitpane Explorer, download the package matching the machine hosting your
+workspace. For Apple Silicon macOS:
+
+```sh
+code --install-extension "$HOME/Downloads/gitpane-explorer-darwin-arm64.vsix"
+```
+
+To build a package from this checkout instead, use Node.js 22 or newer, npm
+and Rust:
 
 ```sh
 node vscode-extension/scripts/package-vsix.js --target darwin-arm64 --out "$HOME/Downloads/gitpane-explorer.vsix"

@@ -31,10 +31,15 @@ test('worktree display loads native settings and ignores stale workspaces', asyn
     requests[0].resolve({ expand_worktrees: true });
     await tick();
     assert.equal(display.value, undefined);
-    requests[1].resolve({ expand_worktrees: false });
+    requests[1].resolve({ expand_worktrees: false, launcher_keys: ['w', 'j'], review_configured: true });
     await tick();
     assert.equal(display.value, false);
     assert.equal(display.error, undefined);
+    assert.deepEqual(display.launcherKeys, ['w', 'j']);
+    assert.equal(display.reviewConfigured, true);
+    backend.emit('initializing');
+    assert.deepEqual(display.launcherKeys, []);
+    assert.equal(display.reviewConfigured, false);
   } finally { display.dispose(); }
 });
 

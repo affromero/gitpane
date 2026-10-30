@@ -55,6 +55,44 @@ test('a configured argv launcher starts only after a selection and validation', 
   assert.deepEqual(f.errors, []);
 });
 
+test('keyboard launchers choose the first matching custom key without a picker', async () => {
+  const f = fixture();
+  f.backend.listLaunchers = async () => ({ actions: [
+    { ...f.action, kind: 'keybinding', key: 'w' },
+    { ...f.action, id: 'second', kind: 'keybinding', key: 'w' }
+  ] });
+  f.window.showQuickPick = () => { throw new Error('Keyboard action opened a picker'); };
+  await f.provider.open(f.repo, () => true, { key: 'w' });
+  assert.equal(f.opened.length, 1);
+  assert.deepEqual(f.calls[0], ['plan', f.root, 'editor', 'original']);
+  await f.provider.open(f.repo, () => true, { key: 'missing' });
+  assert.equal(f.opened.length, 1);
+  assert.match(f.errors[0], /launcher changed/i);
+});
+
+test('review launchers validate the selected base before opening a terminal', async () => {
+  for (const stale of [false, true]) {
+    const f = fixture();
+    f.action.kind = 'review';
+    f.action.id = 'review';
+    const base = 'topic $(touch unsafe)';
+    f.backend.planLauncher = async () => ({ kind: 'argv', argv: ['reviewer', base, f.root],
+      base_ref: base, fingerprint: 'original' });
+    f.backend.validateLauncher = async (repo, id, fingerprint, expectedBase) => {
+      assert.equal(expectedBase, base);
+      return { valid: true, base_ref: stale ? 'different' : base };
+    };
+    await f.provider.open(f.repo, () => true, { id: 'review' });
+    if (stale) {
+      assert.deepEqual(f.opened, []);
+      assert.match(f.errors[0], /configuration changed/i);
+    } else {
+      assert.deepEqual(f.opened[0].options.shellArgs, [base, f.root]);
+      assert.deepEqual(f.errors, []);
+    }
+  }
+});
+
 test('cancelling or returning a forged selection never launches a terminal', async () => {
   for (const choose of [() => undefined, choices => ({ ...choices[0] })]) {
     const f = fixture();
