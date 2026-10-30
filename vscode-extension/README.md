@@ -1,5 +1,7 @@
 # Gitpane Explorer
 
+<img src="https://raw.githubusercontent.com/affromero/gitpane/main/vscode-extension/media/gitpane.png" alt="Gitpane logo" width="128" height="128">
+
 Gitpane Explorer adds a repository overview to VS Code's Explorer. See branches
 and changed files across the repositories in your current workspace. Expand a
 repository to see staged, unstaged, untracked and conflicted files. Select a

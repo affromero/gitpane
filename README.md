@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="vscode-extension/media/gitpane.png" alt="Gitpane logo" width="160" height="160">
   <h1>gitpane</h1>
   <p align="center">
     <strong>Multi repo Git workspace dashboard for the terminal and VS Code</strong>

@@ -35,9 +35,11 @@ def verify_payload(
     }
     if backend is not None:
         files[backend_name] = backend
-    for file in (source / "src").rglob("*"):
-        if file.is_file():
-            files[f"extension/{file.relative_to(source).as_posix()}"] = file
+    for directory in ["src", "media"]:
+        for file in (source / directory).rglob("*"):
+            if file.is_file():
+                name = file.relative_to(source).as_posix()
+                files[f"extension/{name}"] = file
     expected = set(files) | {
         "[Content_Types].xml",
         "extension.vsixmanifest",

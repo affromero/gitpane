@@ -94,6 +94,9 @@ async function workspaceFixture(t) {
 test('ordinary folder deletion and recreation leave repository status available without warnings', async t => {
   const f = await workspaceFixture(t);
   assert.deepEqual(f.errors(), []);
+  // Keep Linux from reusing the deleted directory's inode for its replacement.
+  const heldDirectory = process.platform === 'linux' ? fs.openSync(f.ordinary, 'r') : undefined;
+  if (heldDirectory !== undefined) t.after(() => fs.closeSync(heldDirectory));
   fs.rmSync(f.ordinary, { recursive: true });
   await f.tree.refresh();
   assert.deepEqual(f.errors(), []);
