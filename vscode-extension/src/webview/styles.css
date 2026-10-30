@@ -64,7 +64,7 @@ body {
 
 #repositories {
   display: grid;
-  grid-template-columns: 2.5ch minmax(4ch, 1.35fr) minmax(3ch, 1fr) minmax(0, max-content);
+  grid-template-columns: minmax(calc(2.5ch + 9px), max-content) fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%);
   column-gap: .6ch;
 }
 
@@ -75,6 +75,14 @@ body {
 }
 
 #repositories > .treeitem > .children { grid-column: 1 / -1; }
+
+.repository-children, .worktree-item {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.repository-children > .treeitem, .worktree-item > .children { grid-column: 1 / -1; }
 
 .treeitem { outline: none; }
 
@@ -96,7 +104,7 @@ body {
   outline-offset: -1px;
 }
 
-.repo-row {
+.repo-row, .worktree-row {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
@@ -126,7 +134,7 @@ body {
 .unpushed-submodule { color: var(--gitpane-repo-list-unpushed-submodule, var(--behind)); }
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
 .pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
-.tail { display: flex; gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
+.tail { display: flex; flex-wrap: wrap; column-gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
 .graph-action, .menu-action, .stash-action, .worktree-action {
   flex: none;
   padding: 0;
@@ -141,7 +149,7 @@ body {
 .subtree { color: var(--muted); }
 .worktree-row .subtree { color: var(--gitpane-repo-list-worktree-subtree-icon, var(--muted)); }
 
-.group-row, .file-row, .worktree-row, .stash-row {
+.group-row, .file-row, .stash-row {
   display: grid;
   align-items: baseline;
   gap: 1ch;
@@ -158,7 +166,7 @@ body {
 .directory-row { cursor: default; }
 .worktree-files .group-row { padding-left: 4.7ch; }
 .worktree-files .file-row { padding-left: 6.7ch; }
-.worktree-row { grid-template-columns: 1ch 1ch minmax(3ch, 1fr) minmax(4ch, 1fr) auto; padding-left: 2.7ch; }
+.worktree-markers { display: flex; gap: .1ch; white-space: nowrap; }
 .stash-row { grid-template-columns: auto minmax(0, 1fr); padding-left: 4.7ch; }
 .stash-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-path { color: var(--gitpane-file-list-regular-path, inherit); }
@@ -175,8 +183,6 @@ body.vscode-high-contrast-light .treeitem[aria-selected="true"] > .row span,
 body.vscode-high-contrast-light .treeitem[aria-selected="true"] > .row button { color: inherit; }
 
 @media (max-width: 230px) {
-  #repositories { grid-template-columns: 2.5ch minmax(4ch, 1fr) minmax(3ch, .75fr) minmax(0, max-content); column-gap: .6ch; }
-  .repo-row { gap: .6ch; }
   .row { padding-right: 5px; padding-left: 5px; }
 }
 

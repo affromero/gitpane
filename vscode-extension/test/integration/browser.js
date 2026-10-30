@@ -232,6 +232,10 @@ const scenario = String.raw`
     const withWorktree = JSON.parse(JSON.stringify(snapshot));
     withWorktree.launcherKeys = ['j', 'w', 'p', 'q', '=', '?'];
     withWorktree.theme = themed.theme;
+    Object.assign(withWorktree.repositories[0], { stashCount: 22, worktreeCount: 23,
+      hasDirtySubmodules: true, hasUnpushedSubmodules: true });
+    Object.assign(withWorktree.repositories[4], { name: 'repository-with-a-very-long-display-name',
+      branch: 'feature/a-very-long-branch-name-to-keep-readable' });
     Object.assign(withWorktree.repositories[1], { worktreeCount: 1, worktrees: [{ id: 'opaque-worktree',
       name: 'web-review', branch: 'review', dirty: true, live: true, fileCount: 2, ahead: 1, behind: 0, available: true,
       groups: [
@@ -254,6 +258,52 @@ const scenario = String.raw`
       worktree.getAttribute('aria-label').includes('live session') && !cleanRepo.querySelector('.repo-row .live'));
     check('worktree status has accessible meaning', ['has changes', '2 files', '1 ahead'].every(value => worktree.getAttribute('aria-label').includes(value)));
     check('dirty worktree is collapsed and expandable', worktree.getAttribute('aria-expanded') === 'false');
+    const layoutRoot = document.querySelector('[role="tree"]');
+    const worktreeFrame = document.createElement('iframe');
+    worktreeFrame.style.cssText = 'position:fixed;left:-9999px;width:210px;height:650px;border:0';
+    document.body.appendChild(worktreeFrame);
+    worktreeFrame.contentDocument.head.appendChild(document.querySelector('style').cloneNode(true));
+    worktreeFrame.contentDocument.body.className = document.body.className;
+    worktreeFrame.contentDocument.body.appendChild(layoutRoot.cloneNode(true));
+    const layouts = [210, 300, 500, 900].map(width => ({ layout: layoutRoot, width }));
+    layouts.push({ layout: worktreeFrame.contentDocument.querySelector('[role="tree"]'), width: 210 });
+    for (const { layout, width } of layouts) {
+      layout.style.width = width + 'px';
+      const rows = [...layout.querySelectorAll('.repo-row, .worktree-row')];
+      const branchLeft = rows[0].querySelector('.branch').getBoundingClientRect().left;
+      for (const row of rows) {
+        const name = row.querySelector('.name');
+        const branch = row.querySelector('.branch');
+        const nameBounds = name.getBoundingClientRect();
+        const branchBounds = branch.getBoundingClientRect();
+        check('repository and worktree branch columns align at ' + width + 'px',
+          Math.abs(branchBounds.left - branchLeft) < 1);
+        check('branch follows its repository or worktree name at ' + width + 'px',
+          nameBounds.right <= branchBounds.left);
+        const markerText = document.createRange();
+        markerText.selectNodeContents(row.querySelector('.dirty'));
+        check('status markers leave room before the name at ' + width + 'px',
+          nameBounds.left - markerText.getBoundingClientRect().right >= 4);
+        const nameText = document.createRange();
+        nameText.selectNodeContents(name);
+        const branchText = document.createRange();
+        branchText.selectNodeContents(branch);
+        check('name and branch text share a baseline at ' + width + 'px',
+          Math.abs(nameText.getBoundingClientRect().bottom - branchText.getBoundingClientRect().bottom) < 1);
+        check('branch stays close to its name at ' + width + 'px',
+          branchBounds.left - nameText.getBoundingClientRect().right <= parseFloat(getComputedStyle(row).fontSize) * 8);
+        check('repository rows fit the pane at ' + width + 'px',
+          row.getBoundingClientRect().right <= layout.getBoundingClientRect().right + 1);
+        const tail = row.querySelector('.tail').getBoundingClientRect();
+        for (const indicator of row.querySelector('.tail').children) {
+          const bounds = indicator.getBoundingClientRect();
+          check('repository and worktree badges stay visible at ' + width + 'px',
+            bounds.left >= tail.left - 1 && bounds.right <= tail.right + 1);
+        }
+      }
+    }
+    worktreeFrame.remove();
+    layoutRoot.style.width = '';
     const worktreeGraph = worktree.querySelector('.graph-action');
     check('worktree graph is accessible', worktreeGraph.getAttribute('aria-label') === 'Open commit graph for web-review');
     worktreeGraph.click();

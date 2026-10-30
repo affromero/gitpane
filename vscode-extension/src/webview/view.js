@@ -271,10 +271,12 @@ function fileRow(file) {
 
 function worktreeRow(worktree) {
   const row = element('div', 'row worktree-row');
-  add(row, 'subtree', '⎇');
-  add(row, 'dirty', worktree.dirty ? '*' : '\u00a0');
-  add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
+  const markers = element('span', 'worktree-markers');
+  add(markers, 'subtree', '⎇');
+  add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0');
+  row.appendChild(markers);
   add(row, 'name', worktree.name || '', worktree.name);
+  add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   const tail = element('span', 'tail');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
@@ -453,7 +455,7 @@ function render() {
     item.stashOpen = stashOpen;
     tree.appendChild(item.item);
     if (!hasChildren) continue;
-    const children = element('div', 'children');
+    const children = element('div', 'children repository-children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
     if (filesExpanded && fileExpandable) {
@@ -483,6 +485,7 @@ function render() {
           worktree.changesPage.previous || worktree.changesPage.next);
       const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
         worktreeGroups.length > 0 || worktreeHasPage, worktreeExpanded, key);
+      worktreeItem.item.classList.add('worktree-item');
       worktreeItem.worktreeId = worktree.id;
       worktreeItem.owner = worktree;
       children.appendChild(worktreeItem.item);
