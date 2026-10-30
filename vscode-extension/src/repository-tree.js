@@ -106,11 +106,11 @@ class RepositoryTree {
       git.onDidOpenRepository(repo => {
         this.observe(repo);
         if (this.isVisible(repo)) this.scheduleRefresh();
+        else this.scheduleChanged();
       }),
       git.onDidCloseRepository(repo => {
-        const wasVisible = this.isVisible(repo);
         this.unobserve(repo);
-        if (wasVisible) this.scheduleChanged();
+        this.scheduleChanged();
       }),
       backend.onDidChange(state => this.backendChanged(state)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -620,6 +620,15 @@ class RepositoryTree {
     this.workspacePaths = folders.map(folder => folder.uri.fsPath);
   }
 
+  workspaceHasRepository(folder, current) {
+    const roots = [folder, this.workspaceIdentities.get(folder)?.path, current?.path].filter(Boolean);
+    return this.git.repositories.some(repo => {
+      if (repo.rootUri.scheme !== 'file') return false;
+      const paths = [repo.rootUri.fsPath, this.repositoryIdentities.get(repo.rootUri.toString())?.path].filter(Boolean);
+      return roots.some(root => paths.some(value => inside(root, value)));
+    });
+  }
+
   isPathInWorkspace(value) {
     const target = directoryIdentity(value);
     return this.containsIdentity(target);
@@ -847,11 +856,10 @@ class RepositoryTree {
     if (!node) {
       const missingFolders = this.workspacePaths.flatMap(folder => {
         const current = directoryIdentity(folder);
+        if (sameIdentity(this.workspaceIdentities.get(folder), current)) return [];
+        if (!this.workspaceHasRepository(folder, current)) return [];
         if (!current) return [`Workspace folder unavailable: ${folder}`];
-        if (!sameIdentity(this.workspaceIdentities.get(folder), current)) {
-          return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
-        }
-        return [];
+        return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
       });
       const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.workspaceRepositories?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.presentationView();
