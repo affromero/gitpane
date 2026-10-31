@@ -268,10 +268,8 @@ inspect the publisher before retrying because earlier targets may already be
 public. The release workflow does not skip existing versions. GitHub Release
 creation and crates.io publication wait for Marketplace publication to succeed.
 
-The initial publisher migration used the manual **Marketplace** workflow on
-`main`. It ran the release quality checks and published all five platform
-packages under the new identity at version 0.18.2 without creating a GitHub
-release, changing tags or publishing to crates.io.
+The one-time publisher migration published version 0.18.2 under the new
+identity. It did not create a GitHub release, change tags or publish to crates.io.
 
 To build from this checkout instead, run the packaging script on the matching
 OS and architecture. For Apple Silicon macOS:
