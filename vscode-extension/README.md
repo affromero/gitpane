@@ -251,8 +251,8 @@ The VSIX bundles the Gitpane backend. The Marketplace provides packages for
 macOS, Linux and Windows. Published
 [GitHub release](https://github.com/affromero/gitpane/releases) packages through
 v0.18.2 install the old `gitpane.gitpane-explorer` identity. Those assets remain
-unchanged. Use the Marketplace or build from this checkout for
-`affromero.gitpane-vscode`.
+unchanged. Use GitHub release v0.18.3 or newer, the Marketplace, or build from
+this checkout for `affromero.gitpane-vscode`.
 
 Choose `darwin-arm64` for Apple Silicon macOS, `darwin-x64` for Intel macOS,
 `linux-arm64` or `linux-x64` for Linux, and `win32-x64` for Windows. For SSH,
@@ -268,10 +268,10 @@ inspect the publisher before retrying because earlier targets may already be
 public. The release workflow does not skip existing versions. GitHub Release
 creation and crates.io publication wait for Marketplace publication to succeed.
 
-The initial publisher migration uses the manual **Marketplace** workflow on
-`main`. It runs the release quality checks and publishes all five platform
-packages under the new identity at version 0.18.2. It does not create a GitHub
-release, change tags or publish to crates.io.
+The initial publisher migration used the manual **Marketplace** workflow on
+`main`. It ran the release quality checks and published all five platform
+packages under the new identity at version 0.18.2 without creating a GitHub
+release, changing tags or publishing to crates.io.
 
 To build from this checkout instead, run the packaging script on the matching
 OS and architecture. For Apple Silicon macOS:

@@ -4,6 +4,14 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-10-31
+
+### Added
+- Stack repositories, changes and the commit graph in the VS Code Explorer, matching terminal Gitpane. Selecting a repository or worktree updates both lower sections. File clicks open native diffs. Each section can be resized or collapsed independently. ([#123](https://github.com/affromero/gitpane/pull/123), closes [#122](https://github.com/affromero/gitpane/issues/122))
+
+### Changed
+- Publish **Gitpane for VS Code** under `affromero.gitpane-vscode`. Users of the old `gitpane.gitpane-explorer` extension must install the new identity once; automatic updates do not switch extension IDs. ([#121](https://github.com/affromero/gitpane/pull/121), closes [#120](https://github.com/affromero/gitpane/issues/120))
+
 ## [0.18.2] - 2026-10-30
 
 ### Added

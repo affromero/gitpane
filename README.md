@@ -102,7 +102,8 @@ TOML still apply. Hidden repositories, submodule pins, manually added repositori
 and remembered view choices must be restored in the new extension.
 
 Published GitHub VSIX packages through v0.18.2 still install the old extension.
-Use the Marketplace for the new publisher, or build a package from this checkout.
+Use v0.18.3 or newer from [GitHub Releases](https://github.com/affromero/gitpane/releases),
+the Marketplace, or build a package from this checkout for the new identity.
 
 To build a package from this checkout, use Node.js 22 or newer, npm
 and Rust:
