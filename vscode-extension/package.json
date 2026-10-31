@@ -2,7 +2,7 @@
   "name": "gitpane-vscode",
   "displayName": "Gitpane for VS Code",
   "description": "See changes across Gitpane repositories in the Explorer.",
-  "version": "0.18.2",
+  "version": "0.18.3",
   "publisher": "affromero",
   "icon": "media/gitpane.png",
   "license": "MIT",
