@@ -463,11 +463,16 @@ async function main() {
   assert.equal(diffs.length, 1);
   assert.equal(diffs[0][0].scheme, 'gitpane-empty');
   assert.equal(diffs[0][1].fsPath, path.join(repoPath, file.path));
-  const stale = provider.changes.get(file.id);
+  assert.ok(await provider.waitForCurrentChange(provider.changes.get(file.id)));
+  await receive({ type: 'changesPage', id: owner.id, direction: 'previous' });
+  const stablePage = snapshots.at(-1).repositories[0];
+  const stableFile = stablePage.groups.flatMap(group => group.files).find(item => item.path === 'file-000.txt');
+  assert.ok(stableFile, 'unrelated-change checks need a file retained after a page refresh');
+  const stale = provider.changes.get(stableFile.id);
   fs.writeFileSync(path.join(repoPath, 'unrelated.txt'), 'unrelated\n');
   await commands.get('gitpane.openChange')(stale);
   assert.equal(diffs.length, 2, 'an unrelated change must not invalidate the selected file');
-  fs.unlinkSync(path.join(repoPath, file.path));
+  fs.unlinkSync(path.join(repoPath, stableFile.path));
   await commands.get('gitpane.openChange')(stale);
   assert.equal(diffs.length, 2);
   assert.match(errors.at(-1), /changed|no longer/i);
