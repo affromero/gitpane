@@ -43,6 +43,7 @@ mod input;
 mod launch;
 mod render;
 mod repo_admin;
+mod selection;
 #[cfg(test)]
 mod tests;
 
@@ -242,6 +243,7 @@ pub(crate) struct App {
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph,
     /// 2 = graph|github (only when the 4th panel is shown).
     dragging_border: Option<u8>,
+    text_selection: selection::TextSelection,
     /// Fraction of the layout axis for each border (0.0..1.0). Index 0 is the
     /// repos/changes split, 1 the changes/graph split, and 2 the graph/github
     /// split (live only when the GitHub panel is shown). Applies to width in
@@ -437,6 +439,7 @@ impl App {
             success_message: None,
             clipboard: None,
             dragging_border: None,
+            text_selection: selection::TextSelection::default(),
             border_frac: [0.25, 0.50, 0.78],
             horizontal_layout: false,
             update_version: None,

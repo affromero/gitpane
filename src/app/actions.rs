@@ -459,6 +459,9 @@ impl App {
                     crate::session::env::Multiplexer::Herdr => {
                         crate::session::liveness::herdr_live_panes()
                     }
+                    crate::session::env::Multiplexer::HerdrApp => {
+                        crate::session::liveness::herdr_app_live_panes()
+                    }
                     crate::session::env::Multiplexer::None => Vec::new(),
                 };
                 let _ = tx.send(Action::LiveSessionsLoaded(panes));

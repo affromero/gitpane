@@ -1,6 +1,6 @@
-//! Detects which repos/worktrees have a live tmux session by reading each
-//! pane's session name and cwd. tmux-only: when gitpane is not under tmux (or
-//! tmux is unavailable) the probe yields nothing and no markers are shown.
+//! Detect live repos/worktrees from multiplexer pane directories. Handles are
+//! tmux session names, legacy Herdr tab IDs, or official Herdr terminal addresses.
+//! The official backend reads current foreground cwd from herdr-core.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,6 +49,18 @@ mod worker_tests;
 
 /// Probe the selected host multiplexer without hiding process or parse errors.
 pub(crate) fn checked_pane_sessions(kind: &str) -> color_eyre::Result<Vec<(String, PathBuf)>> {
+    if kind == "herdr-app" {
+        return super::herdr_app::pane_sessions()
+            .map_err(|message| color_eyre::eyre::eyre!(message))?
+            .into_iter()
+            .map(|(terminal, cwd)| {
+                let cwd = cwd
+                    .canonicalize()
+                    .map_err(|_| color_eyre::eyre::eyre!("Cannot resolve a session directory"))?;
+                Ok((terminal, cwd))
+            })
+            .collect();
+    }
     checked_pane_sessions_with(kind, std::process::Command::new(kind))
 }
 
@@ -459,6 +471,23 @@ fn parse_herdr_panes(output: &str) -> Result<Vec<(String, PathBuf)>, String> {
             Some((tab, PathBuf::from(cwd)))
         })
         .collect())
+}
+
+/// Official desktop terminals, keyed by HC address for `agent.focus`.
+pub(crate) fn herdr_app_live_panes() -> Vec<(String, PathBuf)> {
+    match super::herdr_app::pane_sessions() {
+        Ok(panes) => panes
+            .into_iter()
+            .map(|(terminal, cwd)| {
+                let cwd = cwd.canonicalize().unwrap_or(cwd);
+                (terminal, cwd)
+            })
+            .collect(),
+        Err(error) => {
+            rate_limited_debug(|| format!("Herdr desktop liveness failed: {error}"));
+            Vec::new()
+        }
+    }
 }
 
 /// Sorted, unique session names that have a pane cwd'd at or below `path` (the

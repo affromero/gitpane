@@ -2,6 +2,9 @@
 //! markers, and its session-attach to the terminal multiplexer it runs inside.
 //! tmux is the original backend; herdr is supported natively (pane split /
 //! tab create / tab focus) so the same dashboard verbs work there too.
+//! The official desktop is detected separately: `HC_TERMINAL_ID` must resolve
+//! to a displayed local terminal in `herdr-app ls`. Hidden core workers do not
+//! imply an app pane. The verified source pane is pinned independently of focus.
 //!
 //! # Nesting
 //!
@@ -13,21 +16,14 @@
 //! - tmux sets `TMUX`/`TMUX_PANE` for its panes and passes the server's
 //!   inherited `HERDR_*` through, so a tmux pane inside herdr also has both.
 //!
-//! Environment variables therefore cannot tell which multiplexer owns the pane
-//! when nested. [`Multiplexer::detect`] resolves the ambiguity by asking tmux
-//! whether the process directly below us (our parent, or ourself when gitpane
-//! was exec'd as the pane process) is one of its panes: if yes we are inside a
-//! tmux pane; otherwise the pane is herdr's (the tmux env leaked in from an
-//! ancestor). This holds for the normal launches — typing `gitpane` in the
-//! pane's shell, `tmux new-session 'gitpane'`, `send-keys` — where the pane
-//! shell is our direct parent. Launching through an extra wrapper (e.g.
-//! `bash -c '...'`) puts the wrapper between us and the pane shell, and the
-//! nested decision falls back to herdr; the `probe_detect` ignored test prints
-//! the resolved values for manual checks. When tmux cannot
-//! be asked (e.g. a dead tmux server) the nested case also falls back to
-//! herdr.
+//! Environment variables cannot identify the innermost owner on their own.
+//! Legacy Herdr keeps its direct-parent/self tmux check. Official desktop
+//! detection follows up to 64 process ancestors, so wrappers and editor workers
+//! still resolve an inner tmux pane. The HC terminal root ends that walk before
+//! a leaked outer tmux pane can claim it. Failed process probes fall back to the
+//! displayed desktop context.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 /// The terminal multiplexer this instance runs under, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +32,8 @@ pub(crate) enum Multiplexer {
     Tmux,
     /// herdr: `$HERDR_*` is set and we are in a herdr pane.
     Herdr,
+    /// Official herdr-app: the HC terminal is displayed in its local layout.
+    HerdrApp,
     /// A plain terminal, or a multiplexer gitpane does not know.
     None,
 }
@@ -44,8 +42,8 @@ impl Multiplexer {
     /// Detect from the real environment, resolving nested-tmux/herdr ambiguity
     /// (see the module docs). Cached for the process lifetime.
     pub(crate) fn detect() -> Self {
-        static CACHE: OnceLock<Multiplexer> = OnceLock::new();
-        *CACHE.get_or_init(detect_uncached)
+        static CACHE: LazyLock<Multiplexer> = LazyLock::new(detect_uncached);
+        *CACHE
     }
 
     /// Detect from `present`, which answers whether an env var is set. Pure env
@@ -68,10 +66,86 @@ impl Multiplexer {
 
 fn detect_uncached() -> Multiplexer {
     let mux = Multiplexer::detect_from(|v| std::env::var_os(v).is_some());
-    if mux == Multiplexer::Herdr && std::env::var_os("TMUX").is_some() {
-        return disambiguate_nested(&tmux_pane_pids(), parent_pid(), std::process::id());
+    let desktop_member =
+        std::env::var_os("HC_TERMINAL_ID").is_some() && super::herdr_app::current_context().is_ok();
+    let host = if desktop_member {
+        Multiplexer::HerdrApp
+    } else {
+        mux
+    };
+    let nested = matches!(host, Multiplexer::Herdr | Multiplexer::HerdrApp)
+        && (std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some());
+    if nested && host == Multiplexer::HerdrApp {
+        desktop_owner(
+            &tmux_pane_pids(),
+            &process_parents(),
+            std::process::id(),
+            parent_pid(),
+            super::herdr_app::current_terminal_pid(),
+        )
+    } else if nested {
+        resolve_host(host, &tmux_pane_pids(), parent_pid(), std::process::id())
+    } else {
+        host
     }
-    mux
+}
+
+fn resolve_host(host: Multiplexer, panes: &[u32], parent: u32, self_pid: u32) -> Multiplexer {
+    if disambiguate_nested(panes, parent, self_pid) == Multiplexer::Tmux {
+        Multiplexer::Tmux
+    } else {
+        host
+    }
+}
+
+/// Follow wrappers and extension workers, stopping at the desktop terminal root
+/// before any inherited outer tmux pane can claim the process.
+fn desktop_owner(
+    panes: &[u32],
+    parents: &[(u32, u32)],
+    self_pid: u32,
+    parent: u32,
+    desktop_pid: Option<u32>,
+) -> Multiplexer {
+    let mut pid = self_pid;
+    for _ in 0..64 {
+        if Some(pid) == desktop_pid {
+            return Multiplexer::HerdrApp;
+        }
+        if panes.contains(&pid) {
+            return Multiplexer::Tmux;
+        }
+        let next = if pid == self_pid {
+            Some(parent)
+        } else {
+            parents
+                .iter()
+                .find_map(|&(child, parent)| (child == pid).then_some(parent))
+        };
+        match next {
+            Some(next) if next != 0 && next != pid => pid = next,
+            _ => break,
+        }
+    }
+    Multiplexer::HerdrApp
+}
+
+fn process_parents() -> Vec<(u32, u32)> {
+    let mut command = std::process::Command::new("ps");
+    command.args(["-e", "-o", "pid=,ppid="]);
+    let Ok(output) = crate::session::liveness::bounded_output(&mut command) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect()
 }
 
 /// Nested case: if the process just below us (our parent, or ourself when
@@ -163,6 +237,14 @@ mod tests {
             Multiplexer::detect_from(present(&["WEZTERM_PANE"])),
             Multiplexer::None
         );
+        assert_eq!(
+            Multiplexer::detect_from(present(&["HC_TERMINAL_ID"])),
+            Multiplexer::None,
+        );
+        assert_eq!(
+            Multiplexer::detect_from(present(&["HC_TERMINAL_ID", "TMUX"])),
+            Multiplexer::Tmux,
+        );
     }
 
     #[test]
@@ -190,6 +272,51 @@ mod tests {
         );
         // Unreachable tmux (no pane pids) also falls back to herdr.
         assert_eq!(disambiguate_nested(&[], 500, 600), Multiplexer::Herdr);
+    }
+
+    #[test]
+    fn official_desktop_preserves_nested_tmux_ownership() {
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrApp, &[100, 200], 200, 300),
+            Multiplexer::Tmux,
+        );
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrApp, &[100, 200], 500, 200),
+            Multiplexer::Tmux,
+        );
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrApp, &[100, 200], 500, 600),
+            Multiplexer::HerdrApp,
+        );
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrApp, &[], 500, 600),
+            Multiplexer::HerdrApp,
+        );
+    }
+
+    #[test]
+    fn desktop_nested_workers_follow_ancestry_without_crossing_the_terminal_root() {
+        let parents = [(600, 500), (500, 400), (400, 300), (300, 200), (200, 100)];
+        assert_eq!(
+            desktop_owner(&[300], &parents, 700, 600, Some(100)),
+            Multiplexer::Tmux
+        );
+        assert_eq!(
+            desktop_owner(&[200], &parents, 700, 600, Some(400)),
+            Multiplexer::HerdrApp
+        );
+        assert_eq!(
+            desktop_owner(&[300], &parents, 300, 200, Some(100)),
+            Multiplexer::Tmux
+        );
+        assert_eq!(
+            desktop_owner(&[300], &parents, 300, 200, Some(300)),
+            Multiplexer::HerdrApp
+        );
+        assert_eq!(
+            desktop_owner(&[300], &[(600, 500), (500, 600)], 700, 600, None),
+            Multiplexer::HerdrApp
+        );
     }
 
     #[cfg(unix)]

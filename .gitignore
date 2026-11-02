@@ -7,3 +7,7 @@ lcov.info
 
 # Local dead-code scanner reports
 .maintenance-reports/
+
+# Keep durable capability specifications, not transient Chorus state
+.chorus/*
+!.chorus/specs/

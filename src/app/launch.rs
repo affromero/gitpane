@@ -256,6 +256,17 @@ impl App {
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);
             }
+            LaunchPlan::HerdrApp { placement, argv } => {
+                let tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::session::herdr_app::current_context().and_then(|context| {
+                        crate::session::herdr_app::launch(&placement, &argv, &dir, context)
+                    });
+                    if let Err(error) = result {
+                        let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
+                    }
+                });
+            }
             LaunchPlan::Ask => {
                 self.action_tx
                     .send(Action::Error("ask placement isn't available yet".into()))?;
@@ -480,6 +491,15 @@ impl App {
             crate::session::env::Multiplexer::Herdr => {
                 crate::session::launcher::herdr_placement_choices()
             }
+            crate::session::env::Multiplexer::HerdrApp => {
+                match crate::session::herdr_app::placement_choices() {
+                    Ok(choices) => choices,
+                    Err(error) => {
+                        let _ = self.action_tx.send(Action::Error(error));
+                        return;
+                    }
+                }
+            }
             _ => crate::session::launcher::placement_choices(
                 &crate::session::launcher::tmux_windows(),
             ),
@@ -508,22 +528,24 @@ impl App {
         let sessions = crate::session::liveness::live_sessions(path, self.repo_list.live_panes());
         match sessions.as_slice() {
             [] => {
-                let msg = if mux == crate::session::env::Multiplexer::Herdr {
-                    "no live herdr tab here"
-                } else {
-                    "no live tmux session here"
+                let msg = match mux {
+                    crate::session::env::Multiplexer::HerdrApp => "no live Herdr terminal here",
+                    crate::session::env::Multiplexer::Herdr => "no live herdr tab here",
+                    _ => "no live tmux session here",
                 };
                 self.action_tx.send(Action::Error(msg.into()))?;
             }
             [one] => self.goto_session(one),
             many => {
                 let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
-                let title = if mux == crate::session::env::Multiplexer::Herdr {
-                    "Open herdr tab".to_string()
-                } else {
-                    match crate::session::launcher::goto_placement(&self.config.goto.command) {
-                        Some(p) => format!("Open session ({p})"),
-                        None => "Open session".to_string(),
+                let title = match mux {
+                    crate::session::env::Multiplexer::HerdrApp => "Open Herdr terminal".into(),
+                    crate::session::env::Multiplexer::Herdr => "Open herdr tab".into(),
+                    _ => {
+                        match crate::session::launcher::goto_placement(&self.config.goto.command) {
+                            Some(p) => format!("Open session ({p})"),
+                            None => "Open session".to_string(),
+                        }
                     }
                 };
                 self.pending_pick = Some(PendingPick::GotoSession);
@@ -536,6 +558,16 @@ impl App {
     /// (switches the tmux client or spawns a terminal tab), so its exit status
     /// is checked and a failure (e.g. a stale session) is surfaced.
     pub(super) fn goto_session(&mut self, session: &str) {
+        if self.mux == crate::session::env::Multiplexer::HerdrApp {
+            let tx = self.action_tx.clone();
+            let terminal = session.to_string();
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = crate::session::herdr_app::focus(&terminal) {
+                    let _ = tx.send(Action::Error(format!("goto failed: {error}")));
+                }
+            });
+            return;
+        }
         // herdr: focus the tab hosting the live pane — no `[goto] command` needed.
         if self.mux == crate::session::env::Multiplexer::Herdr {
             let tx = self.action_tx.clone();

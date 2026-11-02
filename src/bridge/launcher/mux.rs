@@ -507,6 +507,28 @@ fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeE
     Ok(result)
 }
 
+fn desktop_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
+    let values = crate::session::herdr_app::launcher_choices(&action.placement)
+        .map_err(|message| error("session_error", message))?;
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let id = if action.placement.trim() == "ask" {
+            value.placement.clone()
+        } else {
+            "configured".into()
+        };
+        add_choice(
+            &mut result,
+            identity,
+            action,
+            "herdr-app",
+            &value.identity,
+            (id, value.label, value.placement),
+        );
+    }
+    Ok(result)
+}
+
 fn collect(action: &Action, identity: &str, backend: &str) -> Result<Vec<Choice>, BridgeError> {
     if action.kind != "review"
         && action
@@ -533,6 +555,7 @@ fn collect(action: &Action, identity: &str, backend: &str) -> Result<Vec<Choice>
     match backend {
         "tmux" => tmux_choices(action, identity),
         "herdr" => herdr_choices(action, identity),
+        "herdr-app" => desktop_choices(action, identity),
         _ => Err(error("invalid_request", "Unknown multiplexer backend.")),
     }
 }
@@ -612,7 +635,11 @@ fn launch(
                 } else {
                     ""
                 },
-                String::from_utf8_lossy(&output.stderr).trim()
+                if program == "herdr-app" {
+                    crate::session::herdr_app::error_detail(&output)
+                } else {
+                    String::from_utf8_lossy(&output.stderr).trim().to_owned()
+                }
             ),
         ));
     }
@@ -714,6 +741,7 @@ pub(in crate::bridge) fn execute(
     let mux = match input.backend.as_str() {
         "tmux" => Multiplexer::Tmux,
         "herdr" => Multiplexer::Herdr,
+        "herdr-app" => Multiplexer::HerdrApp,
         _ => return Err(error("invalid_request", "Unknown multiplexer backend.")),
     };
     let path = repo
@@ -748,6 +776,16 @@ pub(in crate::bridge) fn execute(
     match plan {
         LaunchPlan::Spawn(argv) => {
             launch(&argv, &repo, false)?;
+        }
+        LaunchPlan::HerdrApp { placement, argv } => {
+            let context = crate::session::herdr_app::current_context()
+                .map_err(|message| error("session_error", message))?;
+            let create =
+                crate::session::herdr_app::prepare_launch(&placement, &argv, &repo, context)
+                    .map_err(|message| error("session_error", message))?;
+            let output = launch(&create, &repo, false)?;
+            crate::session::herdr_app::validate_launch_response(&output.stdout)
+                .map_err(|message| error("outcome_unknown", message))?;
         }
         LaunchPlan::Herdr { create, command } => {
             let output = launch(&create, &repo, false)?;

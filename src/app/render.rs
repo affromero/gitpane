@@ -235,6 +235,8 @@ impl App {
             }
         }
 
+        self.draw_text_selection(frame)?;
+
         self.clear_expired_messages();
 
         self.status_bar.focus = self.focus;
@@ -339,7 +341,7 @@ impl App {
             Line::from(vec![key("?"), desc("Toggle this help")]),
             Line::from(vec![key("Tab"), desc("Cycle focus forward")]),
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
-            Line::from(vec![key("Esc"), desc("Close / go back")]),
+            Line::from(vec![key("Esc"), desc("Clear selection / close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
@@ -351,7 +353,9 @@ impl App {
             ]),
             Line::from(vec![key("p / P"), desc("Pull / push repo/worktree")]),
             Line::from(vec![key("="), desc("Toggle GitHub panel")]),
-            Line::from(vec![key("y"), desc("Copy to clipboard")]),
+            Line::from(vec![key("Drag text"), desc("Select text; release copies")]),
+            Line::from(vec![key("y"), desc("Copy selection or current item")]),
+            Line::from(vec![key("Ctrl+C"), desc("Copy selection, otherwise quit")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];
 

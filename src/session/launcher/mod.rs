@@ -7,6 +7,8 @@
 //! The launch vocabulary is tmux-shaped (`split-window`/`new-window`); under
 //! herdr ([`Multiplexer::Herdr`]) the same placements are translated to herdr's
 //! `pane split` / `tab create` commands so config stays portable.
+//! The official desktop backend uses `herdr-app do` with explicit pane/space
+//! targets and program argv; herdr-core terminal IDs are never pane IDs.
 
 use crate::session::env::Multiplexer;
 
@@ -46,6 +48,12 @@ pub(crate) enum LaunchPlan {
     Herdr {
         create: Vec<String>,
         command: Option<String>,
+    },
+    /// Official desktop: run this program in a verified pane or space. The
+    /// executor resolves and pins the source terminal independently of focus.
+    HerdrApp {
+        placement: String,
+        argv: Vec<String>,
     },
     /// Run this `sh -c` string in the current terminal, suspending the TUI.
     Inline(String),
@@ -235,6 +243,7 @@ fn plan_with_target_inner(
                     create: herdr_split_argv("right", dir, None),
                     command: None,
                 },
+                Multiplexer::HerdrApp => desktop_plan("split-window -h", dir, None),
                 Multiplexer::None => {
                     LaunchPlan::Error("set a command or run gitpane inside tmux or herdr".into())
                 }
@@ -249,6 +258,7 @@ fn plan_with_target_inner(
                 },
                 Err(e) => LaunchPlan::Error(e),
             },
+            Multiplexer::HerdrApp => desktop_plan(&flags.join(" "), dir, shell.as_deref()),
             Multiplexer::None => {
                 if let Some(s) = shell {
                     LaunchPlan::Inline(s)
@@ -262,7 +272,7 @@ fn plan_with_target_inner(
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
         Placement::Ask => match mux {
-            Multiplexer::Tmux | Multiplexer::Herdr => LaunchPlan::Ask,
+            Multiplexer::Tmux | Multiplexer::Herdr | Multiplexer::HerdrApp => LaunchPlan::Ask,
             Multiplexer::None => {
                 if let Some(command) = shell {
                     LaunchPlan::Inline(command)
@@ -271,6 +281,16 @@ fn plan_with_target_inner(
                 }
             }
         },
+    }
+}
+
+fn desktop_plan(placement: &str, dir: &str, command: Option<&str>) -> LaunchPlan {
+    match crate::session::herdr_app::validate_placement(placement) {
+        Ok(()) => LaunchPlan::HerdrApp {
+            placement: placement.into(),
+            argv: crate::session::herdr_app::program_argv(command, dir),
+        },
+        Err(error) => LaunchPlan::Error(error),
     }
 }
 

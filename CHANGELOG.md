@@ -4,6 +4,10 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Select visible terminal text by dragging and release to copy, while retaining clicks, wheel scrolling, scrollbar scrubbing and panel resizing. Highlighted text can be copied again with `y` or `Ctrl+C`; `Esc` clears the selection.
+- Support official Herdr desktop (`herdr-app` and `hc`) for opening repositories, configured review commands, placement choices, live session markers and terminal navigation. The editor bridge and VS Code session controls support the `herdr-app` backend.
+
 ## [0.18.3] - 2026-10-31
 
 ### Added

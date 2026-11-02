@@ -13,12 +13,12 @@ function normalizeAction(method, params) {
   if (!params || typeof params.repo !== 'string' || !path.isAbsolute(params.repo)) {
     throw new BridgeError('invalid_request', 'A repository is required.');
   }
-  if (method === 'session_goto' && ['tmux', 'herdr'].includes(params.backend) &&
+  if (method === 'session_goto' && ['tmux', 'herdr', 'herdr-app'].includes(params.backend) &&
     typeof params.session === 'string' && params.session.length > 0) {
     return { repo: params.repo, backend: params.backend, session: params.session };
   }
   if (method === 'launcher_execute') {
-    if (!['tmux', 'herdr'].includes(params.backend) ||
+    if (!['tmux', 'herdr', 'herdr-app'].includes(params.backend) ||
       typeof params.id !== 'string' || !params.id || params.id.includes('\0') ||
       typeof params.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(params.fingerprint) ||
       typeof params.expected_repo_identity !== 'string' || !/^[a-f0-9]{64}$/.test(params.expected_repo_identity) ||

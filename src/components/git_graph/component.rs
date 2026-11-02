@@ -75,6 +75,23 @@ impl GitGraph {
         self.indicator_at(pos).is_some()
     }
 
+    /// Select rendered text; only visible borders and scrollbars keep their grabs.
+    pub(crate) fn text_selection_area(&mut self, pos: ratatui::layout::Position) -> Option<Rect> {
+        let (pane, area) = [
+            (None, self.graph_list_area),
+            (Some(DetailPane::Message), self.msg_area),
+            (Some(DetailPane::Files), self.files_area),
+            (Some(DetailPane::Diff), self.diff_area),
+        ]
+        .into_iter()
+        .find(|(_, area)| area.contains(pos))?;
+        let content = match pane {
+            Some(pane) => self.pane_layout(pane)?.content,
+            None => scroll_pane::bordered_inner(area),
+        };
+        content.contains(pos).then_some(content)
+    }
+
     /// The pane whose scroll indicator sits under `pos`, the offset that point
     /// selects on it, and the layout that computed both — the grab stores the
     /// layout so the drag never re-counts the pane's rows.

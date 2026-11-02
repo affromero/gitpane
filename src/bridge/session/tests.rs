@@ -257,3 +257,37 @@ fn oversized_batch_is_rejected() {
     .unwrap_err();
     assert_eq!(error.code, "invalid_request");
 }
+
+#[test]
+fn official_desktop_backend_is_deserializable_and_auto_detectable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    repo(&root);
+    let scope = Scope::new(vec![root.clone()]).unwrap();
+    for backend in ["herdr-app", "auto"] {
+        let input: LivenessRequest = serde_json::from_value(json!({
+            "repos": [root], "backend": backend,
+        }))
+        .unwrap();
+        let result = liveness_with(
+            &scope,
+            input,
+            true,
+            || {
+                assert_eq!(backend, "auto");
+                Multiplexer::HerdrApp
+            },
+            |kind| {
+                assert_eq!(kind, "herdr-app");
+                Ok(vec![("t7".into(), root.clone())])
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "enabled": true, "reason": null, "repos": [{"repo": root, "live": true}],
+            })
+        );
+    }
+}
