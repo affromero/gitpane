@@ -1,5 +1,36 @@
 use super::*;
 
+#[test]
+fn liveness_failure_clears_markers_and_reports_once_per_outage() {
+    let mut app = power_test_app();
+    drain_actions(&mut app);
+    let initial = vec![("t1".to_string(), Path::new("repo").to_path_buf())];
+    app.complete_liveness_probe(Ok(initial.clone()));
+    app.liveness_probe_in_flight = true;
+    app.complete_liveness_probe(Err("desktop offline".into()));
+    assert!(!app.liveness_probe_in_flight);
+    assert!(app.repo_list.live_panes().is_empty());
+    assert!(
+        matches!(app.action_rx.try_recv(), Ok(Action::Error(error)) if error.contains("desktop offline"))
+    );
+
+    app.complete_liveness_probe(Err("still offline".into()));
+    assert!(app.repo_list.live_panes().is_empty());
+    assert!(app.action_rx.try_recv().is_err());
+    app.attach_sessions_for(Path::new("repo")).unwrap();
+    assert!(
+        matches!(app.action_rx.try_recv(), Ok(Action::Error(error)) if error.contains("still offline"))
+    );
+
+    let recovered = vec![("t2".to_string(), Path::new("other").to_path_buf())];
+    app.complete_liveness_probe(Ok(recovered.clone()));
+    assert_eq!(app.repo_list.live_panes(), recovered);
+    app.complete_liveness_probe(Err("offline again".into()));
+    assert!(
+        matches!(app.action_rx.try_recv(), Ok(Action::Error(error)) if error.contains("offline again"))
+    );
+}
+
 #[tokio::test]
 async fn removing_one_repository_preserves_namesakes_and_prefix_siblings() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -12,7 +43,7 @@ async fn removing_one_repository_preserves_namesakes_and_prefix_siblings() {
         write_target_override: Some(tmp.path().join("config.toml")),
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     assert_eq!(app.repo_list.repos.len(), 3);
     app.handle_repo_admin(Action::RemoveRepo(RepoId(removed.clone())))
         .unwrap();

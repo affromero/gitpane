@@ -27,6 +27,64 @@ fn fixture() -> (Layout, Context) {
 }
 
 #[test]
+fn desktop_context_retries_after_failure_and_does_not_cache_hidden_workers() {
+    let cache = OnceLock::new();
+    assert_eq!(
+        pin_context(&cache, "t1", || Err("desktop offline".into())).unwrap_err(),
+        "desktop offline"
+    );
+    assert_eq!(
+        pin_context(&cache, "t99", || Ok(fixture().0)).unwrap(),
+        None
+    );
+    let context = pin_context(&cache, "t1", || Ok(fixture().0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(context.pane, "p-source");
+    assert_eq!(
+        pin_context(&cache, "t1", || panic!("context should be pinned")).unwrap(),
+        Some(context)
+    );
+}
+
+#[test]
+fn liveness_preserves_other_terminals_when_a_pane_closes_during_scan() {
+    let (layout, _) = fixture();
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let mut updated = layout_value();
+    updated["spaces"][0]["tabs"][0]["terminals"]
+        .as_array_mut()
+        .unwrap()
+        .remove(1);
+    let sessions = pane_sessions_with(
+        layout,
+        |address| {
+            if address == "t2" {
+                return Err("terminal disappeared".into());
+            }
+            Ok(json!({"address": address, "state": "live", "cwd": cwd}))
+        },
+        || parse_layout(&serde_json::to_vec(&updated).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|(address, _)| address.as_str())
+            .collect::<Vec<_>>(),
+        ["t1", "t3", "t4"]
+    );
+}
+
+#[test]
+fn liveness_surfaces_terminal_errors_when_the_pane_is_still_displayed() {
+    let (layout, _) = fixture();
+    let error = pane_sessions_with(layout, |_| Err("hc unavailable".into()), || Ok(fixture().0))
+        .unwrap_err();
+    assert_eq!(error, "hc unavailable");
+}
+
+#[test]
 fn terminal_membership_maps_to_actual_containing_pane_space_and_tab() {
     let (layout, source) = fixture();
     assert_eq!(
@@ -343,10 +401,10 @@ fn official_backend_uses_displayed_membership_and_explicit_targets() {
     const CHILD: &str = "GITPANE_DESKTOP_TEST_CHILD";
     if let Ok(mode) = std::env::var(CHILD) {
         if mode == "hidden" {
-            assert_eq!(Multiplexer::detect(), Multiplexer::None);
+            assert_eq!(Multiplexer::detect().unwrap(), Multiplexer::None);
             return;
         }
-        assert_eq!(Multiplexer::detect(), Multiplexer::HerdrApp);
+        assert_eq!(Multiplexer::detect().unwrap(), Multiplexer::HerdrApp);
         let source = current_context().unwrap();
         assert_eq!(source.pane, "p-source");
         let directory = PathBuf::from(std::env::var_os("GITPANE_DESKTOP_TEST_ROOT").unwrap());

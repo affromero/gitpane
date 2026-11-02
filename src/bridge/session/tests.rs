@@ -21,6 +21,23 @@ fn request(repos: Vec<PathBuf>) -> LivenessRequest {
 }
 
 #[test]
+fn auto_liveness_reports_desktop_detection_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let scope = Scope::new(vec![root]).unwrap();
+    let error = liveness_with(
+        &scope,
+        request(vec![]),
+        true,
+        || Err("desktop offline".into()),
+        |_| panic!("failed detection must not choose a backend"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "session_error");
+    assert!(error.message.contains("desktop offline"));
+}
+
+#[test]
 fn dedicated_worker_advertises_capability_and_rejects_other_queries() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
@@ -135,7 +152,7 @@ fn liveness_matches_nested_panes_and_linked_worktrees() {
         &scope,
         request(vec![main.clone(), linked.clone(), sibling.clone()]),
         true,
-        || Multiplexer::Tmux,
+        || Ok(Multiplexer::Tmux),
         |kind| {
             assert_eq!(kind, "tmux");
             Ok(vec![("session".into(), linked.join("nested"))])
@@ -172,7 +189,7 @@ fn disabled_and_plain_host_do_not_probe() {
         &scope,
         request(vec![root]),
         true,
-        || Multiplexer::None,
+        || Ok(Multiplexer::None),
         |_| panic!("must not probe"),
     )
     .unwrap();
@@ -221,7 +238,7 @@ fn scope_and_repository_replacement_are_checked_around_probe() {
         &scope,
         request(vec![outside]),
         false,
-        || Multiplexer::None,
+        || Ok(Multiplexer::None),
         |_| panic!("must not probe"),
     )
     .unwrap_err();
@@ -230,7 +247,7 @@ fn scope_and_repository_replacement_are_checked_around_probe() {
         &scope,
         request(vec![workspace.clone()]),
         true,
-        || Multiplexer::Tmux,
+        || Ok(Multiplexer::Tmux),
         |_| {
             fs::rename(workspace.join(".git"), workspace.join(".old-git")).unwrap();
             git2::Repository::init(&workspace).unwrap();
@@ -251,7 +268,7 @@ fn oversized_batch_is_rejected() {
             MAX_LIVENESS_REPOSITORIES + 1
         ]),
         true,
-        || Multiplexer::Tmux,
+        || Ok(Multiplexer::Tmux),
         |_| panic!("must not probe"),
     )
     .unwrap_err();
@@ -275,7 +292,7 @@ fn official_desktop_backend_is_deserializable_and_auto_detectable() {
             true,
             || {
                 assert_eq!(backend, "auto");
-                Multiplexer::HerdrApp
+                Ok(Multiplexer::HerdrApp)
             },
             |kind| {
                 assert_eq!(kind, "herdr-app");

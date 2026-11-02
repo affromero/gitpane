@@ -235,8 +235,6 @@ impl App {
             }
         }
 
-        self.draw_text_selection(frame)?;
-
         self.clear_expired_messages();
 
         self.status_bar.focus = self.focus;
@@ -265,6 +263,9 @@ impl App {
         if let Some(ref version) = self.update_version {
             self.draw_update_notification(frame, main_area, version);
         }
+
+        // Snapshot and highlight the cells actually visible above the panes.
+        self.draw_text_selection(frame)?;
 
         // Help overlay (rendered last so it's on top of everything)
         if self.show_help {

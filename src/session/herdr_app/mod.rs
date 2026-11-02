@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -197,15 +197,34 @@ impl Layout {
 
 /// Pin the containing pane when detection first succeeds, independently of focus.
 pub(crate) fn current_context() -> Result<&'static Context, String> {
-    static CONTEXT: LazyLock<Result<Context, String>> = LazyLock::new(|| {
-        let terminal =
-            std::env::var("HC_TERMINAL_ID").map_err(|_| "HC_TERMINAL_ID is not set".to_string())?;
-        if !local_terminal(&terminal) {
-            return Err("HC_TERMINAL_ID is not a local terminal address".into());
-        }
-        layout()?.context(&terminal)
-    });
-    CONTEXT.as_ref().map_err(Clone::clone)
+    detected_context()?.ok_or_else(|| "terminal is not displayed in the local Herdr app".into())
+}
+
+/// A valid layout can show that an HC worker is hidden. Backend failures are
+/// different: callers must surface them instead of choosing another backend.
+pub(crate) fn detected_context() -> Result<Option<&'static Context>, String> {
+    static CONTEXT: OnceLock<Context> = OnceLock::new();
+    let terminal = std::env::var("HC_TERMINAL_ID").unwrap_or_default();
+    pin_context(&CONTEXT, &terminal, layout)
+}
+
+fn pin_context<'a>(
+    cache: &'a OnceLock<Context>,
+    terminal: &str,
+    inspect: impl FnOnce() -> Result<Layout, String>,
+) -> Result<Option<&'a Context>, String> {
+    if let Some(context) = cache.get() {
+        return Ok(Some(context));
+    }
+    if !local_terminal(terminal) {
+        return Ok(None);
+    }
+    let current_layout = inspect()?;
+    let Ok(context) = current_layout.context(terminal) else {
+        return Ok(None);
+    };
+    let _ = cache.set(context);
+    Ok(cache.get())
 }
 
 /// The terminal's root process bounds nested-owner ancestry checks.
@@ -466,10 +485,34 @@ fn terminal_cwd(value: Value, address: &str) -> Result<Option<PathBuf>, String> 
 /// Only displayed local terminals count; hidden workers and remote paths do not.
 /// `hc ls` reports launch cwd, so get the foreground cwd for each displayed pane.
 pub(crate) fn pane_sessions() -> Result<Vec<(String, PathBuf)>, String> {
-    let layout = layout()?;
+    pane_sessions_with(
+        layout()?,
+        |terminal| output_json("hc", &["get", terminal, "--json"]),
+        layout,
+    )
+}
+
+fn pane_sessions_with(
+    initial_layout: Layout,
+    mut get_terminal: impl FnMut(&str) -> Result<Value, String>,
+    mut refresh_layout: impl FnMut() -> Result<Layout, String>,
+) -> Result<Vec<(String, PathBuf)>, String> {
     let mut panes = Vec::new();
-    for (_, _, pane) in layout.contexts() {
-        let terminal = output_json("hc", &["get", &pane.terminal, "--json"])?;
+    for (_, _, pane) in initial_layout.contexts() {
+        let terminal = match get_terminal(&pane.terminal) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                // A terminal may close between the layout snapshot and hc get.
+                // Ignore only a confirmed removal; preserve real backend errors.
+                let current_layout = refresh_layout().map_err(|refresh_error| {
+                    format!("{error}; could not refresh Herdr layout: {refresh_error}")
+                })?;
+                if current_layout.context(&pane.terminal).is_err() {
+                    continue;
+                }
+                return Err(error);
+            }
+        };
         if let Some(cwd) = terminal_cwd(terminal, &pane.terminal)? {
             panes.push((pane.terminal.clone(), cwd));
         }

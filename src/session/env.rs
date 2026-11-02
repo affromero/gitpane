@@ -23,7 +23,7 @@
 //! a leaked outer tmux pane can claim it. Failed process probes fall back to the
 //! displayed desktop context.
 
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 /// The terminal multiplexer this instance runs under, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,10 +40,14 @@ pub(crate) enum Multiplexer {
 
 impl Multiplexer {
     /// Detect from the real environment, resolving nested-tmux/herdr ambiguity
-    /// (see the module docs). Cached for the process lifetime.
-    pub(crate) fn detect() -> Self {
-        static CACHE: LazyLock<Multiplexer> = LazyLock::new(detect_uncached);
-        *CACHE
+    /// (see the module docs). Successful detection is cached for the process.
+    pub(crate) fn detect() -> Result<Self, String> {
+        static CACHE: OnceLock<Multiplexer> = OnceLock::new();
+        if let Some(mux) = CACHE.get() {
+            return Ok(*mux);
+        }
+        let mux = detect_uncached()?;
+        Ok(*CACHE.get_or_init(|| mux))
     }
 
     /// Detect from `present`, which answers whether an env var is set. Pure env
@@ -64,10 +68,9 @@ impl Multiplexer {
     }
 }
 
-fn detect_uncached() -> Multiplexer {
+fn detect_uncached() -> Result<Multiplexer, String> {
     let mux = Multiplexer::detect_from(|v| std::env::var_os(v).is_some());
-    let desktop_member =
-        std::env::var_os("HC_TERMINAL_ID").is_some() && super::herdr_app::current_context().is_ok();
+    let desktop_member = super::herdr_app::detected_context()?.is_some();
     let host = if desktop_member {
         Multiplexer::HerdrApp
     } else {
@@ -75,7 +78,7 @@ fn detect_uncached() -> Multiplexer {
     };
     let nested = matches!(host, Multiplexer::Herdr | Multiplexer::HerdrApp)
         && (std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some());
-    if nested && host == Multiplexer::HerdrApp {
+    Ok(if nested && host == Multiplexer::HerdrApp {
         desktop_owner(
             &tmux_pane_pids(),
             &process_parents(),
@@ -87,7 +90,7 @@ fn detect_uncached() -> Multiplexer {
         resolve_host(host, &tmux_pane_pids(), parent_pid(), std::process::id())
     } else {
         host
-    }
+    })
 }
 
 fn resolve_host(host: Multiplexer, panes: &[u32], parent: u32, self_pid: u32) -> Multiplexer {

@@ -115,6 +115,31 @@ fn text_drag_highlights_and_copies_on_release_with_selection_copy_keys() {
 }
 
 #[test]
+fn text_selection_copies_and_highlights_visible_update_notification() {
+    let (mut app, mut terminal) = fixture("+alpha beta".into());
+    app.update_position = UpdatePosition::TopLeft;
+    app.update_version = Some("9.9.9".into());
+    draw(&mut app, &mut terminal);
+    let start = find_text(&terminal, app.repo_area, "gitpane");
+    let end = Position::new(start.x + 6, start.y);
+    start_drag(&mut app, &mut terminal, start, end);
+    for column in start.x..=end.x {
+        assert!(
+            terminal.backend().buffer()[(column, start.y)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+    }
+    app.handle_mouse_event(mouse(MouseEventKind::Up(MouseButton::Left), end))
+        .unwrap();
+    assert_eq!(copies(&drain_actions(&mut app)), ["gitpane"]);
+
+    app.update_version = None;
+    draw(&mut app, &mut terminal);
+    assert!(app.text_selection.origin().is_none());
+}
+
+#[test]
 fn app_drag_copies_multiline_in_both_directions_and_stops_at_the_pane_edge() {
     let (mut app, mut terminal) = fixture("+alpha beta\n+gamma delta".into());
     let first = find_text(&terminal, app.changes_area, "+alpha beta");

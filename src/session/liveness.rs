@@ -474,20 +474,14 @@ fn parse_herdr_panes(output: &str) -> Result<Vec<(String, PathBuf)>, String> {
 }
 
 /// Official desktop terminals, keyed by HC address for `agent.focus`.
-pub(crate) fn herdr_app_live_panes() -> Vec<(String, PathBuf)> {
-    match super::herdr_app::pane_sessions() {
-        Ok(panes) => panes
-            .into_iter()
-            .map(|(terminal, cwd)| {
-                let cwd = cwd.canonicalize().unwrap_or(cwd);
-                (terminal, cwd)
-            })
-            .collect(),
-        Err(error) => {
-            rate_limited_debug(|| format!("Herdr desktop liveness failed: {error}"));
-            Vec::new()
-        }
-    }
+pub(crate) fn herdr_app_live_panes() -> Result<Vec<(String, PathBuf)>, String> {
+    Ok(super::herdr_app::pane_sessions()?
+        .into_iter()
+        .map(|(terminal, cwd)| {
+            let cwd = cwd.canonicalize().unwrap_or(cwd);
+            (terminal, cwd)
+        })
+        .collect())
 }
 
 /// Sorted, unique session names that have a pane cwd'd at or below `path` (the

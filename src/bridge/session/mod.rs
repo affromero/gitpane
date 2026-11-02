@@ -63,7 +63,7 @@ fn liveness_with(
     scope: &Scope,
     input: LivenessRequest,
     enabled: bool,
-    detect: impl FnOnce() -> Multiplexer,
+    detect: impl FnOnce() -> Result<Multiplexer, String>,
     probe: impl FnOnce(&str) -> Result<Vec<(String, PathBuf)>, BridgeError>,
 ) -> Result<Value, BridgeError> {
     if input.repos.len() > MAX_LIVENESS_REPOSITORIES {
@@ -89,7 +89,12 @@ fn liveness_with(
             LivenessBackend::Tmux => Some("tmux"),
             LivenessBackend::Herdr => Some("herdr"),
             LivenessBackend::HerdrApp => Some("herdr-app"),
-            LivenessBackend::Auto => match detect() {
+            LivenessBackend::Auto => match detect().map_err(|error| {
+                BridgeError::new(
+                    "session_error",
+                    format!("Could not detect Herdr desktop session: {error}"),
+                )
+            })? {
                 Multiplexer::Tmux => Some("tmux"),
                 Multiplexer::Herdr => Some("herdr"),
                 Multiplexer::HerdrApp => Some("herdr-app"),

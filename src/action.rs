@@ -81,7 +81,12 @@ pub(crate) enum Action {
     },
     /// `(session, pane_cwd)` from the latest liveness probe; repos/worktrees
     /// whose path contains a pane cwd are marked live with that session's name.
-    LiveSessionsLoaded(Vec<(String, std::path::PathBuf)>),
+    LiveSessionsLoaded(Result<Vec<(String, std::path::PathBuf)>, String>),
+    /// Result of the background Herdr desktop placement query.
+    PlacementChoicesLoaded {
+        generation: u64,
+        result: Result<Vec<(String, String)>, String>,
+    },
     /// The picker chose this value (a placement string, or a session name);
     /// the app routes it by its pending picker purpose.
     PickerChose(String),
