@@ -10,6 +10,7 @@ All notable changes to gitpane are documented here.
 
 ### Fixed
 - Initialize submodule pull-policy regression fixtures explicitly so an inherited `pull.rebase=true` cannot turn the tested policy update into a no-op.
+- Isolate real extension test subprocesses from localized Git diagnostics, and prevent inherited desktop identity from overriding the fake legacy-session fixture.
 
 ## [0.18.3] - 2026-10-31
 

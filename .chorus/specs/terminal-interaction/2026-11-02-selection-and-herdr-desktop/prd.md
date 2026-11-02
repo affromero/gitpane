@@ -46,4 +46,16 @@ Chorus project: `c01ab4f3-2f76-4493-b601-6c38ab5fbaea`.
 
 The two standalone implementation tasks use the Quick Dev workflow; this change has no proposal container.
 
-Both tasks are verified `done` after their independent round-2 `VERDICT: PASS` comments: mouse `de922b75-140e-482c-93b9-c6462dd5ce34`; official desktop `23044a2f-4eb6-429a-8aab-7c46c9bf88ea`. There is no Idea-rooted proposal, so no aggregate Idea review gate applies; spec-lite has no OpenSpec change to archive. No commits or pushes were made.
+Both feature tasks are verified `done` after their independent round-2 `VERDICT: PASS` comments: mouse `de922b75-140e-482c-93b9-c6462dd5ce34`; official desktop `23044a2f-4eb6-429a-8aab-7c46c9bf88ea`. There is no Idea-rooted proposal, so no aggregate Idea review gate applies; spec-lite has no OpenSpec change to archive.
+
+## Publication and approved baseline repairs
+
+The user requested upstream issues, a fork push and an upstream PR. Issues #128 (text selection) and #129 (official desktop support) were created in `affromero/gitpane`; the feature was committed as `7524784`. The user then approved separate commits to repair the established environment-dependent baseline failures instead of bypassing push hooks.
+
+Issue #130 tracks the test isolation repairs. The Rust fixture now starts with local `pull.rebase=false`, ensuring the delayed update to true is a genuine change even when the user's global value is true; rejection assertions and production code are unchanged. This repair is commit `ca98d8e`.
+
+The real extension fixture copies `LC_ALL=C` / `LANGUAGE=C` into Git and backend-worker subprocess environments without changing the parent or production locale behavior. The explicit fake legacy-Herdr fixture clears inherited `HC_TERMINAL_ID` so a real desktop session cannot override its chosen backend.
+
+All unfiltered Rust tests now pass: 910 unit tests and 12 CLI tests, with one manual probe ignored. Formatting, Clippy, warnings-denied rustdoc, and the missing-Git check pass. Under the original Chinese parent locale, JavaScript unit tests pass (396 passed, 13 skipped), and both `bridge-real.js` and the complete `extension-real.js` pass. These results supersede the earlier baseline-failure exclusions recorded above.
+
+Both standalone baseline tasks were independently reviewed and verified: pull-policy fixture task `99521c1c-81bb-4775-8b00-97f3a759829f`, PASS comment `f48d2e79-e747-4597-945b-e89231ad653c`; integration-environment task `4c0f3495-3cb1-4b28-8688-e07310305f94`, PASS comment `d0a41038-2024-459c-b4c4-2c320535d22f`.
