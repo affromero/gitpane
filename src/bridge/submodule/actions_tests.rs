@@ -535,6 +535,12 @@ fn delayed_pull_rejects_changed_settings(change_remote: bool) {
     let (temporary, parent, _, scope) = fixture(&["a", "b"]);
     for name in ["a", "b"] {
         let child = Repository::open(parent.join(name)).unwrap();
+        // The later policy update must change a value, regardless of user config.
+        child
+            .config()
+            .unwrap()
+            .set_bool("pull.rebase", false)
+            .unwrap();
         let head = child.head().unwrap().peel_to_commit().unwrap();
         child.branch("local", &head, false).unwrap();
         child.set_head("refs/heads/local").unwrap();
