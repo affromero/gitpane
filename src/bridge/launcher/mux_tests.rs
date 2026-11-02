@@ -401,7 +401,8 @@ fn official_desktop_launch_is_pinned_and_rejects_replaced_target_terminal() {
         ]})
     };
     if let Some((directory, _listener)) = child() {
-        let root = directory.path();
+        let canonical_root = directory.path().canonicalize().unwrap();
+        let root = canonical_root.as_path();
         fs::write(
             root.join("config.toml"),
             "[open]\ncommand = \"printf '%s' {path}\"\nplacement = 'ask'\n",

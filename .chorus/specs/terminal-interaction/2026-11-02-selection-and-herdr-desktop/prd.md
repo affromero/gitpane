@@ -59,3 +59,13 @@ The real extension fixture copies `LC_ALL=C` / `LANGUAGE=C` into Git and backend
 All unfiltered Rust tests now pass: 910 unit tests and 12 CLI tests, with one manual probe ignored. Formatting, Clippy, warnings-denied rustdoc, and the missing-Git check pass. Under the original Chinese parent locale, JavaScript unit tests pass (396 passed, 13 skipped), and both `bridge-real.js` and the complete `extension-real.js` pass. These results supersede the earlier baseline-failure exclusions recorded above.
 
 Both standalone baseline tasks were independently reviewed and verified: pull-policy fixture task `99521c1c-81bb-4775-8b00-97f3a759829f`, PASS comment `f48d2e79-e747-4597-945b-e89231ad653c`; integration-environment task `4c0f3495-3cb1-4b28-8688-e07310305f94`, PASS comment `d0a41038-2024-459c-b4c4-2c320535d22f`.
+
+## PR #131 cross-platform CI follow-up
+
+The first CI run on `fafc952` failed two newly added test fixtures: macOS job `125186061789` compared a canonical `/private/var/...` launch directory against its `/var/...` alias; Windows job `125186062649` rejected the Unix-only `/launch` and `/actual/nested` fixture paths as non-absolute. The other thirteen checks passed.
+
+The user requested fixing and committing these failures. Only test path construction changes: the desktop-launch test supplies a canonical temporary root to its child process, preserving exact payload and stale-target assertions; the liveness test builds launch and foreground paths from a native temporary directory, preserving foreground/fallback, finished-state, identity/state and relative-path rejection checks. No production path validation or CI platform coverage is weakened.
+
+Both affected regressions pass on Linux with `TMPDIR` pointing through an actual symlink alias. This exercises the macOS-style canonicalization distinction without claiming a native macOS run. Native Windows/macOS validation remains the responsibility of the PR matrix. Follow-up task: `6bb0167e-fe0d-4fd0-b33e-de3ead442d47`.
+
+Local follow-up verification: formatting, Clippy with warnings denied, rustdoc with warnings denied, and the complete unfiltered Rust suite passed (910 unit tests, 12 CLI integration tests, one ignored manual probe). The missing-Git environment check also passed, including its expected Git-dependent skips. Logs are `/tmp/gitpane-ci-portability-gate-{0..4}.log` and the two `/tmp/gitpane-ci-portability-<test-name>.log` focused runs. No test count changed and no production files were modified.

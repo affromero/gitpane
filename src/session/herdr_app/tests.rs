@@ -219,23 +219,27 @@ fn desktop_plans_cover_default_open_review_ask_and_invalid_flags() {
 
 #[test]
 fn liveness_uses_foreground_cwd_skips_finished_and_rejects_wrong_identity() {
-    let value = json!({"address":"t1","state":"live","cwd":"/launch","foreground":{"cwd":"/actual/nested"}});
+    let directory = tempfile::tempdir().unwrap();
+    let launch = directory.path().join("launch");
+    let foreground = directory.path().join("actual").join("nested");
+    let value = json!({"address":"t1","state":"live","cwd":launch,"foreground":{"cwd":foreground}});
     assert_eq!(
-        terminal_cwd(value.clone(), "t1").unwrap(),
-        Some(PathBuf::from("/actual/nested"))
+        terminal_cwd(value.clone(), "t1").unwrap().as_deref(),
+        Some(foreground.as_path())
     );
     assert!(terminal_cwd(value, "t2").is_err());
     assert_eq!(
         terminal_cwd(
-            json!({"address":"t1","state":"live","cwd":"/launch","foreground":null}),
+            json!({"address":"t1","state":"live","cwd":launch,"foreground":null}),
             "t1"
         )
-        .unwrap(),
-        Some(PathBuf::from("/launch"))
+        .unwrap()
+        .as_deref(),
+        Some(launch.as_path())
     );
     assert_eq!(
         terminal_cwd(
-            json!({"address":"t1","state":"finished","cwd":"/launch"}),
+            json!({"address":"t1","state":"finished","cwd":launch}),
             "t1"
         )
         .unwrap(),
@@ -248,13 +252,7 @@ fn liveness_uses_foreground_cwd_skips_finished_and_rejects_wrong_identity() {
         )
         .is_err()
     );
-    assert!(
-        terminal_cwd(
-            json!({"address":"t1","state":"unknown","cwd":"/launch"}),
-            "t1"
-        )
-        .is_err()
-    );
+    assert!(terminal_cwd(json!({"address":"t1","state":"unknown","cwd":launch}), "t1").is_err());
     assert!(terminal_cwd(json!({"address":"t1","state":"live"}), "t1").is_err());
 }
 
