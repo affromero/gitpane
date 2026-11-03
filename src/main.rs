@@ -236,7 +236,7 @@ async fn run(cli: Cli) -> Result<()> {
         tokio::task::spawn_blocking(crate::session::launcher::forward_right_click_in_herdr);
     }
 
-    let mut app = app::App::new(config);
+    let mut app = app::App::new(config)?;
     app.run().await?;
 
     Ok(())

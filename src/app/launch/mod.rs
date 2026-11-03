@@ -256,6 +256,17 @@ impl App {
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);
             }
+            LaunchPlan::HerdrApp { placement, argv } => {
+                let tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::session::herdr_app::current_context().and_then(|context| {
+                        crate::session::herdr_app::launch(&placement, &argv, &dir, context)
+                    });
+                    if let Err(error) = result {
+                        let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
+                    }
+                });
+            }
             LaunchPlan::Ask => {
                 self.action_tx
                     .send(Action::Error("ask placement isn't available yet".into()))?;
@@ -476,6 +487,13 @@ impl App {
     /// Park a launch and open the placement picker (`placement = "ask"`), listing
     /// tmux windows as right-of/below targets, or herdr tabs/splits under herdr.
     fn start_placement_picker(&mut self, request: PendingLaunch) {
+        if self.mux == crate::session::env::Multiplexer::HerdrApp {
+            self.start_herdr_placement_picker(
+                request,
+                crate::session::herdr_app::placement_choices,
+            );
+            return;
+        }
         let choices = match self.mux {
             crate::session::env::Multiplexer::Herdr => {
                 crate::session::launcher::herdr_placement_choices()
@@ -486,6 +504,45 @@ impl App {
         };
         self.pending_pick = Some(PendingPick::Launch(request));
         self.picker.show("Open where?", choices);
+    }
+
+    fn start_herdr_placement_picker(
+        &mut self,
+        request: PendingLaunch,
+        query: impl FnOnce() -> Result<Vec<(String, String)>, String> + Send + 'static,
+    ) {
+        self.placement_generation = self.placement_generation.wrapping_add(1);
+        let generation = self.placement_generation;
+        self.pending_pick = Some(PendingPick::Launch(request));
+        self.picker.show("Loading placements...", Vec::new());
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(Action::PlacementChoicesLoaded {
+                generation,
+                result: query(),
+            });
+        });
+    }
+
+    pub(super) fn finish_placement_picker(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<(String, String)>, String>,
+    ) {
+        if generation != self.placement_generation
+            || !self.picker.visible
+            || !matches!(self.pending_pick, Some(PendingPick::Launch(_)))
+        {
+            return;
+        }
+        match result {
+            Ok(choices) => self.picker.show("Open where?", choices),
+            Err(error) => {
+                self.picker.hide();
+                self.pending_pick = None;
+                let _ = self.action_tx.send(Action::Error(error));
+            }
+        }
     }
     /// Attach the live tmux session(s) for the currently selected row (the `G`
     /// key path).
@@ -504,26 +561,34 @@ impl App {
     /// directly (a herdr tab focus, or the tmux `[goto] command`), several -> the
     /// picker.
     pub(super) fn attach_sessions_for(&mut self, path: &std::path::Path) -> Result<()> {
+        if let Some(error) = &self.liveness_error {
+            self.action_tx.send(Action::Error(format!(
+                "Herdr desktop liveness failed: {error}"
+            )))?;
+            return Ok(());
+        }
         let mux = self.mux;
         let sessions = crate::session::liveness::live_sessions(path, self.repo_list.live_panes());
         match sessions.as_slice() {
             [] => {
-                let msg = if mux == crate::session::env::Multiplexer::Herdr {
-                    "no live herdr tab here"
-                } else {
-                    "no live tmux session here"
+                let msg = match mux {
+                    crate::session::env::Multiplexer::HerdrApp => "no live Herdr terminal here",
+                    crate::session::env::Multiplexer::Herdr => "no live herdr tab here",
+                    _ => "no live tmux session here",
                 };
                 self.action_tx.send(Action::Error(msg.into()))?;
             }
             [one] => self.goto_session(one),
             many => {
                 let choices = many.iter().map(|s| (s.clone(), s.clone())).collect();
-                let title = if mux == crate::session::env::Multiplexer::Herdr {
-                    "Open herdr tab".to_string()
-                } else {
-                    match crate::session::launcher::goto_placement(&self.config.goto.command) {
-                        Some(p) => format!("Open session ({p})"),
-                        None => "Open session".to_string(),
+                let title = match mux {
+                    crate::session::env::Multiplexer::HerdrApp => "Open Herdr terminal".into(),
+                    crate::session::env::Multiplexer::Herdr => "Open herdr tab".into(),
+                    _ => {
+                        match crate::session::launcher::goto_placement(&self.config.goto.command) {
+                            Some(p) => format!("Open session ({p})"),
+                            None => "Open session".to_string(),
+                        }
                     }
                 };
                 self.pending_pick = Some(PendingPick::GotoSession);
@@ -536,6 +601,16 @@ impl App {
     /// (switches the tmux client or spawns a terminal tab), so its exit status
     /// is checked and a failure (e.g. a stale session) is surfaced.
     pub(super) fn goto_session(&mut self, session: &str) {
+        if self.mux == crate::session::env::Multiplexer::HerdrApp {
+            let tx = self.action_tx.clone();
+            let terminal = session.to_string();
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = crate::session::herdr_app::focus(&terminal) {
+                    let _ = tx.send(Action::Error(format!("goto failed: {error}")));
+                }
+            });
+            return;
+        }
         // herdr: focus the tab hosting the live pane — no `[goto] command` needed.
         if self.mux == crate::session::env::Multiplexer::Herdr {
             let tx = self.action_tx.clone();
@@ -801,97 +876,4 @@ fn sanitize_stdout(stdout: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn file_open_app() -> (tempfile::TempDir, App, RepoId, std::path::PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        git2::Repository::init(&repo).unwrap();
-        let repo = repo.canonicalize().unwrap();
-        let file = repo.join("source file.rs");
-        std::fs::write(&file, "fn main() {}\n").unwrap();
-        let mut config = Config {
-            root_dirs: vec![temp.path().to_path_buf()],
-            ..Config::default()
-        };
-        config.open.command = Some("git hash-object {path}".into());
-        config.open.placement = "command".into();
-        (temp, App::new(config), RepoId(repo), file)
-    }
-
-    fn run_file_open(request: PendingLaunch, expected: &std::path::Path) {
-        let plan = crate::session::launcher::plan_with_target(
-            request.command.as_deref(),
-            "command",
-            &request.dir.to_string_lossy(),
-            &request.target.to_string_lossy(),
-            request.base.as_deref(),
-            crate::session::env::Multiplexer::None,
-        );
-        let crate::session::launcher::LaunchPlan::Spawn(argv) = plan else {
-            panic!("expected an argv launch")
-        };
-        let mut command = std::process::Command::new(&argv[0]);
-        crate::git::process::clear_inherited_git_env(&mut command);
-        let output = command
-            .args(&argv[1..])
-            .current_dir(&request.dir)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let expected_oid =
-            git2::Oid::hash_object(git2::ObjectType::Blob, &std::fs::read(expected).unwrap())
-                .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            expected_oid.to_string()
-        );
-        assert_eq!(request.dir, expected.parent().unwrap());
-    }
-
-    #[test]
-    fn configured_file_open_passes_file_to_editor_with_directory_cwd() {
-        if !crate::git::git_test_available() {
-            return;
-        }
-        let (_temp, app, id, file) = file_open_app();
-        let request = app
-            .file_open_request(&id, std::path::Path::new("source file.rs"))
-            .unwrap();
-        run_file_open(request, &file);
-    }
-
-    #[test]
-    fn placement_picker_preserves_file_target_and_directory_cwd() {
-        if !crate::git::git_test_available() {
-            return;
-        }
-        let (_temp, mut app, id, file) = file_open_app();
-        // Herdr choices are local data, so no real multiplexer is needed.
-        app.mux = crate::session::env::Multiplexer::Herdr;
-        let request = app
-            .file_open_request(&id, std::path::Path::new("source file.rs"))
-            .unwrap();
-        app.start_placement_picker(request);
-        let Some(PendingPick::Launch(request)) = app.pending_pick.take() else {
-            panic!("expected a parked file launch")
-        };
-        run_file_open(request, &file);
-    }
-
-    #[test]
-    fn sanitize_stdout_truncates_and_escapes_controls() {
-        let long = "x".repeat(300);
-        let s = sanitize_stdout(&long);
-        assert_eq!(s.chars().count(), 201);
-        assert!(s.ends_with('…'));
-
-        let s = sanitize_stdout("a\nb\r\tc\u{1b}[31m");
-        assert_eq!(s, "a b  c?[31m");
-    }
-}
+mod tests;

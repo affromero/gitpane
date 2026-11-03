@@ -30,8 +30,8 @@ mod tests {
             ..Config::default()
         };
         config.save().unwrap();
-        let first = App::new(config.clone());
-        let second = App::new(config);
+        let first = App::new(config.clone()).unwrap();
+        let second = App::new(config).unwrap();
         (dir, first, second)
     }
 

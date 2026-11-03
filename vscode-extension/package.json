@@ -110,8 +110,8 @@
         },
         "gitpane.sessionBackend": {
           "type": "string",
-          "enum": ["auto", "tmux", "herdr"],
-          "enumDescriptions": ["Detect the multiplexer from the extension host environment.", "Check tmux sessions on the workspace host.", "Check herdr sessions on the workspace host."],
+          "enum": ["auto", "tmux", "herdr", "herdr-app"],
+          "enumDescriptions": ["Detect the multiplexer from the extension host environment.", "Check tmux sessions on the workspace host.", "Check legacy herdr sessions on the workspace host.", "Check official Herdr desktop terminals through herdr-app and hc."],
           "default": "auto",
           "scope": "window",
           "ignoreSync": true,

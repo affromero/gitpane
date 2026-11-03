@@ -153,6 +153,8 @@ async function main() {
     Module._load = function(name, ...args) {
       if (name === 'vscode') return vscode;
       if (name === 'node:child_process') return { ...childProcess, spawn(...command) {
+        // Backend workers must use the same isolated Git diagnostics as fixture commands.
+        command[2] = { ...command[2], env: isolatedGitEnv(command[2]?.env || process.env) };
         const child = childProcess.spawn(...command);
         const closed = new Promise(resolve => child.once('close', resolve));
         children.push({ child, closed });

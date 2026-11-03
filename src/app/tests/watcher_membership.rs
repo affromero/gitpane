@@ -13,7 +13,7 @@ async fn local_poll_removes_deleted_repositories_without_watcher_events() {
             ..Config::default()
         };
         config.ui.show_liveness = false;
-        let mut app = App::new(config);
+        let mut app = App::new(config).unwrap();
         assert_eq!(app.repo_list.repos.len(), 1);
         let deleted = if delete_metadata_only {
             path.join(".git")
@@ -95,7 +95,7 @@ async fn manually_added_repo_refreshes_in_doze_and_removal_stops_its_events() {
     };
     config.watch.debounce_ms = 20;
     config.save().unwrap();
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.tui_event_tx = Some(tx);
     app.rebuild_watcher();

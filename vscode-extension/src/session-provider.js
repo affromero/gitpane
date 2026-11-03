@@ -32,7 +32,8 @@ class SessionProvider {
     const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
     try {
       this.requireCurrent(repo, generation, currentGuard);
-      const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr', kind: 'herdr' }];
+      const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr (legacy)', kind: 'herdr' },
+        { label: 'Herdr desktop', kind: 'herdr-app' }];
       const selectedBackend = await this.vscode.window.showQuickPick(backends, { placeHolder: 'Choose a session type' });
       this.requireCurrent(repo, generation, currentGuard);
       if (!selectedBackend || !backends.includes(selectedBackend)) return;

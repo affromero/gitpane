@@ -407,9 +407,11 @@ impl App {
                 let args = crate::git::worktree_ops::remove_arguments(worktree_path);
                 self.spawn_repo_git_op(repo.clone(), args);
             }
-            Action::LiveSessionsLoaded(panes) => {
-                self.liveness_probe_in_flight = false;
-                self.repo_list.set_live_panes(panes);
+            Action::LiveSessionsLoaded(result) => {
+                self.complete_liveness_probe(result);
+            }
+            Action::PlacementChoicesLoaded { generation, result } => {
+                self.finish_placement_picker(generation, result);
             }
             Action::PickerChose(ref value) => {
                 self.picker.hide();
@@ -443,6 +445,28 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn complete_liveness_probe(
+        &mut self,
+        result: Result<Vec<(String, std::path::PathBuf)>, String>,
+    ) {
+        self.liveness_probe_in_flight = false;
+        match result {
+            Ok(panes) => {
+                self.liveness_error = None;
+                self.repo_list.set_live_panes(panes);
+            }
+            Err(error) => {
+                self.repo_list.set_live_panes(Vec::new());
+                if self.liveness_error.is_none() {
+                    let _ = self.action_tx.send(Action::Error(format!(
+                        "Herdr desktop liveness failed: {error}"
+                    )));
+                }
+                self.liveness_error = Some(error);
+            }
+        }
+    }
+
     pub(super) fn poll_local(&mut self) {
         // Probe live panes once per poll so repos/worktrees get a
         // marker. One `tmux list-panes` (or `herdr pane list`) call,
@@ -454,12 +478,15 @@ impl App {
             tokio::task::spawn_blocking(move || {
                 let panes = match mux {
                     crate::session::env::Multiplexer::Tmux => {
-                        crate::session::liveness::tmux_pane_sessions()
+                        Ok(crate::session::liveness::tmux_pane_sessions())
                     }
                     crate::session::env::Multiplexer::Herdr => {
-                        crate::session::liveness::herdr_live_panes()
+                        Ok(crate::session::liveness::herdr_live_panes())
                     }
-                    crate::session::env::Multiplexer::None => Vec::new(),
+                    crate::session::env::Multiplexer::HerdrApp => {
+                        crate::session::liveness::herdr_app_live_panes()
+                    }
+                    crate::session::env::Multiplexer::None => Ok(Vec::new()),
                 };
                 let _ = tx.send(Action::LiveSessionsLoaded(panes));
             });

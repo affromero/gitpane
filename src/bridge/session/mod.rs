@@ -28,6 +28,8 @@ enum LivenessBackend {
     Auto,
     Tmux,
     Herdr,
+    #[serde(rename = "herdr-app")]
+    HerdrApp,
 }
 
 pub(super) fn liveness(
@@ -61,7 +63,7 @@ fn liveness_with(
     scope: &Scope,
     input: LivenessRequest,
     enabled: bool,
-    detect: impl FnOnce() -> Multiplexer,
+    detect: impl FnOnce() -> Result<Multiplexer, String>,
     probe: impl FnOnce(&str) -> Result<Vec<(String, PathBuf)>, BridgeError>,
 ) -> Result<Value, BridgeError> {
     if input.repos.len() > MAX_LIVENESS_REPOSITORIES {
@@ -86,9 +88,16 @@ fn liveness_with(
         match input.backend {
             LivenessBackend::Tmux => Some("tmux"),
             LivenessBackend::Herdr => Some("herdr"),
-            LivenessBackend::Auto => match detect() {
+            LivenessBackend::HerdrApp => Some("herdr-app"),
+            LivenessBackend::Auto => match detect().map_err(|error| {
+                BridgeError::new(
+                    "session_error",
+                    format!("Could not detect Herdr desktop session: {error}"),
+                )
+            })? {
                 Multiplexer::Tmux => Some("tmux"),
                 Multiplexer::Herdr => Some("herdr"),
+                Multiplexer::HerdrApp => Some("herdr-app"),
                 Multiplexer::None => None,
             },
         }
@@ -167,6 +176,12 @@ pub(super) fn goto(scope: &Scope, input: GotoRequest) -> Result<Value, BridgeErr
             "focus".to_owned(),
             input.session.clone(),
         ],
+        "herdr-app" => vec![
+            "herdr-app".to_owned(),
+            "do".to_owned(),
+            "agent.focus".to_owned(),
+            json!({"terminal": input.session}).to_string(),
+        ],
         "tmux" => {
             let config = crate::config::Config::load()
                 .map_err(|error| BridgeError::new("session_error", error.to_string()))?;
@@ -210,11 +225,26 @@ pub(super) fn goto(scope: &Scope, input: GotoRequest) -> Result<Value, BridgeErr
         BridgeError::new(code, format!("Could not open session: {error}"))
     })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if input.backend == "herdr-app" {
+            crate::session::herdr_app::error_detail(&output)
+        } else {
+            String::from_utf8_lossy(&output.stderr).trim().to_owned()
+        };
         return Err(BridgeError::new(
             "session_error",
-            format!("Could not open session: {}", stderr.trim()),
+            format!("Could not open session: {detail}"),
         ));
+    }
+    if input.backend == "herdr-app" {
+        let response: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+            BridgeError::new("session_error", format!("Invalid Herdr response: {error}"))
+        })?;
+        if let Some(error) = response.get("error") {
+            return Err(BridgeError::new(
+                "session_error",
+                format!("Could not focus terminal: {error}"),
+            ));
+        }
     }
     Ok(json!({}))
 }
