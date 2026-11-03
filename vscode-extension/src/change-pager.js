@@ -104,9 +104,11 @@ class ChangePager {
     state.guard = guard;
     const activeSearch = state.search;
     const previous = { revision: state.revision, cursor: state.cursor, page: state.page };
-    state.phase = 'loading';
-    state.error = undefined;
-    this.changed();
+    if (state.phase !== 'ready') {
+      state.phase = 'loading';
+      state.error = undefined;
+      this.changed();
+    }
     const current = () => !this.disposed && this.entries.get(id) === state && state.guard();
     const pending = Promise.resolve().then(async () => {
       try {

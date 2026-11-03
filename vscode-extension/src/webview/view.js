@@ -24,6 +24,7 @@ const appliedWorktreeReveals = new Set((Array.isArray(saved.appliedWorktreeRevea
   .filter(id => typeof id === 'string' && id.length > 0 && id.length <= 128).slice(-128));
 let selected = typeof saved.selected === 'string' ? saved.selected : undefined;
 let snapshot = { repositories: [], errors: [], loading: true };
+let lastSnapshotRender;
 let changesOwner;
 let hostSelectedOwner;
 let visible = [];
@@ -870,6 +871,7 @@ window.addEventListener('message', event => {
     selected = undefined;
   }
   snapshot = { ...event.data, repositories: Array.isArray(event.data.repositories) ? event.data.repositories : [] };
+  let revealed = false;
   for (const reveal of !changesMode && Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
     if (!reveal || typeof reveal.id !== 'string' || reveal.id.length > 128 ||
         typeof reveal.identity !== 'string' || !/^[a-f0-9]{64}$/.test(reveal.identity)) continue;
@@ -877,13 +879,21 @@ window.addEventListener('message', event => {
     if (!repo) continue;
     if (!appliedWorktreeReveals.has(reveal.id)) {
       setWorktreesVisible(repo, true);
+      revealed = true;
       appliedWorktreeReveals.add(reveal.id);
       if (appliedWorktreeReveals.size > 128) appliedWorktreeReveals.delete(appliedWorktreeReveals.values().next().value);
     }
     save();
     vscode.postMessage({ type: 'ackWorktreeReveal', id: reveal.id });
   }
-  render();
+  const display = { ...snapshot, theme: undefined, themeClear: undefined, revealWorktrees: undefined };
+  if (changesMode) display.repositories = [];
+  if (changesMode || display.repositories.length) display.loading = false;
+  const renderKey = JSON.stringify(display);
+  if (revealed || renderKey !== lastSnapshotRender) {
+    lastSnapshotRender = renderKey;
+    render();
+  }
 });
 
 render();
