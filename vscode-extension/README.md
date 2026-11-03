@@ -204,23 +204,29 @@ progress. If the workspace changes during that call, the repository may still
 open, but Gitpane rejects the stale pin and does not close the repository.
 
 The ◉ marker shows a live session for a repository or worktree. Set
-`gitpane.sessionBackend` to `tmux` or `herdr` when VS Code does not inherit the
-multiplexer environment. The default, `auto`, uses the detected host. Gitpane's
-`ui.show_liveness` setting also controls the marker.
+`gitpane.sessionBackend` to `tmux`, legacy `herdr`, or official `herdr-app` when
+VS Code does not inherit the multiplexer environment. The default, `auto`, uses
+the detected host. Gitpane's `ui.show_liveness` setting also controls the marker.
 
 Configured Launchers offers Gitpane's `[open]`, `[review]`, and custom
 keybinding commands. Review commands receive `{base}` from `[review] base` or
 the repository's detected default branch. A missing base reports an error.
-Command and inline placements open integrated terminals. On Unix, tmux and
-herdr placements can open a split or window on the workspace host. Set
-`gitpane.sessionBackend` to select a multiplexer, or choose one when it is set
-to `auto`. Install and start the selected multiplexer on that host.
+Command and inline placements open integrated terminals. On Unix, tmux, legacy
+herdr, and official Herdr desktop placements can open a split or tab/window on
+the workspace host. Set `gitpane.sessionBackend` to select a backend, or choose
+one when it is set to `auto`. Install and start the selected client on that host.
 
 For `ask`, tmux offers available panes and sessions; herdr offers splits and a
 new tab in the inherited pane's workspace. A configured tmux placement needs a
 separate `-t <target>` or the `TMUX` and `TMUX_PANE` environment inherited by
-VS Code. Herdr requires `HERDR_SOCKET_PATH` and either a configured
-`-t <target>` or `HERDR_PANE_ID`.
+VS Code. Legacy Herdr requires `HERDR_SOCKET_PATH` and either a configured
+`-t <target>` or `HERDR_PANE_ID`. Official Herdr desktop requires `herdr-app`
+and `hc` on `PATH`, and a displayed local `HC_TERMINAL_ID` inherited by VS Code.
+Its picker offers a new tab in the source space or right/below splits beside
+its displayed panes. Explicit pane targets and launcher tokens preserve the
+source and destination identities even when another tab is focused. Session
+navigation focuses the chosen desktop terminal; hidden and remote terminals
+are excluded.
 Multiplexer launchers are unavailable on Windows. Unsupported placements and
 direct command placements using interpreter executables report an error.
 

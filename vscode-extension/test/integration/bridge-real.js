@@ -345,6 +345,7 @@ async function waitForFile(file) {
       sessionEnv.HERDR_ENV = '1';
       delete sessionEnv.TMUX;
       delete sessionEnv.TMUX_PANE;
+      delete sessionEnv.HC_TERMINAL_ID;
       sessionClient = new BridgeClient(executable, { spawn: (program, args, options) => {
         sessionChild = spawn(program, args, { ...options, env: sessionEnv });
         sessionClosed = new Promise(resolve => sessionChild.once('close', resolve));

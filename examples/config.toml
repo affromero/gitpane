@@ -53,8 +53,8 @@ check_for_updates = true
 # Where to show the update notification: "top-right" or "top-left" (default: "top-right")
 update_position = "top-right"
 
-# Mark repos/worktrees that have a live tmux pane (or herdr pane) cwd'd inside
-# them with ◉ (tmux and herdr; default: true)
+# Mark repos/worktrees with a live tmux, legacy herdr, or official Herdr desktop
+# terminal cwd'd inside them with ◉ (default: true).
 show_liveness = true
 
 # Show each repo's worktrees on startup (default: true). Set false if many
@@ -82,8 +82,8 @@ enabled = true
 [open]
 # Command run by `o` to open the selected repo/worktree. `{path}` is its dir.
 # command = "cursor {path}"          # GUI editor (launched directly)
-# Unset + placement "command": open a tmux pane (a shell) when inside tmux,
-# or a herdr pane (right of gitpane) when inside herdr.
+# Unset + placement "command": open a tmux shell pane or a Herdr split to the right.
+# Official desktop uses herdr-app/hc; legacy Herdr uses the herdr CLI.
 #
 # placement controls WHERE/HOW the command runs:
 #   "command" (default) the command IS the launcher, run directly as argv
@@ -93,9 +93,10 @@ enabled = true
 #       window in session 'work'.
 #   "inline" suspend gitpane and run the command in this terminal.
 #   "ask" pick where (right of / below a named window, or new window) each time.
-# Outside tmux, a tmux placement runs inline automatically.
-# Under herdr, split-window -h/-v map to pane directions, new-window creates a
-# new tab, and -t <pane-id> pins a herdr pane.
+# Outside supported multiplexers, split/new-window placements run inline.
+# Under either Herdr client, split-window -h/-v map to right/down and new-window
+# creates a tab. -t <pane-id> targets a split; official desktop new-window also
+# accepts a space/tab/pane ID to choose the destination space.
 # placement = "command"
 
 [review]
@@ -114,6 +115,7 @@ enabled = true
 # dir = "~/worktrees"
 
 [herdr]
+# Legacy herdr CLI only; official herdr-app does not use this routing option.
 # Ask herdr to forward right-click gestures to gitpane's pane at startup ("herdr pane
 # input --current --right-click pane") so the context menu works despite herdr's own
 # right-click menu. herdr's CLI cannot read the current routing back, so gitpane never

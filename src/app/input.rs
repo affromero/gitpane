@@ -12,12 +12,31 @@ impl App {
     }
 
     pub(super) fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        // Ctrl+C always quits, before any overlay or focus-specific routing.
-        // Raw mode clears ISIG, so the terminal never raises SIGINT for Ctrl+C
-        // — this key binding is the only way it can terminate the app.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if self.text_selection_blocked() {
+            self.text_selection.clear();
+        }
+        let control_c =
+            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        if (control_c || (key.code == KeyCode::Char('y') && key.modifiers.is_empty()))
+            && self.text_selection.has_selection()
+        {
+            if let Some(text) = self.text_selection.copy_text() {
+                self.action_tx.send(Action::CopyText(text))?;
+            }
+            return Ok(());
+        }
+        // Raw mode clears ISIG; without selected text Ctrl+C remains the global
+        // quit binding, including while an overlay is open.
+        if control_c {
             self.action_tx.send(Action::Quit)?;
             return Ok(());
+        }
+        if self.text_selection.origin().is_some() {
+            self.text_selection.clear();
+            self.action_tx.send(Action::Render)?;
+            if key.code == KeyCode::Esc {
+                return Ok(());
+            }
         }
 
         // Confirm dialog gets top priority
@@ -327,6 +346,9 @@ impl App {
     pub(super) fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
         use crossterm::event::{MouseButton, MouseEventKind};
 
+        if self.selection_modal_visible() {
+            self.cancel_mouse_gestures();
+        }
         // Modal overlays swallow mouse input so a click can't leak through to a
         // panel or open a context menu hidden behind them.
         if self.graph_context_menu.visible {
@@ -347,6 +369,7 @@ impl App {
             || self.theme_picker.visible
             || self.path_input.visible
             || self.confirm_dialog.visible
+            || self.show_help
         {
             return Ok(());
         }
@@ -361,6 +384,39 @@ impl App {
         }
 
         let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
+        if matches!(
+            mouse.kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ) {
+            self.text_selection.clear();
+        }
+        if self.text_selection.is_pressed() {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    self.text_selection.extend(pos);
+                    self.action_tx.send(Action::Render)?;
+                    return Ok(());
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(press) = self.text_selection.release(pos) {
+                        self.route_panel_mouse(press)?;
+                        self.route_panel_mouse(crossterm::event::MouseEvent {
+                            kind: MouseEventKind::Up(MouseButton::Left),
+                            ..press
+                        })?;
+                    } else if let Some(text) = self.text_selection.take_copy() {
+                        self.action_tx.send(Action::CopyText(text))?;
+                    }
+                    self.action_tx.send(Action::Render)?;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         const GRAB_ZONE: u16 = 2; // ±2 cells hit zone for border grab
 
         // A press anywhere starts a new gesture, so it ends any drag a panel is
@@ -405,12 +461,11 @@ impl App {
 
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    // A panel's own interactive target outranks the seam it runs
-                    // alongside: the scroll indicators sit next to the panel border,
-                    // and losing their grab to it would resize panels instead of
-                    // scrolling the pane. The press still propagates below.
+                    // Text and scroll indicators own their visible cells; the
+                    // border's wider hit zone must not steal text selection.
                     if self.git_graph.is_on_scroll_indicator(pos)
                         || self.file_list.is_on_scroll_indicator(pos)
+                        || self.text_selection_area(pos).is_some()
                     {
                         self.dragging_border = None;
                     } else {
@@ -461,25 +516,18 @@ impl App {
             }
         }
 
-        // Route to the panel under the mouse
-        if self.repo_area.contains(pos) {
-            if let Some(action) = self.repo_list.handle_mouse_event(mouse)? {
-                self.action_tx.send(action)?;
-            }
-        } else if self.changes_area.contains(pos) {
-            if let Some(action) = self.file_list.handle_mouse_event(mouse)? {
-                self.action_tx.send(action)?;
-            }
-        } else if self.graph_area.contains(pos) {
-            if let Some(action) = self.git_graph.handle_mouse_event(mouse)? {
-                self.action_tx.send(action)?;
-            }
-        } else if self.github_visible
-            && self.github_area.contains(pos)
-            && let Some(action) = self.github_panel.handle_mouse_event(mouse)?
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.dragging_border.is_none()
+            && !self.text_selection_blocked()
+            && let Some(area) = self.text_selection_area(pos)
         {
-            self.action_tx.send(action)?;
+            // Defer the normal click until release: a drag must not open a diff
+            // or switch commits underneath the text the user is selecting.
+            self.text_selection.begin(area, mouse);
+            self.action_tx.send(Action::Render)?;
+            return Ok(());
         }
-        Ok(())
+
+        self.route_panel_mouse(mouse)
     }
 }

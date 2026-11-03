@@ -43,6 +43,7 @@ mod input;
 mod launch;
 mod render;
 mod repo_admin;
+mod selection;
 #[cfg(test)]
 mod tests;
 
@@ -205,6 +206,7 @@ pub(crate) struct App {
     picker: Picker,
     /// What the picker is currently choosing for, parked until it resolves.
     pending_pick: Option<PendingPick>,
+    placement_generation: u64,
     focus: FocusPanel,
     sort_order: SortOrder,
     /// The terminal multiplexer this instance runs under, resolved once at
@@ -242,6 +244,7 @@ pub(crate) struct App {
     /// Which border is being dragged: 0 = repos|changes, 1 = changes|graph,
     /// 2 = graph|github (only when the 4th panel is shown).
     dragging_border: Option<u8>,
+    text_selection: selection::TextSelection,
     /// Fraction of the layout axis for each border (0.0..1.0). Index 0 is the
     /// repos/changes split, 1 the changes/graph split, and 2 the graph/github
     /// split (live only when the GitHub panel is shown). Applies to width in
@@ -271,6 +274,8 @@ pub(crate) struct App {
     /// True while a tmux liveness probe is running, so polls don't pile up
     /// blocking tasks (and results stay in order) if tmux stalls.
     liveness_probe_in_flight: bool,
+    /// Most recent liveness failure, until the next successful probe.
+    liveness_error: Option<String>,
     theme: Arc<crate::theme::Theme>,
     /// Filesystem watcher owning the notify debouncer. Held so its `Drop`
     /// (which stops the underlying watches) only fires when we deliberately
@@ -378,7 +383,10 @@ fn graph_status_changed(
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> color_eyre::Result<Self> {
+        let mux = crate::session::env::Multiplexer::detect().map_err(|error| {
+            color_eyre::eyre::eyre!("Could not detect Herdr desktop session: {error}")
+        })?;
         let repo_paths = scanner::discover_repos(&config);
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let theme = Arc::new(config.theme.clone());
@@ -419,9 +427,10 @@ impl App {
             theme_picker: ThemePicker::new(theme.clone()),
             picker: Picker::new(theme.clone()),
             pending_pick: None,
+            placement_generation: 0,
             focus: FocusPanel::Repos,
             sort_order: SortOrder::Alphabetical,
-            mux: crate::session::env::Multiplexer::detect(),
+            mux,
             action_tx,
             action_rx,
             repo_area: Rect::default(),
@@ -437,6 +446,7 @@ impl App {
             success_message: None,
             clipboard: None,
             dragging_border: None,
+            text_selection: selection::TextSelection::default(),
             border_frac: [0.25, 0.50, 0.78],
             horizontal_layout: false,
             update_version: None,
@@ -449,6 +459,7 @@ impl App {
             refresh_scheduled: HashSet::new(),
             active_worktree: None,
             liveness_probe_in_flight: false,
+            liveness_error: None,
             theme,
             watcher: Arc::new(Mutex::new(WatcherSlot::default())),
             tui_event_tx: None,
@@ -465,7 +476,7 @@ impl App {
         // so land on the first *sorted* row instead.
         app.sort_repos();
         app.repo_list.select_repo_row(0);
-        app
+        Ok(app)
     }
 
     /// Order the repo list by the current `sort_order`. The sort is flat and

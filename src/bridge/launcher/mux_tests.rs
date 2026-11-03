@@ -33,6 +33,7 @@ fn run_child(name: &str, root: &Path, backend: &str) {
         .env("PATH", path)
         .env("HERDR_SOCKET_PATH", root.join("mux.sock"))
         .env("HERDR_PANE_ID", "w1:p1")
+        .env("HC_TERMINAL_ID", "t1")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
         .env("GITPANE_LAUNCHER_TEST_BACKEND", backend)
@@ -385,4 +386,94 @@ fn herdr_new_tab_is_pinned_to_verified_workspace_and_rejects_stale_context() {
     let _replacement = UnixListener::bind(root.join("mux.sock")).unwrap();
     assert_eq!(execute(&scope, request()).unwrap_err().code, "stale_target");
     assert!(!root.join("created").exists());
+}
+
+#[test]
+fn official_desktop_launch_is_pinned_and_rejects_replaced_target_terminal() {
+    use serde_json::{Value, json};
+    let layout = |neighbor: &str| {
+        json!({"spaces": [
+            {"id":"sp1", "name":"source", "machine":null, "active":false,
+             "tabs":[{"id":"tb1", "name":"source", "terminals":[
+                 {"terminal":"t1", "pane":"p1"}, {"terminal":neighbor, "pane":"p2"}]}]},
+            {"id":"sp-focused", "machine":null, "active":true,
+             "tabs":[{"id":"tb-focused", "terminals":[{"terminal":"t4", "pane":"p-focused"}]}]}
+        ]})
+    };
+    if let Some((directory, _listener)) = child() {
+        let canonical_root = directory.path().canonicalize().unwrap();
+        let root = canonical_root.as_path();
+        fs::write(
+            root.join("config.toml"),
+            "[open]\ncommand = \"printf '%s' {path}\"\nplacement = 'ask'\n",
+        )
+        .unwrap();
+        fs::write(root.join("layout.json"), layout("t2").to_string()).unwrap();
+        write_script(
+            root,
+            "herdr-app",
+            "#!/bin/sh\ncase \"$1\" in\nls) IFS= read -r data < \"$GITPANE_LAUNCHER_TEST_ROOT/layout.json\"; printf '%s' \"$data\";;\ndo) printf '%s\\n' \"$@\" > \"$GITPANE_LAUNCHER_TEST_ROOT/launched\"; printf '%s' '{\"pane\":\"p-created\",\"terminal\":\"t9\"}';;\n*) exit 3;;\nesac\n",
+        );
+        run_child(
+            "bridge::launcher::mux::tests::official_desktop_launch_is_pinned_and_rejects_replaced_target_terminal",
+            root,
+            "herdr-app",
+        );
+        return;
+    }
+    let (repo, scope) = fixture();
+    let root = repo.parent().unwrap();
+    let action = actions(&load().unwrap()).remove(0);
+    let fingerprint = action.fingerprint();
+    let collect = || {
+        choices(
+            &scope,
+            ChoicesRequest {
+                repo: repo.clone(),
+                id: "open".into(),
+                fingerprint: fingerprint.clone(),
+                backend: "herdr-app".into(),
+                expected_base_ref: None,
+            },
+        )
+        .unwrap()
+    };
+    let found = collect();
+    let request = |choice: &Value| ExecuteRequest {
+        repo: repo.clone(),
+        id: "open".into(),
+        fingerprint: fingerprint.clone(),
+        expected_repo_identity: found["repo_identity"].as_str().unwrap().into(),
+        backend: "herdr-app".into(),
+        choice: choice["id"].as_str().unwrap().into(),
+        context_token: choice["context_token"].as_str().unwrap().into(),
+        expected_base_ref: None,
+    };
+    let choices = found["choices"].as_array().unwrap();
+    assert_eq!(choices.len(), 5);
+    let new_tab = choices
+        .iter()
+        .find(|choice| choice["id"] == "new-window -t sp1")
+        .unwrap();
+    execute(&scope, request(new_tab)).unwrap();
+    let launched = fs::read_to_string(root.join("launched")).unwrap();
+    let lines = launched.lines().collect::<Vec<_>>();
+    assert_eq!(&lines[..2], ["do", "tab.new"]);
+    let payload: Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(payload["space"], "sp1");
+    assert_eq!(payload["folder"], repo.to_str().unwrap());
+    assert_eq!(&payload["argv"][0], "sh");
+    assert_eq!(payload["argv"][4], repo.to_str().unwrap());
+    fs::remove_file(root.join("launched")).unwrap();
+    let split = choices
+        .iter()
+        .find(|choice| choice["id"] == "split-window -v -t p2")
+        .unwrap();
+    fs::write(root.join("layout.json"), layout("t5").to_string()).unwrap();
+    assert_eq!(
+        execute(&scope, request(split)).unwrap_err().code,
+        "stale_target"
+    );
+    assert!(!root.join("launched").exists());
+    assert!(!root.join("unsafe").exists());
 }

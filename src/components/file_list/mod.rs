@@ -438,6 +438,19 @@ impl FileList {
             .is_some()
     }
 
+    /// The rendered text pane under the pointer, excluding borders and its bar.
+    pub(crate) fn text_selection_area(&mut self, pos: ratatui::layout::Position) -> Option<Rect> {
+        let pane = [self.file_list_area, self.diff_area]
+            .into_iter()
+            .find(|area| area.contains(pos))?;
+        let content = if pane == self.diff_area {
+            self.diff_scroll_layout()?.content
+        } else {
+            scroll_pane::bordered_inner(pane)
+        };
+        content.contains(pos).then_some(content)
+    }
+
     /// The diff pane's scroll layout as the last frame drew it, or `None` while
     /// there is no diff. The offset does not enter what a scrub needs.
     fn diff_scroll_layout(&mut self) -> Option<ScrollLayout> {

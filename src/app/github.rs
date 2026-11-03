@@ -363,7 +363,8 @@ mod tests {
         let mut app = App::new(Config {
             root_dirs: vec![],
             ..Config::default()
-        });
+        })
+        .unwrap();
         let id = RepoId("/repo".into());
         let mut cache = GithubState::default();
         let request = cache

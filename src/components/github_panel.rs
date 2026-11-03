@@ -183,6 +183,14 @@ impl GithubPanel {
         self.detail_loading || self.detail.is_some() || self.detail_error.is_some()
     }
 
+    /// The list or detail text under the pointer, excluding either block's border.
+    pub(crate) fn text_selection_area(&self, pos: ratatui::layout::Position) -> Option<Rect> {
+        [self.list_area, self.detail_area]
+            .into_iter()
+            .map(crate::components::scroll_pane::bordered_inner)
+            .find(|area| area.contains(pos))
+    }
+
     /// Close the detail pane and reset its scroll.
     pub fn close_detail(&mut self) {
         self.detail_generation = self.detail_generation.wrapping_add(1);

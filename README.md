@@ -131,7 +131,7 @@ VS Code Settings for **Gitpane**:
 | `gitpane.graph.firstParent` | `false` | Start newly opened graphs in first-parent mode. |
 | `gitpane.graph.labelMaxLength` | `-1` | Inherit native label length, or set 0 to 120 characters. Zero displays an ellipsis. |
 | `gitpane.backendPath` | empty | Use the bundled backend, or enter an absolute path to a compatible Gitpane executable on the workspace host. |
-| `gitpane.sessionBackend` | `auto` | Detect live sessions automatically, or select `tmux` or `herdr`. |
+| `gitpane.sessionBackend` | `auto` | Detect live sessions automatically, or select `tmux`, legacy `herdr`, or official `herdr-app`. |
 
 View settings apply immediately. Graph first-parent changes apply to the next
 graph opened. All preferences support User and Workspace settings except
@@ -217,11 +217,11 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 - **Filesystem awareness**: Watches repo roots and Git metadata for commits, checkouts, and new repos. Local polling catches nested worktree file changes without overwhelming Linux inotify.
 - **Commit graph**: Lane based graph with colored box drawing characters, up to 200 commits.
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them. Panes with more rows than fit carry a scrollbar thumb and a `seen/total` counter (`12/340`, ending at `340/340`), so a long diff never hides how much is left.
-- **Full mouse support**: Click to select, right click for context menu, scroll wheel everywhere, and click or drag a scroll indicator to jump through a long pane.
+- **Full mouse support**: Click to select, drag visible text to copy, right click for context menu, scroll wheel everywhere, and click or drag a scroll indicator to jump through a long pane. Panel borders remain draggable.
 - **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state, plus `p`/`P` pull/push shortcuts. A branch with a configured upstream is pulled/pushed bare so git's own config (including renamed upstream branches) decides the destination; without one, gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit/mirror setups) and passes `<remote> <branch>` explicitly.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
 - **Sort repos**: Cycle between alphabetical and dirty first with `s`.
-- **Copy to clipboard**: Press `y` to copy selected item from any panel (OSC 52).
+- **Copy to clipboard**: Drag text and release to copy it to the system clipboard. With a text selection, `y` or `Ctrl+C` copies it again; otherwise `y` copies the selected item.
 - **Configurable**: TOML config for root dirs, scan depth, pinned repos, exclusions, frame rate.
 - **Responsive layout**: Three horizontal panels on wide terminals, vertical stack on narrow ones.
 - **Cross platform**: Linux, macOS, Windows.
@@ -239,7 +239,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 | `g` | Reload git graph for selected repo |
 | `o` | Open selected repo/worktree (new tmux pane, herdr pane, or `[open]` command) |
 | `v` | Review selected repo/worktree's diff vs its base branch (new tmux window / herdr tab) |
-| `G` | Attach the live tmux session(s) / herdr tab(s) for the selected repo/worktree |
+| `G` | Open live tmux sessions, legacy herdr tabs, or official Herdr desktop terminals for the selected repo/worktree |
 | `p` | Pull the selected repo/worktree |
 | `P` | Push the selected repo/worktree |
 | `=` | Toggle the GitHub panel (issues/PRs) for the selected repo |
@@ -250,11 +250,19 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
 | `Menu` | Open the context menu for the selected row (right-click fallback; needed under herdr, which has its own right-click) |
-| `y` | Copy selected item to clipboard |
+| `y` | Copy highlighted text, or the selected item when no text is highlighted |
 | `q` | Quit (closes an open diff first; waits for an in-flight pull/push, press again to force) |
-| `Esc` | Navigate back through panels, then quit |
+| `Esc` | Clear highlighted text first; otherwise navigate back through panels, then quit |
+| `Ctrl+C` | Copy highlighted text; quit when no text is highlighted |
 
 Bind your own keys to shell commands on top of these, see [Custom keybindings](#custom-keybindings).
+
+### Selecting terminal text
+
+Drag inside a list, message, or diff pane to highlight visible text; release to copy it. Selection works in either direction and across visible rows, stays inside the starting pane, and preserves wide and combining characters. The copied text includes rendered prefixes and line breaks, with trailing padding removed. A normal click selects or opens its item when the button is released.
+
+Scrollbars and panel borders keep their drag behavior. A new press, scrolling, other navigation, changed content or layout, or an overlay clears the text selection. With a selection, `y` and `Ctrl+C` copy it again and `Esc` clears it. Copying uses the host's system clipboard and reports clipboard connection errors in the status bar.
+
 
 ### Repos panel
 
@@ -414,7 +422,7 @@ See [`examples/config.toml`](examples/config.toml) for a fully annotated example
 
 Press `o` (or pick `Open` from the right click menu) to launch the highlighted repo, or worktree if a worktree row is selected, in its own directory.
 
-- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Inside [herdr](https://herdr.dev) it opens a new herdr pane to the right (`herdr pane split --current --direction right --cwd <dir>`). Outside both it shows a hint to configure `[open] command` (a `command` launches directly, with no tmux needed).
+- **Default (no config):** when gitpane is running inside tmux, `o` opens a new tmux pane (`tmux split-window`) at the target directory. Inside official [Herdr](https://herdr.dev) desktop it opens a right-hand split through `herdr-app`; legacy Herdr uses `herdr pane split`. Outside a supported multiplexer it shows a hint to configure `[open] command` (a `command` launches directly).
 - **Custom:** set `[open] command` to any launcher, with `{path}` standing in for the directory:
 
 ```toml
@@ -453,7 +461,25 @@ The selection drives the target: highlight a repo row and `o` opens the repo roo
 
 ### herdr
 
-[herdr](https://herdr.dev) is a terminal workspace manager for AI coding agents, and gitpane adapts to it natively when it runs inside a herdr pane (detected via `$HERDR_ENV` / `$HERDR_PANE_ID`, no config needed):
+Gitpane supports both the official desktop client and the legacy Herdr CLI.
+
+#### Official desktop (`herdr-app` and `hc`)
+
+Run gitpane inside a local terminal displayed by the official desktop client. Gitpane resolves `$HC_TERMINAL_ID` through `herdr-app ls` to find the calling terminal's pane, tab, and space. Hidden core workers and remote terminals do not select this backend. Both `herdr-app` and `hc` must be on `PATH`.
+
+- **Open / review:** `o` with no configured command opens a shell to the right at the selected repository or worktree directory. `v` runs the configured review command in a new tab. `split-window -h` / `split-window -v` map to right / down splits, and `new-window` creates a tab in the calling terminal's space.
+- **Explicit placement:** `split-window -t <pane-id>` targets that pane; `new-window -t <space-id|tab-id|pane-id>` creates a tab in its containing space. Unsupported tmux flags report an error. The current GUI focus does not determine the target.
+- **`ask` placement:** choose a new tab in the source space or a right/below split beside one of its displayed panes.
+- **Liveness and `G`:** displayed local terminals are inspected through `hc get`, using the current foreground directory. The `◉` marker identifies repositories with live terminals; `G` focuses a selected terminal through `herdr-app do agent.focus`.
+- **VS Code:** select `herdr-app` for `gitpane.sessionBackend`, or choose **Herdr desktop** in the session picker. Desktop launchers require VS Code to inherit a displayed terminal's `HC_TERMINAL_ID`.
+
+Verified with `herdr-app 0.1.11` and `hc 0.1.16` on Linux. The legacy `[herdr] forward_right_click` option applies only to the old CLI. Use the `Menu` key when the desktop client consumes right-clicks.
+
+When nested inside tmux, official desktop detection follows a bounded process-ancestor chain so shell wrappers and VS Code backend workers keep the inner tmux backend. It stops at the HC terminal's root process before considering an inherited outer tmux pane. This probe uses `ps`; unavailable process information falls back to the verified desktop context. Select `tmux` explicitly in VS Code if the host prevents the probe.
+
+#### Legacy CLI (`herdr`)
+
+Legacy panes are detected through `$HERDR_ENV` / `$HERDR_PANE_ID`:
 
 - **Open / review**: with no `[open] command`, `o` splits a new herdr pane to the right of gitpane at the target directory; `v` (and the `new-window` placement) creates a new herdr tab and runs the command there. tmux-shaped placements still work — `split-window -h` / `split-window -v` map to pane directions, `new-window` maps to a new tab, and `-t <pane-id>` pins a specific pane. tmux-only placement flags are rejected with an error instead of silently mis-launching.
 - **Right-click**: herdr has its own right-click menu, so the context menu needs herdr to forward right-click gestures to gitpane's pane (`herdr pane input --current --right-click pane`). This is opt-in via `[herdr] forward_right_click = true`, because herdr's CLI cannot read the current routing back — gitpane never restores it on exit, so enabling it intentionally leaves the pane forwarding right-click after gitpane quits. (Right-clicking the pane frame still opens herdr's menu.) On any terminal where right-click still doesn't get through, press the `Menu` key instead.

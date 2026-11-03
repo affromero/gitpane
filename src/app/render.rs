@@ -264,6 +264,9 @@ impl App {
             self.draw_update_notification(frame, main_area, version);
         }
 
+        // Snapshot and highlight the cells actually visible above the panes.
+        self.draw_text_selection(frame)?;
+
         // Help overlay (rendered last so it's on top of everything)
         if self.show_help {
             self.draw_help(frame, main_area);
@@ -339,7 +342,7 @@ impl App {
             Line::from(vec![key("?"), desc("Toggle this help")]),
             Line::from(vec![key("Tab"), desc("Cycle focus forward")]),
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
-            Line::from(vec![key("Esc"), desc("Close / go back")]),
+            Line::from(vec![key("Esc"), desc("Clear selection / close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
             Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
@@ -351,7 +354,9 @@ impl App {
             ]),
             Line::from(vec![key("p / P"), desc("Pull / push repo/worktree")]),
             Line::from(vec![key("="), desc("Toggle GitHub panel")]),
-            Line::from(vec![key("y"), desc("Copy to clipboard")]),
+            Line::from(vec![key("Drag text"), desc("Select text; release copies")]),
+            Line::from(vec![key("y"), desc("Copy selection or current item")]),
+            Line::from(vec![key("Ctrl+C"), desc("Copy selection, otherwise quit")]),
             Line::from(vec![key("q"), desc("Quit")]),
         ];
 

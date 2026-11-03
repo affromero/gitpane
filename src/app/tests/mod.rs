@@ -1,5 +1,6 @@
 use super::*;
 mod robustness;
+mod text_selection;
 mod watcher_membership;
 use crate::git::status::StashEntry;
 use std::path::Path;
@@ -32,7 +33,7 @@ mod file_search_input {
                 write_target_override: Some(tmp.path().join("config.toml")),
                 ..Config::default()
             };
-            let mut app = App::new(config);
+            let mut app = App::new(config).unwrap();
             app.focus = focus;
             let query = "qprtRasgyo?v";
             app.file_list
@@ -86,7 +87,8 @@ mod file_search_input {
             root_dirs: vec![tmp.path().to_path_buf()],
             write_target_override: Some(tmp.path().join("config.toml")),
             ..Config::default()
-        });
+        })
+        .unwrap();
         app.focus = FocusPanel::Graph;
         assert!(
             app.git_graph
@@ -131,7 +133,8 @@ mod file_search_input {
             root_dirs: vec![tmp.path().to_path_buf()],
             write_target_override: Some(tmp.path().join("config.toml")),
             ..Config::default()
-        });
+        })
+        .unwrap();
         app.focus = FocusPanel::Graph;
         app.git_graph.horizontal_layout = true;
         assert!(
@@ -392,7 +395,7 @@ fn app_opens_with_the_repo_list_already_sorted() {
         scan_depth: 3,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
 
     // Breadcrumb labels carry the platform's native separator.
     let zulu = Path::new("alpha").join("zulu").display().to_string();
@@ -425,7 +428,7 @@ fn sort_repos_intermixes_pinned_repos() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     assert_eq!(
         displays(&app),
         ["aaa", "zzz"],
@@ -453,7 +456,7 @@ fn sort_repos_is_case_insensitive_in_both_directions() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     assert_eq!(displays(&app), ["aaa", "Presentations", "zzz"]);
 
     app.sort_order = SortOrder::ReverseAlphabetical;
@@ -488,7 +491,7 @@ fn sort_keeps_the_selected_repo() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     app.repo_list.select_repo_row(1); // zzz
 
     app.sort_order = SortOrder::ReverseAlphabetical;
@@ -521,7 +524,7 @@ fn power_test_app() -> App {
         scan_depth: 2,
         ..Config::default()
     };
-    App::new(config)
+    App::new(config).unwrap()
 }
 
 #[test]
@@ -629,7 +632,7 @@ async fn worktree_refresh_shows_new_commits_after_closing_details() {
         root_dirs: vec![tmp.path().to_path_buf()],
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let wt = tmp.path().join("live-wt");
     let repo = git2::Repository::init(&wt).unwrap();
     let commit = |message: &str| {
@@ -722,7 +725,7 @@ async fn removing_a_pinned_submodule_leaves_excluded_repos_untouched() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let id = RepoId(
         app.repo_list
             .repos
@@ -756,7 +759,7 @@ fn removing_a_discovered_repo_still_excludes_it() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let id = RepoId(app.repo_list.repos[0].path.clone());
 
     app.handle_repo_admin(Action::RemoveRepo(id)).unwrap();
@@ -778,7 +781,7 @@ fn confirm_remove_repo_asks_before_removing() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let id = RepoId(app.repo_list.repos[0].path.clone());
 
     app.handle_repo_admin(Action::ConfirmRemoveRepo(id))
@@ -807,7 +810,7 @@ async fn removing_the_active_context_repo_clears_active_worktree() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let entry_path = app
         .repo_list
         .repos
@@ -843,7 +846,7 @@ fn add_repo_focuses_the_repo_list_on_the_new_row() {
         pinned_repos: vec![existing],
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     app.focus = FocusPanel::Changes;
     drain_actions(&mut app);
 
@@ -889,7 +892,7 @@ fn sort_repos_keeps_pinned_submodules_under_their_parent() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
 
     let names = |app: &App| {
         app.repo_list
@@ -958,7 +961,7 @@ async fn removing_a_nested_plain_repo_still_excludes_it() {
         scan_depth: 2,
         ..Config::default()
     };
-    let mut app = App::new(config);
+    let mut app = App::new(config).unwrap();
     let id = RepoId(
         app.repo_list
             .repos
