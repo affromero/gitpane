@@ -60,6 +60,25 @@ test('paging preserves the current position across unchanged refreshes and reset
   pager.dispose();
 });
 
+test('refresh keeps loaded changes visible until the new page arrives', async () => {
+  let finish;
+  const backend = {
+    beginChanges: async () => page('first', 'a'.repeat(64), 0, null, null, ['one']),
+    async releaseChanges() {}
+  };
+  const pager = new ChangePager(backend, () => {});
+  await pager.refresh('owner', '/repo', () => true);
+  backend.beginChanges = () => new Promise(resolve => { finish = resolve; });
+  const refreshing = pager.refresh('owner', '/repo', () => true);
+  await Promise.resolve();
+  assert.equal(pager.get('owner').phase, 'ready');
+  assert.equal(pager.get('owner').changes[0].path, 'one');
+  finish(page('next', 'b'.repeat(64), 0, null, null, ['two']));
+  await refreshing;
+  assert.equal(pager.get('owner').changes[0].path, 'two');
+  pager.dispose();
+});
+
 test('a removed owner cannot publish a late page', async () => {
   let resolve;
   const backend = { beginChanges: () => new Promise(done => { resolve = done; }),

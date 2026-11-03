@@ -102,7 +102,12 @@ window.addEventListener('DOMContentLoaded',()=>{(async()=>{
   check('Repo selection updates Changes',doc('changes').body.textContent.includes('src/dashboard.ts')&&!doc('changes').body.textContent.includes('src/oauth.ts'));
   check('Repo selection preserves keyboard focus',doc('repos').activeElement.dataset.key==='repo:web');
   check('Selecting repos does not open an editor graph',!received.some(m=>m.type==='openGraph'));
-  doc('changes').querySelector('.file-row').click();await tick();
+  const fileRow=doc('changes').querySelector('.file-row');
+  fileRow.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+  win('changes').postMessage({...snapshot(),loading:true},'*');await tick();
+  check('Unchanged refresh preserves a file during a pointer gesture',doc('changes').querySelector('.file-row')===fileRow);
+  fileRow.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+  fileRow.click();await tick();
   check('Changed files keep native diff routing and scope',received.some(m=>m.type==='openChange'&&m.id==='web-file'&&m.ownerId==='web'&&m.selectionEpoch===epoch));
   row('api').click();await tick();
   const worktreeButton=doc('repos').querySelector('[data-key="repo:api"] .worktree-action');
