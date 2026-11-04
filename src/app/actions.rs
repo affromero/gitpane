@@ -131,6 +131,9 @@ impl App {
                 {
                     self.file_list
                         .set_files(files.clone(), name, repo_id.clone());
+                    if let Some(action) = self.file_list.refresh_diff() {
+                        self.action_tx.send(action)?;
+                    }
                 }
             }
             Action::StatusQueryDone(ref id) => {
@@ -167,8 +170,7 @@ impl App {
                             .invalidate_repo(&self.repo_list.repos[idx].path);
                     }
 
-                    // Refresh the file list so stale diffs are cleared
-                    // when files are staged/unstaged. Skip when a worktree
+                    // Skip when a worktree
                     // is being viewed — its files come from WorktreeFilesLoaded,
                     // not the parent repo's status.
                     if self.repo_list.selected_index() == Some(idx)
@@ -183,6 +185,9 @@ impl App {
                             .map(|s| s.files.clone())
                             .unwrap_or_default();
                         self.file_list.set_files(files, &name, repo_id);
+                        if let Some(action) = self.file_list.refresh_diff() {
+                            self.action_tx.send(action)?;
+                        }
 
                         if graph_changed {
                             if self.git_graph.has_detail() {
