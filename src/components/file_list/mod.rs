@@ -29,6 +29,7 @@ pub(crate) struct FileList {
     diff_area: Rect,
     // Diff view
     diff_content: Option<String>,
+    diff_path: Option<std::path::PathBuf>,
     diff_scroll: u16,
     /// Memoized row index for `diff_content` (see `scroll_pane::PaneRows`),
     /// keyed by the content version and the content width — the only inputs
@@ -73,6 +74,7 @@ impl FileList {
             file_list_area: Rect::default(),
             diff_area: Rect::default(),
             diff_content: None,
+            diff_path: None,
             diff_scroll: 0,
             diff_rows: None,
             diff_content_version: 0,
@@ -91,8 +93,11 @@ impl FileList {
     }
 
     pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_id: RepoId) {
-        let is_same_repo = self.repo_id.as_ref() == Some(&repo_id);
+        let is_same_repo = self.repo_id.as_ref() == Some(&repo_id) && self.repo_name == repo_name;
         let prev_selected = self.state.selected();
+        let selected_path = prev_selected
+            .and_then(|i| self.files.get(i))
+            .map(|f| f.path.clone());
         let files_changed = !is_same_repo || self.files != files;
 
         if !is_same_repo {
@@ -110,10 +115,16 @@ impl FileList {
         self.repo_name = repo_name.to_string();
         self.repo_id = Some(repo_id);
 
-        if files_changed {
+        let keep_diff = is_same_repo
+            && self
+                .diff_path
+                .as_ref()
+                .is_some_and(|path| self.files.iter().any(|f| f.path == *path));
+        if files_changed && !keep_diff {
             self.diff_generation += 1;
             self.diff_content_version = self.diff_content_version.wrapping_add(1);
             self.diff_content = None;
+            self.diff_path = None;
             self.diff_scroll = 0;
         }
 
@@ -121,7 +132,10 @@ impl FileList {
             self.state.select(None);
         } else if is_same_repo {
             // Preserve selection on refresh
-            let idx = prev_selected
+            let idx = selected_path
+                .as_ref()
+                .and_then(|path| self.files.iter().position(|f| f.path == *path))
+                .or(prev_selected)
                 .map(|i| i.min(self.files.len() - 1))
                 .unwrap_or(0);
             self.state.select(Some(idx));
@@ -147,9 +161,26 @@ impl FileList {
     }
 
     pub fn set_diff(&mut self, content: String) {
+        if self.diff_content.is_none() {
+            self.diff_scroll = 0;
+        }
         self.diff_content = Some(content);
         self.diff_content_version = self.diff_content_version.wrapping_add(1);
-        self.diff_scroll = 0;
+    }
+
+    pub fn refresh_diff(&mut self) -> Option<Action> {
+        let path = self.diff_path.clone()?;
+        let repo_id = self.repo_id.clone()?;
+        self.diff_generation += 1;
+        Some(Action::ShowDiff(repo_id, path))
+    }
+
+    pub fn start_diff(&mut self, repo_id: &RepoId, path: &std::path::Path) -> Option<u64> {
+        if self.repo_id.as_ref() != Some(repo_id) || self.diff_path.as_deref() != Some(path) {
+            return None;
+        }
+        self.diff_generation += 1;
+        Some(self.diff_generation)
     }
 
     fn select_next(&mut self) {
@@ -242,6 +273,8 @@ impl FileList {
         let repo_id = self.repo_id.clone()?;
         let file = self.files.get(idx)?;
         self.diff_generation += 1;
+        self.diff_path = Some(file.path.clone());
+        self.diff_scroll = 0;
         Some(Action::ShowDiff(repo_id, file.path.clone()))
     }
 
@@ -624,6 +657,8 @@ impl Component for FileList {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left => {
                     self.diff_content = None;
+                    self.diff_path = None;
+                    self.diff_generation += 1;
                     self.diff_scroll = 0;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {

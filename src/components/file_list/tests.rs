@@ -291,6 +291,35 @@ mod search_tests {
     }
 
     #[test]
+    fn open_diff_survives_file_list_refresh_and_tracks_its_path() {
+        let mut list = FileList::new(Arc::new(Theme::default()));
+        let repo = RepoId(PathBuf::from("/r"));
+        list.set_files(vec![entry("b")], "r", repo.clone());
+        list.handle_key_event(KeyCode::Enter.into()).unwrap();
+        list.set_diff("original diff".into());
+
+        list.set_files(vec![entry("a"), entry("b")], "r", repo.clone());
+        assert!(list.viewing_diff());
+        assert_eq!(list.selected_path().as_deref(), Some("b"));
+        assert!(
+            matches!(list.refresh_diff(), Some(Action::ShowDiff(id, path))
+            if id == repo && path == std::path::Path::new("b"))
+        );
+        list.set_diff("updated diff".into());
+        assert_eq!(list.diff_content.as_deref(), Some("updated diff"));
+
+        list.handle_key_event(KeyCode::Esc.into()).unwrap();
+        assert!(list.start_diff(&repo, std::path::Path::new("b")).is_none());
+        assert!(list.refresh_diff().is_none());
+
+        list.handle_key_event(KeyCode::Enter.into()).unwrap();
+        list.set_diff("diff".into());
+        list.set_files(vec![entry("a")], "r", repo);
+        assert!(!list.viewing_diff());
+        assert!(list.refresh_diff().is_none());
+    }
+
+    #[test]
     fn search_opens_match_without_navigation_and_handles_refresh() {
         let mut fl = FileList::new(Arc::new(Theme::default()));
         let repo = RepoId(PathBuf::from("/r"));

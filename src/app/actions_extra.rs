@@ -399,9 +399,11 @@ impl App {
                 }
             }
             Action::ShowDiff(ref id, ref file_path) => {
+                let Some(diff_gen) = self.file_list.start_diff(id, file_path) else {
+                    return Ok(());
+                };
                 if let Some(idx) = self.repo_list.resolve_index(id) {
                     let entry = &self.repo_list.repos[idx];
-                    let diff_gen = self.file_list.diff_generation();
                     let sub_info = entry
                         .status
                         .as_ref()
