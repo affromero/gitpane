@@ -16,7 +16,7 @@ const ROUTING_VARIABLES = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
 function resolveGitExecutable(executable, env) {
   if (path.isAbsolute(executable)) return executable;
   const hasDirectory = executable.includes('/') || (process.platform === 'win32' && executable.includes('\\'));
-  const pathValue = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] || '';
+  const pathValue = env.PATH ?? Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
   const directories = hasDirectory ? [''] : pathValue.split(path.delimiter);
   const extensions = process.platform === 'win32' && !path.extname(executable)
     ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : [''];
