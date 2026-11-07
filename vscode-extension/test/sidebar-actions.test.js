@@ -26,6 +26,7 @@ function fixture() {
   let waitForChange = async () => true;
   let preview = async () => ({ token: 'a'.repeat(64) });
   let worktreePreview = async () => ({ repo_identity: 'a'.repeat(64), worktree_identity: 'b'.repeat(64) });
+  let validateExternal = async (repo, target) => ({ path: target });
   let stat = async () => ({});
   let failure;
   let refreshFailure;
@@ -71,6 +72,7 @@ function fixture() {
     hideRepository: async (item, kind) => { calls.push(['hideRepository', item.path || item.repoPath, kind]); },
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
+    validateExternalWorktree: (...args) => validateExternal(...args),
     previewFileAction: (...args) => preview(...args),
     previewWorktreeRemoval: (...args) => worktreePreview(...args)
   });
@@ -87,11 +89,36 @@ function fixture() {
     setPlan(fn) { plan = fn; },
     setPreview(fn) { preview = fn; },
     setWorktreePreview(fn) { worktreePreview = fn; },
+    setValidateExternal(fn) { validateExternal = fn; },
     setStat(fn) { stat = fn; }
   };
 }
 
 const action = (action, id) => ({ type: 'action', action, id });
+
+test('outside worktrees open only after explicit selection and current validation', async () => {
+  const f = fixture();
+  const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
+  f.setWorktree(item);
+  f.pick(choices => {
+    assert.deepEqual(choices.map(choice => choice.action), ['openExternalWorktree']);
+    return choices[0];
+  });
+  let validated;
+  f.setValidateExternal(async (...args) => { validated = args; return { path: item.path }; });
+  await f.actions.showMenu('worktree', 'worktree');
+  assert.deepEqual(validated, [f.root, item.path, item.repoIdentity, item.externalIdentity]);
+  assert.deepEqual(f.calls, [['vscode.openFolder', { fsPath: item.path }, { forceNewWindow: true }]]);
+  f.calls.length = 0;
+  f.setValidateExternal(async () => { f.setWorktree(undefined); return { path: item.path }; });
+  await f.actions.handle(action('openExternalWorktree', 'worktree'));
+  assert.deepEqual(f.calls, [], 'a selection removed during validation cannot open a window');
+  f.setWorktree(item);
+  f.setValidateExternal(async () => { throw new Error('Worktree changed'); });
+  await f.actions.handle(action('openExternalWorktree', 'worktree'));
+  assert.match(f.errors.at(-1), /worktree changed/i);
+  assert.deepEqual(f.calls, []);
+});
 
 test('file actions wait for a refresh and still reject a changed selection', async () => {
   const f = fixture();

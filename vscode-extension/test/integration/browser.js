@@ -382,6 +382,17 @@ const scenario = String.raw`
     check('unavailable worktree is reported without stale file or graph actions',
       worktree.getAttribute('aria-label').includes('repository unavailable') && !worktree.querySelector('.graph-action') &&
       !items().some(item => item.getAttribute('aria-label') === 'M working.txt'));
+    const external = JSON.parse(JSON.stringify(unavailable));
+    external.repositories[1].worktrees[0].external = true;
+    external.repositories[1].worktrees[0].branch = 'outside workspace';
+    window.postMessage(external, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
+    check('outside worktree explains how to inspect changes', worktree.getAttribute('aria-label').includes('open in a new window') &&
+      !worktree.getAttribute('aria-label').includes('clean') && !worktree.querySelector('.graph-action'));
+    worktree.querySelector('.menu-action').click();
+    check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&
+      window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
       id: 'overview-parent', name: 'overview-parent', branch: 'main', dirty: false, groups: [],
       worktreeStateKey: 'a'.repeat(64), worktreeCount: 1,

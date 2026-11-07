@@ -122,10 +122,14 @@ class BridgeClient {
     const summary = options?.summaryOnly === true;
     try {
       return await this.request('status', { repo, ...(includeWorktrees === undefined ? {} : { include_worktrees: includeWorktrees }),
+        ...(options?.includeExternalWorktrees === true ? { include_external_worktrees: true } : {}),
         ...(summary ? { summary_only: true, watched_paths: options.watchedPaths } : {}) });
     } catch (error) {
       if (summary && error.code === 'invalid_request' && /unknown field.*(?:summary_only|watched_paths)/i.test(error.message)) {
         throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support compact status. Update the backend and try again.');
+      }
+      if (options?.includeExternalWorktrees && error.code === 'invalid_request' && /unknown field.*include_external_worktrees/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support outside worktrees. Update the backend and try again.');
       }
       throw error;
     }
@@ -259,6 +263,17 @@ class BridgeClient {
 
   planWorktree(repo, branch) {
     return this.request('worktree_plan', { repo, branch });
+  }
+
+  async validateExternalWorktree(repo, path, identity, worktreeIdentity) {
+    try { return await this.request('external_worktree_validate', { repo, path, expected_repo_identity: identity,
+      expected_worktree_identity: worktreeIdentity }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support outside worktrees. Update the backend and try again.');
+      }
+      throw error;
+    }
   }
 
   branchReview(repo) {

@@ -4,6 +4,9 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Optionally show linked worktrees outside the VS Code workspace and open them in a new window.
+
 ## [0.18.4] - 2026-11-03
 
 ### Added

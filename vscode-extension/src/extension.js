@@ -76,10 +76,11 @@ class GitpaneViewProvider {
     return this.ids.get(key);
   }
 
-  configureView({ refreshInterval, worktreeExpansion }) {
+  configureView({ refreshInterval, worktreeExpansion, showOutsideWorktrees }) {
     const intervalChanged = this.refreshInterval !== refreshInterval;
     this.refreshInterval = refreshInterval;
     this.worktreeExpansion = worktreeExpansion;
+    this.showOutsideWorktrees = showOutsideWorktrees;
     if (intervalChanged && this.refreshChangesTimer !== undefined) {
       clearTimeout(this.refreshChangesTimer);
       this.refreshChangesTimer = undefined;
@@ -157,6 +158,15 @@ class GitpaneViewProvider {
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
             { repoKey, repoToken, path: item.path }) : [] };
       });
+      if (this.showOutsideWorktrees && Array.isArray(status?.external_worktrees)) {
+        for (const item of status.external_worktrees) {
+          if (!item || typeof item.path !== 'string' || !path.isAbsolute(item.path) || this.tree.isPathInWorkspace(item.path)) continue;
+          const worktreeId = this.idFor(JSON.stringify(['external-worktree', repoKey, repoToken, item.path, item.identity]), live);
+          worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, externalIdentity: item.identity, external: true });
+          worktreeData.push({ id: worktreeId, name: path.basename(item.path), branch: 'outside workspace',
+            available: false, external: true, groups: [] });
+        }
+      }
       const groupData = groupsFor(repo, id);
       return {
         id,
@@ -195,7 +205,11 @@ class GitpaneViewProvider {
     return {
       type: 'snapshot', repositories,
       errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
-        ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : [])],
+        ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : []),
+        ...(this.showOutsideWorktrees && children.some(node => node.type === 'repo' &&
+          this.tree.backendStatuses.has(node.repo.rootUri.toString()) &&
+          !Array.isArray(this.tree.backendStatuses.get(node.repo.rootUri.toString()).external_worktrees))
+          ? ['The Gitpane backend does not support outside worktrees. Update the configured backend.'] : [])],
       ...(reveals.length ? { revealWorktrees: reveals } : {}),
       ...(typeof (this.worktreeExpansion ?? this.worktreeDisplay?.value) === 'boolean'
         ? { expandWorktrees: this.worktreeExpansion ?? this.worktreeDisplay.value } : {}),
@@ -488,8 +502,15 @@ class GitpaneViewProvider {
     const repo = this.tree.git.repositories.find(item => item.rootUri.toString() === selected.repoKey);
     if (!repo || !this.tree.isCurrentRepository(repo, selected.repoToken)) return undefined;
     const actionRepo = this.actionRepository(repo);
-    if (!actionRepo || !this.tree.isPathInWorkspace(selected.path)) return undefined;
+    if (!actionRepo) return undefined;
     const status = this.tree.backendStatuses.get(selected.repoKey);
+    if (selected.external) {
+      if (!this.showOutsideWorktrees || this.tree.isPathInWorkspace(selected.path) ||
+          !status?.external_worktrees?.some(item => item.path === selected.path && item.identity === selected.externalIdentity)) return undefined;
+      return { ...actionRepo, path: selected.path, branch: 'outside workspace', available: false,
+        external: true, externalIdentity: selected.externalIdentity };
+    }
+    if (!this.tree.isPathInWorkspace(selected.path)) return undefined;
     const worktree = status.worktrees.find(item => item.path === selected.path);
     if (!worktree || typeof worktree.branch !== 'string') return undefined;
     if (!this.tree.workspaceWorktrees(repo).some(item => item.path === selected.path)) return undefined;
@@ -732,6 +753,7 @@ async function activate(context) {
     previewFileAction: (repo, target, operation) => backend.fileActionPreview(repo, target, operation),
     previewWorktreeRemoval: (repo, target) => backend.previewWorktreeRemoval(repo, target),
     planWorktree: (repo, branch) => backend.planWorktree(repo, branch),
+    validateExternalWorktree: (repo, target, identity, worktreeIdentity) => backend.validateExternalWorktree(repo, target, identity, worktreeIdentity),
     revalidateChange: id => provider.revalidateChange(id),
     validateChangePath: item => scopedFile(item.repoPath, item.path),
     resolveRepository: id => provider.resolveRepository(id),

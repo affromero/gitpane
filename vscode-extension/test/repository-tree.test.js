@@ -622,6 +622,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
   const linkedRoot = path.join(workspace, 'worktrees');
   const first = path.join(linkedRoot, 'one');
   const second = path.join(linkedRoot, 'two');
+  const outside = path.join(temporary, 'sibling');
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(linkedRoot, { recursive: true });
   const env = isolatedGitEnv();
@@ -638,6 +639,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
   git(root, 'commit', '-qm', 'initial');
   git(root, 'worktree', 'add', '-qb', 'topic-one', first);
   git(root, 'worktree', 'add', '-qb', 'topic-two', second);
+  git(root, 'worktree', 'add', '-qb', 'topic-outside', outside);
   const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
   const event = () => ({ dispose() {} });
   const makeRepo = (value, kind) => ({ rootUri: uri(value), kind,
@@ -662,7 +664,8 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
       const paths = lines.filter(line => line.startsWith('worktree ')).map(line => fs.realpathSync.native(line.slice(9)));
       return { common_dir: common, repo_identity: 'a'.repeat(64), branch: git(value, 'branch', '--show-current'), is_dirty: false,
         ahead: 0, behind: 0, stashes: [], worktrees: includeWorktrees ?
-          paths.filter(item => item !== root).map(item => ({ path: item, branch: path.basename(item), repo_identity: 'a'.repeat(64) })) : [],
+          paths.filter(item => item !== root && item !== outside).map(item => ({ path: item, branch: path.basename(item), repo_identity: 'a'.repeat(64) })) : [],
+        external_worktrees: includeWorktrees ? paths.filter(item => item === outside).map(item => ({ path: item, identity: 'b'.repeat(64) })) : [],
         has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false };
     }
   };
@@ -703,6 +706,16 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
     let rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['main']);
     assert.deepEqual(rows[0].worktrees.map(row => row.name).sort(), ['one', 'two']);
+    provider.configureView({ refreshInterval: 5000, showOutsideWorktrees: true });
+    rows = provider.snapshot().repositories;
+    const external = rows[0].worktrees.find(row => row.name === 'sibling');
+    assert.equal(external.external, true);
+    assert.equal(provider.resolveWorktree(external.id).path, outside);
+    assert.equal(tree.sessionTargets().some(target => target.path === canonical(outside)), false);
+    assert.equal(tree.fetchTargets().some(target => target.path === canonical(outside)), false);
+    provider.configureView({ refreshInterval: 5000, showOutsideWorktrees: false });
+    assert.equal(provider.resolveWorktree(external.id), undefined);
+    rows = provider.snapshot().repositories;
     const { SidebarActions } = require('../src/sidebar-actions');
     provider.actions = new SidebarActions({ vscode, resolveRepository: id => provider.resolveRepository(id) });
     await provider.handleShortcut({ key: 'y', id: rows[0].id });
