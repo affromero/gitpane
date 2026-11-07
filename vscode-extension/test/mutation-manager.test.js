@@ -25,7 +25,9 @@ function reply(value) { process.stdout.write(JSON.stringify(value) + '\n', () =>
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   if (request.method === 'initialize') {
-    fs.writeFileSync(file('initialized'), JSON.stringify(request));
+    const initialized = file('initialized-' + process.pid + '.tmp');
+    fs.writeFileSync(initialized, JSON.stringify(request));
+    fs.renameSync(initialized, file('initialized'));
     const answer = () => reply({id: request.id, result: {version: mode === 'wrong-version' ? 2 : 1}});
     if (mode === 'hold-init') release('release-init', answer); else answer();
     return;
