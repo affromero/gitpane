@@ -3,6 +3,7 @@
 const { spawn } = require('node:child_process');
 const { constants: bufferConstants } = require('node:buffer');
 const { createHash } = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 const { BridgeError } = require('./bridge-client');
 
@@ -12,9 +13,28 @@ const MAX_ERROR_BYTES = 64 * 1024;
 const ROUTING_VARIABLES = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX',
   'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE']);
 
+function resolveGitExecutable(executable, env) {
+  if (path.isAbsolute(executable)) return executable;
+  const hasDirectory = executable.includes('/') || (process.platform === 'win32' && executable.includes('\\'));
+  const pathValue = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] || '';
+  const directories = hasDirectory ? [''] : pathValue.split(path.delimiter);
+  const extensions = process.platform === 'win32' && !path.extname(executable)
+    ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : [''];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = path.resolve(directory, executable + extension);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch { /* Continue searching PATH. */ }
+    }
+  }
+  throw new BridgeError('unsupported_git', `VS Code's Git executable could not be resolved: ${executable}`);
+}
+
 function captureGitEnvironment(api) {
   const git = api?.git;
-  if (!git || typeof git.path !== 'string' || !path.isAbsolute(git.path) ||
+  if (!git || typeof git.path !== 'string' || !git.path ||
       !git.env || typeof git.env !== 'object' || Array.isArray(git.env)) {
     throw new BridgeError('unsupported_git', 'VS Code did not provide the Git executable and environment.');
   }
@@ -23,9 +43,10 @@ function captureGitEnvironment(api) {
     if (ROUTING_VARIABLES.has(process.platform === 'win32' ? name.toUpperCase() : name) || value === undefined) continue;
     env[name] = String(value);
   }
+  const executable = resolveGitExecutable(git.path, env);
   const entries = Object.entries(env).sort(([first], [second]) => first.localeCompare(second));
-  const key = createHash('sha256').update(JSON.stringify([git.path, entries])).digest('hex');
-  return { executable: git.path, env, key };
+  const key = createHash('sha256').update(JSON.stringify([executable, entries])).digest('hex');
+  return { executable, env, key };
 }
 
 class GitContentWorkers {

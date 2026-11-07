@@ -3,6 +3,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { EventEmitter, getEventListeners } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { GitContentWorkers, captureGitEnvironment } = require('../src/git-content-worker');
@@ -86,4 +89,16 @@ test('selected Git environment removes repository routing variables', () => {
   assert.equal(captured.key, captureGitEnvironment(git).key);
   git.git.env.GIT_CONFIG_GLOBAL = '/different';
   assert.notEqual(captured.key, captureGitEnvironment(git).key);
+});
+
+test('a Git executable selected by name resolves through PATH', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-git-path-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const executable = path.join(dir, process.platform === 'win32' ? 'git.exe' : 'git');
+  fs.writeFileSync(executable, '', { mode: 0o755 });
+  const api = { git: { path: 'git', env: { PATH: dir } } };
+  assert.equal(captureGitEnvironment(api).executable, executable);
+  api.git.path = 'missing-git';
+  assert.throws(() => captureGitEnvironment(api), error =>
+    error.code === 'unsupported_git' && /missing-git/.test(error.message));
 });
