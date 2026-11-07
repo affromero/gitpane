@@ -110,6 +110,20 @@ async function waitForFile(file) {
     assert.ok(status.files.some(file => file.path === 'new file.txt' && file.status === 'untracked'));
     console.log('PASS handshake and real repository status');
 
+    const sibling = path.join(temporary, 'linked sibling');
+    git(repo, 'worktree', 'add', '-qb', 'outside-topic', sibling);
+    const siblingPath = fs.realpathSync.native(sibling);
+    assert.deepEqual((await client.status(repoPath)).external_worktrees, []);
+    const outsideStatus = await client.status(repoPath, true, { includeExternalWorktrees: true });
+    assert.deepEqual(outsideStatus.external_worktrees.map(item => fs.realpathSync.native(item.path)), [siblingPath]);
+    const outsideWorktree = outsideStatus.external_worktrees[0];
+    const validated = await client.validateExternalWorktree(repoPath, outsideWorktree.path, outsideStatus.repo_identity, outsideWorktree.identity);
+    assert.equal(fs.realpathSync.native(validated.path), siblingPath);
+    await assert.rejects(client.status(siblingPath), error => error.code === 'outside_workspace');
+    git(repo, 'worktree', 'remove', sibling);
+    await assert.rejects(client.validateExternalWorktree(repoPath, outsideWorktree.path, outsideStatus.repo_identity, outsideWorktree.identity), error => error.code === 'stale_target');
+    console.log('PASS opt-in outside worktree discovery and validation retain workspace scope');
+
     const many = [];
     for (let index = 0; index < 75; index++) {
       const directory = path.join(workspace, `scale-${String(index).padStart(3, '0')}`);

@@ -4,14 +4,14 @@ const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
 const REPO_ACTIONS = new Set(['refreshRepo', 'createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
-const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree']);
+const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir, item.repoIdentity];
   if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned, !!item.added, !!item.refreshOnly);
   if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
-  if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, item.childRepoKey, item.childRepoId, item.childRepoIdentity);
+  if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, !!item.external, item.externalIdentity, item.childRepoKey, item.childRepoId, item.childRepoIdentity);
   return JSON.stringify(fields);
 }
 
@@ -66,6 +66,7 @@ class SidebarActions {
     this.previewFileAction = options.previewFileAction;
     this.previewWorktreeRemoval = options.previewWorktreeRemoval;
     this.planWorktree = options.planWorktree;
+    this.validateExternalWorktree = options.validateExternalWorktree;
     this.revalidateChange = options.revalidateChange;
     this.validateChangePath = options.validateChangePath;
   }
@@ -114,6 +115,7 @@ class SidebarActions {
         { label: 'Pull', action: 'pull' },
         { label: 'Pull with Rebase', action: 'pull_rebase' }
       ];
+      else if (kind === 'worktree' && item.external) choices = [{ label: 'Open in New Window', action: 'openExternalWorktree' }];
       else if (kind === 'worktree') choices = [
         { label: 'Refresh', action: 'refreshWorktree' },
         { label: 'Hide from Gitpane', action: 'hideWorktree' },
@@ -156,6 +158,16 @@ class SidebarActions {
         if (!await this.revalidateChange(message.id) ||
             (this.waitForChange && !await this.waitForChange(message.id)) || !current()) return;
         if (this.validateChangePath) this.validateChangePath(item);
+      }
+      if (kind === 'worktree' && item.external && action !== 'openExternalWorktree') return;
+      if (action === 'openExternalWorktree') {
+        if (!item.external || !/^[a-f0-9]{64}$/.test(item.repoIdentity || '') ||
+            !/^[a-f0-9]{64}$/.test(item.externalIdentity || '') || typeof this.validateExternalWorktree !== 'function') return;
+        const result = await this.validateExternalWorktree(item.repoPath, item.path, item.repoIdentity, item.externalIdentity);
+        if (!current()) return;
+        if (!result || typeof result.path !== 'string' || !path.isAbsolute(result.path)) throw new Error('Gitpane returned an invalid worktree path.');
+        await this.vscode.commands.executeCommand('vscode.openFolder', this.vscode.Uri.file(result.path), { forceNewWindow: true });
+        return;
       }
       if (kind === 'worktree' && !['removeWorktree', 'hideWorktree', 'refreshWorktree'].includes(action) && !item.available) return;
       if (action === 'refreshRepo' || action === 'refreshWorktree') {

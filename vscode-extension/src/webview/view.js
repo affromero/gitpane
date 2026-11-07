@@ -306,7 +306,8 @@ function worktreeRow(worktree) {
       vscode.postMessage({ type: 'openWorktreeGraph', id: worktree.id });
     });
     tail.appendChild(graph);
-  } else add(tail, 'behind', '!', 'Worktree repository unavailable');
+  } else if (worktree.external) add(tail, 'muted', '↗', 'Open in a new window to inspect changes');
+  else add(tail, 'behind', '!', 'Worktree repository unavailable');
   tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
   row.appendChild(tail);
   return row;
@@ -435,6 +436,10 @@ function renderSelectedChanges(owners) {
     return;
   }
   owners.add(owner.id);
+  if (owner.external) {
+    messages.appendChild(element('div', 'message', 'Open this worktree in a new window to inspect its changes.'));
+    return;
+  }
   if (owner.available === false || owner.statusUnavailable) {
     messages.appendChild(element('div', 'message error', 'Repository status is unavailable.'));
     return;
@@ -497,7 +502,7 @@ function render() {
       owners.add(worktree.id);
       reconcilePending(worktree);
       const worktreeKey = `worktree:${worktree.id}`;
-      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.dirty ? 'has changes' : 'clean'];
+      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'open in a new window to inspect changes' : worktree.dirty ? 'has changes' : 'clean'];
       const worktreeInfo = countInfo(worktree);
       if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
       else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
@@ -506,7 +511,7 @@ function render() {
       if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
       if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
       if (worktree.live) worktreeDetails.push('live session');
-      if (!worktree.available) worktreeDetails.push('repository unavailable');
+      if (!worktree.available && !worktree.external) worktreeDetails.push('repository unavailable');
       const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
       const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
       const worktreeExpanded = !snapshot.separateChanges && expanded.has(worktreeKey);

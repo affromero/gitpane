@@ -7,6 +7,8 @@ use crate::config::{WorktreeConfig, worktree_path};
 
 use super::{BridgeError, mutation, scope::Scope};
 
+pub(super) mod external;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorktreePlan {

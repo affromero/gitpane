@@ -96,6 +96,8 @@ struct StatusRequest {
     #[serde(default = "include_worktrees_by_default")]
     include_worktrees: bool,
     #[serde(default)]
+    include_external_worktrees: bool,
+    #[serde(default)]
     summary_only: bool,
     #[serde(default)]
     watched_paths: Vec<PathBuf>,
@@ -314,7 +316,7 @@ fn process(
         "status" => {
             let input: StatusRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;
-            let result = status::query(
+            let mut result = status::query(
                 &repo,
                 scope,
                 sub_cfg,
@@ -322,6 +324,30 @@ fn process(
                 input.summary_only,
                 &input.watched_paths,
             )?;
+            let external = if input.include_worktrees && input.include_external_worktrees {
+                let identity = changes::RepositoryIdentity::read(&repo)?;
+                if result["repo_identity"].as_str() != Some(identity.fingerprint()?.as_str()) {
+                    return Err(BridgeError::new(
+                        "stale_target",
+                        "Repository changed while collecting worktrees",
+                    ));
+                }
+                let repository = git2::Repository::open(&repo)
+                    .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+                let paths = worktree_plan::external::list(scope, &repository)?;
+                if scope.repository(&repo)? != repo
+                    || changes::RepositoryIdentity::read(&repo)? != identity
+                {
+                    return Err(BridgeError::new(
+                        "stale_target",
+                        "Repository changed while collecting worktrees",
+                    ));
+                }
+                paths
+            } else {
+                Vec::new()
+            };
+            result["external_worktrees"] = json!(external);
             scope.repository(&repo)?;
             Ok(result)
         }
@@ -349,6 +375,9 @@ fn process(
         "launcher_validate" => launcher::validate(scope, params(request.params)?),
         "launcher_choices" => launcher::mux::choices(scope, params(request.params)?),
         "worktree_plan" => worktree_plan::plan(scope, params(request.params)?, worktree_cfg),
+        "external_worktree_validate" => {
+            worktree_plan::external::validate(scope, params(request.params)?)
+        }
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;

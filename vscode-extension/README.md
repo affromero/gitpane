@@ -60,6 +60,13 @@ under their repository, with their own changed files and actions. A worktree
 added as a workspace folder appears at the top level. Repositories outside the
 workspace are not included.
 
+To see registered worktrees outside the workspace, enable
+`gitpane.worktrees.showOutsideWorkspace`. They appear beneath the repository
+with an **Open in New Window** action. Opening one starts a separate VS Code
+window, where its files and changes can be inspected under that window's
+workspace trust settings. Gitpane does not inspect its changes in the original
+workspace.
+
 Worktree rows are shown by default, following Gitpane's `[ui] expand_worktrees`
 setting. Use the worktree count or press `w` on a repository to show or hide
 its worktrees without opening the repository's file list. Gitpane remembers that
@@ -306,6 +313,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 |---------|---------|----------|
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
+| `gitpane.worktrees.showOutsideWorkspace` | `false` | Show registered outside worktrees and open them in a new window. |
 | `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
 | `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
 | `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |

@@ -323,6 +323,7 @@ class BackendManager {
       else if (method === 'worktree_remove_preview') result = await client.previewWorktreeRemoval(repo, argument);
       else if (method === 'working_symlink') result = await client.readWorkingSymlink(repo, argument);
       else if (method === 'worktree_plan') result = await client.planWorktree(repo, argument);
+      else if (method === 'external_worktree_validate') result = await client.validateExternalWorktree(repo, argument.path, argument.identity, argument.worktreeIdentity);
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
       else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
@@ -352,6 +353,7 @@ class BackendManager {
         throw new BridgeError('workspace_changed', 'Workspace changed before the Gitpane response arrived.');
       }
       const invalidWorktreePlan = method === 'worktree_plan' && error?.code === 'invalid_request';
+      const invalidExternalWorktree = method === 'external_worktree_validate' && ['invalid_request', 'unsupported_backend', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
       const invalidWorktreePreview = method === 'worktree_remove_preview' && ['invalid_request', 'unsupported_backend', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
       const invalidLink = method === 'working_symlink' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'file_changed', 'file_too_large'].includes(error?.code);
@@ -371,7 +373,7 @@ class BackendManager {
       const invalidUiConfig = method === 'ui_config' && ['invalid_request', 'unsupported_backend'].includes(error?.code);
       const invalidLauncher = ['launchers_list', 'launcher_plan', 'launcher_validate'].includes(method) &&
         ['invalid_request', 'unsupported', 'unsupported_backend', 'unsupported_placement', 'config_error', 'session_error', 'stale_launcher', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig && !invalidLauncher) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidExternalWorktree && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig && !invalidLauncher) {
         this.setState('error', error);
       }
       throw error;
@@ -695,6 +697,7 @@ class BackendManager {
   readWorkingSymlink(repo, path) { return this.request('working_symlink', repo, path); }
 
   planWorktree(repo, branch) { return this.request('worktree_plan', repo, branch); }
+  validateExternalWorktree(repo, path, identity, worktreeIdentity) { return this.request('external_worktree_validate', repo, { path, identity, worktreeIdentity }); }
 
   branchReview(repo) { return this.request('branch_review', repo); }
 

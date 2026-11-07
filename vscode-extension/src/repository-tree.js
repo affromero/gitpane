@@ -51,6 +51,9 @@ function validBackendStatus(status) {
     typeof status.branch === 'string' && typeof status.is_dirty === 'boolean' &&
     count(status.ahead) && count(status.behind) && Array.isArray(status.stashes) &&
     Array.isArray(status.worktrees) && status.worktrees.every(item => item && typeof item.path === 'string' && path.isAbsolute(item.path)) &&
+    (status.external_worktrees === undefined || (Array.isArray(status.external_worktrees) &&
+      status.external_worktrees.every(item => item && typeof item.path === 'string' && path.isAbsolute(item.path) &&
+        /^[a-f0-9]{64}$/.test(item.identity || '')))) &&
     typeof status.has_dirty_submodules === 'boolean' && typeof status.has_unpushed_submodules === 'boolean' &&
     Array.isArray(status.files) && Array.isArray(status.watched_errors) &&
     count(status.file_count_lower_bound) && typeof status.files_truncated === 'boolean';
@@ -102,6 +105,7 @@ class RepositoryTree {
     this.visible = false;
     this.refreshInterval = DEFAULT_REFRESH_INTERVAL;
     this.showSessionLiveness = true;
+    this.showOutsideWorktrees = false;
     this.pollTimer = undefined;
     this.pollPromise = undefined;
     this.refreshTimer = undefined;
@@ -216,7 +220,8 @@ class RepositoryTree {
       const watchedPaths = [...new Set(this.watchedPathsFor(repo.rootUri.fsPath))];
       const watchTokens = new Map(watchedPaths.map(value => [value, this.watchTokenFor(repo.rootUri.fsPath, value)]));
       if (watchedPaths.length > 256 || !watchedPaths.every(relativeFile)) throw new Error('Invalid symlink paths to watch.');
-      const status = await this.backend.status(repo.rootUri.fsPath, includeWorktrees, { summaryOnly: true, watchedPaths });
+      const status = await this.backend.status(repo.rootUri.fsPath, includeWorktrees, { summaryOnly: true, watchedPaths,
+        ...(includeWorktrees && this.showOutsideWorktrees ? { includeExternalWorktrees: true } : {}) });
       if (!current()) return;
       if (!validBackendStatus(status) || status.files.some(file => !file || !relativeFile(file.path) || !watchedPaths.includes(file.path)) ||
           status.watched_errors.some(error => !error || !relativeFile(error.path) || !watchedPaths.includes(error.path) ||
@@ -227,10 +232,12 @@ class RepositoryTree {
       const previous = this.backendStatuses.get(key);
       const commonIdentity = directoryIdentity(status.common_dir);
       const previousEvidence = previous && this.statusEvidence.get(previous);
-      const preserveWorktrees = !includeWorktrees && previous?.worktrees.length &&
+      const preserveWorktrees = !includeWorktrees && (previous?.worktrees.length || previous?.external_worktrees?.length) &&
         previousEvidence?.generation === generation && previousEvidence.token === cycle.tokens.get(key) &&
         sameIdentity(previousEvidence.common, commonIdentity);
-      const stored = { ...status, watchedPaths, watchTokens, ...(preserveWorktrees ? { worktrees: previous.worktrees } : {}) };
+      const stored = { ...status, watchedPaths, watchTokens, ...(preserveWorktrees ? {
+        worktrees: previous.worktrees, external_worktrees: previous.external_worktrees
+      } : {}) };
       this.statusEvidence.set(stored, { common: commonIdentity, generation, token: cycle.tokens.get(key) });
       this.backendStatuses.set(key, stored);
       this.backendErrors.delete(key);
@@ -673,11 +680,13 @@ class RepositoryTree {
     this.groupCache.delete(key);
   }
 
-  configureView({ refreshInterval, showSessionLiveness }) {
+  configureView({ refreshInterval, showSessionLiveness, showOutsideWorktrees }) {
     const intervalChanged = this.refreshInterval !== refreshInterval;
     const livenessChanged = this.showSessionLiveness !== showSessionLiveness;
+    const outsideChanged = this.showOutsideWorktrees !== !!showOutsideWorktrees;
     this.refreshInterval = refreshInterval;
     this.showSessionLiveness = showSessionLiveness;
+    this.showOutsideWorktrees = !!showOutsideWorktrees;
     if (intervalChanged && this.pollTimer !== undefined) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -685,6 +694,7 @@ class RepositoryTree {
     this.liveness?.setVisible(this.visible && showSessionLiveness);
     if (intervalChanged) this.schedulePoll();
     if (livenessChanged) this.changed();
+    if (outsideChanged) this.scheduleRefresh();
   }
 
   setVisible(visible) {
