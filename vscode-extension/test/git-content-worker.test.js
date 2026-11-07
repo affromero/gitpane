@@ -97,7 +97,9 @@ test('a Git executable selected by name resolves through PATH', t => {
   const executable = path.join(dir, process.platform === 'win32' ? 'git.exe' : 'git');
   fs.writeFileSync(executable, '', { mode: 0o755 });
   const api = { git: { path: 'git', env: { PATH: dir } } };
-  assert.equal(captureGitEnvironment(api).executable, executable);
+  const resolved = captureGitEnvironment(api).executable;
+  assert.equal(process.platform === 'win32' ? resolved.toLowerCase() : resolved,
+    process.platform === 'win32' ? executable.toLowerCase() : executable);
   api.git.path = 'missing-git';
   assert.throws(() => captureGitEnvironment(api), error =>
     error.code === 'unsupported_git' && /missing-git/.test(error.message));
