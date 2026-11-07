@@ -4,8 +4,13 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.5] - 2026-11-07
+
 ### Added
-- Optionally show linked worktrees outside the VS Code workspace and open them in a new window.
+- Optionally show linked worktrees outside the VS Code workspace and open them in a new window. ([#139](https://github.com/affromero/gitpane/pull/139), closes [#136](https://github.com/affromero/gitpane/issues/136))
+
+### Fixed
+- Find Git using the VS Code environment's PATH, including Windows PATH casing. ([#138](https://github.com/affromero/gitpane/pull/138), closes [#137](https://github.com/affromero/gitpane/issues/137))
 
 ## [0.18.4] - 2026-11-03
 
