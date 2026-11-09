@@ -22,6 +22,13 @@ body.vscode-light, body.vscode-high-contrast-light {
 
 * { box-sizing: border-box; }
 
+.file-context-menu { position: fixed; z-index: 100; display: flex; flex-direction: column; min-width: 150px;
+  max-width: 100vw; max-height: 100vh; overflow: auto; padding: 4px 0;
+  color: var(--vscode-menu-foreground, var(--text)); background: var(--vscode-menu-background, var(--vscode-sideBar-background));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555)); box-shadow: 0 3px 10px #0006; }
+.file-context-menu button { border: 0; border-radius: 0; padding: 4px 12px; text-align: left; font: inherit; color: inherit; background: transparent; }
+.file-context-menu button:hover, .file-context-menu button:focus-visible { outline: none; color: var(--vscode-menu-selectionForeground, inherit); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+
 body {
   margin: 0;
   padding: 5px 0 8px;

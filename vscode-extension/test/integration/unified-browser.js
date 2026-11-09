@@ -19,7 +19,7 @@ const server = http.createServer((request, response) => {
   response.end(asset.body);
 });
 const add = (route, body, type = 'text/html') => assets.set(route, { body, type });
-for (const file of ['webview/styles.css', 'webview/view.js', 'graph/styles.css', 'graph/view.js',
+for (const file of ['webview/styles.css', 'webview/view.js', 'webview/file-menu.js', 'graph/styles.css', 'graph/view.js',
   'theme-webview.js', 'unified/styles.css', 'unified/view.js', 'unified/frame.js']) {
   add(`/src/${file}`, fs.readFileSync(path.join(extension, 'src', file)), file.endsWith('.css') ? 'text/css' : 'text/javascript');
 }
@@ -74,6 +74,33 @@ const scenario = String.raw`
   doc('changes').querySelector('.file-row').click(); await tick();
   check('diff action retains owner and selection epoch', received.some(packet => packet.surface === 'changes' &&
    packet.message.type === 'openChange' && packet.message.id === 'file' && packet.message.ownerId === 'repo' && packet.message.selectionEpoch === 7));
+  const rightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 45, clientY: 55 });
+  doc('changes').querySelector('.file-row .file-path').dispatchEvent(rightClick); await tick();
+  check('right click selects the file and requests its guarded menu', rightClick.defaultPrevented &&
+   doc('changes').querySelector('.file-row').parentElement.getAttribute('aria-selected') === 'true' &&
+   received.at(-1).surface === 'changes' && received.at(-1).message.type === 'fileMenuRequest' &&
+   received.at(-1).message.id === 'file' &&
+   received.at(-1).message.ownerId === 'repo' && received.at(-1).message.selectionEpoch === 7);
+  const requestId = received.at(-1).message.requestId;
+  send('changes', { type: 'fileMenu', id: 'file', requestId, token: 'test-token',
+   choices: [{ label: 'Open Changes', action: 'open' }, { label: 'Stage', action: 'stage' }] });
+  await tick();
+  const popup = doc('changes').querySelector('[role="menu"]');
+  const bounds = popup?.getBoundingClientRect();
+  check('file menu opens beside the pointer', popup && bounds.left === 45 && bounds.top === 55 &&
+   [...popup.querySelectorAll('button')].map(button => button.textContent).join(',') === 'Open Changes,Stage');
+  popup.querySelectorAll('button')[1].click(); await tick();
+  check('menu action carries the selected file and guard', received.at(-1).message.type === 'fileMenuAction' &&
+   received.at(-1).message.id === 'file' && received.at(-1).message.action === 'stage' &&
+   received.at(-1).message.token === 'test-token' && !doc('changes').querySelector('[role="menu"]'));
+  doc('changes').querySelector('.file-row .menu-action').click(); await tick();
+  check('file ellipsis opens the same local menu', received.at(-1).message.type === 'fileMenuRequest' &&
+   received.at(-1).message.id === 'file');
+  send('changes', { type: 'fileMenu', id: 'file', requestId: received.at(-1).message.requestId,
+   token: 'second-token', choices: [{ label: 'Open Changes', action: 'open' }] }); await tick();
+  doc('changes').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('escape closes the file menu and returns focus to the file', !doc('changes').querySelector('[role="menu"]') &&
+   doc('changes').activeElement.getAttribute('role') === 'treeitem');
   const splitter = document.querySelector('.splitter');
   const before = document.getElementById('repositories-pane').getBoundingClientRect().height;
   splitter.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));

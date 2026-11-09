@@ -31,6 +31,8 @@ const pendingLoads = new Map();
 const pendingPages = new Map();
 let searchOwner;
 let searchTimer;
+const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
+  selection: () => JSON.stringify([snapshot.selectedOwnerId, snapshot.selectionEpoch]) });
 
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
@@ -87,7 +89,12 @@ function menuButton(label, kind, id) {
   button.setAttribute('aria-label', label);
   button.addEventListener('click', event => {
     event.stopPropagation();
-    vscode.postMessage({ type: 'menu', kind, id });
+    if (kind === 'file') {
+      const rect = button.getBoundingClientRect();
+      const item = visible.find(value => value.key === button.closest('.treeitem')?.dataset.key);
+      if (item) select(item);
+      fileMenu.open(id, rect.right, rect.bottom);
+    } else vscode.postMessage({ type: 'menu', kind, id });
   });
   return button;
 }
@@ -819,6 +826,15 @@ tree.addEventListener('click', event => {
   activate(item);
 });
 
+tree.addEventListener('contextmenu', event => {
+  const row = event.target.closest('.file-row');
+  const item = visible.find(value => value.key === row?.parentElement?.dataset.key);
+  if (!item || item.fileId === undefined) return;
+  event.preventDefault();
+  select(item);
+  fileMenu.open(item.fileId, event.clientX, event.clientY);
+});
+
 tree.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
@@ -907,6 +923,7 @@ window.addEventListener('message', event => {
     selected = undefined;
   }
   snapshot = { ...event.data, repositories: Array.isArray(event.data.repositories) ? event.data.repositories : [] };
+  fileMenu.closeIfChanged();
   let revealed = false;
   for (const reveal of !changesMode && Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
     if (!reveal || typeof reveal.id !== 'string' || reveal.id.length > 128 ||

@@ -50,6 +50,15 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
     if (provider.currentRepository(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
   } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
     await provider.openWorktreeGraph?.(message.id);
+  } else if (message?.type === 'fileMenuRequest' && typeof message.id === 'string' && Number.isSafeInteger(message.requestId)) {
+    try {
+      const menu = await provider.actions?.fileMenu(message.id, guard);
+      const view = surface === 'changes' ? provider.workspaceViews?.changes?.view : provider.view;
+      if (menu && guard()) view?.webview.postMessage({ type: 'fileMenu', id: message.id, requestId: message.requestId, ...menu });
+    } catch (error) { if (guard()) await provider.actions?.report(error); }
+  } else if (message?.type === 'fileMenuAction' && typeof message.id === 'string' &&
+             typeof message.token === 'string' && typeof message.action === 'string') {
+    await provider.actions?.fileMenuAction(message.id, message.token, message.action, guard);
   } else if (message?.type === 'action' && message.action === 'inspectExternalWorktree' && typeof message.id === 'string') {
     await provider.actions?.handle(message, undefined, guard);
   } else if (message?.type === 'shortcut' && typeof message.id === 'string' && typeof message.key === 'string') {

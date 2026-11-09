@@ -107,8 +107,10 @@ The sidebar and graph use Gitpane's configured theme and adapt its colors for
 the VS Code background. Use **Gitpane: Choose Theme…** to preview and save a
 theme for Gitpane. Restart the extension host after editing theme files directly.
 
-The `⋯` menus provide file actions to stage, unstage, discard or delete an
-untracked file. Repository actions include branch review, push, pull, pull with
+Right-click a changed file or use its `⋯` menu to open its actions. For files
+inside the workspace, these include stage, unstage, discard and delete. Outside
+worktrees offer read-only actions to open changes or copy the path. Repository
+actions include branch review, push, pull, pull with
 rebase and worktree creation. Linked worktrees inside the workspace can be
 removed from their menu.
 Choose **Refresh** from a repository or worktree menu to update its local status

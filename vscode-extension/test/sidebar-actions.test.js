@@ -132,6 +132,35 @@ test('inspecting an outside worktree leaves the workspace unchanged', async () =
   assert.deepEqual(f.calls, [['inspectExternalWorktree', 'worktree']]);
 });
 
+test('outside worktree file menus offer guarded inspection without mutations', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), external: true });
+  f.pick(choices => {
+    assert.deepEqual(choices.map(choice => choice.action), ['open', 'copy']);
+    return choices[0];
+  });
+  await f.actions.showMenu('file', 'file');
+  assert.equal(f.calls.at(-1)[0], 'gitpane.openChange');
+  f.calls.length = 0;
+  await f.actions.handle(action('stage', 'file'));
+  assert.deepEqual(f.calls, []);
+});
+
+test('file menu actions reject forged and stale selections', async () => {
+  const f = fixture();
+  let menu = await f.actions.fileMenu('file');
+  assert.ok(menu.choices.some(choice => choice.action === 'open'));
+  await f.actions.fileMenuAction('file', 'forged', 'open');
+  assert.deepEqual(f.calls, []);
+  menu = await f.actions.fileMenu('file');
+  await f.actions.fileMenuAction('file', menu.token, 'unavailable-action');
+  assert.deepEqual(f.calls, []);
+  menu = await f.actions.fileMenu('file');
+  f.setFile({ ...f.getFile(), path: 'changed.txt' });
+  await f.actions.fileMenuAction('file', menu.token, 'open');
+  assert.deepEqual(f.calls, []);
+});
+
 test('file actions wait for a refresh and still reject a changed selection', async () => {
   const f = fixture();
   let release, started;

@@ -83,7 +83,8 @@ class WorkspaceViews {
     if (message.type === 'action') return message.action === 'inspectExternalWorktree' && message.id === this.selectedId;
     if (['loadChanges', 'releaseChanges', 'changesPage', 'searchChanges', 'shortcut'].includes(message.type) &&
         message.id !== this.selectedId) return false;
-    if (message.type === 'openChange' || (message.type === 'menu' && message.kind === 'file')) {
+    if (message.type === 'openChange' || ['fileMenuRequest', 'fileMenuAction'].includes(message.type) ||
+        (message.type === 'menu' && message.kind === 'file')) {
       return this.provider.changes.get(message.id)?.ownerId === this.selectedId;
     }
     return ['refresh', 'loadChanges', 'releaseChanges', 'changesPage', 'searchChanges', 'shortcut'].includes(message.type);

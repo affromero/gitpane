@@ -12,6 +12,7 @@ const browser = process.env.CHROME_EXECUTABLE || (process.platform === 'darwin'
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-browser-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/webview/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
+const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
@@ -568,7 +569,7 @@ const scenario = String.raw`
     const openCount = window.posted.filter(message => message.type === 'openChange').length;
     fileMenu.click();
     check('file actions do not open the diff',
-      window.posted.some(message => message.type === 'menu' && message.kind === 'file' && message.id === 'file1') &&
+      window.posted.some(message => message.type === 'fileMenuRequest' && message.id === 'file1') &&
       window.posted.filter(message => message.type === 'openChange').length === openCount);
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('enter opens selected diff', window.posted.some(message => message.type === 'openChange' && message.id === 'file1'));
@@ -960,7 +961,7 @@ function documentFor(theme, restored = false) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="gitpane-test">window.posted=[];window.ackStates=[];window.savedState=${restored ? JSON.stringify({ expanded: ['repo:restored', 'worktree:restored-child'], worktreeVisibility: [['d'.repeat(64), false]], appliedWorktreeReveals: ['already-revealed'] }) : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>{window.posted.push(m);if(m.type==='ackWorktreeReveal')window.ackStates.push(structuredClone(window.savedState));},getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme, restored = false) {

@@ -32,6 +32,7 @@ function getHtml(webview, extensionUri, mode = 'repositories') {
   </div>
   <div id="repositories" role="tree" aria-label="Gitpane ${mode === 'changes' ? 'changes' : 'repositories'}"></div>
   <script src="${theme}"></script>
+  <script src="${resource('file-menu.js')}"></script>
   <script src="${script}"></script>
 </body>
 </html>`;

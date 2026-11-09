@@ -254,6 +254,24 @@ test('changing repositories cancels a dispatched Changes diff without stale erro
   assert.equal(changes.snapshot().selectedOwner.name, 'web-app');
 });
 
+test('changing repositories rejects actions from an earlier file menu', async t => {
+  const f = await fixture(t);
+  const repos = await f.resolve('repositories');
+  const changes = await f.resolve('changes');
+  const first = changes.snapshot().selectedOwnerId;
+  await changes.receive(message(changes, 'loadChanges', first));
+  const file = changes.snapshot().selectedOwner.groups[0].files[0];
+  await changes.receive(message(changes, 'fileMenuRequest', file.id, { requestId: 1 }));
+  const menu = changes.messages.findLast(item => item.type === 'fileMenu');
+  assert.ok(menu?.choices.some(choice => choice.action === 'open'));
+  const action = message(changes, 'fileMenuAction', file.id, { token: menu.token, action: 'open' });
+  const second = repos.snapshot().repositories.find(item => item.name === 'web-app');
+  await repos.receive({ type: 'selectOwner', id: second.id });
+  await changes.receive(action);
+  assert.deepEqual(f.diffs, []);
+  assert.deepEqual(f.errors, []);
+});
+
 test('an unavailable worktree remains selected when its repository opens', async t => {
   const f = await fixture(t, { unavailableWorktree: true });
   const repos = await f.resolve('repositories');

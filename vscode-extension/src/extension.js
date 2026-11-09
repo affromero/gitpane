@@ -531,7 +531,8 @@ class GitpaneViewProvider {
 
   resolveChange(id) {
     const node = this.currentChange(this.changes.get(id));
-    const repo = node && this.actionRepository(node.repo);
+    const repo = node && (node.external ? { repoPath: node.repo.rootUri.fsPath, external: true,
+      repoIdentity: this.externalOwners.get(node.ownerId)?.status?.repo_identity } : this.actionRepository(node.repo));
     if (!repo) return undefined;
     const relative = path.relative(repo.repoPath, node.change.uri.fsPath);
     if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return undefined;
