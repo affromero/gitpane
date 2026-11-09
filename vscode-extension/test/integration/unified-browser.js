@@ -40,7 +40,10 @@ const scenario = String.raw`
  const tick = () => new Promise(resolve => setTimeout(resolve, 30));
  const frame = name => document.querySelector('iframe[data-surface="' + name + '"]');
  const doc = name => frame(name).contentDocument;
- const send = (surface, message) => window.postMessage({ surface, message }, '*');
+ const host = document.createElement('iframe');
+ document.body.appendChild(host);
+ const send = (surface, message) => window.dispatchEvent(new MessageEvent('message',
+  { data: { surface, message }, source: host.contentWindow }));
  const group = { id: 'working', label: 'Unstaged', files: [{ id: 'file', status: 'M', path: 'changed.txt' }] };
  const owner = { id: 'repo', name: 'repo', branch: 'main', dirty: true, groups: [group], worktrees: [],
   changesPage: { state: 'ready', page: 0, previous: false, next: false } };

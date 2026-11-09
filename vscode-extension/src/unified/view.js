@@ -23,7 +23,7 @@
   };
   window.addEventListener('message', event => {
     const { surface, message } = event.data || {};
-    if (surfaces.has(surface) && message && (event.source === window || event.source === window.parent || event.source === null)) {
+    if (surfaces.has(surface) && message && !Object.values(frames).some(frame => event.source === frame.contentWindow)) {
       frames[surface].contentWindow?.postMessage(message, '*');
     }
   });
