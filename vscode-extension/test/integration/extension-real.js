@@ -178,13 +178,11 @@ async function main() {
       if (name === './webview/html') return { getHtml: () => '<html></html>' };
       return load.call(this, name, ...args);
     };
-    provider.resolveWebviewView(view);
+    provider.resolveRepositoryView(view);
   } finally { Module._load = load; }
   await receive({ type: 'ready' });
   await require('./settings-real')({ vscode, provider, snapshots, preferences, configurationChanged,
     commands, settingUpdates, workspaceState, errors, choose: value => { pickChanges = value; } });
-  assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'outside sibling'));
-  await vscode.workspace.getConfiguration('gitpane').update('worktrees.showOutsideWorkspace', true, 2);
   await provider.tree.refresh();
   const outsideRow = snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.find(item => item.name === 'outside sibling');
   assert.ok(outsideRow?.external);
@@ -198,7 +196,7 @@ async function main() {
   await provider.tree.refresh();
   assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'outside sibling'));
   pickChanges = undefined;
-  console.log('PASS opt-in sibling worktree opens in a new window without changing workspace scope');
+  console.log('PASS sibling worktrees appear by default and can be hidden without changing workspace scope');
   const shortcutOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const shortcutChild = shortcutOwner.worktrees.find(item => item.name === 'linked');
   await receive({ type: 'shortcut', id: shortcutChild.id, key: 'y' });

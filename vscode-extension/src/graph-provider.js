@@ -36,6 +36,7 @@ class GraphProvider {
     this.themeSubscription = theme?.onDidChange(() => this.publishTheme());
     this.panel = undefined;
     this.repoKey = undefined;
+    this.externalRepo = undefined;
     this.repoName = undefined;
     this.guard = () => true;
     this.validateGuard = undefined;
@@ -88,6 +89,7 @@ class GraphProvider {
   }
 
   currentRepo() {
+    if (this.externalRepo) return this.guard() ? this.externalRepo : undefined;
     const repo = this.tree.git.repositories.find(item => item.rootUri.toString() === this.repoKey);
     return this.guard() && repo && this.tree.isVisible(repo) ? repo : undefined;
   }
@@ -97,13 +99,14 @@ class GraphProvider {
   }
 
   open(repo, guard = () => true, validateGuard, persistent) {
-    const token = repo && this.tree.repositoryToken(repo);
-    const currentGuard = () => guard() && this.tree.isCurrentRepository(repo, token);
-    if (!repo || !currentGuard() || !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString())) {
+    const token = repo?.externalToken || (repo && this.tree.repositoryToken(repo));
+    const currentGuard = () => guard() && (repo?.externalToken ? persistent?.current() : this.tree.isCurrentRepository(repo, token));
+    if (!repo || !currentGuard() || (!repo.externalToken && !this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()))) {
       throw new Error('Repository is no longer in the workspace.');
     }
     const wasReady = this.ready;
     this.repoKey = repo.rootUri.toString();
+    this.externalRepo = repo.externalToken ? repo : undefined;
     this.repoName = path.basename(repo.rootUri.fsPath);
     this.ownerEpoch++;
     this.guard = currentGuard;
@@ -196,6 +199,7 @@ class GraphProvider {
 
   clearSelection(message, error = false) {
     this.repoKey = undefined;
+    this.externalRepo = undefined;
     this.repoName = undefined;
     this.guard = () => false;
     this.validateGuard = undefined;
@@ -531,12 +535,14 @@ class GraphProvider {
     const file = this.files.get(id);
     if (!repo || !file || file.oid !== this.selected) return;
     if (!await this.validateGraph(repo) || this.files.get(id) !== file || !this.isCurrentRepo(repo)) return;
+    if (file.isSubmodule && repo.externalToken) throw new Error('External submodule diffs are not supported.');
     if (file.isSubmodule) return this.openCommitGitlink(repo, file, id);
     const uri = vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
-    const repoToken = this.tree.repositoryToken(repo);
+    const repoToken = repo.externalToken || this.tree.repositoryToken(repo);
     const persistent = this.persistent;
-    const current = () => this.tree.isCurrentRepository(repo, repoToken) &&
+    const current = () => repo.externalToken ? !!persistent?.current() :
+      this.tree.isCurrentRepository(repo, repoToken) &&
       this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
       (!persistent || persistent.current());
     const makeSide = (relative, ref) => createLiveGitSide({ vscode, links: this.links, backend: this.backend,

@@ -8,6 +8,28 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { installGitSideFixture } = require('./git-side-fixture');
 
+test('outside worktree graph stops when its inspection becomes stale', async () => {
+  const load = Module._load;
+  const uri = value => ({ fsPath: value, toString: () => value });
+  let GraphProvider;
+  try {
+    Module._load = function(name, ...args) {
+      return name === 'vscode' ? { Uri: { file: uri } } : load.call(this, name, ...args);
+    };
+    ({ GraphProvider } = require('../src/graph-provider'));
+  } finally { Module._load = load; }
+  const repo = { rootUri: uri('/outside-worktree'), externalToken: 'selected-worktree' };
+  const tree = { git: { repositories: [] }, onDidChangeTreeData: () => ({ dispose() {} }) };
+  const provider = new GraphProvider(tree, {}, {}, '/extension', undefined, undefined, { sidebar: true });
+  let current = true;
+  try {
+    provider.open(repo, () => true, undefined, { current: () => current });
+    assert.equal(provider.currentRepo(), repo);
+    current = false;
+    assert.equal(provider.currentRepo(), undefined);
+  } finally { provider.dispose(); }
+});
+
 test('commit graph opens Unix filenames containing literal backslashes', { skip: process.platform === 'win32' }, async () => {
   const calls = [], messages = [];
   const uri = value => ({ fsPath: value, toString: () => value, with: change => ({ fsPath: value, ...change }) });

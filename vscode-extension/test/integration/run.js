@@ -62,6 +62,7 @@ try {
 
   const env = {
     ...isolatedGitEnv(),
+    ...(process.env.GITPANE_TEST_BINARY ? { GITPANE_TEST_BINARY: process.env.GITPANE_TEST_BINARY } : {}),
     GITPANE_TEST_EXTENSION: extension,
     GITPANE_TEST_REPO: fs.realpathSync(repo),
     GITPANE_TEST_NESTED: fs.realpathSync(nested),

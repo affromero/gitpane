@@ -35,6 +35,23 @@ test('concurrent metadata requests preserve each result and separate repository 
   assert.deepEqual(calls.map(call => call.items.length).sort((a, b) => a - b), [1, 1, 100]);
 });
 
+test('metadata requests do not reuse an obsolete external authorization', async t => {
+  const old = session('/outside'), current = session('/outside');
+  old.external = { selection: { path: '/outside' } };
+  current.external = { selection: { path: '/outside' } };
+  const batches = new GitMetadataBatches(async (owner, _identity, items) => {
+    if (owner === old) throw new Error('old authorization expired');
+    return response(items);
+  });
+  t.after(() => batches.dispose());
+  const [stale, fresh] = await Promise.allSettled([
+    batches.request(old, 'd'.repeat(64), { ref: 'HEAD', path: 'old' }),
+    batches.request(current, 'd'.repeat(64), { ref: 'HEAD', path: 'new' })
+  ]);
+  assert.match(stale.reason.message, /expired/);
+  assert.equal(fresh.value.results[0].metadata.path, 'new');
+});
+
 test('metadata batches split at protocol limits without poisoning valid items', async t => {
   const calls = [], owner = session(), identity = 'd'.repeat(64);
   const batches = new GitMetadataBatches(async (current, expected, items) => {

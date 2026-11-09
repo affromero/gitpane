@@ -258,6 +258,9 @@ fn process(
             if !matches!(
                 input.method.as_str(),
                 "status"
+                    | "graph"
+                    | "graph_revision"
+                    | "commit_files"
                     | "changes_begin"
                     | "changes_next"
                     | "changes_find"
@@ -389,7 +392,40 @@ fn process(
                 }
                 let repository = git2::Repository::open(&repo)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
-                let paths = worktree_plan::external::list(scope, &repository)?;
+                let mut paths = worktree_plan::external::list(scope, &repository)?;
+                // Keep a large worktree list from monopolizing the bridge on every poll.
+                // Entries beyond this limit can still be inspected explicitly.
+                const MAX_EXTERNAL_SUMMARIES: usize = 8;
+                let anchor_identity = identity.fingerprint()?;
+                for (index, item) in paths.iter_mut().enumerate() {
+                    if !item["status_error"].is_null() {
+                        continue;
+                    }
+                    if index >= MAX_EXTERNAL_SUMMARIES {
+                        item["status_error"] = json!("Select this worktree to load its status.");
+                        continue;
+                    }
+                    let summary = (|| {
+                        let selection: worktree_plan::external::Selection = params(json!({
+                            "repo": repo,
+                            "path": item["path"],
+                            "expected_repo_identity": anchor_identity,
+                            "expected_worktree_identity": item["identity"],
+                        }))?;
+                        let path = PathBuf::from(item["path"].as_str().ok_or_else(|| {
+                            BridgeError::new("repository_error", "Invalid worktree path")
+                        })?);
+                        let temporary =
+                            worktree_plan::external::read_scope(scope, &selection, &path)?;
+                        let summary = status::query(&path, &temporary, sub_cfg, false, true, &[])?;
+                        worktree_plan::external::read_scope(scope, &selection, &path)?;
+                        Ok::<_, BridgeError>(summary)
+                    })();
+                    match summary {
+                        Ok(summary) => item["status"] = summary,
+                        Err(error) => item["status_error"] = json!(error.message),
+                    }
+                }
                 if scope.repository(&repo)? != repo
                     || changes::RepositoryIdentity::read(&repo)? != identity
                 {

@@ -11,6 +11,8 @@ class GitMetadataBatches {
     this.active = new Set();
     this.scheduled = undefined;
     this.disposed = false;
+    this.externalIds = new WeakMap();
+    this.nextExternalId = 0;
   }
 
   request(session, identity, item, signal) {
@@ -22,8 +24,16 @@ class GitMetadataBatches {
       return Promise.reject(new BridgeError('invalid_request', 'Invalid Git content reference or path.'));
     }
     const { snapshot, git, repo } = session;
+    let externalId;
+    if (session.external) {
+      externalId = this.externalIds.get(session.external);
+      if (externalId === undefined) {
+        externalId = ++this.nextExternalId;
+        this.externalIds.set(session.external, externalId);
+      }
+    }
     const key = JSON.stringify([snapshot.executable, snapshot.generation, snapshot.roots, snapshot.rootSources,
-      snapshot.rootIdentities, repo, identity, git.executable, git.key]);
+      snapshot.rootIdentities, repo, identity, git.executable, git.key, externalId]);
     return new Promise((resolve, reject) => {
       const entry = { item, signal, resolve, reject, settled: false };
       entry.abort = () => {
@@ -56,6 +66,7 @@ class GitMetadataBatches {
       const base = Buffer.byteLength(`${JSON.stringify({ version: 1, workspace_roots: snapshot.roots,
         workspace_root_identities: snapshot.rootIdentities, workspace_root_sources: snapshot.rootSources,
         repo, expected_repo_identity: group.identity, git_executable: git.executable,
+        ...(group.session.external ? { external_worktree: group.session.external.selection } : {}),
         operation: { kind: 'metadata', items: [] } })}\n`);
       let entries = [], bytes = base;
       const queue = () => {

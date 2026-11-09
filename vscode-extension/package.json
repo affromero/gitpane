@@ -17,13 +17,11 @@
     "untrustedWorkspaces": { "supported": false },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onView:gitpane.repositories", "onView:gitpane.changes", "onView:gitpane.commitGraph"],
+  "activationEvents": ["onView:gitpane.repositories"],
   "contributes": {
     "views": {
       "explorer": [
-        { "id": "gitpane.repositories", "name": "Repositories", "type": "webview" },
-        { "id": "gitpane.changes", "name": "Changes", "type": "webview" },
-        { "id": "gitpane.commitGraph", "name": "Git Graph", "type": "webview" }
+        { "id": "gitpane.repositories", "name": "Gitpane", "type": "webview" }
       ]
     },
     "commands": [
@@ -71,7 +69,7 @@
         },
         "gitpane.worktrees.showOutsideWorkspace": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "scope": "window",
           "description": "Show registered worktrees outside the workspace and inspect their changes in the current window."
         },

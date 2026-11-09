@@ -317,11 +317,14 @@ class BackendManager {
       }
       let result;
       const external = this.externalSelections.get(repo);
-      if (external && isChanges) {
+      if (external && (isChanges || ['graph', 'graph_revision', 'commit_files'].includes(method))) {
         if (!external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
         const parameters = method === 'changes_begin' ? { repo } : method === 'changes_next' ? { repo, snapshot: argument.snapshot, cursor: argument.cursor } :
           method === 'changes_search' ? { repo, snapshot: argument.snapshot, query: argument.query, direction: argument.direction, position: argument.position } :
-          method === 'changes_release' ? { repo, snapshot: argument } : undefined;
+          method === 'changes_release' ? { repo, snapshot: argument } :
+          method === 'graph' ? { repo, first_parent: argument, ...(filters === undefined ? {} : { filters }),
+            ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) } :
+          method === 'graph_revision' ? { repo } : method === 'commit_files' ? { repo, oid: argument } : undefined;
         if (!parameters) throw new BridgeError('invalid_request', 'Unsupported external worktree operation.');
         result = await client.request('external_worktree_read', { selection: external.selection, method, params: parameters });
         if (!current() || generation !== this.generation || this.externalSelections.get(repo) !== external || !external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');

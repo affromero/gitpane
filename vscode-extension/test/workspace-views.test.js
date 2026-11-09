@@ -143,7 +143,9 @@ async function fixture(t, { delayedDiscovery = false, unavailableWorktree = fals
   });
   const resolve = async kind => {
     const result = view();
-    registrations.get(`gitpane.${kind}`).resolveWebviewView(result);
+    const provider = registrations.get(`gitpane.${kind}`);
+    if (kind === 'repositories') provider.resolveRepositoryView(result);
+    else provider.resolveWebviewView(result);
     await result.receive({ type: 'ready' });
     return result;
   };

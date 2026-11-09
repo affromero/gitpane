@@ -19,7 +19,7 @@ function readPreferences(configuration, rememberedOrder) {
     sortOrder: order === 'remember' ? (orders.includes(rememberedOrder) ? rememberedOrder : 'workspace') : order,
     refreshInterval: seconds * 1000,
     worktreeExpansion: visibility === 'native' ? undefined : visibility === 'expanded',
-    showOutsideWorktrees: read('worktrees.showOutsideWorkspace', false, value => typeof value === 'boolean'),
+    showOutsideWorktrees: read('worktrees.showOutsideWorkspace', true, value => typeof value === 'boolean'),
     showSessionLiveness: read('showSessionLiveness', true, value => typeof value === 'boolean'),
     graphFirstParent: read('graph.firstParent', false, value => typeof value === 'boolean'),
     graphLabelMaxLength: labelLength === -1 ? undefined : labelLength

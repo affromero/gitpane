@@ -161,6 +161,34 @@ class WorkspaceViews {
     } finally { this.publishing = false; }
   }
 
+  resolveUnifiedView(view) {
+    view.webview.options = { enableScripts: true,
+      localResourceRoots: [this.vscode.Uri.joinPath(this.context.extensionUri, 'src')] };
+    view.webview.html = require('./unified/html').getHtml(view.webview, this.context.extensionUri);
+    const section = surface => {
+      const webview = {
+        get cspSource() { return view.webview.cspSource; },
+        asWebviewUri: uri => view.webview.asWebviewUri(uri),
+        postMessage: message => view.webview.postMessage({ surface, message }),
+        onDidReceiveMessage: listener => view.webview.onDidReceiveMessage(envelope => {
+          if (envelope?.surface === surface && envelope.message && typeof envelope.message === 'object') listener(envelope.message);
+        }),
+        set html(_value) {},
+        set options(_value) {}
+      };
+      return {
+        webview,
+        get visible() { return view.visible; },
+        set title(_value) {},
+        onDidChangeVisibility: listener => view.onDidChangeVisibility(listener),
+        onDidDispose: listener => view.onDidDispose(listener)
+      };
+    };
+    this.provider.resolveRepositoryView(section('repositories'));
+    this.resolveChangesView(section('changes'));
+    this.resolveGraphView(section('graph'));
+  }
+
   resolveChangesView(view) {
     const previous = this.changes;
     if (previous) for (const disposable of previous.disposables) disposable.dispose();

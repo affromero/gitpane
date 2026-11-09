@@ -22,6 +22,9 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
     .find(item => item.name === 'outside sibling');
   const selected = row();
   assert.ok(selected?.external, 'the sibling remains outside the workspace');
+  assert.equal(selected.available, false, 'status is visible before inspection');
+  assert.equal(selected.dirty, true);
+  assert.equal(selected.fileCount, 2);
   await receive({ type: 'action', action: 'inspectExternalWorktree', id: selected.id });
   await receive({ type: 'loadChanges', id: selected.id });
   assert.equal(errors.length, previousErrors, errors.at(-1));

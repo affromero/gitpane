@@ -167,10 +167,13 @@ class GitpaneViewProvider {
           worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, externalIdentity: item.identity, external: true });
           const inspected = this.externalOwners.get(worktreeId);
           const active = inspected && inspected.guard();
+          const summary = item.status || inspected?.status;
           worktreeData.push({ id: worktreeId, name: path.basename(item.path), path: item.path,
             branch: typeof item.branch === 'string' ? item.branch : 'branch unavailable',
-            available: !!active, external: true, dirty: !!inspected?.status?.is_dirty,
-            fileCount: inspected?.status?.file_count_lower_bound || 0,
+            available: !!active, external: true, dirty: !!summary?.is_dirty,
+            inspectable: /^[a-f0-9]{64}$/.test(item.identity || ''),
+            statusUnavailable: !summary, ...(item.status_error ? { statusError: item.status_error } : {}),
+            fileCount: summary?.file_count_lower_bound || 0, ahead: summary?.ahead || 0, behind: summary?.behind || 0,
             ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [] });
         }
       }
@@ -285,7 +288,7 @@ class GitpaneViewProvider {
 
   async inspectExternalWorktree(id, actionGuard = () => true) {
     const item = this.resolveWorktree(id);
-    if (!item?.external || !vscode.workspace.isTrusted || !actionGuard()) throw new Error('Worktree is no longer available.');
+    if (!item?.external || !/^[a-f0-9]{64}$/.test(item.externalIdentity || '') || !vscode.workspace.isTrusted || !actionGuard()) throw new Error('Worktree is no longer available.');
     const selected = this.worktrees.get(id);
     const guard = () => {
       const current = this.resolveWorktree(id);
@@ -620,6 +623,11 @@ class GitpaneViewProvider {
   }
 
   resolveWebviewView(view) {
+    if (this.workspaceViews) return this.workspaceViews.resolveUnifiedView(view);
+    return this.resolveRepositoryView(view);
+  }
+
+  resolveRepositoryView(view) {
     for (const disposable of this.viewDisposables) disposable.dispose();
     this.viewDisposables = [];
     this.view = view;
@@ -745,10 +753,11 @@ async function activate(context) {
       tree.worktreeRepository(parent, link.path)?.rootUri.toString() === repo.rootUri.toString(), contextKey: JSON.stringify(link) };
   };
   const openWorktreeGraph = async (id, guard = () => true, target = graph) => {
-    const repo = provider.currentWorktreeRepository(id);
-    const persistent = worktreeContext(id, repo);
+    const repo = provider.currentOwner(id);
+    const external = repo?.externalToken && provider.externalOwners.get(id);
+    const persistent = external ? { current: external.guard, contextKey: repo.externalToken } : worktreeContext(id, repo);
     if (!persistent) return;
-    const current = () => guard() && provider.currentWorktreeRepository(id)?.rootUri.toString() === repo.rootUri.toString();
+    const current = () => guard() && provider.currentOwner(id)?.rootUri.toString() === repo.rootUri.toString();
     if (!current()) return;
     try { target.open(repo, current, undefined, persistent); }
     catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }

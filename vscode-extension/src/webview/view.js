@@ -1,6 +1,5 @@
+function mountGitpaneView(document, window, api) {
 'use strict';
-
-const api = acquireVsCodeApi();
 const changesMode = document.body.dataset.view === 'changes';
 const vscode = { getState: () => api.getState(), setState: state => api.setState(state),
   postMessage: message => api.postMessage(changesMode ?
@@ -289,6 +288,7 @@ function worktreeRow(worktree) {
     add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   }
   const tail = element('span', 'tail');
+  if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
   if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
@@ -310,7 +310,7 @@ function worktreeRow(worktree) {
       vscode.postMessage({ type: 'openWorktreeGraph', id: worktree.id });
     });
     tail.appendChild(graph);
-  } else if (worktree.external && !worktree.available) {
+  } else if (worktree.external && !worktree.available && worktree.inspectable !== false) {
     const button = element('button', 'menu-action', '↗');
     button.type = 'button';
     button.title = 'Inspect worktree changes';
@@ -451,6 +451,10 @@ function renderSelectedChanges(owners) {
   }
   owners.add(owner.id);
   if (owner.external && !owner.available) {
+    if (owner.inspectable === false) {
+      messages.appendChild(element('div', 'message error', owner.statusError || 'Worktree is unavailable.'));
+      return;
+    }
     const message = element('div', 'message', 'Inspect this worktree in the current window.');
     const button = element('button', '', 'Inspect Changes');
     button.type = 'button';
@@ -522,6 +526,7 @@ function render() {
       reconcilePending(worktree);
       const worktreeKey = `worktree:${worktree.id}`;
       const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'outside workspace' : worktree.dirty ? 'has changes' : 'clean'];
+      if (worktree.statusUnavailable) worktreeDetails.push(worktree.statusError || 'status unavailable');
       const worktreeInfo = countInfo(worktree);
       if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
       else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
@@ -774,6 +779,13 @@ function toggle(item) {
 
 function activate(item) {
   if (!item) return;
+  if (item.owner?.external && !item.owner.available && item.owner.inspectable !== false) {
+    if (snapshot.separateChanges) vscode.postMessage({ type: 'selectOwner', id: item.owner.id });
+    else expanded.add(item.key);
+    vscode.postMessage({ type: 'action', action: 'inspectExternalWorktree', id: item.owner.id });
+    render();
+    return;
+  }
   if (snapshot.separateChanges && item.owner) {
     vscode.postMessage({ type: 'selectOwner', id: item.owner.id });
     return;
@@ -922,3 +934,7 @@ window.addEventListener('message', event => {
 
 render();
 vscode.postMessage({ type: 'ready' });
+}
+
+if (window.GitpaneUnified) window.GitpaneMountView = mountGitpaneView;
+else mountGitpaneView(document, window, acquireVsCodeApi());

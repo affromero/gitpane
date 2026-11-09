@@ -81,18 +81,34 @@ pub(in crate::bridge) fn list(
         if !path.is_absolute() {
             continue;
         }
+        let path_text = path.to_str().ok_or_else(|| {
+            BridgeError::new("repository_error", "Worktree path is not valid UTF-8")
+        })?;
         let canonical = match path.canonicalize() {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(BridgeError::new("repository_error", error.to_string())),
+            Ok(canonical) => canonical,
+            Err(error) => {
+                if scope.allows_missing(&path).unwrap_or(false) {
+                    continue;
+                }
+                result.push(
+                    json!({ "path": path_text, "identity": null, "branch": branch,
+                    "status_error": format!("Worktree is unavailable: {error}") }),
+                );
+                continue;
+            }
         };
         if scope.allows(&canonical) {
             continue;
         }
-        let path = path.to_str().ok_or_else(|| {
-            BridgeError::new("repository_error", "Worktree path is not valid UTF-8")
-        })?;
-        result.push(json!({ "path": path, "identity": DirectoryIdentity::read(&canonical)?.fingerprint()?, "branch": branch }));
+        match DirectoryIdentity::read(&canonical).and_then(|identity| identity.fingerprint()) {
+            Ok(identity) => {
+                result.push(json!({ "path": path_text, "identity": identity, "branch": branch }))
+            }
+            Err(error) => result.push(
+                json!({ "path": path_text, "identity": null, "branch": branch,
+                "status_error": format!("Worktree is unavailable: {}", error.message) }),
+            ),
+        }
     }
     Ok(result)
 }
@@ -198,6 +214,15 @@ mod tests {
         );
         let saved = temp.path().join("saved-sibling");
         std::fs::rename(&sibling, &saved).unwrap();
+        let unavailable = list(&scope, &repo).unwrap();
+        assert_eq!(unavailable.len(), 1);
+        assert!(unavailable[0]["identity"].is_null());
+        assert!(
+            unavailable[0]["status_error"]
+                .as_str()
+                .unwrap()
+                .contains("unavailable")
+        );
         std::fs::create_dir(&sibling).unwrap();
         assert_eq!(
             validate(&scope, selection(registered, &identity))

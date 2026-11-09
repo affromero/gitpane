@@ -1,6 +1,5 @@
+function mountGitpaneGraph(document, window, vscode) {
 'use strict';
-
-const vscode = acquireVsCodeApi();
 const graph = document.getElementById('graph');
 const search = document.getElementById('search');
 const searchStatus = document.getElementById('search-status');
@@ -377,3 +376,7 @@ window.addEventListener('gitpane-theme', renderGraph);
 renderGraph();
 renderFiles();
 vscode.postMessage({ type: 'ready' });
+}
+
+if (window.GitpaneUnified) window.GitpaneMountGraph = mountGitpaneGraph;
+else mountGitpaneGraph(document, window, acquireVsCodeApi());

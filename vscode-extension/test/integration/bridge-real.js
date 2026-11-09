@@ -119,6 +119,14 @@ async function waitForFile(file) {
     const outsideWorktree = outsideStatus.external_worktrees[0];
     const validated = await client.validateExternalWorktree(repoPath, outsideWorktree.path, outsideStatus.repo_identity, outsideWorktree.identity);
     assert.equal(fs.realpathSync.native(validated.path), siblingPath);
+    const savedSibling = `${sibling}-temporarily-missing`;
+    fs.renameSync(sibling, savedSibling);
+    try {
+      const missing = await client.status(repoPath, true, { includeExternalWorktrees: true });
+      const unavailable = missing.external_worktrees.find(item => item.path === outsideWorktree.path);
+      assert.ok(unavailable?.status_error, 'a missing worktree must not fail the parent status');
+      assert.equal(unavailable.identity, null);
+    } finally { fs.renameSync(savedSibling, sibling); }
     await assert.rejects(client.status(siblingPath), error => error.code === 'outside_workspace');
     const selection = { repo: repoPath, path: outsideWorktree.path,
       expected_repo_identity: outsideStatus.repo_identity, expected_worktree_identity: outsideWorktree.identity };
@@ -129,6 +137,10 @@ async function waitForFile(file) {
     fs.writeFileSync(path.join(sibling, 'new.txt'), 'external untracked\n');
     const externalStatus = await externalRead('status', { repo: siblingPath });
     assert.equal(externalStatus.is_dirty, true);
+    const externalGraph = await externalRead('graph', { repo: siblingPath });
+    assert.ok(externalGraph.rows.some(row => row.oid === mergeOid));
+    assert.ok((await externalRead('graph_revision', { repo: siblingPath })).revision);
+    assert.ok(Array.isArray((await externalRead('commit_files', { repo: siblingPath, oid: mergeOid })).files));
     const externalChanges = await externalRead('changes_begin', { repo: siblingPath });
     const externalFiles = externalChanges.changes.filter(item => item.path === 'tracked.txt');
     assert.ok(externalFiles.some(item => item.group === 'index') && externalFiles.some(item => item.group === 'working'));
@@ -139,6 +151,7 @@ async function waitForFile(file) {
     git(repo, 'worktree', 'remove', '--force', sibling);
     await assert.rejects(client.validateExternalWorktree(repoPath, outsideWorktree.path, outsideStatus.repo_identity, outsideWorktree.identity), error => error.code === 'stale_target');
     await assert.rejects(externalRead('changes_next', { repo: siblingPath, snapshot: externalChanges.snapshot, cursor: 0 }), error => error.code === 'stale_target');
+    await assert.rejects(externalRead('graph', { repo: siblingPath }), error => error.code === 'stale_target');
     console.log('PASS opt-in outside worktree discovery and validation retain workspace scope');
 
     const many = [];

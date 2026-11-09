@@ -11,11 +11,11 @@ native diff in the editor.
 
 Rendered preview with example repositories and simulated Explorer section headers.
 
-Resize, collapse or move the three sections using VS Code's view controls.
+Resize the three sections by dragging their dividers, or focus a divider and
+use the up and down arrow keys.
 Gitpane remembers the selected repository for this workspace. Each selection
 shows its staged, unstaged, untracked and conflicted groups in **Changes** and
 its history in **Git Graph**, including when there are no changed files.
-Hide **Changes** to show changed files inline under repositories instead.
 
 Install [Gitpane for VS Code](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode)
 from the VS Code Marketplace, or run:
@@ -60,8 +60,8 @@ under their repository, with their own changed files and actions. A worktree
 added as a workspace folder appears at the top level. Repositories outside the
 workspace are not included.
 
-To see registered worktrees outside the workspace, enable
-`gitpane.worktrees.showOutsideWorkspace`. They appear beneath the repository.
+Registered worktrees outside the workspace appear beneath the repository by
+default. Set `gitpane.worktrees.showOutsideWorkspace` to false to hide them.
 Choose **Inspect Changes** to review one in the current window, or **Open in
 New Window** to inspect it separately. Inspection requires a trusted workspace
 and leaves its folders unchanged.
@@ -315,7 +315,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 |---------|---------|----------|
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
-| `gitpane.worktrees.showOutsideWorkspace` | `false` | Show registered outside worktrees and inspect their changes in the current window. |
+| `gitpane.worktrees.showOutsideWorkspace` | `true` | Show registered outside worktrees and inspect their changes in the current window. |
 | `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
 | `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
 | `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |
@@ -346,7 +346,7 @@ code --new-window --extensionDevelopmentPath="$(pwd)"
 
 In the development host, set `gitpane.backendPath` to the absolute path of the
 built `target/debug/gitpane` executable. Open a folder or workspace, then expand
-**Repositories**, **Changes** and **Git Graph** in the Explorer. On Windows, the
+**Gitpane** in the Explorer. On Windows, the
 executable is `target/debug/gitpane.exe`.
 For SSH, WSL or a development container, install a
 VSIX built for that workspace host. Virtual and untrusted workspaces are not

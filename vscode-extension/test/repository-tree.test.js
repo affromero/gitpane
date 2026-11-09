@@ -966,7 +966,7 @@ test('worktree graph opens for the linked repository and rejects a removed link'
     await activate(context);
   } finally { Module._load = load; }
   try {
-    provider.resolveWebviewView(view);
+    provider.resolveRepositoryView(view);
     await receiveSidebar({ type: 'ready' });
     const worktree = snapshots.at(-1).repositories[0].worktrees[0];
     assert.equal(worktree.available, true);

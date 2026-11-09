@@ -403,6 +403,31 @@ const scenario = String.raw`
     check('worktree labels are indented below their parent', worktree.querySelector('.name').getBoundingClientRect().left >
       items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name').getBoundingClientRect().left);
     layoutRoot.style.width = '';
+    worktree.querySelector('.row').click();
+    check('clicking an outside worktree starts inspection', window.posted.at(-1).type === 'action' &&
+      window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree');
+    const inspected = JSON.parse(JSON.stringify(external));
+    Object.assign(inspected.repositories[1].worktrees[0], { available: true, dirty: true,
+      changesPage: { state: 'ready', page: 0, previous: false, next: false },
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'external-file', status: 'M', path: 'external.txt' }] }] });
+    window.postMessage(inspected, '*');
+    await tick();
+    check('inspected outside worktree expands its changes', items().some(item => item.getAttribute('aria-label') === 'M external.txt'));
+    window.postMessage(external, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    const separateExternal = { ...external, separateChanges: true };
+    window.postMessage(separateExternal, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    const beforeSelection = window.posted.length;
+    worktree.querySelector('.row').click();
+    check('outside worktree click selects and inspects in the separate Changes panel',
+      window.posted.slice(beforeSelection).some(message => message.type === 'selectOwner' && message.id === 'opaque-worktree') &&
+      window.posted.at(-1).action === 'inspectExternalWorktree');
+    window.postMessage(external, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
     worktree.querySelector('[aria-label="Inspect worktree changes"]').click();
     check('outside worktree inspect action sends only its opaque id', window.posted.at(-1).type === 'action' &&
       window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
