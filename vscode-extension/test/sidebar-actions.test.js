@@ -41,7 +41,10 @@ function fixture() {
     commands: { executeCommand: async (...args) => { calls.push(args); } },
     env: { clipboard: { writeText: async text => { calls.push(['copy', text]); } } },
     Uri: { file: fsPath => ({ fsPath }) },
-    workspace: { fs: { stat: (...args) => stat(...args) } }
+    workspace: { isTrusted: true, workspaceFolders: [{ uri: { fsPath: root } }],
+      getWorkspaceFolder: () => undefined,
+      updateWorkspaceFolders: (...args) => { calls.push(['updateWorkspaceFolders', ...args]); return true; },
+      fs: { stat: (...args) => stat(...args) } }
   };
   const actions = new SidebarActions({
     vscode,
@@ -73,11 +76,12 @@ function fixture() {
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     validateExternalWorktree: (...args) => validateExternal(...args),
+    inspectExternalWorktree: async (id, guard) => { if (guard()) calls.push(['inspectExternalWorktree', id]); },
     previewFileAction: (...args) => preview(...args),
     previewWorktreeRemoval: (...args) => worktreePreview(...args)
   });
   return {
-    actions, root, commonDir, uri, node, calls, errors, inputs, inputOptions, plans,
+    actions, vscode, root, commonDir, uri, node, calls, errors, inputs, inputOptions, plans,
     setFile(value) { file = value; }, getFile() { return file; },
     setRepo(value) { repo = value; }, getRepo() { return repo; },
     setWorktree(value) { worktree = value; }, getWorktree() { return worktree; },
@@ -101,8 +105,8 @@ test('outside worktrees open only after explicit selection and current validatio
   const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
   f.setWorktree(item);
   f.pick(choices => {
-    assert.deepEqual(choices.map(choice => choice.action), ['openExternalWorktree']);
-    return choices[0];
+    assert.deepEqual(choices.map(choice => choice.action), ['inspectExternalWorktree', 'openExternalWorktree']);
+    return choices[1];
   });
   let validated;
   f.setValidateExternal(async (...args) => { validated = args; return { path: item.path }; });
@@ -117,6 +121,43 @@ test('outside worktrees open only after explicit selection and current validatio
   f.setValidateExternal(async () => { throw new Error('Worktree changed'); });
   await f.actions.handle(action('openExternalWorktree', 'worktree'));
   assert.match(f.errors.at(-1), /worktree changed/i);
+  assert.deepEqual(f.calls, []);
+});
+
+test('inspecting an outside worktree leaves the workspace unchanged', async () => {
+  const f = fixture();
+  const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
+  f.setWorktree(item);
+  await f.actions.handle(action('inspectExternalWorktree', 'worktree'));
+  assert.deepEqual(f.calls, [['inspectExternalWorktree', 'worktree']]);
+});
+
+test('outside worktree file menus offer guarded inspection without mutations', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), external: true });
+  f.pick(choices => {
+    assert.deepEqual(choices.map(choice => choice.action), ['open', 'copy']);
+    return choices[0];
+  });
+  await f.actions.showMenu('file', 'file');
+  assert.equal(f.calls.at(-1)[0], 'gitpane.openChange');
+  f.calls.length = 0;
+  await f.actions.handle(action('stage', 'file'));
+  assert.deepEqual(f.calls, []);
+});
+
+test('file menu actions reject forged and stale selections', async () => {
+  const f = fixture();
+  let menu = await f.actions.fileMenu('file');
+  assert.ok(menu.choices.some(choice => choice.action === 'open'));
+  await f.actions.fileMenuAction('file', 'forged', 'open');
+  assert.deepEqual(f.calls, []);
+  menu = await f.actions.fileMenu('file');
+  await f.actions.fileMenuAction('file', menu.token, 'unavailable-action');
+  assert.deepEqual(f.calls, []);
+  menu = await f.actions.fileMenu('file');
+  f.setFile({ ...f.getFile(), path: 'changed.txt' });
+  await f.actions.fileMenuAction('file', menu.token, 'open');
   assert.deepEqual(f.calls, []);
 });
 

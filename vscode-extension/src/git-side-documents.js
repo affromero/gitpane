@@ -97,4 +97,32 @@ async function createLiveGitSide(options) {
   return links.createLiveBinary(uri, metadata, read, guard, group, batch);
 }
 
-module.exports = { createLiveGitSide };
+async function createLiveWorkingSide({ vscode, links, backend, repo, repoIdentity, repoToken, side, current }) {
+  if (!links || typeof links.createLiveWorking !== 'function' || !identity(repoIdentity) || !relativeFile(side?.filePath)) {
+    throw new Error('Gitpane cannot open this working file. Update the backend and try again.');
+  }
+  const repoPath = repo.rootUri.fsPath;
+  const session = await backend.gitSideSession(repoPath);
+  if (!session.external) throw new Error('External worktree authorization is unavailable.');
+  const guard = () => current() && backend.gitSideCurrent(session);
+  const uri = vscode.Uri.file(path.join(repoPath, ...side.filePath.split('/')));
+  const metadata = async signal => {
+    if (!guard()) throw new Error('The Gitpane diff is no longer available.');
+    const result = await backend.gitSideOperation(session, repoIdentity, { kind: 'working_metadata', path: side.filePath }, signal);
+    if (!guard() || !result || !Number.isSafeInteger(result.size) || result.size < 0 ||
+        typeof result.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(result.fingerprint)) {
+      throw new Error('Gitpane returned invalid working file metadata.');
+    }
+    return { size: result.size, eventFingerprint: result.fingerprint };
+  };
+  const read = async (_state, signal) => {
+    if (!guard()) throw new Error('The Gitpane diff is no longer available.');
+    const bytes = await backend.gitSideOperation(session, repoIdentity, { kind: 'working_content', path: side.filePath }, signal);
+    if (!guard()) throw new Error('The Gitpane diff is no longer available.');
+    return bytes;
+  };
+  return links.createLiveWorking(uri, metadata, read, guard,
+    JSON.stringify([repoPath, repoIdentity, repoToken, side.filePath, 'working']));
+}
+
+module.exports = { createLiveGitSide, createLiveWorkingSide };

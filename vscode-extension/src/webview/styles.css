@@ -22,13 +22,20 @@ body.vscode-light, body.vscode-high-contrast-light {
 
 * { box-sizing: border-box; }
 
+.file-context-menu { position: fixed; z-index: 100; display: flex; flex-direction: column; min-width: 150px;
+  max-width: 100vw; max-height: 100vh; overflow: auto; padding: 4px 0;
+  color: var(--vscode-menu-foreground, var(--text)); background: var(--vscode-menu-background, var(--vscode-sideBar-background));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555)); box-shadow: 0 3px 10px #0006; }
+.file-context-menu button { border: 0; border-radius: 0; padding: 4px 12px; text-align: left; font: inherit; color: inherit; background: transparent; }
+.file-context-menu button:hover, .file-context-menu button:focus-visible { outline: none; color: var(--vscode-menu-selectionForeground, inherit); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+
 body {
   margin: 0;
   padding: 5px 0 8px;
   color: var(--text);
   background: var(--vscode-sideBar-background);
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: var(--vscode-editor-font-size, 13px);
+  font-size: var(--gitpane-font-size, var(--vscode-editor-font-size, 13px));
   line-height: 1.45;
 }
 
@@ -117,6 +124,8 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+.worktree-row .name { padding-left: .2ch; }
+.external-worktree-row { grid-template-columns: minmax(calc(2.5ch + 9px), max-content) minmax(0, 1fr) auto; }
 .dirty { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }
 .count { color: var(--gitpane-repo-list-file-count, var(--dirty)); }
 .modified { color: var(--gitpane-file-list-status-modified, var(--dirty)); }

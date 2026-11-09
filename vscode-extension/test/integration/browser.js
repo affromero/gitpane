@@ -12,6 +12,7 @@ const browser = process.env.CHROME_EXECUTABLE || (process.platform === 'darwin'
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-browser-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/webview/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
+const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
@@ -383,14 +384,56 @@ const scenario = String.raw`
       worktree.getAttribute('aria-label').includes('repository unavailable') && !worktree.querySelector('.graph-action') &&
       !items().some(item => item.getAttribute('aria-label') === 'M working.txt'));
     const external = JSON.parse(JSON.stringify(unavailable));
-    external.repositories[1].worktrees[0].external = true;
-    external.repositories[1].worktrees[0].branch = 'outside workspace';
+    Object.assign(external.repositories[1].worktrees[0], { external: true, live: false, ahead: 0, behind: 0, fileCount: 0, dirty: false });
+    external.repositories[1].worktrees[0].name = 'DrivingVideoEvaluation-semantic-plots';
+    external.repositories[1].worktrees[0].path = '/projects/DrivingVideoEvaluation-semantic-plots';
+    external.repositories[1].worktrees[0].branch = 'wt/semantic-plots';
+    external.repositories[1].worktrees.push({ ...external.repositories[1].worktrees[0], id: 'other-worktree',
+      name: 'DrivingVideoEvaluation-model-backends', path: '/projects/DrivingVideoEvaluation-model-backends', branch: 'wt/model-backends' });
     window.postMessage(external, '*');
     await tick();
-    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
-    check('outside worktree explains how to inspect changes', worktree.getAttribute('aria-label').includes('open in a new window') &&
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    check('outside worktree exposes its workspace state', worktree.getAttribute('aria-label').includes('outside workspace') &&
       !worktree.getAttribute('aria-label').includes('clean') && !worktree.querySelector('.graph-action'));
-    worktree.querySelector('.menu-action').click();
+    layoutRoot.style.width = '210px';
+    const externalRows = [...layoutRoot.querySelectorAll('.external-worktree-row')];
+    check('outside worktrees show distinct branches in a narrow pane', externalRows.length === 2 && externalRows.every(row => {
+      const label = row.querySelector('.name');
+      return label.scrollWidth <= label.clientWidth && label.textContent.startsWith('wt/') && label.title.startsWith('/projects/');
+    }));
+    check('worktree labels are indented below their parent', worktree.querySelector('.name').getBoundingClientRect().left >
+      items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name').getBoundingClientRect().left);
+    layoutRoot.style.width = '';
+    worktree.querySelector('.row').click();
+    check('clicking an outside worktree starts inspection', window.posted.at(-1).type === 'action' &&
+      window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree');
+    const inspected = JSON.parse(JSON.stringify(external));
+    Object.assign(inspected.repositories[1].worktrees[0], { available: true, dirty: true,
+      changesPage: { state: 'ready', page: 0, previous: false, next: false },
+      groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'external-file', status: 'M', path: 'external.txt' }] }] });
+    window.postMessage(inspected, '*');
+    await tick();
+    check('inspected outside worktree expands its changes', items().some(item => item.getAttribute('aria-label') === 'M external.txt'));
+    window.postMessage(external, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    const separateExternal = { ...external, separateChanges: true };
+    window.postMessage(separateExternal, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    const beforeSelection = window.posted.length;
+    worktree.querySelector('.row').click();
+    check('outside worktree click selects and inspects in the separate Changes panel',
+      window.posted.slice(beforeSelection).some(message => message.type === 'selectOwner' && message.id === 'opaque-worktree') &&
+      window.posted.at(-1).action === 'inspectExternalWorktree');
+    window.postMessage(external, '*');
+    await tick();
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    worktree.querySelector('[aria-label="Inspect worktree changes"]').click();
+    check('outside worktree inspect action sends only its opaque id', window.posted.at(-1).type === 'action' &&
+      window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
+      !('path' in window.posted.at(-1)));
+    worktree.querySelector('[aria-label^="Actions for worktree"]').click();
     check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
@@ -526,7 +569,7 @@ const scenario = String.raw`
     const openCount = window.posted.filter(message => message.type === 'openChange').length;
     fileMenu.click();
     check('file actions do not open the diff',
-      window.posted.some(message => message.type === 'menu' && message.kind === 'file' && message.id === 'file1') &&
+      window.posted.some(message => message.type === 'fileMenuRequest' && message.id === 'file1') &&
       window.posted.filter(message => message.type === 'openChange').length === openCount);
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('enter opens selected diff', window.posted.some(message => message.type === 'openChange' && message.id === 'file1'));
@@ -918,7 +961,7 @@ function documentFor(theme, restored = false) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="gitpane-test">window.posted=[];window.ackStates=[];window.savedState=${restored ? JSON.stringify({ expanded: ['repo:restored', 'worktree:restored-child'], worktreeVisibility: [['d'.repeat(64), false]], appliedWorktreeReveals: ['already-revealed'] }) : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>{window.posted.push(m);if(m.type==='ackWorktreeReveal')window.ackStates.push(structuredClone(window.savedState));},getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme, restored = false) {

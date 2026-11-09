@@ -1,7 +1,7 @@
 'use strict';
 
 const DEFAULT_REFRESH_INTERVAL = 5000;
-const KEYS = ['sortOrder', 'worktrees.defaultVisibility', 'worktrees.showOutsideWorkspace', 'refreshInterval', 'showSessionLiveness',
+const KEYS = ['fontSize', 'sortOrder', 'worktrees.defaultVisibility', 'worktrees.showOutsideWorkspace', 'refreshInterval', 'showSessionLiveness',
   'graph.firstParent', 'graph.labelMaxLength'];
 
 function readPreferences(configuration, rememberedOrder) {
@@ -16,10 +16,11 @@ function readPreferences(configuration, rememberedOrder) {
   const seconds = read('refreshInterval', 5, value => Number.isSafeInteger(value) && value >= 1 && value <= 300);
   const labelLength = read('graph.labelMaxLength', -1, value => Number.isSafeInteger(value) && value >= -1 && value <= 120);
   return {
+    fontSize: read('fontSize', 0, value => Number.isSafeInteger(value) && (value === 0 || (value >= 8 && value <= 40))),
     sortOrder: order === 'remember' ? (orders.includes(rememberedOrder) ? rememberedOrder : 'workspace') : order,
     refreshInterval: seconds * 1000,
     worktreeExpansion: visibility === 'native' ? undefined : visibility === 'expanded',
-    showOutsideWorktrees: read('worktrees.showOutsideWorkspace', false, value => typeof value === 'boolean'),
+    showOutsideWorktrees: read('worktrees.showOutsideWorkspace', true, value => typeof value === 'boolean'),
     showSessionLiveness: read('showSessionLiveness', true, value => typeof value === 'boolean'),
     graphFirstParent: read('graph.firstParent', false, value => typeof value === 'boolean'),
     graphLabelMaxLength: labelLength === -1 ? undefined : labelLength

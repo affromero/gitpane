@@ -80,9 +80,11 @@ class WorkspaceViews {
         message.ownerId !== this.selectedId || message.selectionEpoch !== this.selectionEpoch) return false;
     if (message.type === 'refresh') return true;
     if (!this.current(this.selectedId)) return false;
+    if (message.type === 'action') return message.action === 'inspectExternalWorktree' && message.id === this.selectedId;
     if (['loadChanges', 'releaseChanges', 'changesPage', 'searchChanges', 'shortcut'].includes(message.type) &&
         message.id !== this.selectedId) return false;
-    if (message.type === 'openChange' || (message.type === 'menu' && message.kind === 'file')) {
+    if (message.type === 'openChange' || ['fileMenuRequest', 'fileMenuAction'].includes(message.type) ||
+        (message.type === 'menu' && message.kind === 'file')) {
       return this.provider.changes.get(message.id)?.ownerId === this.selectedId;
     }
     return ['refresh', 'loadChanges', 'releaseChanges', 'changesPage', 'searchChanges', 'shortcut'].includes(message.type);
@@ -158,6 +160,34 @@ class WorkspaceViews {
         }
       }
     } finally { this.publishing = false; }
+  }
+
+  resolveUnifiedView(view) {
+    view.webview.options = { enableScripts: true,
+      localResourceRoots: [this.vscode.Uri.joinPath(this.context.extensionUri, 'src')] };
+    view.webview.html = require('./unified/html').getHtml(view.webview, this.context.extensionUri);
+    const section = surface => {
+      const webview = {
+        get cspSource() { return view.webview.cspSource; },
+        asWebviewUri: uri => view.webview.asWebviewUri(uri),
+        postMessage: message => view.webview.postMessage({ surface, message }),
+        onDidReceiveMessage: listener => view.webview.onDidReceiveMessage(envelope => {
+          if (envelope?.surface === surface && envelope.message && typeof envelope.message === 'object') listener(envelope.message);
+        }),
+        set html(_value) {},
+        set options(_value) {}
+      };
+      return {
+        webview,
+        get visible() { return view.visible; },
+        set title(_value) {},
+        onDidChangeVisibility: listener => view.onDidChangeVisibility(listener),
+        onDidDispose: listener => view.onDidDispose(listener)
+      };
+    };
+    this.provider.resolveRepositoryView(section('repositories'));
+    this.resolveChangesView(section('changes'));
+    this.resolveGraphView(section('graph'));
   }
 
   resolveChangesView(view) {

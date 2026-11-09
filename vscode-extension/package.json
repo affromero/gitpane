@@ -17,13 +17,11 @@
     "untrustedWorkspaces": { "supported": false },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onView:gitpane.repositories", "onView:gitpane.changes", "onView:gitpane.commitGraph"],
+  "activationEvents": ["onView:gitpane.repositories"],
   "contributes": {
     "views": {
       "explorer": [
-        { "id": "gitpane.repositories", "name": "Repositories", "type": "webview" },
-        { "id": "gitpane.changes", "name": "Changes", "type": "webview" },
-        { "id": "gitpane.commitGraph", "name": "Git Graph", "type": "webview" }
+        { "id": "gitpane.repositories", "name": "Gitpane", "type": "webview" }
       ]
     },
     "commands": [
@@ -51,6 +49,15 @@
     "configuration": {
       "title": "Gitpane Explorer",
       "properties": {
+        "gitpane.fontSize": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 40,
+          "scope": "window",
+          "order": 5,
+          "description": "Text size in pixels for Gitpane. Use 0 to follow the editor font size, or choose a value from 8 to 40."
+        },
         "gitpane.sortOrder": {
           "type": "string",
           "enum": ["remember", "workspace", "alphabetical", "reverse", "dirty"],
@@ -71,9 +78,9 @@
         },
         "gitpane.worktrees.showOutsideWorkspace": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "scope": "window",
-          "description": "Show registered worktrees outside the workspace. Open them in a separate VS Code window to inspect their changes."
+          "description": "Show registered worktrees outside the workspace and inspect their changes in the current window."
         },
         "gitpane.refreshInterval": {
           "type": "integer",

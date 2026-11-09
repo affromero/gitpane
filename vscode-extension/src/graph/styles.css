@@ -26,7 +26,7 @@ body {
   padding: 10px 12px;
   background: var(--vscode-editor-background);
   color: var(--text);
-  font: var(--vscode-editor-font-size, 13px)/1.5 var(--vscode-editor-font-family, monospace);
+  font: var(--gitpane-font-size, var(--vscode-editor-font-size, 13px))/1.5 var(--vscode-editor-font-family, monospace);
 }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }

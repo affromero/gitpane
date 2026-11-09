@@ -318,6 +318,10 @@ class LinkDocuments {
               target = result.fingerprint;
               current = !entry.guardSync || entry.guardSync();
             }
+          } else if (entry.liveWorking) {
+            const metadata = await this.binaryMetadata(entry);
+            target = metadata.eventFingerprint;
+            current = !entry.guardSync || entry.guardSync();
           } else if ((entry.content !== undefined || entry.readContent || entry.readBinary) && entry.group) {
             if (!checks.has(entry.group)) checks.set(entry.group, entry.refreshGuard ? entry.refreshGuard() : this.current(entry));
             current = await checks.get(entry.group) && (!entry.guardSync || entry.guardSync());
@@ -333,10 +337,10 @@ class LinkDocuments {
           } catch (error) { current = false; failure = error; }
         }
         if (this.disposed || entry.closed) continue;
-        const next = current ? (entry.liveBatch ? target : this.fingerprint(entry, target)) : `stale:${failure?.message || ''}`;
+        const next = current ? (entry.liveBatch || entry.liveWorking ? target : this.fingerprint(entry, target)) : `stale:${failure?.message || ''}`;
         if (entry.fingerprint !== next) {
           entry.fingerprint = next;
-          if (entry.liveBatch) this.updateLiveVersion(entry, next);
+          if (entry.liveBatch || entry.liveWorking) this.updateLiveVersion(entry, next);
           if (failure?.code === 'watched_path_error') this.vscode.window?.showErrorMessage(failure.message);
           if (entry.liveBatch && failure && failure.code !== 'stale_target') {
             const key = JSON.stringify([entry.liveBatch.repo, failure.code, failure.message]);
@@ -351,7 +355,7 @@ class LinkDocuments {
             const key = JSON.stringify([entry.batch.repo, failure.code, failure.message]);
             if (!shown.has(key)) { shown.add(key); this.vscode.window?.showErrorMessage(`Gitpane could not validate a submodule diff: ${failure.message}`); }
           }
-          if (entry.readBinary && entry.liveBatch && (entry.activeLiveReads || entry.pendingLiveDispatch)) entry.pendingLiveChange = true;
+          if (entry.readBinary && (entry.liveBatch || entry.liveWorking) && (entry.activeLiveReads || entry.pendingLiveDispatch)) entry.pendingLiveChange = true;
           else if (entry.readBinary) this.fileEmitter.fire([{ type: this.vscode.FileChangeType.Changed, uri: entry.uri }]);
           else this.emitter.fire(entry.uri);
         }
@@ -446,6 +450,14 @@ class LinkDocuments {
     return entry.uri;
   }
 
+  async createLiveWorking(fileUri, readMetadata, readBinary, guard, group) {
+    const uri = await this.createLiveBinary(fileUri, readMetadata, readBinary, guard, group);
+    const entry = this.documents.get(uri.toString());
+    if (!entry) throw new Error('The Gitpane diff is no longer available.');
+    entry.liveWorking = true;
+    return uri;
+  }
+
   expirePendingBinary(key, entry, delay = 60000) {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
@@ -470,24 +482,24 @@ class LinkDocuments {
     const entry = this.binaryEntry(uri);
     const metadata = await this.binaryMetadata(entry);
     if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
-    if (entry.liveBatch) this.updateLiveVersion(entry, metadata.eventFingerprint);
+    if (entry.liveBatch || entry.liveWorking) this.updateLiveVersion(entry, metadata.eventFingerprint);
     return { type: this.vscode.FileType.File, size: metadata.size, ctime: 0, mtime: entry.mtime || 0 };
   }
 
   async readFile(uri) {
     const entry = this.binaryEntry(uri);
-    if (entry.refreshGuard || entry.liveBatch) {
+    if (entry.refreshGuard || entry.liveBatch || entry.liveWorking) {
       if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
     } else await this.binaryMetadata(entry);
     await this.acquireBinary();
     let counted = false;
     try {
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
-      if (entry.liveBatch) { entry.activeLiveReads = (entry.activeLiveReads || 0) + 1; counted = true; }
-      const before = entry.liveBatch ? undefined : await this.binaryMetadata(entry);
+      if (entry.liveBatch || entry.liveWorking) { entry.activeLiveReads = (entry.activeLiveReads || 0) + 1; counted = true; }
+      const before = entry.liveBatch || entry.liveWorking ? undefined : await this.binaryMetadata(entry);
       const bytes = await entry.readBinary(before, entry.abort?.signal);
       if (!(bytes instanceof Uint8Array)) throw new Error('VS Code returned invalid historical file contents.');
-      if (!entry.liveBatch) await this.binaryMetadata(entry);
+      if (!entry.liveBatch && !entry.liveWorking) await this.binaryMetadata(entry);
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
       return bytes;
     } finally {

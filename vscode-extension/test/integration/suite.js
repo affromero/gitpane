@@ -40,6 +40,8 @@ exports.run = async () => {
     tree = provider.tree;
     await vscode.commands.executeCommand('gitpane.repositories.focus');
     await waitFor(() => provider.view?.visible, 'Gitpane view was not visible');
+    await waitFor(() => provider.ready && provider.workspaceViews?.changes?.ready && provider.workspaceViews?.graph?.ready,
+      () => `unified webview sections did not become ready; repositories: ${!!provider.ready}, changes: ${!!provider.workspaceViews?.changes?.ready}, graph: ${!!provider.workspaceViews?.graph?.ready}`);
     await waitFor(() => [fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND]
       .every(target => rootNode(target)), () => `workspace repositories were not discovered; expected: ${JSON.stringify([fixture, process.env.GITPANE_TEST_NESTED, process.env.GITPANE_TEST_SECOND])}; VS Code repositories: ${JSON.stringify(api.repositories.map(item => item.rootUri.fsPath))}; tree: ${JSON.stringify(tree.getChildren().filter(item => item.type === 'repo').map(item => item.repo.rootUri.fsPath))}; workspace: ${JSON.stringify(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath))}; repositoryScanMaxDepth: ${vscode.workspace.getConfiguration('git').get('repositoryScanMaxDepth')}`, 30000);
     await waitFor(() => snapshotRepo(fixture)?.dirty, 'repository changes were not loaded');

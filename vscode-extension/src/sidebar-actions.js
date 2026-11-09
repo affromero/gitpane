@@ -4,13 +4,13 @@ const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
 const REPO_ACTIONS = new Set(['refreshRepo', 'createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
-const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree']);
+const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree', 'inspectExternalWorktree']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
   const fields = [item.repoPath, item.commonDir, item.repoIdentity];
   if (kind === 'repo') fields.push(item.branch, item.head, item.worktreeRemoval, !!item.pinned, !!item.added, !!item.refreshOnly);
-  if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.isSubmodule, item.recordSignature);
+  if (kind === 'file') fields.push(item.path, item.group, item.status, !!item.external, !!item.isSubmodule, item.recordSignature);
   if (kind === 'worktree') fields.push(item.path, item.branch, !!item.available, !!item.external, item.externalIdentity, item.childRepoKey, item.childRepoId, item.childRepoIdentity);
   return JSON.stringify(fields);
 }
@@ -23,6 +23,7 @@ function validFile(item) {
 
 function fileOptions(item) {
   if (!validFile(item)) return [];
+  if (item.external) return [{ label: 'Open Changes', action: 'open' }, { label: 'Copy Path', action: 'copy' }];
   const choices = [
     { label: 'Open Changes', action: 'open' },
     { label: 'Open File', action: 'openFile' },
@@ -67,8 +68,11 @@ class SidebarActions {
     this.previewWorktreeRemoval = options.previewWorktreeRemoval;
     this.planWorktree = options.planWorktree;
     this.validateExternalWorktree = options.validateExternalWorktree;
+    this.inspectExternalWorktree = options.inspectExternalWorktree;
     this.revalidateChange = options.revalidateChange;
     this.validateChangePath = options.validateChangePath;
+    this.pendingFileMenu = undefined;
+    this.fileMenuGeneration = 0;
   }
 
   resolve(kind, id) {
@@ -81,6 +85,28 @@ class SidebarActions {
 
   current(kind, id, expected) {
     return !!expected && fingerprint(this.resolve(kind, id), kind) === expected;
+  }
+
+  async fileMenu(id, guard = () => true) {
+    const generation = ++this.fileMenuGeneration;
+    this.pendingFileMenu = undefined;
+    if (!guard() || (this.waitForChange && !await this.waitForChange(id)) || !guard() || generation !== this.fileMenuGeneration) return undefined;
+    const item = this.resolve('file', id);
+    const expected = fingerprint(item, 'file');
+    const choices = fileOptions(item);
+    if (!expected || !choices.length) return undefined;
+    const token = require('node:crypto').randomUUID();
+    this.pendingFileMenu = { id, expected, token, guard, choices };
+    return { token, choices };
+  }
+
+  async fileMenuAction(id, token, action, guard = () => true) {
+    this.fileMenuGeneration++;
+    const pending = this.pendingFileMenu;
+    this.pendingFileMenu = undefined;
+    if (!pending || pending.id !== id || pending.token !== token || !pending.guard() || !guard() ||
+        !pending.choices.some(choice => choice.action === action) || !this.current('file', id, pending.expected)) return;
+    await this.handle({ type: 'action', id, action }, pending.expected, () => pending.guard() && guard());
   }
 
   async showMenu(kind, id, guard = () => true) {
@@ -115,7 +141,10 @@ class SidebarActions {
         { label: 'Pull', action: 'pull' },
         { label: 'Pull with Rebase', action: 'pull_rebase' }
       ];
-      else if (kind === 'worktree' && item.external) choices = [{ label: 'Open in New Window', action: 'openExternalWorktree' }];
+      else if (kind === 'worktree' && item.external) choices = [
+        { label: 'Inspect Changes', action: 'inspectExternalWorktree' },
+        { label: 'Open in New Window', action: 'openExternalWorktree' }
+      ];
       else if (kind === 'worktree') choices = [
         { label: 'Refresh', action: 'refreshWorktree' },
         { label: 'Hide from Gitpane', action: 'hideWorktree' },
@@ -159,7 +188,11 @@ class SidebarActions {
             (this.waitForChange && !await this.waitForChange(message.id)) || !current()) return;
         if (this.validateChangePath) this.validateChangePath(item);
       }
-      if (kind === 'worktree' && item.external && action !== 'openExternalWorktree') return;
+      if (kind === 'worktree' && item.external && !['openExternalWorktree', 'inspectExternalWorktree'].includes(action)) return;
+      if (action === 'inspectExternalWorktree') {
+        if (item.external && this.inspectExternalWorktree) await this.inspectExternalWorktree(message.id, current);
+        return;
+      }
       if (action === 'openExternalWorktree') {
         if (!item.external || !/^[a-f0-9]{64}$/.test(item.repoIdentity || '') ||
             !/^[a-f0-9]{64}$/.test(item.externalIdentity || '') || typeof this.validateExternalWorktree !== 'function') return;

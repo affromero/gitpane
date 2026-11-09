@@ -206,6 +206,14 @@ fn monitor_worker_input() -> io::Result<()> {
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalRead {
+    selection: worktree_plan::external::Selection,
+    method: String,
+    params: Value,
+}
+
 fn process(
     scope: &mut Option<Scope>,
     snapshots: &mut changes::Snapshots,
@@ -245,6 +253,56 @@ fn process(
     let worktree_cfg = options.worktree;
     let review_base = options.review_base;
     match request.method.as_str() {
+        "external_worktree_read" => {
+            let mut input: ExternalRead = params(request.params)?;
+            if !matches!(
+                input.method.as_str(),
+                "status"
+                    | "graph"
+                    | "graph_revision"
+                    | "commit_files"
+                    | "changes_begin"
+                    | "changes_next"
+                    | "changes_find"
+                    | "changes_search"
+                    | "changes_release"
+                    | "repo_blob_metadata"
+                    | "repo_blob_metadata_batch"
+            ) {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "Unsupported external worktree operation.",
+                ));
+            }
+            let repo = input
+                .params
+                .get("repo")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    BridgeError::new("invalid_request", "Missing worktree repository.")
+                })?;
+            let temporary = worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+            if input.method == "status" {
+                let object = input.params.as_object_mut().ok_or_else(|| {
+                    BridgeError::new("invalid_request", "Invalid status parameters.")
+                })?;
+                object.insert("include_worktrees".into(), json!(false));
+                object.insert("include_external_worktrees".into(), json!(false));
+            }
+            let result = process(
+                &mut Some(temporary),
+                snapshots,
+                Request {
+                    id: request.id,
+                    method: input.method,
+                    params: input.params,
+                },
+                options,
+            );
+            worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+            result
+        }
         "workspace_root_identities" => {
             let _: EmptyRequest = params(request.params)?;
             scope.identities()
@@ -334,7 +392,42 @@ fn process(
                 }
                 let repository = git2::Repository::open(&repo)
                     .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
-                let paths = worktree_plan::external::list(scope, &repository)?;
+                let mut paths = worktree_plan::external::list(scope, &repository)?;
+                // Keep a large worktree list from monopolizing the bridge on every poll.
+                // Entries beyond this limit can still be inspected explicitly.
+                const MAX_EXTERNAL_SUMMARIES: usize = 8;
+                let anchor_identity = identity.fingerprint()?;
+                for (index, item) in paths.iter_mut().enumerate() {
+                    if !item["status_error"].is_null() {
+                        continue;
+                    }
+                    if index >= MAX_EXTERNAL_SUMMARIES {
+                        item["status_error"] = json!("Select this worktree to load its status.");
+                        continue;
+                    }
+                    let summary = (|| {
+                        let selection: worktree_plan::external::Selection = params(json!({
+                            "repo": repo,
+                            "path": item["path"],
+                            "expected_repo_identity": anchor_identity,
+                            "expected_worktree_identity": item["identity"],
+                        }))?;
+                        let path = PathBuf::from(item["path"].as_str().ok_or_else(|| {
+                            BridgeError::new("repository_error", "Invalid worktree path")
+                        })?);
+                        let temporary =
+                            worktree_plan::external::read_scope(scope, &selection, &path)?;
+                        let canonical = temporary.repository(&path)?;
+                        let summary =
+                            status::query(&canonical, &temporary, sub_cfg, false, true, &[])?;
+                        worktree_plan::external::read_scope(scope, &selection, &path)?;
+                        Ok::<_, BridgeError>(summary)
+                    })();
+                    match summary {
+                        Ok(summary) => item["status"] = summary,
+                        Err(error) => item["status_error"] = json!(error.message),
+                    }
+                }
                 if scope.repository(&repo)? != repo
                     || changes::RepositoryIdentity::read(&repo)? != identity
                 {

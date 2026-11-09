@@ -116,7 +116,8 @@ async function main() {
     FileSystemError: { FileNotFound: () => Object.assign(new Error('File not found'), { code: 'FileNotFound' }) },
     env: { clipboard: { async writeText(value) { copied.push(value); } } },
     extensions: { getExtension: () => ({ activate: async () => ({ enabled: true, getAPI: () => api }) }) },
-    workspace: { workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
+    workspace: { isTrusted: true, workspaceFolders: [{ uri: uri(path.dirname(repoPath)) }],
+      updateWorkspaceFolders() { throw new Error('Outside worktree inspection must not modify the workspace'); },
       getConfiguration: () => ({ get: (name, fallback) => preferences.has(name) ? preferences.get(name) : name === 'backendPath' ? executable : name === 'sessionBackend' ? 'auto' : fallback,
         async update(key, value, target) { settingUpdates.push({ key, value, target }); preferences.set(key, value);
           configurationChanged.fire({ affectsConfiguration: name => name === `gitpane.${key}` }); } }),
@@ -177,13 +178,11 @@ async function main() {
       if (name === './webview/html') return { getHtml: () => '<html></html>' };
       return load.call(this, name, ...args);
     };
-    provider.resolveWebviewView(view);
+    provider.resolveRepositoryView(view);
   } finally { Module._load = load; }
   await receive({ type: 'ready' });
   await require('./settings-real')({ vscode, provider, snapshots, preferences, configurationChanged,
     commands, settingUpdates, workspaceState, errors, choose: value => { pickChanges = value; } });
-  assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'outside sibling'));
-  await vscode.workspace.getConfiguration('gitpane').update('worktrees.showOutsideWorkspace', true, 2);
   await provider.tree.refresh();
   const outsideRow = snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.find(item => item.name === 'outside sibling');
   assert.ok(outsideRow?.external);
@@ -192,11 +191,12 @@ async function main() {
   await receive({ type: 'menu', kind: 'worktree', id: outsideRow.id });
   assert.ok(sameLocation(openedFolders.at(-1)[0].fsPath, siblingPath));
   assert.deepEqual(openedFolders.at(-1)[1], { forceNewWindow: true });
+  await require('./external-real')({ vscode, provider, snapshots, documents, diffs, errors, receive, gitAt, repoPath, siblingPath });
   await vscode.workspace.getConfiguration('gitpane').update('worktrees.showOutsideWorkspace', false, 2);
   await provider.tree.refresh();
   assert.ok(!snapshots.at(-1).repositories.find(item => item.name === 'repo').worktrees.some(item => item.name === 'outside sibling'));
   pickChanges = undefined;
-  console.log('PASS opt-in sibling worktree opens in a new window without changing workspace scope');
+  console.log('PASS sibling worktrees appear by default and can be hidden without changing workspace scope');
   const shortcutOwner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   const shortcutChild = shortcutOwner.worktrees.find(item => item.name === 'linked');
   await receive({ type: 'shortcut', id: shortcutChild.id, key: 'y' });

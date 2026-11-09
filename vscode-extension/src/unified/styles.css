@@ -1,0 +1,10 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { color: var(--vscode-sideBar-foreground); background: var(--vscode-sideBar-background); font: var(--gitpane-font-size, var(--vscode-editor-font-size, 13px))/1.4 var(--vscode-editor-font-family, monospace); }
+#panes { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.pane { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--vscode-panel-border, var(--vscode-contrastBorder, #555)); }
+.pane h2 { flex: none; margin: 0; padding: 1px 5px; font: inherit; font-weight: 600; color: var(--vscode-sideBarSectionHeader-foreground, inherit); background: var(--vscode-sideBarSectionHeader-background, transparent); }
+.pane iframe { display: block; width: 100%; flex: 1 1 auto; min-height: 0; border: 0; }
+.splitter { flex: none; height: 6px; cursor: row-resize; background: var(--vscode-sideBar-background); touch-action: none; }
+.splitter:hover, .splitter:focus-visible { background: var(--vscode-focusBorder); outline: none; }
