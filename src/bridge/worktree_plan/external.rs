@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::super::{
@@ -226,13 +226,34 @@ mod tests {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::bridge) struct Selection {
     repo: PathBuf,
     path: PathBuf,
     expected_repo_identity: String,
     expected_worktree_identity: String,
+}
+
+pub(in crate::bridge) fn read_scope(
+    workspace: &Scope,
+    selection: &Selection,
+    requested_repo: &Path,
+) -> Result<Scope, BridgeError> {
+    let value = validate(workspace, selection.clone())?;
+    let path = value["path"]
+        .as_str()
+        .ok_or_else(|| BridgeError::new("repository_error", "Invalid validated worktree path."))?;
+    let canonical = Path::new(path).canonicalize().map_err(|_| {
+        BridgeError::new("stale_target", "Worktree changed. Refresh and try again.")
+    })?;
+    if requested_repo.canonicalize().ok().as_ref() != Some(&canonical) {
+        return Err(BridgeError::new(
+            "outside_workspace",
+            "Request does not identify the selected worktree.",
+        ));
+    }
+    Scope::new(vec![canonical])
 }
 
 pub(in crate::bridge) fn validate(scope: &Scope, input: Selection) -> Result<Value, BridgeError> {

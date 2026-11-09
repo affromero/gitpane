@@ -63,7 +63,7 @@ class GitContentWorkers {
     if (signal?.aborted) throw new BridgeError('cancelled', 'Gitpane content request was cancelled.');
     const line = `${JSON.stringify(request)}\n`;
     if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) throw new BridgeError('request_too_large', 'Git content request is too large.');
-    const limit = request.operation.kind === 'metadata' ? MAX_METADATA_BYTES : bufferConstants.MAX_LENGTH;
+    const limit = ['metadata', 'working_metadata'].includes(request.operation.kind) ? MAX_METADATA_BYTES : bufferConstants.MAX_LENGTH;
     return await new Promise((resolve, reject) => {
       let child;
       try {

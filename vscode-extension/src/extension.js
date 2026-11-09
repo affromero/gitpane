@@ -26,7 +26,7 @@ const { SubmodulePins } = require('./submodule-pins');
 const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
-const { createLiveGitSide } = require('./git-side-documents');
+const { createLiveGitSide, createLiveWorkingSide } = require('./git-side-documents');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
@@ -56,6 +56,7 @@ class GitpaneViewProvider {
     this.repositories = new Map();
     this.changes = new Map();
     this.worktrees = new Map();
+    this.externalOwners = new Map();
     this.searchRequests = new Map();
     this.worktreeReveals = new Map();
     this.worktreeRevealError = undefined;
@@ -97,7 +98,7 @@ class GitpaneViewProvider {
     const groupsFor = (repo, ownerId, parentWorktree) => {
       const root = repo.rootUri.fsPath;
       const repoKey = repo.rootUri.toString();
-      const repoToken = this.tree.repositoryToken(repo);
+      const repoToken = repo.externalToken || this.tree.repositoryToken(repo);
       const state = this.pager.get(ownerId);
       const labels = { merge: 'Conflicts', index: 'Staged', working: 'Unstaged', untracked: 'Untracked',
         attention: 'Submodules needing attention' };
@@ -108,6 +109,7 @@ class GitpaneViewProvider {
         const fileId = this.idFor(JSON.stringify(['file', ownerId, repoKey, repoToken, record.group, record.path]), live);
         const directory = record.kind === 'untracked_directory';
         if (!directory) changes.set(fileId, { type: 'change', repo, repoToken, group: record.group, change, fileId,
+          ...(repo.externalToken ? { external: true } : {}),
           parentWorktree, ownerId, record });
         if (!grouped.has(record.group)) grouped.set(record.group, { id: record.group, label: labels[record.group], files: [] });
         grouped.get(record.group).files.push({ id: fileId, name: path.basename(uri.fsPath),
@@ -163,9 +165,13 @@ class GitpaneViewProvider {
           if (!item || typeof item.path !== 'string' || !path.isAbsolute(item.path) || this.tree.isPathInWorkspace(item.path)) continue;
           const worktreeId = this.idFor(JSON.stringify(['external-worktree', repoKey, repoToken, item.path, item.identity]), live);
           worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, externalIdentity: item.identity, external: true });
+          const inspected = this.externalOwners.get(worktreeId);
+          const active = inspected && inspected.guard();
           worktreeData.push({ id: worktreeId, name: path.basename(item.path), path: item.path,
             branch: typeof item.branch === 'string' ? item.branch : 'branch unavailable',
-            available: false, external: true, groups: [] });
+            available: !!active, external: true, dirty: !!inspected?.status?.is_dirty,
+            fileCount: inspected?.status?.file_count_lower_bound || 0,
+            ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [] });
         }
       }
       const groupData = groupsFor(repo, id);
@@ -274,15 +280,41 @@ class GitpaneViewProvider {
   currentOwner(id) {
     const repository = this.currentRepository(id);
     if (repository) return repository;
-    return this.currentWorktreeRepository(id);
+    return this.currentWorktreeRepository(id) || (this.externalOwners.get(id)?.guard() ? this.externalOwners.get(id).repo : undefined);
+  }
+
+  async inspectExternalWorktree(id, actionGuard = () => true) {
+    const item = this.resolveWorktree(id);
+    if (!item?.external || !vscode.workspace.isTrusted || !actionGuard()) throw new Error('Worktree is no longer available.');
+    const selected = this.worktrees.get(id);
+    const guard = () => {
+      const current = this.resolveWorktree(id);
+      return !this.disposed && !!vscode.workspace.isTrusted && !!current?.external &&
+        current.path === item.path && current.externalIdentity === item.externalIdentity && current.repoIdentity === item.repoIdentity &&
+        this.worktrees.get(id)?.repoToken === selected.repoToken;
+    };
+    const selection = { repo: item.repoPath, path: item.path, expected_repo_identity: item.repoIdentity,
+      expected_worktree_identity: item.externalIdentity };
+    const status = await this.tree.backend.inspectExternalWorktree(selection, guard);
+    if (!guard() || !actionGuard() || !/^[a-f0-9]{64}$/.test(status?.repo_identity || '')) throw new Error('Worktree is no longer available.');
+    const repo = { rootUri: vscode.Uri.file(item.path), state: { submodules: [] }, externalToken: id };
+    this.externalOwners.set(id, { repo, status, guard });
+    this.publish();
+    await this.loadChanges(id);
   }
 
   async loadChanges(id) {
     const repo = this.currentOwner(id);
     if (!repo) return;
-    const token = this.tree.repositoryToken(repo);
+    const token = repo.externalToken || this.tree.repositoryToken(repo);
     const guard = () => this.currentOwner(id)?.rootUri.toString() === repo.rootUri.toString() &&
-      this.tree.isCurrentRepository(repo, token);
+      (repo.externalToken ? !!this.externalOwners.get(id)?.guard() : this.tree.isCurrentRepository(repo, token));
+    if (repo.externalToken) {
+      const owner = this.externalOwners.get(id);
+      const status = await this.tree.backend.externalStatus(repo.rootUri.fsPath);
+      if (!guard() || !owner || owner !== this.externalOwners.get(id) || status?.repo_identity !== owner.status.repo_identity) return;
+      owner.status = status;
+    }
     await this.pager.refresh(id, repo.rootUri.fsPath, guard);
     this.scheduleChangesRefresh();
   }
@@ -427,6 +459,13 @@ class GitpaneViewProvider {
         stored.ownerId !== node.ownerId || stored.change.uri.toString() !== node.change?.uri?.toString() ||
         JSON.stringify(stored.record) !== JSON.stringify(node.record)) return undefined;
     node = stored;
+    if (node.external) {
+      const owner = this.externalOwners.get(node.ownerId);
+      const state = this.pager.get(node.ownerId);
+      const record = state?.changes.find(item => item.group === node.group && item.path === node.record?.path);
+      return owner?.guard() && state?.phase === 'ready' && state.guard() && record &&
+        JSON.stringify(record) === JSON.stringify(node.record) ? { ...node, record } : undefined;
+    }
     if (!node?.repo?.rootUri || !node.change?.uri || !this.tree.isCurrentRepository(node.repo, node.repoToken)) return undefined;
     const repoKey = node.repo.rootUri.toString();
     const repo = this.tree.git.repositories.find(item => item.rootUri.toString() === repoKey);
@@ -509,7 +548,7 @@ class GitpaneViewProvider {
       const external = status?.external_worktrees?.find(item => item.path === selected.path && item.identity === selected.externalIdentity);
       if (!this.showOutsideWorktrees || this.tree.isPathInWorkspace(selected.path) || !external) return undefined;
       return { ...actionRepo, path: selected.path,
-        branch: typeof external.branch === 'string' ? external.branch : 'branch unavailable', available: false,
+        branch: typeof external.branch === 'string' ? external.branch : 'branch unavailable', available: this.externalOwners.has(id),
         external: true, externalIdentity: selected.externalIdentity };
     }
     if (!this.tree.isPathInWorkspace(selected.path)) return undefined;
@@ -722,6 +761,7 @@ async function activate(context) {
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.openLauncherShortcut = (repo, guard, selector) => launchers.open(repo, guard, selector);
   provider.actions = new SidebarActions({ vscode, mutations,
+    inspectExternalWorktree: (id, guard) => provider.inspectExternalWorktree(id, guard),
     removeWorkspaceRepository: async (id, guard) => {
       const repo = provider.currentRepository(id);
       if (repo && guard()) await workspaceRepositories.remove(repo, guard);
@@ -871,6 +911,7 @@ async function activate(context) {
         node = await provider.waitForCurrentChange(node);
         if (!selectedGuard()) return;
         if (!node) throw new Error('The change is no longer in the workspace.');
+        if (node.external && node.record.is_submodule) throw new Error('External submodule diffs are not supported.');
         if (isPointerComparison(node.record)) {
           await openPointerDiff(node, provider, tree, backend, links, vscode, { openGuard: selectedGuard });
           return;
@@ -885,6 +926,7 @@ async function activate(context) {
         const plan = richComparison(node.record);
         const empty = node.change.uri.with({ scheme: 'gitpane-empty', query: '' });
         const current = () => {
+          if (node.external) return !!provider.currentChange(node);
           const repo = tree.git.repositories.find(item => item.rootUri.toString() === node.repo.rootUri.toString());
           if (!repo || !tree.isCurrentRepository(repo, node.repoToken)) return false;
           if (!node.parentWorktree) return true;
@@ -900,9 +942,15 @@ async function activate(context) {
         const resolve = async side => {
           if (side.empty) return empty;
           if (side.gitPath) {
-            const repoIdentity = tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
+            const repoIdentity = node.external ? provider.externalOwners.get(node.ownerId)?.status?.repo_identity :
+              tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
             return createLiveGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
               side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null) });
+          }
+          if (node.external) {
+            const repoIdentity = provider.externalOwners.get(node.ownerId)?.status?.repo_identity;
+            return createLiveWorkingSide({ vscode, links, backend, repo: node.repo, repoIdentity,
+              repoToken: node.repoToken, side, current });
           }
           const target = scopedFile(node.repo.rootUri.fsPath, side.filePath);
           if (side.filePath) {

@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
 const REPO_ACTIONS = new Set(['refreshRepo', 'createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
-const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree', 'addWorktreeToWorkspace']);
+const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree', 'inspectExternalWorktree']);
 
 function fingerprint(item, kind) {
   if (!item || typeof item.repoPath !== 'string' || !path.isAbsolute(item.repoPath)) return undefined;
@@ -67,6 +67,7 @@ class SidebarActions {
     this.previewWorktreeRemoval = options.previewWorktreeRemoval;
     this.planWorktree = options.planWorktree;
     this.validateExternalWorktree = options.validateExternalWorktree;
+    this.inspectExternalWorktree = options.inspectExternalWorktree;
     this.revalidateChange = options.revalidateChange;
     this.validateChangePath = options.validateChangePath;
   }
@@ -116,7 +117,7 @@ class SidebarActions {
         { label: 'Pull with Rebase', action: 'pull_rebase' }
       ];
       else if (kind === 'worktree' && item.external) choices = [
-        { label: 'Add to Current Workspace', action: 'addWorktreeToWorkspace' },
+        { label: 'Inspect Changes', action: 'inspectExternalWorktree' },
         { label: 'Open in New Window', action: 'openExternalWorktree' }
       ];
       else if (kind === 'worktree') choices = [
@@ -162,22 +163,18 @@ class SidebarActions {
             (this.waitForChange && !await this.waitForChange(message.id)) || !current()) return;
         if (this.validateChangePath) this.validateChangePath(item);
       }
-      if (kind === 'worktree' && item.external && !['openExternalWorktree', 'addWorktreeToWorkspace'].includes(action)) return;
-      if (action === 'openExternalWorktree' || action === 'addWorktreeToWorkspace') {
+      if (kind === 'worktree' && item.external && !['openExternalWorktree', 'inspectExternalWorktree'].includes(action)) return;
+      if (action === 'inspectExternalWorktree') {
+        if (item.external && this.inspectExternalWorktree) await this.inspectExternalWorktree(message.id, current);
+        return;
+      }
+      if (action === 'openExternalWorktree') {
         if (!item.external || !/^[a-f0-9]{64}$/.test(item.repoIdentity || '') ||
             !/^[a-f0-9]{64}$/.test(item.externalIdentity || '') || typeof this.validateExternalWorktree !== 'function') return;
-        if (action === 'addWorktreeToWorkspace' && !this.vscode.workspace.isTrusted) throw new Error('Trust this workspace before adding a worktree.');
         const result = await this.validateExternalWorktree(item.repoPath, item.path, item.repoIdentity, item.externalIdentity);
         if (!current()) return;
         if (!result || typeof result.path !== 'string' || !path.isAbsolute(result.path)) throw new Error('Gitpane returned an invalid worktree path.');
-        const uri = this.vscode.Uri.file(result.path);
-        if (action === 'openExternalWorktree') await this.vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
-        else {
-          if (!this.vscode.workspace.isTrusted) throw new Error('Trust this workspace before adding a worktree.');
-          if (this.vscode.workspace.getWorkspaceFolder(uri)) throw new Error('This worktree is already in the workspace.');
-          const index = this.vscode.workspace.workspaceFolders?.length || 0;
-          if (!this.vscode.workspace.updateWorkspaceFolders(index, 0, { uri })) throw new Error('VS Code could not add the worktree to the workspace.');
-        }
+        await this.vscode.commands.executeCommand('vscode.openFolder', this.vscode.Uri.file(result.path), { forceNewWindow: true });
         return;
       }
       if (kind === 'worktree' && !['removeWorktree', 'hideWorktree', 'refreshWorktree'].includes(action) && !item.available) return;

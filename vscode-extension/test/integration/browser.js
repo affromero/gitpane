@@ -403,9 +403,9 @@ const scenario = String.raw`
     check('worktree labels are indented below their parent', worktree.querySelector('.name').getBoundingClientRect().left >
       items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name').getBoundingClientRect().left);
     layoutRoot.style.width = '';
-    worktree.querySelector('[aria-label="Add worktree to workspace"]').click();
-    check('outside worktree add action sends only its opaque id', window.posted.at(-1).type === 'action' &&
-      window.posted.at(-1).action === 'addWorktreeToWorkspace' && window.posted.at(-1).id === 'opaque-worktree' &&
+    worktree.querySelector('[aria-label="Inspect worktree changes"]').click();
+    check('outside worktree inspect action sends only its opaque id', window.posted.at(-1).type === 'action' &&
+      window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
       !('path' in window.posted.at(-1)));
     worktree.querySelector('[aria-label^="Actions for worktree"]').click();
     check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&

@@ -19,6 +19,7 @@ fn request(repo: &Path) -> Request {
         workspace_roots: Vec::new(),
         workspace_root_identities: Vec::new(),
         workspace_root_sources: Vec::new(),
+        external_worktree: None,
         repo: repo.to_owned(),
         expected_repo_identity: "0".repeat(64),
         git_executable: PathBuf::from("git"),

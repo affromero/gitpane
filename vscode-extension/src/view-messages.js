@@ -50,6 +50,8 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
     if (provider.currentRepository(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
   } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
     await provider.openWorktreeGraph?.(message.id);
+  } else if (message?.type === 'action' && message.action === 'inspectExternalWorktree' && typeof message.id === 'string') {
+    await provider.actions?.handle(message, undefined, guard);
   } else if (message?.type === 'shortcut' && typeof message.id === 'string' && typeof message.key === 'string') {
     await provider.handleShortcut(message, guard);
   } else if (message?.type === 'menu' && typeof message.id === 'string') {

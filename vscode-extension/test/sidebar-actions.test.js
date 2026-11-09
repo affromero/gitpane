@@ -76,6 +76,7 @@ function fixture() {
     unpinSubmodule: async id => { calls.push(['unpinSubmodule', id]); },
     planWorktree: async (...args) => { plans.push(args); return plan(...args); },
     validateExternalWorktree: (...args) => validateExternal(...args),
+    inspectExternalWorktree: async (id, guard) => { if (guard()) calls.push(['inspectExternalWorktree', id]); },
     previewFileAction: (...args) => preview(...args),
     previewWorktreeRemoval: (...args) => worktreePreview(...args)
   });
@@ -104,7 +105,7 @@ test('outside worktrees open only after explicit selection and current validatio
   const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
   f.setWorktree(item);
   f.pick(choices => {
-    assert.deepEqual(choices.map(choice => choice.action), ['addWorktreeToWorkspace', 'openExternalWorktree']);
+    assert.deepEqual(choices.map(choice => choice.action), ['inspectExternalWorktree', 'openExternalWorktree']);
     return choices[1];
   });
   let validated;
@@ -123,29 +124,12 @@ test('outside worktrees open only after explicit selection and current validatio
   assert.deepEqual(f.calls, []);
 });
 
-test('adding an outside worktree validates the selection and respects workspace trust', async () => {
+test('inspecting an outside worktree leaves the workspace unchanged', async () => {
   const f = fixture();
   const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
   f.setWorktree(item);
-  let validated;
-  f.setValidateExternal(async (...args) => { validated = args; return { path: item.path }; });
-  await f.actions.handle(action('addWorktreeToWorkspace', 'worktree'));
-  assert.deepEqual(validated, [f.root, item.path, item.repoIdentity, item.externalIdentity]);
-  assert.deepEqual(f.calls, [['updateWorkspaceFolders', 1, 0, { uri: { fsPath: item.path } }]]);
-  f.calls.length = 0;
-  f.vscode.workspace.isTrusted = false;
-  await f.actions.handle(action('addWorktreeToWorkspace', 'worktree'));
-  assert.match(f.errors.at(-1), /trust/i);
-  assert.deepEqual(f.calls, []);
-  f.vscode.workspace.isTrusted = true;
-  f.setValidateExternal(async () => { f.setWorktree(undefined); return { path: item.path }; });
-  await f.actions.handle(action('addWorktreeToWorkspace', 'worktree'));
-  assert.deepEqual(f.calls, []);
-  f.setWorktree(item);
-  f.setValidateExternal(async () => { throw new Error('Worktree changed'); });
-  await f.actions.handle(action('addWorktreeToWorkspace', 'worktree'));
-  assert.match(f.errors.at(-1), /worktree changed/i);
-  assert.deepEqual(f.calls, []);
+  await f.actions.handle(action('inspectExternalWorktree', 'worktree'));
+  assert.deepEqual(f.calls, [['inspectExternalWorktree', 'worktree']]);
 });
 
 test('file actions wait for a refresh and still reject a changed selection', async () => {

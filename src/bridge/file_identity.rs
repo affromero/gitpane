@@ -64,10 +64,7 @@ fn too_large() -> BridgeError {
 }
 
 fn text_too_large() -> BridgeError {
-    BridgeError::new(
-        "invalid_request",
-        "Pointer side exceeds the 1 MiB text limit.",
-    )
+    BridgeError::new("invalid_request", "File exceeds the permitted read size.")
 }
 
 fn hash_file(
@@ -404,9 +401,24 @@ pub(super) fn link_target(path: &Path) -> Result<String, BridgeError> {
 
 /// Read an unchanged regular file without following symlinks in its path.
 #[cfg(unix)]
-pub(super) fn working_text(path: &Path, limit: usize) -> Result<(String, String), BridgeError> {
+pub(super) fn working_bytes(path: &Path, limit: usize) -> Result<(Vec<u8>, String), BridgeError> {
     let mut hash = Sha256::new();
     let bytes = working_entry(&mut hash, path, false, Some(limit))?.ok_or_else(changed)?;
+    Ok((bytes, crate::hash::hex(hash.finalize().as_ref())))
+}
+
+#[cfg(not(unix))]
+pub(super) fn working_bytes(_path: &Path, _limit: usize) -> Result<(Vec<u8>, String), BridgeError> {
+    Err(BridgeError::new(
+        "unsupported",
+        "External worktree file reads are unavailable on this platform.",
+    ))
+}
+
+/// Read an unchanged regular UTF-8 file without following symlinks in its path.
+#[cfg(unix)]
+pub(super) fn working_text(path: &Path, limit: usize) -> Result<(String, String), BridgeError> {
+    let (bytes, fingerprint) = working_bytes(path, limit)?;
     if bytes.contains(&0) {
         return Err(BridgeError::new(
             "invalid_request",
@@ -415,7 +427,7 @@ pub(super) fn working_text(path: &Path, limit: usize) -> Result<(String, String)
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| BridgeError::new("invalid_request", "Pointer side is not UTF-8 text."))?;
-    Ok((text, crate::hash::hex(hash.finalize().as_ref())))
+    Ok((text, fingerprint))
 }
 
 #[cfg(not(unix))]
@@ -547,6 +559,9 @@ mod tests {
         fs::write(root.join("inside/file"), b"first\n").unwrap();
         let (first, identity) = working_text(&root.join("inside/file"), 1024).unwrap();
         assert_eq!(first, "first\n");
+        fs::write(root.join("inside/binary"), b"one\0two").unwrap();
+        let (binary, _) = working_bytes(&root.join("inside/binary"), 1024).unwrap();
+        assert_eq!(binary, b"one\0two");
         fs::write(root.join("inside/file"), b"other\n").unwrap();
         assert_ne!(
             working_text(&root.join("inside/file"), 1024).unwrap().1,

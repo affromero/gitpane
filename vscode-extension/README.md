@@ -62,9 +62,12 @@ workspace are not included.
 
 To see registered worktrees outside the workspace, enable
 `gitpane.worktrees.showOutsideWorkspace`. They appear beneath the repository.
-Choose **Add to Current Workspace** to inspect changes in the current window,
-or **Open in New Window** to inspect them separately. Adding a folder changes
-the VS Code workspace and is subject to workspace trust.
+Choose **Inspect Changes** to review one in the current window, or **Open in
+New Window** to inspect it separately. Inspection requires a trusted workspace
+and leaves its folders unchanged.
+External working-file diffs are read-only. External submodule and symlink diffs
+are not supported. On Windows, staged diffs are available, but working-file
+diffs are not yet supported.
 
 Worktree rows are shown by default, following Gitpane's `[ui] expand_worktrees`
 setting. Use the worktree count or press `w` on a repository to show or hide
@@ -312,7 +315,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 |---------|---------|----------|
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
-| `gitpane.worktrees.showOutsideWorkspace` | `false` | Show registered outside worktrees. Add one to the current workspace or open it in a new window to inspect its changes. |
+| `gitpane.worktrees.showOutsideWorkspace` | `false` | Show registered outside worktrees and inspect their changes in the current window. |
 | `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
 | `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
 | `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |

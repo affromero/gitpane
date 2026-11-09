@@ -80,6 +80,7 @@ class WorkspaceViews {
         message.ownerId !== this.selectedId || message.selectionEpoch !== this.selectionEpoch) return false;
     if (message.type === 'refresh') return true;
     if (!this.current(this.selectedId)) return false;
+    if (message.type === 'action') return message.action === 'inspectExternalWorktree' && message.id === this.selectedId;
     if (['loadChanges', 'releaseChanges', 'changesPage', 'searchChanges', 'shortcut'].includes(message.type) &&
         message.id !== this.selectedId) return false;
     if (message.type === 'openChange' || (message.type === 'menu' && message.kind === 'file')) {

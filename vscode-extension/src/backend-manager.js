@@ -40,6 +40,7 @@ class BackendManager {
     this.changesClient = undefined;
     this.changesConfiguration = undefined;
     this.changesEpoch = 0;
+    this.externalSelections = new Map();
     this.validationClient = undefined;
     this.validationConfiguration = undefined;
     this.validationEpoch = 0;
@@ -95,6 +96,7 @@ class BackendManager {
   reconfigure() {
     if (this.disposed) return Promise.reject(new BridgeError('disposed', 'Gitpane backend has been disposed.'));
     const generation = ++this.generation;
+    this.externalSelections.clear();
     this.gitMetadataBatches.cancel();
     this.gitContentWorkers.cancel();
     this.cancelChanges();
@@ -234,12 +236,14 @@ class BackendManager {
   async gitSideSession(repo) {
     const snapshot = await this.mutationSnapshot();
     const git = captureGitEnvironment(this.gitApi);
-    if (!this.isCurrentMutation(snapshot, repo)) throw new BridgeError('workspace_changed', 'Gitpane workspace changed.');
-    return { snapshot, git, repo };
+    const external = this.externalSelections.get(repo);
+    if (!this.isCurrentMutation(snapshot, external?.selection.repo || repo) || (external && !external.guard())) throw new BridgeError('workspace_changed', 'Gitpane workspace changed.');
+    return { snapshot, git, repo, external };
   }
 
   gitSideCurrent(session) {
-    if (!session || !this.isCurrentMutation(session.snapshot, session.repo)) return false;
+    if (!session || !this.isCurrentMutation(session.snapshot, session.external?.selection.repo || session.repo) ||
+        (session.external && (this.externalSelections.get(session.repo) !== session.external || !session.external.guard()))) return false;
     return captureGitEnvironment(this.gitApi).key === session.git.key;
   }
 
@@ -258,7 +262,7 @@ class BackendManager {
     const { snapshot, git, repo } = session;
     const request = { version: 1, workspace_roots: snapshot.roots, workspace_root_identities: snapshot.rootIdentities,
       workspace_root_sources: snapshot.rootSources, repo, expected_repo_identity: identity,
-      git_executable: git.executable, operation };
+      git_executable: git.executable, operation, ...(session.external ? { external_worktree: session.external.selection } : {}) };
     let bytes;
     try { bytes = await this.gitContentWorkers.run(snapshot.executable, git.env, request, signal); }
     catch (error) {
@@ -269,7 +273,7 @@ class BackendManager {
       throw error;
     }
     if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');
-    if (operation.kind === 'content' || operation.kind === 'verified_content') return bytes;
+    if (operation.kind === 'content' || operation.kind === 'verified_content' || operation.kind === 'working_content') return bytes;
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
     catch { throw new BridgeError('protocol_error', 'Gitpane returned invalid Git file metadata.'); }
   }
@@ -312,6 +316,17 @@ class BackendManager {
         throw new BridgeError('workspace_changed', 'Change scan was cancelled.');
       }
       let result;
+      const external = this.externalSelections.get(repo);
+      if (external && isChanges) {
+        if (!external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+        const parameters = method === 'changes_begin' ? { repo } : method === 'changes_next' ? { repo, snapshot: argument.snapshot, cursor: argument.cursor } :
+          method === 'changes_search' ? { repo, snapshot: argument.snapshot, query: argument.query, direction: argument.direction, position: argument.position } :
+          method === 'changes_release' ? { repo, snapshot: argument } : undefined;
+        if (!parameters) throw new BridgeError('invalid_request', 'Unsupported external worktree operation.');
+        result = await client.request('external_worktree_read', { selection: external.selection, method, params: parameters });
+        if (!current() || generation !== this.generation || this.externalSelections.get(repo) !== external || !external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+        return result;
+      }
       if (method === 'status') result = await client.status(repo, argument.includeWorktrees, argument.options);
       else if (method === 'repository_preview') result = await client.status(repo, false, { summaryOnly: true, watchedPaths: [] });
       else if (method === 'changes_begin') result = await client.beginChanges(repo);
@@ -599,6 +614,21 @@ class BackendManager {
   }
 
   async verifyChanges(repo, record) {
+    const external = this.externalSelections.get(repo);
+    if (external) {
+      const page = await this.beginChanges(repo);
+      const client = await this.getChangesClient(this.changesEpoch);
+      try {
+        if (!external.guard() || this.externalSelections.get(repo) !== external) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+        const result = await client.request('external_worktree_read', { selection: external.selection, method: 'changes_find',
+          params: { repo, snapshot: page.snapshot, path: record.path, group: record.group } });
+        if (!external.guard() || this.externalSelections.get(repo) !== external) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+        return { page, change: result?.change };
+      } finally {
+        await client.request('external_worktree_read', { selection: external.selection, method: 'changes_release',
+          params: { repo, snapshot: page.snapshot } }).catch(() => {});
+      }
+    }
     const session = await this.openChangesSession(repo);
     try {
       const page = await session.begin();
@@ -698,6 +728,30 @@ class BackendManager {
 
   planWorktree(repo, branch) { return this.request('worktree_plan', repo, branch); }
   validateExternalWorktree(repo, path, identity, worktreeIdentity) { return this.request('external_worktree_validate', repo, { path, identity, worktreeIdentity }); }
+
+  async inspectExternalWorktree(selection, guard) {
+    if (!this.vscode.workspace.isTrusted || !guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    await this.ready();
+    const generation = this.generation, client = this.client;
+    const result = await client.request('external_worktree_read', { selection, method: 'status',
+      params: { repo: selection.path, include_worktrees: false, summary_only: true, watched_paths: [] } });
+    if (!this.vscode.workspace.isTrusted || !guard() || generation !== this.generation || client !== this.client) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    this.externalSelections.set(selection.path, { selection, guard: () => this.vscode.workspace.isTrusted && guard() });
+    return result;
+  }
+
+  async externalStatus(repo) {
+    const external = this.externalSelections.get(repo);
+    if (!external?.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    await this.ready();
+    const client = this.client, generation = this.generation;
+    const result = await client.request('external_worktree_read', { selection: external.selection, method: 'status',
+      params: { repo, include_worktrees: false, summary_only: true, watched_paths: [] } });
+    if (generation !== this.generation || client !== this.client || this.externalSelections.get(repo) !== external || !external.guard()) {
+      throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    }
+    return result;
+  }
 
   branchReview(repo) { return this.request('branch_review', repo); }
 

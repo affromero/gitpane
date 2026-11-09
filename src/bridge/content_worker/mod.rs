@@ -24,6 +24,8 @@ struct Request {
     workspace_roots: Vec<PathBuf>,
     workspace_root_identities: Vec<String>,
     workspace_root_sources: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_worktree: Option<super::worktree_plan::external::Selection>,
     repo: PathBuf,
     expected_repo_identity: String,
     git_executable: PathBuf,
@@ -33,6 +35,12 @@ struct Request {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
+    WorkingMetadata {
+        path: String,
+    },
+    WorkingContent {
+        path: String,
+    },
     Content {
         #[serde(rename = "ref")]
         reference: String,
@@ -87,6 +95,11 @@ fn validate(request: &Request) -> Result<(), BridgeError> {
         return Err(invalid("Invalid repository identity."));
     }
     match &request.operation {
+        Operation::WorkingMetadata { path } | Operation::WorkingContent { path } => {
+            if request.external_worktree.is_none() || !changes::blob::valid_path(path) {
+                return Err(invalid("Invalid external working file path."));
+            }
+        }
         Operation::Content { reference, path } => validate_item(reference, path, true)?,
         Operation::VerifiedContent { reference, path } => validate_item(reference, path, false)?,
         Operation::Metadata { items } => {
@@ -102,11 +115,17 @@ fn validate(request: &Request) -> Result<(), BridgeError> {
 }
 
 fn check_scope(request: &Request) -> Result<(), BridgeError> {
-    let scope = Scope::new_with_identities(
+    let workspace = Scope::new_with_identities(
         request.workspace_roots.clone(),
         Some(request.workspace_root_identities.clone()),
         Some(request.workspace_root_sources.clone()),
     )?;
+    let scope = match &request.external_worktree {
+        Some(selection) => {
+            super::worktree_plan::external::read_scope(&workspace, selection, &request.repo)?
+        }
+        None => workspace,
+    };
     let repo = scope.repository(&request.repo)?;
     if changes::RepositoryIdentity::read(&repo)?.fingerprint()? != request.expected_repo_identity {
         return Err(BridgeError::new(
@@ -143,6 +162,21 @@ fn exec() -> Result<(), BridgeError> {
     let request = decode(payload)?;
     validate(&request)?;
     match &request.operation {
+        Operation::WorkingMetadata { path } | Operation::WorkingContent { path } => {
+            let repo = request.repo.canonicalize().map_err(failure)?;
+            let (bytes, fingerprint) =
+                super::file_identity::working_bytes(&repo.join(path), 64 * 1024 * 1024)?;
+            check_scope(&request)?;
+            if matches!(&request.operation, Operation::WorkingMetadata { .. }) {
+                let response =
+                    serde_json::json!({ "size": bytes.len(), "fingerprint": fingerprint });
+                io::stdout()
+                    .write_all(&serde_json::to_vec(&response).map_err(failure)?)
+                    .map_err(failure)?;
+            } else {
+                io::stdout().write_all(&bytes).map_err(failure)?;
+            }
+        }
         Operation::Content { reference, path } => runner::content(&request, reference, path)?,
         Operation::VerifiedContent { reference, path } => {
             metadata::verified_content(&request, reference, path)?

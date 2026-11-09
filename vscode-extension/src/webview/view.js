@@ -300,7 +300,7 @@ function worktreeRow(worktree) {
       add(tail, 'count', `[${info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`}]`, countText(info));
     }
   } else if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
-  if (worktree.available) {
+  if (worktree.available && !worktree.external) {
     const graph = element('button', 'graph-action', '●');
     graph.type = 'button';
     graph.title = `Open commit graph for ${worktree.name || worktree.branch}`;
@@ -310,18 +310,18 @@ function worktreeRow(worktree) {
       vscode.postMessage({ type: 'openWorktreeGraph', id: worktree.id });
     });
     tail.appendChild(graph);
-  } else if (worktree.external) {
-    const button = element('button', 'menu-action', '+');
+  } else if (worktree.external && !worktree.available) {
+    const button = element('button', 'menu-action', '↗');
     button.type = 'button';
-    button.title = 'Add worktree to workspace';
+    button.title = 'Inspect worktree changes';
     button.setAttribute('aria-label', button.title);
     button.addEventListener('click', event => {
       event.stopPropagation();
-      vscode.postMessage({ type: 'action', action: 'addWorktreeToWorkspace', id: worktree.id });
+      vscode.postMessage({ type: 'action', action: 'inspectExternalWorktree', id: worktree.id });
     });
     tail.appendChild(button);
   }
-  else add(tail, 'behind', '!', 'Worktree repository unavailable');
+  else if (!worktree.available) add(tail, 'behind', '!', 'Worktree repository unavailable');
   tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
   row.appendChild(tail);
   return row;
@@ -450,11 +450,11 @@ function renderSelectedChanges(owners) {
     return;
   }
   owners.add(owner.id);
-  if (owner.external) {
-    const message = element('div', 'message', 'Add this worktree to the current workspace to inspect its changes.');
-    const button = element('button', '', 'Add to Workspace');
+  if (owner.external && !owner.available) {
+    const message = element('div', 'message', 'Inspect this worktree in the current window.');
+    const button = element('button', '', 'Inspect Changes');
     button.type = 'button';
-    button.addEventListener('click', () => vscode.postMessage({ type: 'action', action: 'addWorktreeToWorkspace', id: owner.id }));
+    button.addEventListener('click', () => vscode.postMessage({ type: 'action', action: 'inspectExternalWorktree', id: owner.id }));
     message.appendChild(button);
     messages.appendChild(message);
     return;

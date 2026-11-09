@@ -206,6 +206,14 @@ fn monitor_worker_input() -> io::Result<()> {
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalRead {
+    selection: worktree_plan::external::Selection,
+    method: String,
+    params: Value,
+}
+
 fn process(
     scope: &mut Option<Scope>,
     snapshots: &mut changes::Snapshots,
@@ -245,6 +253,53 @@ fn process(
     let worktree_cfg = options.worktree;
     let review_base = options.review_base;
     match request.method.as_str() {
+        "external_worktree_read" => {
+            let mut input: ExternalRead = params(request.params)?;
+            if !matches!(
+                input.method.as_str(),
+                "status"
+                    | "changes_begin"
+                    | "changes_next"
+                    | "changes_find"
+                    | "changes_search"
+                    | "changes_release"
+                    | "repo_blob_metadata"
+                    | "repo_blob_metadata_batch"
+            ) {
+                return Err(BridgeError::new(
+                    "invalid_request",
+                    "Unsupported external worktree operation.",
+                ));
+            }
+            let repo = input
+                .params
+                .get("repo")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    BridgeError::new("invalid_request", "Missing worktree repository.")
+                })?;
+            let temporary = worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+            if input.method == "status" {
+                let object = input.params.as_object_mut().ok_or_else(|| {
+                    BridgeError::new("invalid_request", "Invalid status parameters.")
+                })?;
+                object.insert("include_worktrees".into(), json!(false));
+                object.insert("include_external_worktrees".into(), json!(false));
+            }
+            let result = process(
+                &mut Some(temporary),
+                snapshots,
+                Request {
+                    id: request.id,
+                    method: input.method,
+                    params: input.params,
+                },
+                options,
+            );
+            worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+            result
+        }
         "workspace_root_identities" => {
             let _: EmptyRequest = params(request.params)?;
             scope.identities()
