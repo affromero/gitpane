@@ -383,14 +383,31 @@ const scenario = String.raw`
       worktree.getAttribute('aria-label').includes('repository unavailable') && !worktree.querySelector('.graph-action') &&
       !items().some(item => item.getAttribute('aria-label') === 'M working.txt'));
     const external = JSON.parse(JSON.stringify(unavailable));
-    external.repositories[1].worktrees[0].external = true;
-    external.repositories[1].worktrees[0].branch = 'outside workspace';
+    Object.assign(external.repositories[1].worktrees[0], { external: true, live: false, ahead: 0, behind: 0, fileCount: 0, dirty: false });
+    external.repositories[1].worktrees[0].name = 'DrivingVideoEvaluation-semantic-plots';
+    external.repositories[1].worktrees[0].path = '/projects/DrivingVideoEvaluation-semantic-plots';
+    external.repositories[1].worktrees[0].branch = 'wt/semantic-plots';
+    external.repositories[1].worktrees.push({ ...external.repositories[1].worktrees[0], id: 'other-worktree',
+      name: 'DrivingVideoEvaluation-model-backends', path: '/projects/DrivingVideoEvaluation-model-backends', branch: 'wt/model-backends' });
     window.postMessage(external, '*');
     await tick();
-    worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
-    check('outside worktree explains how to inspect changes', worktree.getAttribute('aria-label').includes('open in a new window') &&
+    worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
+    check('outside worktree exposes its workspace state', worktree.getAttribute('aria-label').includes('outside workspace') &&
       !worktree.getAttribute('aria-label').includes('clean') && !worktree.querySelector('.graph-action'));
-    worktree.querySelector('.menu-action').click();
+    layoutRoot.style.width = '210px';
+    const externalRows = [...layoutRoot.querySelectorAll('.external-worktree-row')];
+    check('outside worktrees show distinct branches in a narrow pane', externalRows.length === 2 && externalRows.every(row => {
+      const label = row.querySelector('.name');
+      return label.scrollWidth <= label.clientWidth && label.textContent.startsWith('wt/') && label.title.startsWith('/projects/');
+    }));
+    check('worktree labels are indented below their parent', worktree.querySelector('.name').getBoundingClientRect().left >
+      items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name').getBoundingClientRect().left);
+    layoutRoot.style.width = '';
+    worktree.querySelector('[aria-label="Add worktree to workspace"]').click();
+    check('outside worktree add action sends only its opaque id', window.posted.at(-1).type === 'action' &&
+      window.posted.at(-1).action === 'addWorktreeToWorkspace' && window.posted.at(-1).id === 'opaque-worktree' &&
+      !('path' in window.posted.at(-1)));
+    worktree.querySelector('[aria-label^="Actions for worktree"]').click();
     check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{

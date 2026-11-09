@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -9,7 +10,31 @@ use super::super::{
     scope::Scope,
 };
 
-fn registrations(repo: &git2::Repository) -> Result<Vec<PathBuf>, BridgeError> {
+fn head_label(path: &Path) -> Option<String> {
+    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut contents = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(4097)
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() > 4096 {
+        return None;
+    }
+    let head = contents.trim_end_matches(['\r', '\n']);
+    if let Some(branch) = head.strip_prefix("ref: refs/heads/") {
+        return git2::Reference::is_valid_name(&format!("refs/heads/{branch}"))
+            .then(|| branch.to_owned());
+    }
+    if (head.len() == 40 || head.len() == 64) && head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Some(head[..8].to_owned());
+    }
+    None
+}
+
+fn registrations(repo: &git2::Repository) -> Result<Vec<(PathBuf, Option<String>)>, BridgeError> {
     let error = |error: git2::Error| BridgeError::new("repository_error", error.to_string());
     let mut paths = Vec::new();
     let names = repo.worktrees().map_err(error)?;
@@ -17,19 +42,32 @@ fn registrations(repo: &git2::Repository) -> Result<Vec<PathBuf>, BridgeError> {
         let name = name.map_err(error)?.ok_or_else(|| {
             BridgeError::new("repository_error", "Worktree name is not valid UTF-8")
         })?;
-        paths.push(
+        let name_path = Path::new(name);
+        let branch = if matches!(
+            name_path.components().collect::<Vec<_>>().as_slice(),
+            [Component::Normal(_)]
+        ) {
+            head_label(&repo.commondir().join("worktrees").join(name).join("HEAD"))
+        } else {
+            None
+        };
+        paths.push((
             repo.find_worktree(name)
                 .map_err(error)?
                 .path()
                 .components()
                 .collect(),
-        );
+            branch,
+        ));
     }
     // A linked worktree can be the workspace anchor. Git's worktree list
     // excludes the main checkout, whose path is recorded by the common repo.
     let common = git2::Repository::open(repo.commondir()).map_err(error)?;
     if let Some(path) = common.workdir() {
-        paths.push(path.components().collect());
+        paths.push((
+            path.components().collect(),
+            head_label(&repo.commondir().join("HEAD")),
+        ));
     }
     Ok(paths)
 }
@@ -39,7 +77,7 @@ pub(in crate::bridge) fn list(
     repo: &git2::Repository,
 ) -> Result<Vec<Value>, BridgeError> {
     let mut result = Vec::new();
-    for path in registrations(repo)? {
+    for (path, branch) in registrations(repo)? {
         if !path.is_absolute() {
             continue;
         }
@@ -54,17 +92,31 @@ pub(in crate::bridge) fn list(
         let path = path.to_str().ok_or_else(|| {
             BridgeError::new("repository_error", "Worktree path is not valid UTF-8")
         })?;
-        result.push(json!({ "path": path, "identity": DirectoryIdentity::read(&canonical)?.fingerprint()? }));
+        result.push(json!({ "path": path, "identity": DirectoryIdentity::read(&canonical)?.fingerprint()?, "branch": branch }));
     }
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Selection, list, validate};
+    use super::{Selection, head_label, list, validate};
     use crate::bridge::{changes::RepositoryIdentity, scope::Scope};
     use git2::Repository;
     use std::path::Path;
+
+    #[test]
+    fn head_labels_include_branches_and_detached_commits() {
+        let temp = tempfile::tempdir().unwrap();
+        let head = temp.path().join("HEAD");
+        std::fs::write(&head, "ref: refs/heads/wt/model-backends\n").unwrap();
+        assert_eq!(head_label(&head).as_deref(), Some("wt/model-backends"));
+        std::fs::write(&head, "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        assert_eq!(head_label(&head).as_deref(), Some("01234567"));
+        std::fs::write(&head, "ref: refs/heads/invalid branch\n").unwrap();
+        assert_eq!(head_label(&head), None);
+        std::fs::write(&head, "a".repeat(4097)).unwrap();
+        assert_eq!(head_label(&head), None);
+    }
 
     #[test]
     fn external_worktrees_are_listed_and_revalidated_without_widening_scope() {
@@ -97,6 +149,7 @@ mod tests {
         let scope = Scope::new(vec![main.clone()]).unwrap();
         let listed = list(&scope, &repo).unwrap();
         assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["branch"], "topic");
         let registered = Path::new(listed[0]["path"].as_str().unwrap());
         assert_eq!(registered.canonicalize().unwrap(), sibling);
         let target_identity = listed[0]["identity"].as_str().unwrap().to_owned();
@@ -133,6 +186,10 @@ mod tests {
         let linked_scope = Scope::new(vec![sibling.clone()]).unwrap();
         let linked = Repository::open(&sibling).unwrap();
         let listed_main = list(&linked_scope, &linked).unwrap();
+        assert_eq!(
+            listed_main[0]["branch"],
+            repo.head().unwrap().shorthand().unwrap()
+        );
         assert_eq!(
             Path::new(listed_main[0]["path"].as_str().unwrap())
                 .canonicalize()
@@ -189,7 +246,7 @@ pub(in crate::bridge) fn validate(scope: &Scope, input: Selection) -> Result<Val
         .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     if !registrations(&repository)?
         .iter()
-        .any(|path| path == &input.path)
+        .any(|(path, _)| path == &input.path)
     {
         return Err(stale());
     }
@@ -215,7 +272,7 @@ pub(in crate::bridge) fn validate(scope: &Scope, input: Selection) -> Result<Val
         || RepositoryIdentity::read(&repo)? != identity
         || !registrations(&repository)?
             .iter()
-            .any(|path| path == &input.path)
+            .any(|(path, _)| path == &input.path)
         || input.path.canonicalize().ok().as_ref() != Some(&target)
         || DirectoryIdentity::read(&target)?.fingerprint()? != input.expected_worktree_identity
         || RepositoryIdentity::read(&target)? != target_identity

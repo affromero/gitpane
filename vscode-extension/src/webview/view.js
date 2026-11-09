@@ -277,13 +277,17 @@ function fileRow(file) {
 }
 
 function worktreeRow(worktree) {
-  const row = element('div', 'row worktree-row');
+  const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}`);
   const markers = element('span', 'worktree-markers');
   add(markers, 'subtree', '⎇');
   add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0');
   row.appendChild(markers);
-  add(row, 'name', worktree.name || '', worktree.name);
-  add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
+  if (worktree.external) {
+    add(row, 'name worktree', worktree.branch || worktree.name || 'unknown branch', worktree.path || worktree.name);
+  } else {
+    add(row, 'name', worktree.name || '', worktree.path || worktree.name);
+    add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
+  }
   const tail = element('span', 'tail');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
@@ -306,7 +310,17 @@ function worktreeRow(worktree) {
       vscode.postMessage({ type: 'openWorktreeGraph', id: worktree.id });
     });
     tail.appendChild(graph);
-  } else if (worktree.external) add(tail, 'muted', '↗', 'Open in a new window to inspect changes');
+  } else if (worktree.external) {
+    const button = element('button', 'menu-action', '+');
+    button.type = 'button';
+    button.title = 'Add worktree to workspace';
+    button.setAttribute('aria-label', button.title);
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      vscode.postMessage({ type: 'action', action: 'addWorktreeToWorkspace', id: worktree.id });
+    });
+    tail.appendChild(button);
+  }
   else add(tail, 'behind', '!', 'Worktree repository unavailable');
   tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
   row.appendChild(tail);
@@ -437,7 +451,12 @@ function renderSelectedChanges(owners) {
   }
   owners.add(owner.id);
   if (owner.external) {
-    messages.appendChild(element('div', 'message', 'Open this worktree in a new window to inspect its changes.'));
+    const message = element('div', 'message', 'Add this worktree to the current workspace to inspect its changes.');
+    const button = element('button', '', 'Add to Workspace');
+    button.type = 'button';
+    button.addEventListener('click', () => vscode.postMessage({ type: 'action', action: 'addWorktreeToWorkspace', id: owner.id }));
+    message.appendChild(button);
+    messages.appendChild(message);
     return;
   }
   if (owner.available === false || owner.statusUnavailable) {
@@ -502,7 +521,7 @@ function render() {
       owners.add(worktree.id);
       reconcilePending(worktree);
       const worktreeKey = `worktree:${worktree.id}`;
-      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'open in a new window to inspect changes' : worktree.dirty ? 'has changes' : 'clean'];
+      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'outside workspace' : worktree.dirty ? 'has changes' : 'clean'];
       const worktreeInfo = countInfo(worktree);
       if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
       else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);

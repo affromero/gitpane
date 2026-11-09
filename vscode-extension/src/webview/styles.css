@@ -117,6 +117,8 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+.worktree-row .name { padding-left: .2ch; }
+.external-worktree-row { grid-template-columns: minmax(calc(2.5ch + 9px), max-content) minmax(0, 1fr) auto; }
 .dirty { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }
 .count { color: var(--gitpane-repo-list-file-count, var(--dirty)); }
 .modified { color: var(--gitpane-file-list-status-modified, var(--dirty)); }

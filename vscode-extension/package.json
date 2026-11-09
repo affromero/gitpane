@@ -73,7 +73,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Show registered worktrees outside the workspace. Open them in a separate VS Code window to inspect their changes."
+          "description": "Show registered worktrees outside the workspace. Add one to the current workspace or open it in a new window to inspect its changes."
         },
         "gitpane.refreshInterval": {
           "type": "integer",

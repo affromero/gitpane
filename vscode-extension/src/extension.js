@@ -163,7 +163,8 @@ class GitpaneViewProvider {
           if (!item || typeof item.path !== 'string' || !path.isAbsolute(item.path) || this.tree.isPathInWorkspace(item.path)) continue;
           const worktreeId = this.idFor(JSON.stringify(['external-worktree', repoKey, repoToken, item.path, item.identity]), live);
           worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, externalIdentity: item.identity, external: true });
-          worktreeData.push({ id: worktreeId, name: path.basename(item.path), branch: 'outside workspace',
+          worktreeData.push({ id: worktreeId, name: path.basename(item.path), path: item.path,
+            branch: typeof item.branch === 'string' ? item.branch : 'branch unavailable',
             available: false, external: true, groups: [] });
         }
       }
@@ -505,9 +506,10 @@ class GitpaneViewProvider {
     if (!actionRepo) return undefined;
     const status = this.tree.backendStatuses.get(selected.repoKey);
     if (selected.external) {
-      if (!this.showOutsideWorktrees || this.tree.isPathInWorkspace(selected.path) ||
-          !status?.external_worktrees?.some(item => item.path === selected.path && item.identity === selected.externalIdentity)) return undefined;
-      return { ...actionRepo, path: selected.path, branch: 'outside workspace', available: false,
+      const external = status?.external_worktrees?.find(item => item.path === selected.path && item.identity === selected.externalIdentity);
+      if (!this.showOutsideWorktrees || this.tree.isPathInWorkspace(selected.path) || !external) return undefined;
+      return { ...actionRepo, path: selected.path,
+        branch: typeof external.branch === 'string' ? external.branch : 'branch unavailable', available: false,
         external: true, externalIdentity: selected.externalIdentity };
     }
     if (!this.tree.isPathInWorkspace(selected.path)) return undefined;
