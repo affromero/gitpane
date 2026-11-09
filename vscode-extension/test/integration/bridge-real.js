@@ -135,6 +135,10 @@ async function waitForFile(file) {
     git(sibling, 'add', '--', 'tracked.txt');
     fs.writeFileSync(path.join(sibling, 'tracked.txt'), 'external unstaged\n');
     fs.writeFileSync(path.join(sibling, 'new.txt'), 'external untracked\n');
+    const refreshedStatus = await client.status(repoPath, true, { includeExternalWorktrees: true });
+    const refreshedWorktree = refreshedStatus.external_worktrees.find(item => item.path === outsideWorktree.path);
+    assert.equal(refreshedWorktree?.status_error, undefined, refreshedWorktree?.status_error);
+    assert.equal(refreshedWorktree?.status?.is_dirty, true, 'outside worktree summary reflects changes');
     const externalStatus = await externalRead('status', { repo: siblingPath });
     assert.equal(externalStatus.is_dirty, true);
     const externalGraph = await externalRead('graph', { repo: siblingPath });

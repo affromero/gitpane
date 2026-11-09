@@ -417,7 +417,9 @@ fn process(
                         })?);
                         let temporary =
                             worktree_plan::external::read_scope(scope, &selection, &path)?;
-                        let summary = status::query(&path, &temporary, sub_cfg, false, true, &[])?;
+                        let canonical = temporary.repository(&path)?;
+                        let summary =
+                            status::query(&canonical, &temporary, sub_cfg, false, true, &[])?;
                         worktree_plan::external::read_scope(scope, &selection, &path)?;
                         Ok::<_, BridgeError>(summary)
                     })();

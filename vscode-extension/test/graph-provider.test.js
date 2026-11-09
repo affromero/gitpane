@@ -27,7 +27,10 @@ test('outside worktree graph stops when its inspection becomes stale', async () 
     assert.equal(provider.currentRepo(), repo);
     current = false;
     assert.equal(provider.currentRepo(), undefined);
-  } finally { provider.dispose(); }
+  } finally {
+    provider.dispose();
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
 });
 
 test('commit graph opens Unix filenames containing literal backslashes', { skip: process.platform === 'win32' }, async () => {
