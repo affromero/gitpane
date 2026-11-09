@@ -4,6 +4,15 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.6] - 2026-11-09
+
+### Added
+- Inspect changes and commit graphs for sibling worktrees in the current VS Code window without adding them to the workspace. ([#142](https://github.com/affromero/gitpane/pull/142), closes [#141](https://github.com/affromero/gitpane/issues/141))
+- Resize the unified Repositories, Changes, and Git Graph panes, adjust Gitpane's text size, and open file actions beside the selected row. ([#142](https://github.com/affromero/gitpane/pull/142))
+
+### Notes
+- Outside-worktree working-file diffs are read-only and unavailable on Windows. Outside-worktree submodule and symlink diffs are not supported. ([#142](https://github.com/affromero/gitpane/pull/142))
+
 ## [0.18.5] - 2026-11-07
 
 ### Added
