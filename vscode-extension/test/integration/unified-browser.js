@@ -63,6 +63,14 @@ const scenario = String.raw`
   check('repositories snapshot reaches repository pane', doc('repositories').body.textContent.includes('repo'));
   check('selected changes reach changes pane', doc('changes').body.textContent.includes('changed.txt'));
   check('graph snapshot reaches graph pane', doc('graph').body.textContent.includes('first commit'));
+  send('repositories', { ...snapshot, fontSize: 20 }); await tick();
+  check('font size applies to all three panes and their headings',
+   getComputedStyle(document.querySelector('.pane h2')).fontSize === '20px' &&
+   ['repositories', 'changes', 'graph'].every(name => getComputedStyle(doc(name).body).fontSize === '20px'));
+  send('repositories', { ...snapshot, fontSize: 0 }); await tick();
+  check('automatic font size restores the editor setting',
+   !document.documentElement.style.getPropertyValue('--gitpane-font-size') &&
+   ['repositories', 'changes', 'graph'].every(name => !doc(name).documentElement.style.getPropertyValue('--gitpane-font-size')));
   doc('changes').querySelector('.file-row').click(); await tick();
   check('diff action retains owner and selection epoch', received.some(packet => packet.surface === 'changes' &&
    packet.message.type === 'openChange' && packet.message.id === 'file' && packet.message.ownerId === 'repo' && packet.message.selectionEpoch === 7));

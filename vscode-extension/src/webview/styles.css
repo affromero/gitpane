@@ -28,7 +28,7 @@ body {
   color: var(--text);
   background: var(--vscode-sideBar-background);
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: var(--vscode-editor-font-size, 13px);
+  font-size: var(--gitpane-font-size, var(--vscode-editor-font-size, 13px));
   line-height: 1.45;
 }
 

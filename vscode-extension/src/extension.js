@@ -77,11 +77,12 @@ class GitpaneViewProvider {
     return this.ids.get(key);
   }
 
-  configureView({ refreshInterval, worktreeExpansion, showOutsideWorktrees }) {
+  configureView({ refreshInterval, worktreeExpansion, showOutsideWorktrees, fontSize }) {
     const intervalChanged = this.refreshInterval !== refreshInterval;
     this.refreshInterval = refreshInterval;
     this.worktreeExpansion = worktreeExpansion;
     this.showOutsideWorktrees = showOutsideWorktrees;
+    this.fontSize = fontSize;
     if (intervalChanged && this.refreshChangesTimer !== undefined) {
       clearTimeout(this.refreshChangesTimer);
       this.refreshChangesTimer = undefined;
@@ -213,7 +214,7 @@ class GitpaneViewProvider {
       }
     }
     return {
-      type: 'snapshot', repositories,
+      type: 'snapshot', repositories, fontSize: this.fontSize || 0,
       errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : []),
         ...(this.showOutsideWorktrees && children.some(node => node.type === 'repo' &&

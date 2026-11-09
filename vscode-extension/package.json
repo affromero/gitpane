@@ -49,6 +49,15 @@
     "configuration": {
       "title": "Gitpane Explorer",
       "properties": {
+        "gitpane.fontSize": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 40,
+          "scope": "window",
+          "order": 5,
+          "description": "Text size in pixels for Gitpane. Use 0 to follow the editor font size, or choose a value from 8 to 40."
+        },
         "gitpane.sortOrder": {
           "type": "string",
           "enum": ["remember", "workspace", "alphabetical", "reverse", "dirty"],

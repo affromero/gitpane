@@ -24,6 +24,12 @@
   window.addEventListener('message', event => {
     const { surface, message } = event.data || {};
     if (surfaces.has(surface) && message && !Object.values(frames).some(frame => event.source === frame.contentWindow)) {
+      if (surface === 'repositories' && message.type === 'snapshot') {
+        if (Number.isInteger(message.fontSize) && message.fontSize >= 8 && message.fontSize <= 40)
+          document.documentElement.style.setProperty('--gitpane-font-size', `${message.fontSize}px`);
+        else document.documentElement.style.removeProperty('--gitpane-font-size');
+        for (const frame of Object.values(frames)) syncTheme(frame);
+      }
       frames[surface].contentWindow?.postMessage(message, '*');
     }
   });
@@ -33,6 +39,9 @@
     if (!doc?.body) return;
     const styles = getComputedStyle(document.body);
     for (const key of styles) if (key.startsWith('--vscode-')) doc.documentElement.style.setProperty(key, styles.getPropertyValue(key));
+    const fontSize = document.documentElement.style.getPropertyValue('--gitpane-font-size');
+    if (fontSize) doc.documentElement.style.setProperty('--gitpane-font-size', fontSize);
+    else doc.documentElement.style.removeProperty('--gitpane-font-size');
     const keep = [...doc.body.classList].filter(name => !name.startsWith('vscode-'));
     doc.body.className = [...keep, ...[...document.body.classList].filter(name => name.startsWith('vscode-'))].join(' ');
   }

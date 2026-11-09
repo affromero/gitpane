@@ -313,6 +313,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 
 | Setting | Default | Behavior |
 |---------|---------|----------|
+| `gitpane.fontSize` | `0` | Text size in pixels across Gitpane's three panes. `0` follows the editor font size; choose 8 to 40 for a fixed size. |
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
 | `gitpane.worktrees.showOutsideWorkspace` | `true` | Show registered outside worktrees and inspect their changes in the current window. |
