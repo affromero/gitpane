@@ -26,6 +26,14 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
     if (!guard()) return;
     if (node) await vscode.commands.executeCommand('gitpane.openChange', node, ...(surface === 'changes' ? [guard] : []));
     else if (selected) await vscode.window.showErrorMessage('Gitpane change is no longer available. Refresh and try again.');
+  } else if (message?.type === 'loadStashFiles' && typeof message.id === 'string') {
+    await provider.stashView?.load(message.id);
+  } else if (message?.type === 'openStashFile' && typeof message.id === 'string' && typeof message.fileId === 'string') {
+    try { await provider.stashView?.open(message.id, message.fileId); }
+    catch (error) {
+      provider.tree.output?.appendLine(`Could not open stash file: ${error.message}`);
+      if (guard()) await vscode.window.showErrorMessage(`Gitpane could not open the stash file: ${error.message}`);
+    }
   } else if (message?.type === 'loadChanges' && typeof message.id === 'string') {
     provider.workspaceViews?.retainChanges(surface, message.id);
     await provider.loadChanges(message.id);

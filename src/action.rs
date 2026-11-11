@@ -1,4 +1,5 @@
 use crate::git::graph::{DiffStat, GraphFilters, GraphRow};
+use crate::git::stash::StashSource;
 use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 
@@ -9,9 +10,6 @@ pub(crate) enum Action {
     Quit,
     Resize(u16, u16),
     SelectRepo(RepoId),
-    /// Update the file list and graph to a repo's data without moving the
-    /// list-row selection. Used when a child row (stash entry) is highlighted.
-    FocusRepoDetails(RepoId),
     SelectWorktree {
         repo_id: RepoId,
         worktree_path: std::path::PathBuf,
@@ -177,6 +175,42 @@ pub(crate) enum Action {
         generation: u64,
         content: String,
     },
+    /// Open a stash's saved file list. The OID is the immutable identity; the
+    /// label and summary are display-only.
+    SelectStash {
+        repo_id: RepoId,
+        oid: String,
+        label: String,
+        summary: String,
+    },
+    /// Result of reading a stash snapshot. Applies only while the same
+    /// `(repo_id, oid)` is still selected and `generation` is the latest list
+    /// request, so A → B → A cannot resurrect the first visit's result.
+    StashFilesLoaded {
+        repo_id: RepoId,
+        oid: String,
+        generation: u64,
+        result: Result<Vec<crate::components::file_list::StashFileEntry>, String>,
+    },
+    /// Read one file from a stash snapshot. `source` + `file.path` identify the
+    /// file within the stash; `generation` rejects superseded requests.
+    ShowStashDiff {
+        repo_id: RepoId,
+        oid: String,
+        source: StashSource,
+        path: std::path::PathBuf,
+        generation: u64,
+    },
+    StashDiffLoaded {
+        repo_id: RepoId,
+        oid: String,
+        path: std::path::PathBuf,
+        generation: u64,
+        result: Result<String, String>,
+    },
+    /// Leave the read-only stash preview and show the selected repo's working
+    /// tree again.
+    ExitStashView,
     GraphError {
         generation: u64,
         message: String,
@@ -268,4 +302,22 @@ pub(crate) enum Action {
     CommitTheme(String),
     /// Re-apply the theme that was active when the picker opened, then close.
     CancelThemePreview,
+}
+
+impl Action {
+    /// Workspace file actions that mutate or open the on-disk working tree.
+    /// A stash preview is a read-only snapshot, so dispatch refuses these even
+    /// if a UI path (context menu, stale key, mouse click) emits one.
+    pub(crate) fn is_workspace_file_action(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenFile(..)
+                | Self::RevealFile(..)
+                | Self::StageFile(..)
+                | Self::UnstageFile(..)
+                | Self::DiscardFile(..)
+                | Self::DiscardFileConfirmed(..)
+                | Self::ShowFileContextMenu { .. }
+        )
+    }
 }

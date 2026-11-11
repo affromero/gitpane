@@ -16,6 +16,7 @@ const saved = vscode.getState() || {};
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
 const expandedStashes = new Set(Array.isArray(saved.expandedStashes) ? saved.expandedStashes : []);
+const expandedStashFiles = new Set(Array.isArray(saved.expandedStashFiles) ? saved.expandedStashFiles : []);
 const worktreeVisibility = new Map((Array.isArray(saved.worktreeVisibility) ? saved.worktreeVisibility : [])
   .filter(item => Array.isArray(item) && typeof item[0] === 'string' && /^[a-f0-9]{64}$/.test(item[0]) && typeof item[1] === 'boolean').slice(-1024));
 const transientWorktreeVisibility = new Map();
@@ -29,6 +30,7 @@ let hostSelectedOwner;
 let visible = [];
 const pendingLoads = new Map();
 const pendingPages = new Map();
+const pendingStashFiles = new Map();
 let searchOwner;
 let searchTimer;
 const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
@@ -36,6 +38,7 @@ const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message
 
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
+    expandedStashFiles: [...expandedStashFiles].slice(-1024),
     worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected });
 }
 
@@ -492,6 +495,7 @@ function render() {
   const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
   visible = [];
   const owners = new Set();
+  const stashIds = new Set();
   tree.replaceChildren();
   renderMessages();
   document.body.dataset.separateChanges = String(!changesMode && !!snapshot.separateChanges);
@@ -579,17 +583,33 @@ function render() {
         stashGroup.item.appendChild(stashChildren);
         for (const stash of stashes) {
           const label = `stash@{${stash.index}}`;
+          const itemKey = `stash:${stash.id}`;
+          const open = expandedStashFiles.has(itemKey);
+          const files = Array.isArray(stash.files) ? stash.files : [];
+          const count = stash.fileState === 'ready' ? files.length : undefined;
           const stashRow = element('div', 'row stash-row');
           add(stashRow, 'stash', `$ ${label}`);
           add(stashRow, 'stash-message', stash.message, stash.message);
-          const stashItem = createItem(`stash:${stash.id}`, `${label}, ${stash.message}`, stashRow, false, false, stashKey);
+          if (stash.fileState === 'error') add(stashRow, 'stash-status error', '!', stash.fileError || 'Could not load saved files');
+          else if (count !== undefined) add(stashRow, 'stash-status', `[${count}]`, `${count} saved ${count === 1 ? 'file' : 'files'}`);
+          const details = count === undefined ? '' : `, ${count} saved ${count === 1 ? 'file' : 'files'}`;
+          const stashItem = createItem(itemKey, `${label}, ${stash.message}${details}`, stashRow, true, open, stashKey);
+          stashItem.stashId = stash.id;
+          stashIds.add(stash.id);
           stashChildren.appendChild(stashItem.item);
+          if (!open) continue;
+          const stashFiles = element('div', 'children stash-files');
+          stashFiles.setAttribute('role', 'group');
+          stashItem.item.appendChild(stashFiles);
+          window.GitpaneStashFiles.render({ element, add, createItem, statusClass, container: stashFiles, stash,
+            open: false, parentKey: itemKey, pending: pendingStashFiles, post: message => vscode.postMessage(message) });
         }
       }
     }
   }
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);
   for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
+  for (const id of pendingStashFiles.keys()) if (!stashIds.has(id)) pendingStashFiles.delete(id);
   for (const id of transientWorktreeVisibility.keys()) if (!owners.has(id)) transientWorktreeVisibility.delete(id);
   syncSearch();
   if (!changesMode && snapshot.selectedOwnerId !== hostSelectedOwner) {
@@ -776,6 +796,13 @@ function toggle(item) {
         if (worktree.available && expanded.has(`worktree:${worktree.id}`)) requestChanges(worktree, true);
       }
     }
+  } else if (item.key.startsWith('stash:')) {
+    if (item.isExpanded) expandedStashFiles.delete(item.key);
+    else {
+      expandedStashFiles.add(item.key);
+      const stash = (snapshot.repositories || []).flatMap(repo => repo.stashes || []).find(value => value.id === item.stashId);
+      window.GitpaneStashFiles.retry(message => vscode.postMessage(message), pendingStashFiles, stash);
+    }
   } else if (item.key.startsWith('stash-group:')) {
     if (item.isExpanded) expandedStashes.delete(item.key);
     else expandedStashes.add(item.key);
@@ -805,6 +832,7 @@ function activate(item) {
     } else requestPage(item.pageOwner, item.pageDirection, item.pageNumber);
     render();
   }
+  else if (item.stashFileId !== undefined) vscode.postMessage({ type: 'openStashFile', id: item.stashId, fileId: item.stashFileId });
   else if (item.fileId !== undefined) vscode.postMessage({ type: 'openChange', id: item.fileId });
   else if (item.worktreeId !== undefined) vscode.postMessage({ type: 'menu', kind: 'worktree', id: item.worktreeId });
 }

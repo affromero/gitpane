@@ -3,25 +3,37 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::ListState,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::Action;
-use crate::components::scroll_pane::{self, BarColors, ScrollLayout};
+use crate::components::scroll_pane::{self, ScrollLayout};
 use crate::components::{Component, ListFilter};
-use crate::git::status::{FileEntry, FileStatus, SubmoduleHead, SubmoduleState, SubmoduleWarn};
+use crate::git::stash::StashSource;
+use crate::git::status::{FileEntry, FileStatus};
+pub(crate) use crate::git::status::{SubmoduleHead, SubmoduleState, SubmoduleWarn};
 use crate::repo_id::RepoId;
-use crate::theme::{FileListTheme, Theme};
+pub(crate) use crate::theme::FileListTheme;
+use crate::theme::Theme;
+
+mod render;
+mod source;
+
+pub(crate) use source::{ContentState, FileSource, StashFileEntry, StashView};
 
 pub(crate) struct FileList {
     files: Vec<FileEntry>,
     state: ListState,
-    repo_name: String,
-    repo_id: Option<RepoId>,
+    /// Which repository/snapshot the rows came from. `None` before the first
+    /// selection.
+    source: Option<FileSource>,
+    /// Parallel metadata for `files` when `source` is a stash. Kept separate
+    /// from `FileEntry` because stash rows carry a read-only origin and both
+    /// sides of a rename.
+    stash_files: Option<Vec<StashFileEntry>>,
+    content_state: ContentState,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
     render_area: Rect,
@@ -30,6 +42,10 @@ pub(crate) struct FileList {
     // Diff view
     diff_content: Option<String>,
     diff_path: Option<std::path::PathBuf>,
+    /// Origin of `diff_path` inside a stash. The same path can be present as
+    /// both tracked and saved-untracked content, so the path alone does not
+    /// identify the row whose diff is open.
+    diff_stash_source: Option<StashSource>,
     diff_scroll: u16,
     /// Memoized row index for `diff_content` (see `scroll_pane::PaneRows`),
     /// keyed by the content version and the content width — the only inputs
@@ -50,6 +66,10 @@ pub(crate) struct FileList {
     pub horizontal_layout: bool,
     /// Monotonic counter to discard stale DiffLoaded results.
     diff_generation: u64,
+    /// Monotonic counter for stash file-list requests. Because A → B → A
+    /// selects the same snapshot twice, the snapshot identity cannot tell the
+    /// two visits apart; the request that is still outstanding can.
+    stash_generation: u64,
     theme: Arc<Theme>,
     /// Substring filter over file paths (`/` to type; matches are highlighted
     /// and `j`/`k` jump between them).
@@ -66,8 +86,9 @@ impl FileList {
         Self {
             files: Vec::new(),
             state: ListState::default(),
-            repo_name: String::new(),
-            repo_id: None,
+            source: None,
+            stash_files: None,
+            content_state: ContentState::Ready,
             focused: false,
             action_tx: None,
             render_area: Rect::default(),
@@ -75,12 +96,14 @@ impl FileList {
             diff_area: Rect::default(),
             diff_content: None,
             diff_path: None,
+            diff_stash_source: None,
             diff_scroll: 0,
             diff_rows: None,
             diff_content_version: 0,
             dragging_scrollbar: None,
             horizontal_layout: false,
             diff_generation: 0,
+            stash_generation: 0,
             theme,
             filter: ListFilter::default(),
             searching: false,
@@ -93,44 +116,41 @@ impl FileList {
     }
 
     pub fn set_files(&mut self, files: Vec<FileEntry>, repo_name: &str, repo_id: RepoId) {
-        let is_same_repo = self.repo_id.as_ref() == Some(&repo_id) && self.repo_name == repo_name;
+        let source = FileSource::WorkingTree {
+            repo_id,
+            name: repo_name.to_string(),
+        };
+        let is_same_source = self.source.as_ref() == Some(&source);
         let prev_selected = self.state.selected();
         let selected_path = prev_selected
             .and_then(|i| self.files.get(i))
             .map(|f| f.path.clone());
-        let files_changed = !is_same_repo || self.files != files;
+        let files_changed = !is_same_source || self.files != files;
 
-        if !is_same_repo {
+        if !is_same_source {
             self.searching = false;
             self.filter.clear();
         }
 
         self.files = files;
-        self.path_strings = self
-            .files
-            .iter()
-            .map(|f| f.path.to_string_lossy().into_owned())
-            .collect();
-        self.filter.rebuild(&self.path_strings);
-        self.repo_name = repo_name.to_string();
-        self.repo_id = Some(repo_id);
+        self.stash_files = None;
+        self.diff_stash_source = None;
+        self.content_state = ContentState::Ready;
+        self.source = Some(source);
+        self.rebuild_path_strings();
 
-        let keep_diff = is_same_repo
+        let keep_diff = is_same_source
             && self
                 .diff_path
                 .as_ref()
                 .is_some_and(|path| self.files.iter().any(|f| f.path == *path));
         if files_changed && !keep_diff {
-            self.diff_generation += 1;
-            self.diff_content_version = self.diff_content_version.wrapping_add(1);
-            self.diff_content = None;
-            self.diff_path = None;
-            self.diff_scroll = 0;
+            self.reset_diff();
         }
 
         if self.files.is_empty() {
             self.state.select(None);
-        } else if is_same_repo {
+        } else if is_same_source {
             // Preserve selection on refresh
             let idx = selected_path
                 .as_ref()
@@ -143,6 +163,165 @@ impl FileList {
             self.state.select(Some(0));
         }
         self.normalize_search_selection();
+    }
+
+    /// Enter the read-only preview for `oid` before its rows have loaded.
+    /// Returns the generation of this list request; a result tagged with an
+    /// older generation is stale even if it names the same snapshot.
+    pub fn show_stash_loading(
+        &mut self,
+        repo_id: RepoId,
+        repo_name: String,
+        oid: String,
+        label: String,
+        summary: String,
+    ) -> u64 {
+        self.stash_generation += 1;
+        self.source = Some(FileSource::Stash(StashView {
+            repo_id,
+            repo_name,
+            oid,
+            label,
+            summary,
+        }));
+        self.stash_files = None;
+        self.files.clear();
+        self.path_strings.clear();
+        self.filter.clear();
+        self.searching = false;
+        self.state.select(None);
+        self.content_state = ContentState::Loading;
+        self.reset_diff();
+        self.stash_generation
+    }
+
+    /// Install the rows of the selected stash. `path_strings` keeps rename
+    /// rows readable (`old → new`) while `files` keeps the diff key in `path`.
+    pub fn set_stash_files(&mut self, stash_files: Vec<StashFileEntry>) {
+        let is_same_source = self.is_stash();
+        let prev_selected = self.state.selected();
+        // A stash can hold the same path as both tracked and saved-untracked
+        // content, so the selected row is remembered by its full identity.
+        let selected_identity = prev_selected
+            .and_then(|i| self.stash_files.as_ref()?.get(i))
+            .map(|f| (f.source, f.path.clone()));
+
+        self.files = stash_files
+            .iter()
+            .map(StashFileEntry::as_file_entry)
+            .collect();
+        self.path_strings = stash_files
+            .iter()
+            .map(StashFileEntry::display_path)
+            .collect();
+        self.stash_files = Some(stash_files);
+        self.content_state = ContentState::Ready;
+        self.filter.rebuild(&self.path_strings);
+
+        // The open diff survives a reload only if the new list still holds the
+        // same (source, path) row.
+        let keep_diff = match (&self.diff_path, self.diff_stash_source) {
+            (Some(path), Some(source)) => self
+                .stash_files
+                .as_ref()
+                .is_some_and(|files| files.iter().any(|f| f.source == source && f.path == *path)),
+            _ => false,
+        };
+        if !is_same_source || !keep_diff {
+            self.reset_diff();
+        }
+
+        if self.files.is_empty() {
+            self.state.select(None);
+        } else if is_same_source {
+            let idx = selected_identity
+                .as_ref()
+                .and_then(|(source, path)| {
+                    self.stash_files
+                        .as_ref()?
+                        .iter()
+                        .position(|f| f.source == *source && f.path == *path)
+                })
+                .or(prev_selected)
+                .map(|i| i.min(self.files.len() - 1))
+                .unwrap_or(0);
+            self.state.select(Some(idx));
+        } else {
+            self.state.select(Some(0));
+        }
+        self.normalize_search_selection();
+    }
+
+    pub fn set_stash_error(&mut self, message: String) {
+        self.stash_files = None;
+        self.files.clear();
+        self.path_strings.clear();
+        self.filter.clear();
+        self.searching = false;
+        self.state.select(None);
+        self.content_state = ContentState::Error(message);
+        self.reset_diff();
+    }
+
+    fn rebuild_path_strings(&mut self) {
+        self.path_strings = self
+            .files
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned())
+            .collect();
+        self.filter.rebuild(&self.path_strings);
+    }
+
+    fn reset_diff(&mut self) {
+        self.diff_generation += 1;
+        self.diff_content_version = self.diff_content_version.wrapping_add(1);
+        self.diff_content = None;
+        self.diff_path = None;
+        self.diff_stash_source = None;
+        self.diff_scroll = 0;
+    }
+
+    pub fn is_stash(&self) -> bool {
+        matches!(self.source, Some(FileSource::Stash(_)))
+    }
+
+    pub fn stash_view(&self) -> Option<&StashView> {
+        match self.source.as_ref()? {
+            FileSource::Stash(stash) => Some(stash),
+            FileSource::WorkingTree { .. } => None,
+        }
+    }
+
+    /// Update the display identity of the current stash preview when the
+    /// stash list renumbers it. Content and selection stay bound to the OID.
+    pub fn update_stash_identity(
+        &mut self,
+        repo_id: &RepoId,
+        oid: &str,
+        label: String,
+        summary: String,
+    ) {
+        let Some(FileSource::Stash(stash)) = self.source.as_mut() else {
+            return;
+        };
+        if &stash.repo_id == repo_id && stash.oid == oid {
+            stash.label = label;
+            stash.summary = summary;
+        }
+    }
+
+    /// Whether the panel is still showing exactly the requested snapshot.
+    pub fn is_viewing_stash(&self, repo_id: &RepoId, oid: &str) -> bool {
+        self.stash_view()
+            .is_some_and(|stash| &stash.repo_id == repo_id && stash.oid == oid)
+    }
+
+    /// Whether a stash file-list result belongs to the snapshot that is still
+    /// displayed and to the latest list request. Both checks are needed:
+    /// A → B → A selects the same snapshot twice, so identity alone would let
+    /// the first visit's late result overwrite the second visit's preview.
+    pub fn accepts_stash_files(&self, repo_id: &RepoId, oid: &str, generation: u64) -> bool {
+        generation == self.stash_generation && self.is_viewing_stash(repo_id, oid)
     }
 
     pub fn search_active(&self) -> bool {
@@ -170,17 +349,71 @@ impl FileList {
 
     pub fn refresh_diff(&mut self) -> Option<Action> {
         let path = self.diff_path.clone()?;
-        let repo_id = self.repo_id.clone()?;
+        if let Some(stash) = self.stash_view() {
+            let source = self.diff_stash_source?;
+            let file = self
+                .stash_files
+                .as_ref()?
+                .iter()
+                .find(|file| file.source == source && file.path == path)?
+                .clone();
+            let repo_id = stash.repo_id.clone();
+            let oid = stash.oid.clone();
+            self.diff_generation += 1;
+            return Some(Action::ShowStashDiff {
+                repo_id,
+                oid,
+                source: file.source,
+                path: file.path,
+                generation: self.diff_generation,
+            });
+        }
+        let repo_id = self.source.as_ref()?.repo_id().clone();
         self.diff_generation += 1;
         Some(Action::ShowDiff(repo_id, path))
     }
 
     pub fn start_diff(&mut self, repo_id: &RepoId, path: &std::path::Path) -> Option<u64> {
-        if self.repo_id.as_ref() != Some(repo_id) || self.diff_path.as_deref() != Some(path) {
+        if self.source.as_ref().map(FileSource::repo_id) != Some(repo_id)
+            || self.is_stash()
+            || self.diff_path.as_deref() != Some(path)
+        {
             return None;
         }
         self.diff_generation += 1;
         Some(self.diff_generation)
+    }
+
+    /// Claim the generation for a stash diff request. The caller must have
+    /// bumped it when emitting [`Action::ShowStashDiff`].
+    pub fn start_stash_diff(
+        &self,
+        repo_id: &RepoId,
+        oid: &str,
+        path: &std::path::Path,
+        generation: u64,
+    ) -> Option<u64> {
+        if generation != self.diff_generation
+            || !self.is_viewing_stash(repo_id, oid)
+            || self.diff_path.as_deref() != Some(path)
+        {
+            return None;
+        }
+        Some(generation)
+    }
+
+    /// A late stash diff may only land on the snapshot and path that asked
+    /// for it, and only if no newer diff request superseded it.
+    pub fn accepts_stash_diff(
+        &self,
+        repo_id: &RepoId,
+        oid: &str,
+        path: &std::path::Path,
+        generation: u64,
+    ) -> bool {
+        generation == self.diff_generation
+            && self.is_viewing_stash(repo_id, oid)
+            && self.diff_path.as_deref() == Some(path)
     }
 
     fn select_next(&mut self) {
@@ -234,9 +467,12 @@ impl FileList {
     /// selected row's right edge. Used by the keyboard context menu (`x` /
     /// Menu); mirrors the flags the right-click handler computes.
     pub fn selected_menu(&self) -> Option<Action> {
+        if self.is_stash() {
+            return None;
+        }
         let idx = self.state.selected()?;
         let entry = self.files.get(idx)?;
-        let repo_id = self.repo_id.clone()?;
+        let repo_id = self.source.as_ref()?.repo_id().clone();
         let area = if self.viewing_diff() {
             self.file_list_area
         } else {
@@ -270,136 +506,28 @@ impl FileList {
         if self.filter.is_active() && self.filter.position_of(idx).is_none() {
             return None;
         }
-        let repo_id = self.repo_id.clone()?;
+        if let Some(stash) = self.stash_view() {
+            let file = self.stash_files.as_ref()?.get(idx)?.clone();
+            let repo_id = stash.repo_id.clone();
+            let oid = stash.oid.clone();
+            self.diff_generation += 1;
+            self.diff_path = Some(file.path.clone());
+            self.diff_stash_source = Some(file.source);
+            self.diff_scroll = 0;
+            return Some(Action::ShowStashDiff {
+                repo_id,
+                oid,
+                source: file.source,
+                path: file.path,
+                generation: self.diff_generation,
+            });
+        }
+        let repo_id = self.source.as_ref()?.repo_id().clone();
         let file = self.files.get(idx)?;
         self.diff_generation += 1;
         self.diff_path = Some(file.path.clone());
         self.diff_scroll = 0;
         Some(Action::ShowDiff(repo_id, file.path.clone()))
-    }
-
-    fn draw_file_list(&mut self, frame: &mut Frame, area: Rect) {
-        let t = &self.theme.file_list;
-        let border_color = if self.focused && !self.viewing_diff() {
-            t.border_focused
-        } else {
-            t.border_unfocused
-        };
-
-        let title = if self.repo_name.is_empty() {
-            " Changes ".to_string()
-        } else {
-            let mut t = format!(" Changes — {} ", self.repo_name);
-            if self.searching || self.filter.is_active() {
-                t = format!("{t} /{}▏ ", self.filter.query());
-            }
-            t
-        };
-
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        if self.files.is_empty() {
-            let msg = if self.repo_name.is_empty() {
-                "Select a repository"
-            } else {
-                "No changes"
-            };
-            let paragraph = Paragraph::new(msg)
-                .style(Style::default().fg(t.empty_text))
-                .block(block);
-            frame.render_widget(paragraph, area);
-            return;
-        }
-
-        let items: Vec<ListItem> = self
-            .files
-            .iter()
-            .enumerate()
-            .map(|(file_index, entry)| {
-                let mut item_style = Style::default();
-                if self.filter.is_active() && self.filter.position_of(file_index).is_some() {
-                    item_style = item_style.add_modifier(Modifier::BOLD);
-                }
-                let color = match entry.status {
-                    FileStatus::Modified => t.status_modified,
-                    FileStatus::Added => t.status_added,
-                    FileStatus::Deleted => t.status_deleted,
-                    FileStatus::Renamed => t.status_renamed,
-                    FileStatus::Untracked => t.status_untracked,
-                    FileStatus::Conflicted => t.status_conflicted,
-                };
-
-                let mut spans = vec![Span::styled(
-                    format!(" {} ", entry.status.label()),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )];
-
-                if entry.is_submodule {
-                    spans.extend(submodule_tag_spans(
-                        &entry.submodule_state,
-                        &entry.submodule_head,
-                        &entry.submodule_warn,
-                        t,
-                    ));
-                }
-
-                let path_color = if entry.is_submodule {
-                    t.submodule_path
-                } else {
-                    t.regular_path
-                };
-                let path_str = &self.path_strings[file_index];
-                spans.extend(crate::components::highlight_matches(
-                    path_str,
-                    self.filter.query(),
-                    Style::default().fg(path_color),
-                    Style::default()
-                        .fg(t.border_focused)
-                        .add_modifier(Modifier::BOLD),
-                ));
-
-                ListItem::new(Line::from(spans)).style(item_style)
-            })
-            .collect();
-
-        // No-matches note when the filter hides everything (very large lists).
-        let list = if self.filter.is_active() && self.filter.count() == 0 {
-            let mut items = items;
-            items.push(ListItem::new(Line::from(Span::styled(
-                "  no matching files ",
-                Style::default().fg(t.empty_text),
-            ))));
-            List::new(items).block(block)
-        } else {
-            List::new(items).block(block)
-        };
-        let list = list.highlight_style(
-            Style::default()
-                .bg(t.selection_bg)
-                .add_modifier(Modifier::BOLD),
-        );
-
-        frame.render_stateful_widget(list, area, &mut self.state);
-
-        // Bottom input line: makes the typing mode unmistakable even while the
-        // query is still empty (it would otherwise look like nothing happened).
-        if self.searching || self.filter.is_active() {
-            let input = format!(" /{}▏ ", self.filter.query());
-            let over = Rect::new(
-                area.x + 1,
-                area.y + area.height.saturating_sub(1),
-                (area.width.saturating_sub(2)).min(input.chars().count() as u16),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(input)
-                    .style(Style::default().fg(t.border_focused).bg(t.selection_bg)),
-                over,
-            );
-        }
     }
 
     /// Populate the row-index cache when stale (content version or pane width
@@ -493,155 +621,7 @@ impl FileList {
         }
         self.diff_scroll_layout_for(pane, 0)
     }
-
-    fn draw_diff(&mut self, frame: &mut Frame, area: Rect) {
-        // `draw` stored this same rect in `self.diff_area`, so every consumer's
-        // cache key stays one width.
-        let pane = area;
-        if !self.ensure_diff_rows(pane) {
-            return;
-        }
-        let Some(ref content) = self.diff_content else {
-            return;
-        };
-        let Some(layout) = self.diff_scroll_layout_for(pane, self.diff_scroll) else {
-            return;
-        };
-        let Some((_, _, rows)) = self.diff_rows.as_ref() else {
-            return;
-        };
-
-        let t = &self.theme.file_list;
-        let title = format!(" Diff — {} (Esc/h to close) ", self.repo_name);
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(t.diff_border));
-
-        // Only the viewport's rows are built and wrapped (the index locates the
-        // window by byte range), so a long diff scrolls as fast at the bottom
-        // as at the top.
-        let lines = scroll_pane::window_lines(
-            content,
-            rows.index(),
-            layout.gauge.offset(),
-            usize::from(layout.content.height),
-            |line| diff_line_style(line, t),
-        );
-        let gauge = scroll_pane::render_window_pane(
-            frame,
-            pane,
-            block,
-            lines,
-            layout,
-            BarColors {
-                thumb: t.diff_scrollbar_thumb,
-                track: t.diff_scrollbar_track,
-            },
-        );
-        self.diff_scroll = gauge.offset();
-    }
 }
-
-/// The style of one diff line, from its prefix: added, removed, hunk header,
-/// file metadata, or context.
-fn diff_line_style(line: &str, t: &FileListTheme) -> Style {
-    if line.starts_with('+') && !line.starts_with("+++") {
-        Style::default().fg(t.diff_added)
-    } else if line.starts_with('-') && !line.starts_with("---") {
-        Style::default().fg(t.diff_removed)
-    } else if line.starts_with("@@") {
-        Style::default().fg(t.diff_hunk)
-    } else if line.starts_with("diff ") || line.starts_with("index ") {
-        Style::default().fg(t.diff_meta)
-    } else {
-        Style::default().fg(t.diff_context)
-    }
-}
-
-/// Build the `[sub: …]` tag spans for a submodule file row. `state`, `head`,
-/// and `warn` are independent and compose, e.g. `[sub: +commit @feature ↑3 ↛main]`.
-fn submodule_tag_spans(
-    state: &Option<SubmoduleState>,
-    head: &Option<SubmoduleHead>,
-    warn: &SubmoduleWarn,
-    theme: &FileListTheme,
-) -> Vec<Span<'static>> {
-    let bracket_style = Style::default().fg(theme.submodule_bracket);
-    let branch_style = Style::default().fg(theme.submodule_branch);
-    let unpushed_style = Style::default().fg(theme.submodule_unpushed);
-    let unreach_style = Style::default().fg(theme.submodule_unreachable);
-    let merge_style = Style::default().fg(theme.submodule_needs_merge);
-
-    let mut inner: Vec<Span<'static>> = Vec::new();
-
-    let state_label = match state {
-        Some(SubmoduleState::Modified) => Some("+commit"),
-        Some(SubmoduleState::Uninitialized) => Some("-uninit"),
-        Some(SubmoduleState::Dirty) => Some("~dirty"),
-        None => None,
-    };
-
-    // Uninitialized takes precedence: never compose with branch/warn —
-    // `sub.open()` can't introspect the inner repo, so those fields are empty.
-    let suppress_warn = matches!(state, Some(SubmoduleState::Uninitialized));
-
-    if let Some(label) = state_label {
-        inner.push(Span::styled(label, bracket_style));
-    }
-
-    // Push a separating space when the tag already has content.
-    fn sep(inner: &mut Vec<Span<'static>>, style: Style) {
-        if !inner.is_empty() {
-            inner.push(Span::styled(" ", style));
-        }
-    }
-
-    if !suppress_warn {
-        // Branch indicator: `@feature`, or `@detached` for a detached HEAD.
-        if let Some(h) = head {
-            let label = match h {
-                SubmoduleHead::Branch(name) => format!("@{name}"),
-                SubmoduleHead::Detached => "@detached".to_string(),
-            };
-            sep(&mut inner, bracket_style);
-            inner.push(Span::styled(label, branch_style));
-        }
-
-        // Push/merge warnings. `⚠unreach` (on no remote) dominates; otherwise
-        // `↑N` (ahead of upstream) and `↛main` (not on the default branch)
-        // compose additively.
-        if warn.pointer_unreachable {
-            sep(&mut inner, bracket_style);
-            inner.push(Span::styled("\u{26a0}unreach", unreach_style));
-        } else {
-            if warn.unpushed_commits > 0 {
-                sep(&mut inner, bracket_style);
-                inner.push(Span::styled(
-                    format!("\u{2191}{}", warn.unpushed_commits),
-                    unpushed_style,
-                ));
-            }
-            if warn.needs_merge_to_default {
-                sep(&mut inner, bracket_style);
-                inner.push(Span::styled("\u{219b}main", merge_style));
-            }
-        }
-    }
-
-    if inner.is_empty() {
-        // No state and no warn — fall back to a plain "[submodule]" tag
-        // (matches the prior behavior for submodules with no signal).
-        return vec![Span::styled("[submodule] ", bracket_style)];
-    }
-
-    let mut out = Vec::with_capacity(inner.len() + 2);
-    out.push(Span::styled("[sub: ", bracket_style));
-    out.extend(inner);
-    out.push(Span::styled("] ", bracket_style));
-    out
-}
-
 impl Component for FileList {
     fn cancel_drag(&mut self) {
         self.dragging_scrollbar = None;
@@ -658,6 +638,7 @@ impl Component for FileList {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left => {
                     self.diff_content = None;
                     self.diff_path = None;
+                    self.diff_stash_source = None;
                     self.diff_generation += 1;
                     self.diff_scroll = 0;
                 }
@@ -718,6 +699,7 @@ impl Component for FileList {
                 Ok(None)
             }
             KeyCode::Enter => Ok(self.try_show_diff()),
+            KeyCode::Esc if self.is_stash() => Ok(Some(Action::ExitStashView)),
             _ => Ok(None),
         }
     }
@@ -765,6 +747,11 @@ impl Component for FileList {
                 Ok(None)
             }
             MouseEventKind::Down(MouseButton::Right) => {
+                if self.is_stash() {
+                    // Stash rows have no workspace context menu. The dispatch
+                    // boundary also refuses those actions if one slips through.
+                    return Ok(None);
+                }
                 let pos = ratatui::layout::Position::new(mouse.column, mouse.row);
                 let click_area = if self.viewing_diff() {
                     self.file_list_area
@@ -778,9 +765,10 @@ impl Component for FileList {
                         if self.filter.is_active() && self.filter.position_of(idx).is_none() {
                             return Ok(None);
                         }
-                        if let (Some(entry), Some(repo_id)) =
-                            (self.files.get(idx), self.repo_id.clone())
-                        {
+                        if let (Some(entry), Some(repo_id)) = (
+                            self.files.get(idx),
+                            self.source.as_ref().map(FileSource::repo_id).cloned(),
+                        ) {
                             self.state.select(Some(idx));
                             let conflicted = entry.status == FileStatus::Conflicted;
                             return Ok(Some(Action::ShowFileContextMenu {

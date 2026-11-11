@@ -27,6 +27,8 @@ const { HiddenRepositories } = require('./hidden-repositories');
 const { WorkspaceRepositories } = require('./workspace-repositories');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { createLiveGitSide, createLiveWorkingSide } = require('./git-side-documents');
+const { createStashSource, unsupportedStashSource } = require('./stash-source');
+const { StashView } = require('./stash-view');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
@@ -41,7 +43,7 @@ const RICH_STATUS = {
 };
 
 class GitpaneViewProvider {
-  constructor(tree, extensionUri, theme, worktreeDisplay) {
+  constructor(tree, extensionUri, theme, worktreeDisplay, options = {}) {
     this.tree = tree;
     this.theme = theme;
     this.themeSubscription = theme?.onDidChange(() => this.publish());
@@ -56,6 +58,7 @@ class GitpaneViewProvider {
     this.repositories = new Map();
     this.changes = new Map();
     this.worktrees = new Map();
+    this.stashView = new StashView(this, options.stash || unsupportedStashSource());
     this.externalOwners = new Map();
     this.searchRequests = new Map();
     this.worktreeReveals = new Map();
@@ -139,11 +142,7 @@ class GitpaneViewProvider {
       const id = this.idFor(JSON.stringify(['repo', repoKey, repoToken]), live);
       repositoriesById.set(id, { repoKey, repoToken });
       const head = repo.state.HEAD;
-      const stashes = (status?.stashes || []).filter(item => item && Number.isSafeInteger(item.index) &&
-        item.index >= 0 && typeof item.message === 'string' && typeof item.oid === 'string').map(item => ({
-        id: this.idFor(JSON.stringify(['stash', repoKey, repoToken, item.oid, item.index]), live),
-        index: item.index, message: item.message
-      }));
+      const stashes = this.stashView.snapshot(repo, repoKey, repoToken, status?.stashes, live, this.idFor.bind(this));
       const worktreeData = this.tree.workspaceWorktrees(repo, hierarchy).map(item => {
         const child = this.tree.worktreeRepository(repo, item.path, hierarchy);
         const childRepoKey = child?.rootUri.toString();
@@ -205,6 +204,7 @@ class GitpaneViewProvider {
     this.changes = changes;
     this.worktrees = worktrees;
     this.repositories = repositoriesById;
+    this.stashView.prune();
     const reveals = [];
     for (const [id, entry] of this.worktreeReveals) {
       const current = entry.current();
@@ -692,6 +692,7 @@ class GitpaneViewProvider {
     this.changes.clear();
     this.worktrees.clear();
     this.worktreeReveals.clear();
+    this.stashView.dispose();
   }
 }
 
@@ -716,7 +717,7 @@ async function activate(context) {
   const tree = new RepositoryTree(api, output, backend, context.workspaceState?.get('gitpane.sortOrder'));
   const hidden = new HiddenRepositories(tree, backend, context.workspaceState, vscode);
   tree.hiddenRepositories = hidden;
-  const provider = new GitpaneViewProvider(tree, context.extensionUri, theme, worktreeDisplay);
+  const provider = new GitpaneViewProvider(tree, context.extensionUri, theme, worktreeDisplay, { stash: createStashSource(backend) });
   const pins = new SubmodulePins(tree, backend, api, context.workspaceState, vscode);
   const workspaceRepositories = new WorkspaceRepositories(tree, backend, api, context.workspaceState, vscode, pins);
   tree.pins = pins;
@@ -724,6 +725,7 @@ async function activate(context) {
   provider.pins = pins;
   provider.workspaceRepositories = workspaceRepositories;
   const links = new LinkDocuments(vscode, tree, backend);
+  provider.links = links;
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
   const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links);

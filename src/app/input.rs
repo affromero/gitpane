@@ -150,6 +150,11 @@ impl App {
                     self.git_graph.handle_key_event(key)?;
                 } else if self.focus == FocusPanel::GitHub && self.github_panel.has_detail() {
                     self.github_panel.handle_key_event(key)?;
+                } else if self.file_list.is_stash() {
+                    // A stash preview is a read-only view of a source the repo
+                    // panel no longer points at. Esc returns to the working
+                    // tree before falling through to panel navigation/quit.
+                    self.action_tx.send(Action::ExitStashView)?;
                 } else {
                     match self.focus {
                         FocusPanel::GitHub => self.focus = FocusPanel::Graph,

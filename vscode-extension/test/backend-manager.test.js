@@ -44,6 +44,17 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     process.exit(1);
   } else if (request.method === 'repo_blob_metadata' && request.params.path === 'tree') {
     send({id: request.id, error: {code: 'unsupported_content', message: 'The selected object is not a blob'}});
+  } else if (request.method === 'stash_files' && request.params.oid === '2'.repeat(40)) {
+    send({id: request.id, error: {code: 'content_not_found', message: 'The saved stash is gone'}});
+  } else if (request.method === 'stash_files' && request.params.oid === '4'.repeat(40)) {
+    process.exit(1);
+  } else if (request.method === 'stash_file_content' && request.params.oid === '5'.repeat(40)) {
+    send({id: request.id, error: {code: 'unsupported_backend', message: 'Stash previews are unavailable'}});
+  } else if (request.method === 'stash_file_content' && request.params.oid === '2'.repeat(40)) {
+    send({id: request.id, error: {code: 'stale_target', message: 'Repository changed'}});
+  } else if (request.method === 'stash_files') {
+    send({id: request.id, result: {oid: request.params.oid, message: 'WIP', parent_oid: 'a'.repeat(40),
+      untracked_parent_oid: null, files: [], repo_identity: 'e'.repeat(64)}});
   } else if (request.method === 'changes_begin') {
     const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
       previous_cursor: null, next_cursor: 1, changes: []};
@@ -706,6 +717,26 @@ test('invalid worktree branches remain action errors while backend failures stay
   assert.equal(manager.state.status, 'ready');
   assert.equal((await manager.status(repo)).method, 'status');
   await assert.rejects(manager.planWorktree(repo, 'offline'), error => error.code === 'service_exited');
+  assert.equal(manager.state.status, 'error');
+  assert.equal(manager.state.error.code, 'service_exited');
+});
+
+test('recoverable stash read errors keep the backend ready while transport failures stay visible', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  const repo = path.join(root, 'repo'), identity = 'e'.repeat(64);
+  assert.equal((await manager.stashFiles(repo, '1'.repeat(40))).message, 'WIP');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.stashFiles(repo, '2'.repeat(40)), error => error.code === 'content_not_found');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.stashFileContent(repo, '5'.repeat(40), identity, 'tracked', 'src/file.txt'),
+    error => error.code === 'unsupported_backend');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.stashFileContent(repo, '2'.repeat(40), identity, 'saved_untracked', 'notes.txt'),
+    error => error.code === 'stale_target');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.stashFiles(repo, '4'.repeat(40)), error => error.code === 'service_exited');
   assert.equal(manager.state.status, 'error');
   assert.equal(manager.state.error.code, 'service_exited');
 });

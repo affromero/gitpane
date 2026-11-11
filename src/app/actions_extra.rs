@@ -7,7 +7,43 @@ const COMMIT_DIFF_DEBOUNCE: Duration = Duration::from_millis(200);
 
 impl App {
     pub(super) fn handle_action_rest(&mut self, action: Action) -> Result<()> {
+        if self.file_list.is_stash() && action.is_workspace_file_action() {
+            self.action_tx.send(Action::Error(
+                "Stash preview is read-only; return to the working tree to change files"
+                    .to_string(),
+            ))?;
+            return Ok(());
+        }
         match action {
+            Action::StashFilesLoaded {
+                repo_id,
+                oid,
+                generation,
+                result,
+            } => {
+                // A late load may only land on the snapshot that is still
+                // displayed and on the latest request for it. Switching repo,
+                // worktree, or stash drops it; returning to the same stash
+                // bumps the generation, so the first visit cannot land here.
+                if self
+                    .file_list
+                    .accepts_stash_files(&repo_id, &oid, generation)
+                {
+                    match &result {
+                        Ok(files) => {
+                            self.file_list.set_stash_files(files.clone());
+                            if let Some(action) = self.file_list.refresh_diff() {
+                                self.action_tx.send(action)?;
+                            }
+                        }
+                        Err(message) => {
+                            self.file_list.set_stash_error(message.clone());
+                            self.action_tx
+                                .send(Action::Error(format!("Stash preview: {message}")))?;
+                        }
+                    }
+                }
+            }
             Action::GotoSessionSelected => {
                 self.goto_session_selected()?;
             }
@@ -555,6 +591,60 @@ impl App {
             } => {
                 if generation == self.file_list.diff_generation() {
                     self.file_list.set_diff(content.clone());
+                }
+            }
+            Action::ShowStashDiff {
+                repo_id,
+                oid,
+                source,
+                path,
+                generation,
+            } => {
+                // The row click already claimed this generation and path. Any
+                // newer selection or diff request makes it stale.
+                if self
+                    .file_list
+                    .start_stash_diff(&repo_id, &oid, &path, generation)
+                    .is_none()
+                {
+                    return Ok(());
+                }
+                let Some(idx) = self.repo_list.resolve_index(&repo_id) else {
+                    return Ok(());
+                };
+                let repo_path = self.repo_list.repos[idx].path.clone();
+                let tx = self.action_tx.clone();
+                let file_key = path.to_string_lossy().into_owned();
+                tokio::task::spawn_blocking(move || {
+                    let result = super::stash::load_stash_diff(&repo_path, &oid, source, &file_key)
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(Action::StashDiffLoaded {
+                        repo_id,
+                        oid,
+                        path,
+                        generation,
+                        result,
+                    });
+                });
+            }
+            Action::StashDiffLoaded {
+                repo_id,
+                oid,
+                path,
+                generation,
+                result,
+            } => {
+                if !self
+                    .file_list
+                    .accepts_stash_diff(&repo_id, &oid, &path, generation)
+                {
+                    return Ok(());
+                }
+                match &result {
+                    Ok(content) => self.file_list.set_diff(content.clone()),
+                    Err(message) => self
+                        .file_list
+                        .set_diff(format!("Failed to load stash diff: {message}")),
                 }
             }
             Action::ShowCommitFiles {

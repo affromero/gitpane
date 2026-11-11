@@ -350,6 +350,8 @@ class BackendManager {
       else if (method === 'submodule_pointer_compare') result = await client.submodulePointerCompare(repo, argument.record, argument.identity);
       else if (method === 'submodule_pointer_content') result = await client.submodulePointerContent(repo, argument.record, argument.identity, argument.headOid, argument.sides, argument.side);
       else if (method === 'submodule_historical_content') result = await client.submoduleHistoricalContent(repo, argument.identity, argument.commit, argument.path, argument.oid, argument.mode);
+      else if (method === 'stash_files') result = await client.stashFiles(repo, argument.oid);
+      else if (method === 'stash_file_content') result = await client.stashFileContent(repo, argument.oid, argument.identity, argument.source, argument.path);
       else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'ui_config') result = await client.uiConfig();
@@ -383,6 +385,8 @@ class BackendManager {
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'unsupported_content', 'content_not_found'].includes(error?.code);
       const invalidPointer = ['submodule_pointer_compare', 'submodule_pointer_content', 'submodule_historical_content'].includes(method) &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'file_too_large', 'unsupported_content'].includes(error?.code);
+      const invalidStash = ['stash_files', 'stash_file_content'].includes(method) &&
+        ['invalid_request', 'unsupported_backend', 'repository_error', 'outside_workspace', 'stale_target', 'content_not_found'].includes(error?.code);
       const invalidRepositoryPreview = method === 'repository_preview' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';
@@ -391,7 +395,7 @@ class BackendManager {
       const invalidUiConfig = method === 'ui_config' && ['invalid_request', 'unsupported_backend'].includes(error?.code);
       const invalidLauncher = ['launchers_list', 'launcher_plan', 'launcher_validate'].includes(method) &&
         ['invalid_request', 'unsupported', 'unsupported_backend', 'unsupported_placement', 'config_error', 'session_error', 'stale_launcher', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
-      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidExternalWorktree && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig && !invalidLauncher) {
+      if (!isChanges && !this.disposed && generation === this.generation && current() && !invalidWorktreePlan && !invalidExternalWorktree && !invalidWorktreePreview && !invalidLink && !invalidSubmodule && !invalidIdentity && !invalidBlob && !invalidPointer && !invalidStash && !invalidRepositoryPreview && !staleChanges && !obsoleteRelease && !invalidTheme && !invalidUiConfig && !invalidLauncher) {
         this.setState('error', error);
       }
       throw error;
@@ -774,6 +778,12 @@ class BackendManager {
 
   submodulePointerContent(repo, record, identity, headOid, sides, side) {
     return this.request('submodule_pointer_content', repo, { record, identity, headOid, sides, side });
+  }
+
+  stashFiles(repo, oid) { return this.request('stash_files', repo, { oid }); }
+
+  stashFileContent(repo, oid, identity, source, filePath) {
+    return this.request('stash_file_content', repo, { oid, identity, source, path: filePath });
   }
 
   cancelSessionLiveness() {

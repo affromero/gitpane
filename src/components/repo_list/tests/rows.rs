@@ -398,3 +398,67 @@ fn expand_repo_reverses_a_session_collapse() {
     list.expand_repo(&PathBuf::from("/a"));
     assert_eq!(worktree_rows(&list), 1);
 }
+
+#[test]
+fn stash_row_emits_select_stash_with_the_immutable_oid() {
+    let mut list = make_list(&["/a"]);
+    let mut status = empty_status("main");
+    status.stashes = vec![stash_entry(2)];
+    list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
+    list.update_status(0, status);
+    let stash_row = list
+        .display_rows
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Stash(_, _)))
+        .expect("stash row present");
+    list.state.select(Some(stash_row));
+
+    assert!(matches!(
+        list.emit_selection_action(),
+        Some(Action::SelectStash { repo_id, oid, label, summary })
+            if repo_id == RepoId(PathBuf::from("/a"))
+                && oid == format!("{:040x}", 2)
+                && label == "stash@{2}"
+                && summary == "WIP 2"
+    ));
+}
+
+#[test]
+fn stash_selection_survives_renumbering_and_falls_back_on_deletion() {
+    let mut list = make_list(&["/a"]);
+    list.expanded_stashes.insert(RepoId(PathBuf::from("/a")));
+
+    let mut status = empty_status("main");
+    status.stashes = vec![stash_entry(0), stash_entry(1)];
+    list.update_status(0, status);
+
+    let stash_row = list
+        .display_rows
+        .iter()
+        .position(|row| matches!(row, DisplayRow::Stash(0, si) if *si == 1))
+        .expect("second stash row present");
+    list.state.select(Some(stash_row));
+    let oid = format!("{:040x}", 1);
+
+    // An external push renumbers the list: the same OID moves to index 0.
+    let mut renumbered = empty_status("main");
+    renumbered.stashes = vec![stash_entry(1), stash_entry(0)];
+    list.update_status(0, renumbered);
+
+    let selected = list.state.selected().expect("selection restored");
+    match &list.display_rows[selected] {
+        DisplayRow::Stash(ri, si) => assert_eq!(
+            list.repos[*ri].status.as_ref().unwrap().stashes[*si].oid,
+            oid,
+            "selection must follow the OID, not the old index"
+        ),
+        other => panic!("expected stash row, got {other:?}"),
+    }
+
+    // Dropping that stash falls back to its parent repo row.
+    let mut deleted = empty_status("main");
+    deleted.stashes = vec![stash_entry(0)];
+    list.update_status(0, deleted);
+    let selected = list.state.selected().expect("parent row selected");
+    assert!(matches!(list.display_rows[selected], DisplayRow::Repo(0)));
+}

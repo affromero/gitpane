@@ -179,8 +179,12 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 .worktree-files .group-row { padding-left: 4.7ch; }
 .worktree-files .file-row { padding-left: 6.7ch; }
 .worktree-markers { display: flex; gap: .1ch; white-space: nowrap; }
-.stash-row { grid-template-columns: auto minmax(0, 1fr); padding-left: 4.7ch; }
+.stash-row { grid-template-columns: auto minmax(0, 1fr) auto; padding-left: 4.7ch; }
 .stash-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stash-status { color: var(--muted); }
+.stash-status.error { color: var(--vscode-errorForeground, var(--behind)); }
+.stash-files .file-row, .stash-files .page-status { padding-left: 6.7ch; }
+.stash-binary { margin-left: 1ch; }
 .file-path { color: var(--gitpane-file-list-regular-path, inherit); }
 .file-path.submodule-path { color: var(--gitpane-file-list-submodule-path, inherit); }
 .page-row, .page-status { padding-left: 2.7ch; color: var(--muted); }
