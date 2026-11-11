@@ -100,5 +100,11 @@ pub(in crate::bridge) fn content(
     if scope.repository(&request.repo)? != repo || RepositoryIdentity::read(&repo)? != identity {
         return Err(stale());
     }
-    response(content, &identity)
+    let mut value = response(content, &identity)?;
+    // The extension compares the saved sides itself and does not use the patch.
+    value
+        .as_object_mut()
+        .expect("stash content is an object")
+        .remove("diff");
+    Ok(value)
 }

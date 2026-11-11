@@ -62,6 +62,7 @@ const scenario = `
   ] }))});
   await tick();
   check('saved files render under the stash', !!byKey('stash-file:f1') && !!byKey('stash-file:f2'));
+  check('modified files display their path once', byKey('stash-file:f1').querySelector('.file-path').textContent === 'src/server.rs');
   const rename = byKey('stash-file:f2').textContent;
   check('renames show both saved paths', rename.includes('old name.txt → new name.txt'));
   check('deleted files stay visible', byKey('stash-file:f3').textContent.includes('gone.txt'));

@@ -133,12 +133,12 @@ fn file_entry(delta: &git2::DiffDelta<'_>, source: StashSource) -> Result<StashF
     let path = |file: git2::DiffFile<'_>| -> Result<String> {
         let path = file
             .path()
-            .and_then(Path::to_str)
-            .ok_or_else(|| eyre!("A stash file path is missing or is not valid UTF-8."))?;
-        if !valid_path(path) {
+            .ok_or_else(|| eyre!("A stash file path is missing."))?;
+        let encoded = encoded_path(path)?;
+        if !valid_path(&encoded) {
             bail!("A stash file path is invalid.");
         }
-        Ok(path.to_string())
+        Ok(encoded)
     };
     let old_path = (delta.status() != Delta::Added)
         .then(|| path(delta.old_file()))
@@ -162,7 +162,38 @@ fn file_entry(delta: &git2::DiffDelta<'_>, source: StashSource) -> Result<StashF
     })
 }
 
-fn content(repo: &Repository, tree: Option<&Tree<'_>>, path: Option<&str>) -> Result<StashContent> {
+fn encoded_path(path: &Path) -> Result<String> {
+    // Reserve the prefix for escaped raw bytes, including when a literal path
+    // starts with it, so distinct Git paths cannot share a preview identity.
+    const PREFIX: &str = "~gitpane-raw~";
+    if let Some(text) = path.to_str()
+        && !text.starts_with(PREFIX)
+    {
+        return Ok(text.to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::fmt::Write;
+        use std::os::unix::ffi::OsStrExt;
+        let mut result = PREFIX.to_string();
+        for byte in path.as_os_str().as_bytes() {
+            write!(result, "{byte:02x}")?;
+        }
+        Ok(result)
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_str()
+            .map(str::to_string)
+            .ok_or_else(|| eyre!("A stash file path is not valid UTF-8."))
+    }
+}
+
+fn content(
+    repo: &Repository,
+    tree: Option<&Tree<'_>>,
+    path: Option<&Path>,
+) -> Result<StashContent> {
     let Some((tree, path)) = tree.zip(path) else {
         return Ok(StashContent {
             kind: StashContentKind::Missing,
@@ -172,7 +203,7 @@ fn content(repo: &Repository, tree: Option<&Tree<'_>>, path: Option<&str>) -> Re
             text: Some(String::new()),
         });
     };
-    let entry = tree.get_path(Path::new(path))?;
+    let entry = tree.get_path(path)?;
     let mode = entry.filemode() as u32;
     let (kind, size, text) = match mode {
         0o160000 => {
@@ -207,9 +238,20 @@ fn sides(
     old_tree: Option<&Tree<'_>>,
     new_tree: &Tree<'_>,
     file: &mut StashFile,
+    delta: &git2::DiffDelta<'_>,
 ) -> Result<(StashContent, StashContent)> {
-    let old = content(repo, old_tree, file.old_path.as_deref())?;
-    let new = content(repo, Some(new_tree), file.new_path.as_deref())?;
+    let old_file = delta.old_file();
+    let new_file = delta.new_file();
+    let old = content(
+        repo,
+        old_tree,
+        file.old_path.as_ref().and_then(|_| old_file.path()),
+    )?;
+    let new = content(
+        repo,
+        Some(new_tree),
+        file.new_path.as_ref().and_then(|_| new_file.path()),
+    )?;
     file.is_binary = old.kind == StashContentKind::Binary || new.kind == StashContentKind::Binary;
     Ok((old, new))
 }
@@ -228,7 +270,7 @@ pub(crate) fn list_stash_files(path: &Path, oid: &str) -> Result<StashFiles> {
         let diff = tree_diff(&repo, old, new)?;
         for delta in diff.deltas() {
             let mut file = file_entry(&delta, source)?;
-            sides(&repo, old, new, &mut file)?;
+            sides(&repo, old, new, &mut file, &delta)?;
             files.push(file);
         }
     }
@@ -249,14 +291,8 @@ fn patch_text(diff: &Diff<'_>, index: usize, file: &StashFile) -> Result<String>
         // Print only Git's headers; binary bytes must never pass through a text decoder.
         let mut headers = Vec::new();
         diff.print(git2::DiffFormat::PatchHeader, |delta, _, line| {
-            if file
-                .old_path
-                .as_deref()
-                .is_none_or(|path| delta.old_file().path() == Some(Path::new(path)))
-                && file
-                    .new_path
-                    .as_deref()
-                    .is_none_or(|path| delta.new_file().path() == Some(Path::new(path)))
+            if delta.old_file().path() == selected.old_file().path()
+                && delta.new_file().path() == selected.new_file().path()
             {
                 headers.extend_from_slice(line.content());
             }
@@ -294,7 +330,7 @@ pub(crate) fn stash_file_content(
         if file.path != file_path {
             continue;
         }
-        let (old, new) = sides(&repo, old_tree, new_tree, &mut file)?;
+        let (old, new) = sides(&repo, old_tree, new_tree, &mut file, &delta)?;
         let diff = patch_text(&diff, index, &file)?;
         return Ok(StashFileContent {
             oid: snapshot.oid.to_string(),

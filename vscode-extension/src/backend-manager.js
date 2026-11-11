@@ -386,7 +386,7 @@ class BackendManager {
       const invalidPointer = ['submodule_pointer_compare', 'submodule_pointer_content', 'submodule_historical_content'].includes(method) &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend', 'file_too_large', 'unsupported_content'].includes(error?.code);
       const invalidStash = ['stash_files', 'stash_file_content'].includes(method) &&
-        ['invalid_request', 'unsupported_backend', 'repository_error', 'outside_workspace', 'stale_target', 'content_not_found'].includes(error?.code);
+        ['invalid_request', 'unsupported_backend', 'repository_error', 'outside_workspace', 'stale_target', 'content_not_found', 'response_too_large'].includes(error?.code);
       const invalidRepositoryPreview = method === 'repository_preview' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const staleChanges = ['changes_next', 'changes_release'].includes(method) && error?.code === 'snapshot_stale';

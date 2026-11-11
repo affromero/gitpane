@@ -14,6 +14,46 @@ fn repository() -> (TempDir, Repository) {
     (directory, repo)
 }
 
+#[cfg(unix)]
+#[test]
+fn non_utf8_paths_do_not_hide_other_saved_files() {
+    let (directory, repo) = repository();
+    let empty = files(&repo, &[]);
+    let base = commit(&repo, empty, &[], "base");
+    let blob = repo.blob(b"saved\n").unwrap();
+    let mut index = git2::Index::new().unwrap();
+    for name in [b"bad-\xff.txt".as_slice(), b"good.txt"] {
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: blob,
+                flags: 0,
+                flags_extended: 0,
+                path: name.to_vec(),
+            })
+            .unwrap();
+    }
+    let saved = index.write_tree_to(&repo).unwrap();
+    let oid = stash(&repo, base, empty, empty, Some(saved)).to_string();
+    let list = list_stash_files(directory.path(), &oid).unwrap();
+    assert_eq!(list.files.len(), 2);
+    let raw = list
+        .files
+        .iter()
+        .find(|file| file.path.starts_with("~gitpane-raw~"))
+        .unwrap();
+    let read = stash_file_content(directory.path(), &oid, raw.source, &raw.path).unwrap();
+    assert_eq!(read.new.text.as_deref(), Some("saved\n"));
+    assert!(list.files.iter().any(|file| file.path == "good.txt"));
+}
+
 #[test]
 fn two_parent_stash_compares_first_parent_with_combined_saved_tree() {
     let (directory, repo) = repository();

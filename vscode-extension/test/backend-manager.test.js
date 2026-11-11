@@ -50,6 +50,8 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     process.exit(1);
   } else if (request.method === 'stash_file_content' && request.params.oid === '5'.repeat(40)) {
     send({id: request.id, error: {code: 'unsupported_backend', message: 'Stash previews are unavailable'}});
+  } else if (request.method === 'stash_file_content' && request.params.oid === '6'.repeat(40)) {
+    send({id: request.id, error: {code: 'response_too_large', message: 'Response too large'}});
   } else if (request.method === 'stash_file_content' && request.params.oid === '2'.repeat(40)) {
     send({id: request.id, error: {code: 'stale_target', message: 'Repository changed'}});
   } else if (request.method === 'stash_files') {
@@ -735,6 +737,9 @@ test('recoverable stash read errors keep the backend ready while transport failu
   assert.equal(manager.state.status, 'ready');
   await assert.rejects(manager.stashFileContent(repo, '2'.repeat(40), identity, 'saved_untracked', 'notes.txt'),
     error => error.code === 'stale_target');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.stashFileContent(repo, '6'.repeat(40), identity, 'tracked', 'large.txt'),
+    error => error.code === 'response_too_large');
   assert.equal(manager.state.status, 'ready');
   await assert.rejects(manager.stashFiles(repo, '4'.repeat(40)), error => error.code === 'service_exited');
   assert.equal(manager.state.status, 'error');

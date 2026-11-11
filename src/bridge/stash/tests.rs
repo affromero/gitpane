@@ -130,12 +130,7 @@ fn routes_return_stable_file_dtos_and_saved_untracked_content() {
     assert_eq!(content["new"]["kind"], "text");
     assert_eq!(content["new"]["mode"], 0o100644);
     assert_eq!(content["new"]["text"], "saved untracked\n");
-    assert!(
-        content["diff"]
-            .as_str()
-            .unwrap()
-            .contains("+saved untracked\n")
-    );
+    assert!(content.get("diff").is_none());
 }
 
 #[test]
@@ -168,12 +163,7 @@ fn renamed_deleted_binary_and_gitlink_responses_have_explicit_sides() {
     assert_eq!(binary["new"]["kind"], "binary");
     assert!(binary["old"]["text"].is_null());
     assert!(binary["new"]["text"].is_null());
-    assert!(
-        binary["diff"]
-            .as_str()
-            .unwrap()
-            .contains("Binary files differ")
-    );
+    assert!(binary.get("diff").is_none());
     let gitlink = &replies[4]["result"];
     assert_eq!(gitlink["file"]["is_submodule"], true);
     assert_eq!(gitlink["old"]["kind"], "gitlink");

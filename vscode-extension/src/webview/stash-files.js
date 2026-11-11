@@ -7,7 +7,7 @@
     const item = element('div', `row file-row stash-file-row${file.gitlink ? ' submodule-file-row' : ''}`);
     add(item, statusClass(file.status), file.status || ' ');
     if (file.gitlink) add(item, 'submodule-tag', '[sub: pointer]', 'Saved submodule pointer');
-    const text = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+    const text = file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
     add(item, 'file-path', text, text);
     if (file.binary) add(item, 'muted stash-binary', 'binary', 'Saved binary file');
     return item;
