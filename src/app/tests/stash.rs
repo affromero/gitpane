@@ -28,7 +28,7 @@ fn app_with_repo() -> (tempfile::TempDir, App, RepoId) {
         ..Config::default()
     };
     let app = App::new(config).unwrap();
-    (tmp, app, RepoId(repo))
+    (tmp, app, RepoId(repo.canonicalize().unwrap()))
 }
 
 #[test]
