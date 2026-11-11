@@ -4,6 +4,11 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.7] - 2026-11-11
+
+### Added
+- Preview saved stash files and diffs in the terminal and VS Code, including saved untracked and ignored files. ([#145](https://github.com/affromero/gitpane/pull/145), closes [#144](https://github.com/affromero/gitpane/issues/144)) Thanks @expoli for the report and implementation.
+
 ## [0.18.6] - 2026-11-09
 
 ### Added
