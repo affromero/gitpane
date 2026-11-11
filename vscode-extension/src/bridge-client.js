@@ -247,6 +247,27 @@ class BridgeClient {
     }
   }
 
+  async stashFiles(repo, oid) {
+    try { return await this.request('stash_files', { repo, oid }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support stash previews. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
+  async stashFileContent(repo, oid, identity, source, filePath) {
+    try {
+      return await this.request('stash_file_content', { repo, oid, expected_repo_identity: identity, source, path: filePath });
+    } catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support stash previews. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async previewWorktreeRemoval(repo, path) {
     try { return await this.request('worktree_remove_preview', { repo, path }); }
     catch (error) {

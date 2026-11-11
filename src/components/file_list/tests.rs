@@ -3,6 +3,7 @@ use super::*;
 #[cfg(test)]
 mod tag_tests {
     use super::*;
+    use crate::components::file_list::render::submodule_tag_spans;
 
     fn rendered(
         state: Option<SubmoduleState>,
@@ -844,5 +845,53 @@ mod diff_scroll_indicator_tests {
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| fl.draw(f, f.area()).unwrap()).unwrap();
         terminal
+    }
+}
+
+#[cfg(test)]
+mod stash_identity_tests {
+    use super::*;
+    use crate::git::stash::{StashFile, StashSource};
+    use std::path::PathBuf;
+
+    fn stash_entry(path: &str, source: StashSource) -> StashFileEntry {
+        StashFileEntry::from_stash_file(StashFile {
+            source,
+            status: "M".to_string(),
+            path: path.to_string(),
+            old_path: None,
+            new_path: Some(path.to_string()),
+            is_binary: false,
+            is_submodule: false,
+        })
+    }
+
+    #[test]
+    fn reload_keeps_the_selected_row_for_a_duplicate_path() {
+        let repo = RepoId(PathBuf::from("/r"));
+        let mut list = FileList::new(Arc::new(Theme::default()));
+        list.show_stash_loading(
+            repo,
+            "r".into(),
+            "a".repeat(40),
+            "stash@{0}".into(),
+            "duplicate".into(),
+        );
+        let rows = vec![
+            stash_entry("same.txt", StashSource::Tracked),
+            stash_entry("same.txt", StashSource::SavedUntracked),
+            stash_entry("other.txt", StashSource::Tracked),
+        ];
+        list.set_stash_files(rows.clone());
+        // Select the saved-untracked row: it shares its path with row 0.
+        list.state.select(Some(1));
+
+        list.set_stash_files(rows);
+
+        assert_eq!(
+            list.state.selected(),
+            Some(1),
+            "a path-only lookup would move the selection to row 0"
+        );
     }
 }

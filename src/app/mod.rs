@@ -44,6 +44,7 @@ mod launch;
 mod render;
 mod repo_admin;
 mod selection;
+mod stash;
 #[cfg(test)]
 mod tests;
 
@@ -592,6 +593,16 @@ impl App {
     fn sync_selection(&mut self) {
         // Retarget the GitHub panel onto the (new) selection, debounced.
         self.github_touch_selection();
+        // A stash preview is pinned to an immutable OID. A sort, rescan, or
+        // status refresh must not replace it with the current working tree
+        // while that snapshot still exists. A deleted stash (or its repo)
+        // falls back to the working tree instead.
+        self.reconcile_stash_preview();
+        if let Some(stash) = self.file_list.stash_view()
+            && self.repo_list.resolve_index(&stash.repo_id).is_some()
+        {
+            return;
+        }
         // An active worktree/submodule context owns the detail panels. A sort,
         // rescan, or discovery must refresh *that* path, not reload the selected
         // parent row over it (a submodule is opened with the parent row still

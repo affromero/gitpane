@@ -19,6 +19,7 @@ mod mutation_tests;
 mod repo_sort;
 mod scope;
 mod session;
+mod stash;
 mod status;
 mod submodule;
 #[cfg(test)]
@@ -261,6 +262,8 @@ fn process(
                     | "graph"
                     | "graph_revision"
                     | "commit_files"
+                    | "stash_files"
+                    | "stash_file_content"
                     | "changes_begin"
                     | "changes_next"
                     | "changes_find"
@@ -471,6 +474,8 @@ fn process(
         "external_worktree_validate" => {
             worktree_plan::external::validate(scope, params(request.params)?)
         }
+        "stash_files" => stash::files(scope, params(request.params)?),
+        "stash_file_content" => stash::content(scope, params(request.params)?),
         "commit_files" => {
             let input: CommitFilesRequest = params(request.params)?;
             let repo = scope.repository(&input.repo)?;

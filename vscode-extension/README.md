@@ -262,6 +262,33 @@ change a file between the check and the Git operation. On Windows, an ancestor
 path can also change during the check; Windows behavior has not yet been
 verified locally.
 
+## Preview saved stashes
+
+Each repository row shows its stashes as `$N`. Use the stash button or press
+`S` to expand the **Stashes** group, then expand a stash to load the files it
+saved. Expanding requests the files on demand; nothing is read until you open
+one.
+
+Selecting a saved file opens VS Code's native diff. Both sides come from the
+stash's immutable saved objects, so later edits to the working tree, index or
+HEAD never change the preview:
+
+- Tracked changes compare the stash's first parent with the stash tree, with
+  staged and unstaged changes merged into one list.
+- Files saved by `git stash push --include-untracked` or `--all` appear from the
+  stash's third parent as additions, including saved ignored files.
+- Added, modified, deleted and renamed files are labelled with their status;
+  renames show both saved paths. Saved submodule pointers show the recorded
+  `Subproject commit <oid>` text.
+- Binary files show a message instead of a text diff.
+
+Stash nodes use an opaque identity built from the repository and the full stash
+OID, so refreshing never resolves `stash@{0}` to a different saved snapshot after
+a new stash is pushed or an existing one is dropped. Empty stashes, missing
+objects and failed reads show a visible status in the tree; the virtual
+documents are read-only. Gitpane never runs `stash apply`, `pop` or `drop` from
+this view.
+
 ## Package and install
 
 The VSIX bundles the Gitpane backend. The Marketplace provides packages for

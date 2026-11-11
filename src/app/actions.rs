@@ -2,6 +2,13 @@ use super::*;
 
 impl App {
     pub(super) fn handle_action(&mut self, action: Action, tui: &mut Tui) -> Result<()> {
+        if self.file_list.is_stash() && action.is_workspace_file_action() {
+            self.action_tx.send(Action::Error(
+                "Stash preview is read-only; return to the working tree to change files"
+                    .to_string(),
+            ))?;
+            return Ok(());
+        }
         match action {
             Action::Quit => {
                 if self.should_quit {
@@ -53,28 +60,43 @@ impl App {
                 }
                 self.github_touch_selection();
             }
-            Action::FocusRepoDetails(ref id) => {
-                // Same panel refresh as SelectRepo but without
-                // moving the list selection — used by child rows
-                // (currently stash entries) so the cursor can
-                // remain on the child while the details panels
-                // re-target onto that child's parent repo.
+            Action::SelectStash {
+                repo_id,
+                oid,
+                label,
+                summary,
+            } => {
                 self.context_menu.hide();
                 self.active_worktree = None;
-                if let Some(idx) = self.repo_list.resolve_index(id) {
+                if let Some(idx) = self.repo_list.resolve_index(&repo_id) {
                     let entry = &self.repo_list.repos[idx];
                     let name = entry.name.clone();
                     let path = entry.path.clone();
-                    let repo_id = id.clone();
-                    let files = entry
-                        .status
-                        .as_ref()
-                        .map(|s| s.files.clone())
-                        .unwrap_or_default();
-                    self.file_list.set_files(files, &name, repo_id);
-                    self.git_graph.load_repo(path, &name);
+                    let generation = self.file_list.show_stash_loading(
+                        repo_id.clone(),
+                        name.clone(),
+                        oid.clone(),
+                        label,
+                        summary,
+                    );
+                    self.git_graph.load_repo(path.clone(), &name);
+                    let tx = self.action_tx.clone();
+                    let load_oid = oid.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let result = super::stash::load_stash_files(&path, &load_oid)
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(Action::StashFilesLoaded {
+                            repo_id,
+                            oid: load_oid,
+                            generation,
+                            result,
+                        });
+                    });
                 }
                 self.github_touch_selection();
+            }
+            Action::ExitStashView => {
+                self.exit_stash_view()?;
             }
             Action::SelectWorktree {
                 ref repo_id,
@@ -160,6 +182,9 @@ impl App {
                     );
                     let status_clone = status.clone();
                     self.repo_list.update_status(idx, status_clone);
+                    // A stash preview follows its OID: renumbering refreshes
+                    // the label, deletion falls back to the working tree.
+                    self.reconcile_stash_preview();
 
                     // A graph-relevant change invalidates the cached snapshot
                     // even when this repo isn't selected, so switching to it
@@ -175,6 +200,7 @@ impl App {
                     // not the parent repo's status.
                     if self.repo_list.selected_index() == Some(idx)
                         && self.active_worktree.is_none()
+                        && !self.file_list.is_stash()
                     {
                         let entry = &self.repo_list.repos[idx];
                         let name = entry.name.clone();

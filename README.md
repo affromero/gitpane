@@ -285,6 +285,21 @@ While searching files, typed characters update the query, `Enter` opens the
 matching file, and `Esc` clears the query. The file list remains visible with
 matches highlighted. The same controls work in a commit's file list.
 
+### Viewing a stash
+
+Expand a repo's stash subtree with `S`, then select a stash row (`j`/`k` or
+click). The changes panel switches to a read-only preview of that snapshot:
+its saved files (including `-u` / `--all` untracked content), rename paths, and
+the file's diff. The title shows `stash@{n}` and the stash message, and saved
+untracked files carry an `[saved untracked]` tag.
+
+The preview is pinned to the stash's OID, so later worktree, index, or HEAD
+changes — or a renumbered stash list — cannot change what it shows. `Enter`
+opens a file diff; `Esc` closes the diff, then leaves the stash preview and
+returns to the working tree. Selecting a repo or worktree also leaves it.
+Stage, unstage, discard, and open-file actions are refused while a stash is
+shown.
+
 ### Graph panel
 
 | Key | Action |

@@ -104,7 +104,7 @@ enum DisplayRow {
 pub(crate) enum RowId {
     Repo(PathBuf),
     Worktree(PathBuf, usize),
-    Stash(PathBuf, usize),
+    Stash(PathBuf, String),
 }
 
 pub(crate) struct RepoList {
@@ -380,9 +380,9 @@ impl RepoList {
     }
 
     /// Stable identity of the selected row: the parent repo's path plus the
-    /// subrow's index within that repo. Unlike a `DisplayRow` (positional
-    /// indices) it survives list reorders and row-count changes in other
-    /// repos, so it is the right thing to capture before a sort or rebuild.
+    /// subrow's identity (worktree index, or stash OID). Unlike a `DisplayRow`
+    /// (positional indices) it survives list reorders and row-count changes in
+    /// other repos, so it is the right thing to capture before a sort or rebuild.
     pub fn selected_row_id(&self) -> Option<RowId> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
@@ -390,7 +390,11 @@ impl RepoList {
             DisplayRow::Worktree(ri, wi) => {
                 Some(RowId::Worktree(self.repos.get(*ri)?.path.clone(), *wi))
             }
-            DisplayRow::Stash(ri, si) => Some(RowId::Stash(self.repos.get(*ri)?.path.clone(), *si)),
+            DisplayRow::Stash(ri, si) => {
+                let entry = self.repos.get(*ri)?;
+                let oid = entry.status.as_ref()?.stashes.get(*si)?.oid.clone();
+                Some(RowId::Stash(entry.path.clone(), oid))
+            }
         }
     }
 
@@ -460,13 +464,16 @@ impl RepoList {
             };
             let ri = self.repos.iter().position(|e| &e.path == path)?;
             let want = match &t {
-                RowId::Repo(_) => DisplayRow::Repo(ri),
-                RowId::Worktree(_, wi) => DisplayRow::Worktree(ri, *wi),
-                RowId::Stash(_, si) => DisplayRow::Stash(ri, *si),
+                RowId::Repo(_) => Some(DisplayRow::Repo(ri)),
+                RowId::Worktree(_, wi) => Some(DisplayRow::Worktree(ri, *wi)),
+                RowId::Stash(_, oid) => self
+                    .repos
+                    .get(ri)
+                    .and_then(|entry| entry.status.as_ref())
+                    .and_then(|status| status.stashes.iter().position(|stash| &stash.oid == oid))
+                    .map(|si| DisplayRow::Stash(ri, si)),
             };
-            self.display_rows
-                .iter()
-                .position(|r| *r == want)
+            want.and_then(|want| self.display_rows.iter().position(|row| *row == want))
                 .or_else(|| {
                     // Subrow gone (worktree removed, stash dropped): land on
                     // the parent repo row instead of a random neighbor.
@@ -628,13 +635,18 @@ impl RepoList {
                     worktree_branch: wt.branch.clone(),
                 })
             }
-            DisplayRow::Stash(ri, _) => {
-                // Re-target the file list / graph to the stash's parent repo
-                // (so a stash row click from another repo updates the right
-                // details), but do NOT call select_repo_row — that would
-                // snap the cursor off the stash and back onto the Repo row.
-                let id = RepoId(self.repos[*ri].path.clone());
-                Some(Action::FocusRepoDetails(id))
+            DisplayRow::Stash(ri, si) => {
+                // The stash row carries the immutable OID, not its list index,
+                // so a renumbered or refreshed stash list cannot retarget the
+                // preview onto another snapshot.
+                let entry = &self.repos[*ri];
+                let stash = entry.status.as_ref()?.stashes.get(*si)?;
+                Some(Action::SelectStash {
+                    repo_id: RepoId(entry.path.clone()),
+                    oid: stash.oid.clone(),
+                    label: format!("stash@{{{}}}", stash.index),
+                    summary: stash.message.clone(),
+                })
             }
         }
     }

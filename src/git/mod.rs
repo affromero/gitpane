@@ -6,6 +6,7 @@ pub(crate) mod graph_render;
 pub(crate) mod process;
 pub(crate) mod repo_sort;
 pub(crate) mod scanner;
+pub(crate) mod stash;
 pub(crate) mod status;
 pub(crate) mod worktree_ops;
 
