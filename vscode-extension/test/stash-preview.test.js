@@ -65,7 +65,7 @@ test('stash diffs read both sides from saved contents and never the working tree
   assert.equal(f.calls.length, 1);
   const [command, left, right, title] = f.calls[0];
   assert.equal(command, 'vscode.diff');
-  assert.equal(title, 'file.txt (stash@{0})');
+  assert.equal(title, `${path.join(f.repo.rootUri.fsPath, 'src', 'file.txt')} (stash@{0})`);
   assert.match(left.toString(), /^gitpane-link:\/[0-9a-f-]{36}$/);
   assert.doesNotMatch(left.toString(), /workspace|repo|file\.txt/);
   assert.deepEqual(f.opened, [path.join(f.repo.rootUri.fsPath, 'src', 'file.txt'),
@@ -93,7 +93,7 @@ test('added, deleted and renamed stash files use an empty side and both saved pa
   await renamed.open(rename, { old: text('old\n'), new: text('new\n') });
   assert.deepEqual(renamed.opened, [path.join(renamed.repo.rootUri.fsPath, 'old name.txt'),
     path.join(renamed.repo.rootUri.fsPath, 'new name.txt')]);
-  assert.equal(renamed.calls[0][3], 'new name.txt (stash@{0})');
+  assert.equal(renamed.calls[0][3], `${path.join(renamed.repo.rootUri.fsPath, 'new name.txt')} (stash@{0})`);
 });
 
 test('saved-untracked files always compare against the empty tree', async t => {

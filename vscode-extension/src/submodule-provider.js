@@ -337,7 +337,7 @@ class SubmoduleProvider {
         if (!validRecord(finalRecord?.change) || JSON.stringify(finalRecord.change) !== JSON.stringify(record) || !currentChild()) {
           throw new Error('The submodule changed; refresh and try again.');
         }
-        await this.vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(uri.fsPath)} (${record.group})`);
+        await this.vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (${record.group})`);
       } finally { if (!sessionClosed) session.close(); }
   }
 
@@ -361,7 +361,7 @@ class SubmoduleProvider {
         readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
           result.child_identity, commit, relative, oid, mode),
         verifyAncestors: () => options.checkHead(true), ancestorKey: options.ancestorKey, contextKey: options.contextKey,
-        title: `${path.basename(file.path)} (submodule)` });
+        title: `${path.join(repo.rootUri.fsPath, file.path)} (submodule)` });
     }
     const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
     const old = file.status === 'R' ? this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.old_path)) : uri;
@@ -375,7 +375,7 @@ class SubmoduleProvider {
     const left = file.status === 'A' || !result.base_oid ? empty : await makeSide(old, result.base_oid);
     const right = file.status === 'D' || !result.head_oid ? empty : await makeSide(uri, result.head_oid);
     if (!options.currentChild() || !await options.checkHead()) throw new Error('The submodule changed; refresh and try again.');
-    await this.vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (submodule)`);
+    await this.vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (submodule)`);
   }
 
   dispose() { this.disposed = true; this.generation++; this.clearGraphWatch(); this.graphSubscription?.dispose(); }

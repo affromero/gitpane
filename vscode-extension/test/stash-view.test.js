@@ -146,7 +146,7 @@ test('opening a saved file reads both stash sides and never the working tree', a
     old_path: 'one.txt', new_path: 'one.txt', binary: false, gitlink: false, id: file.id } });
   const [command, left, right, title] = f.vscode.commands.calls.at(-1);
   assert.equal(command, 'vscode.diff');
-  assert.equal(title, 'one.txt (stash@{0})');
+  assert.equal(title, `${path.join(repoPath, 'one.txt')} (stash@{0})`);
   assert.match(left.toString(), /^gitpane-link:\/[0-9a-f-]{36}$/);
   assert.equal(await f.links.provideTextDocumentContent(left), 'old\n');
   assert.equal(await f.links.provideTextDocumentContent(right), 'new\n');

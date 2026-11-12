@@ -104,6 +104,7 @@ test('opens committed additions, modifications and deletions against the merge b
   assert.equal(f.calls[3][1].ref, f.base);
   assert.equal(f.calls[3][2].fsPath, path.join(f.root, 'new/name.txt'));
   assert.equal(f.calls[3][2].ref, f.head);
+  assert.equal(f.calls[3][3], `${path.join(f.root, 'new/name.txt')} (${f.getReview().base_ref}...HEAD)`);
 });
 
 test('opens Unix filenames containing backslashes as literal names', { skip: process.platform === 'win32' }, async () => {
@@ -198,6 +199,7 @@ test('opens branch review gitlinks using the compared tree endpoints', async () 
     assert.equal(diff[0], 'vscode.diff');
     assert.equal(side(diff[1]), item.left);
     assert.equal(side(diff[2]), item.right);
+    assert.equal(diff[3], `${path.join(f.root, 'module')} (${f.getReview().base_ref}...HEAD)`);
   }
   assert.equal(f.calls.length, cases.length);
   assert.deepEqual(f.errors, []);

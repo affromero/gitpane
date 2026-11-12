@@ -589,6 +589,7 @@ async function main() {
   assert.equal(diffs.length, priorDiffCount + 1);
   assert.equal(diffs.at(-1)[0].scheme, 'gitpane-empty');
   assert.equal(diffs.at(-1)[1].fsPath, path.join(worktreePath, linkedFile.path));
+  assert.equal(diffs.at(-1)[2], `${path.join(worktreePath, linkedFile.path)} (untracked)`);
   console.log('PASS real linked worktree paging and native file diff');
 
   pickChanges = choices => choices.find(choice => choice.action === 'hideWorktree');
