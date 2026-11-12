@@ -855,12 +855,16 @@ tree.addEventListener('click', event => {
 });
 
 tree.addEventListener('contextmenu', event => {
-  const row = event.target.closest('.file-row');
+  const row = event.target.closest('.row');
   const item = visible.find(value => value.key === row?.parentElement?.dataset.key);
-  if (!item || item.fileId === undefined) return;
+  if (!item) return;
+  const kind = row.classList.contains('repo-row') ? 'repo' :
+    row.classList.contains('worktree-row') ? 'worktree' : undefined;
+  if (item.fileId === undefined && !kind) return;
   event.preventDefault();
   select(item);
-  fileMenu.open(item.fileId, event.clientX, event.clientY);
+  if (item.fileId !== undefined) fileMenu.open(item.fileId, event.clientX, event.clientY);
+  else vscode.postMessage({ type: 'menu', kind, id: kind === 'repo' ? item.owner.id : item.worktreeId });
 });
 
 tree.addEventListener('keydown', event => {
