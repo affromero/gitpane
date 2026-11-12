@@ -89,7 +89,36 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
     await assert.rejects(blobs.readFile(workingSide), /no longer|changed|stale|unavailable/i,
       'an open working file cannot be read after workspace trust is lost');
     vscode.workspace.isTrusted = true;
+    const deadline = Date.now() + 5000;
+    while (provider.links.refreshing) {
+      assert.ok(Date.now() < deadline, 'the existing diff refresh must finish');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    let started, release;
+    const entered = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const originalOperation = provider.tree.backend.gitSideOperation;
+    provider.tree.backend.gitSideOperation = async function(session, ...args) {
+      if (session.external && args[1].kind === 'metadata') {
+        started();
+        await gate;
+        throw new Error('Git configuration lookup failed after worktree removal');
+      }
+      return originalOperation.call(this, session, ...args);
+    };
+    const beforeRefreshErrors = errors.length;
+    const refresh = provider.links.refresh();
+    let timer;
+    try {
+      await Promise.race([entered, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('The diff metadata check did not start')), 5000);
+      })]);
+    } finally { clearTimeout(timer); }
     gitAt(repoPath, 'worktree', 'remove', '--force', siblingPath);
+    release();
+    await refresh;
+    provider.tree.backend.gitSideOperation = originalOperation;
+    assert.equal(errors.length, beforeRefreshErrors, 'a stale worktree must not report a refresh failure');
     await assert.rejects(blobs.readFile(head), /no longer|changed|stale|unavailable/i,
       'an open diff cannot retain access after worktree removal');
     gitAt(repoPath, 'worktree', 'add', '-qb', 'feature/replacement', siblingPath);
