@@ -14,6 +14,10 @@ test('verified submodules follow their immediate visible parent and stale proofs
     .map(value => path.join(root, value));
   for (const value of paths) fs.mkdirSync(path.join(value, '.git'), { recursive: true });
   const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
+  const canonical = value => {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
   const event = () => ({ dispose() {} });
   const repos = paths.map(value => ({ rootUri: uri(value), state: { onDidChange: event, submodules: [] } }));
   repos[0].state.submodules = [{ path: 'child' }, { path: 'unrelated' }];
@@ -25,7 +29,7 @@ test('verified submodules follow their immediate visible parent and stale proofs
   const api = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event };
   const backend = { state: { status: 'ready' }, onDidChange: event, async validateSubmodulePin(parent, chain) {
     const child = path.join(parent, chain[0].path);
-    if (child === fs.realpathSync.native(paths[3])) throw Object.assign(new Error('Not registered'), { code: 'stale_target' });
+    if (child === canonical(paths[3])) throw Object.assign(new Error('Not registered'), { code: 'stale_target' });
     return { repos: [parent, child] };
   } };
   const original = Module._load;
@@ -60,7 +64,7 @@ test('verified submodules follow their immediate visible parent and stale proofs
   backend.validateSubmodulePin = validate;
   tree.contentRevisions.set(paths[3], 1);
   assert.equal(tree.presentationView().nested.has(paths[1]), true, 'unrelated repository updates do not flatten the hierarchy');
-  tree.hiddenRepositories = { isHidden: identity => identity?.path === fs.realpathSync.native(paths[0]) };
+  tree.hiddenRepositories = { isHidden: identity => identity?.path === canonical(paths[0]) };
   view = tree.presentationView();
   assert.equal(view.nested.has(paths[1]), false, 'a child remains visible when its parent is hidden');
   assert.deepEqual(view.submodules.get(paths[1]), [paths[2]]);
