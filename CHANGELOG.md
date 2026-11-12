@@ -4,6 +4,15 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.8] - 2026-11-11
+
+### Added
+- Discover initialized workspace submodules in VS Code and show them beneath their parent repository or worktree. Automatic discovery can be disabled in settings. ([#152](https://github.com/affromero/gitpane/pull/152), closes [#147](https://github.com/affromero/gitpane/issues/147))
+
+### Fixed
+- Show full paths in VS Code diff titles so files with the same name are distinguishable. ([#149](https://github.com/affromero/gitpane/pull/149), closes [#148](https://github.com/affromero/gitpane/issues/148))
+- Open repository and worktree actions with a right click in Gitpane Explorer. ([#151](https://github.com/affromero/gitpane/pull/151), closes [#150](https://github.com/affromero/gitpane/issues/150))
+
 ## [0.18.7] - 2026-11-11
 
 ### Added
