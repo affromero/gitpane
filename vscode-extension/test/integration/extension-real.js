@@ -31,6 +31,11 @@ function sameLocation(first, second) {
   } catch { return false; }
 }
 
+function overviewRows(repositories) {
+  return repositories.flatMap(repo => [repo, ...overviewRows(repo.submodules || []),
+    ...(repo.worktrees || []).flatMap(worktree => overviewRows(worktree.submodules || []))]);
+}
+
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = handler => { this.listeners.add(handler); return { dispose: () => this.listeners.delete(handler) }; }; }
   fire(value) { for (const handler of this.listeners) handler(value); }
@@ -844,6 +849,62 @@ async function main() {
     if (!api.repositories.includes(submodule)) { api.repositories.push(submodule); openedRepositories.fire(submodule); }
     return submodule;
   };
+  await vscode.workspace.getConfiguration('gitpane').update('submodules.autoDiscover', false, 2);
+  repo.state.submodules = [{ path: 'child', url: source }];
+  await commands.get('gitpane.refresh')();
+  assert.ok(!api.repositories.includes(childRepo), 'disabled discovery does not open a submodule');
+  await vscode.workspace.getConfiguration('gitpane').update('submodules.autoDiscover', true, 2);
+  await commands.get('gitpane.refresh')();
+  await commands.get('gitpane.refresh')();
+  assert.ok(api.repositories.includes(childRepo), 'initialized submodule opens automatically when discovery is enabled');
+  const groupedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  assert.equal(groupedParent.submodules.length, 1, 'discovered registered submodule is grouped under its parent');
+  assert.equal(groupedParent.submodules[0].name, 'child');
+  assert.equal(groupedParent.submodules[0].submodule, true);
+  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'child'), 'submodule is not duplicated at the root');
+  await receive({ type: 'selectOwner', id: groupedParent.submodules[0].id });
+  assert.equal(provider.workspaceViews.selectedId, groupedParent.submodules[0].id, 'submodule remains selectable');
+  await receive({ type: 'loadChanges', id: groupedParent.submodules[0].id });
+  assert.ok(snapshots.at(-1).repositories.find(item => item.name === 'repo').submodules[0].groups
+    .flatMap(group => group.files).some(file => file.path.startsWith('child-')), 'submodule shows its own changes');
+  let childActions;
+  pickChanges = choices => { childActions = choices.map(choice => choice.action); return undefined; };
+  await receive({ type: 'menu', kind: 'repo', id: groupedParent.submodules[0].id });
+  assert.ok(childActions.includes('refreshRepo'), 'submodule retains its repository menu');
+  const linkedSubmoduleRoot = path.join(path.dirname(repoPath), 'submodule-linked');
+  git('worktree', 'add', '-qb', 'feature/submodule-group', linkedSubmoduleRoot);
+  gitAt(linkedSubmoduleRoot, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'child');
+  const linkedChildPath = path.join(linkedSubmoduleRoot, 'child');
+  const linkedRepo = { rootUri: uri(linkedSubmoduleRoot), kind: 'worktree', state: {
+    HEAD: { name: 'feature/submodule-group' }, onDidChange: event, submodules: [{ path: 'child' }],
+    workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  const linkedChildRepo = { rootUri: uri(linkedChildPath), state: {
+    HEAD: { commit: gitAt(linkedChildPath, 'rev-parse', 'HEAD') }, onDidChange: event, submodules: [],
+    workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  availableSubmodules.set(fs.realpathSync.native(linkedChildPath), linkedChildRepo);
+  const unrelatedPath = path.join(repoPath, 'nested-repo');
+  const unrelatedRepo = { rootUri: uri(unrelatedPath), state: { onDidChange: event, submodules: [],
+    workingTreeChanges: [], indexChanges: [], mergeChanges: [] }, async status() {} };
+  repo.state.submodules.push({ path: 'nested-repo' });
+  for (const item of [linkedRepo, unrelatedRepo]) { api.repositories.push(item); openedRepositories.fire(item); }
+  await commands.get('gitpane.refresh')();
+  await commands.get('gitpane.refresh')();
+  const linkedParent = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  const linkedRow = linkedParent.worktrees.find(item => item.name === 'submodule-linked');
+  assert.ok(api.repositories.includes(linkedChildRepo), 'an initialized worktree submodule is discovered automatically');
+  assert.equal(linkedRow?.submodules[0]?.name, 'child', 'a worktree owns its initialized submodule');
+  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested-repo'),
+    'an unrelated nested repository is not grouped even when suggested by stale metadata');
+  for (const item of [linkedRepo, linkedChildRepo, unrelatedRepo]) {
+    api.repositories = api.repositories.filter(candidate => candidate !== item);
+    closedRepositories.fire(item);
+  }
+  git('worktree', 'remove', '--force', linkedSubmoduleRoot);
+  await vscode.workspace.getConfiguration('gitpane').update('submodules.autoDiscover', false, 2);
+  assert.ok(api.repositories.includes(childRepo), 'disabling discovery keeps an already opened repository');
+  api.repositories = api.repositories.filter(item => item !== childRepo);
+  closedRepositories.fire(childRepo);
+  repo.state.submodules = [];
   await commands.get('gitpane.refresh')();
   let parentAfterSubmodule = snapshots.at(-1).repositories.find(item => item.name === 'repo');
   await receive({ type: 'loadChanges', id: parentAfterSubmodule.id });
@@ -1360,8 +1421,10 @@ async function main() {
   assert.equal(diffs.length, beforeNestedPointer + 1, 'pinning must not open a terminal or diff');
   assert.equal(terminals.length, beforeNestedTerminals);
   await commands.get('gitpane.refresh')();
-  let pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
+  let pinnedRow = overviewRows(snapshots.at(-1).repositories).find(item => item.name === 'nested');
   assert.ok(pinnedRow?.pinned, 'nested pin is visible in the overview');
+  assert.ok(snapshots.at(-1).repositories.find(item => item.name === 'child')?.submodules.some(item => item.id === pinnedRow.id),
+    'the clean nested submodule is shown beneath its immediate parent');
   assert.equal(pinnedRow.statusUnavailable, false, 'pinned repository status must be verified before hiding');
   const nestedStatusKey = grandRepo.rootUri.toString();
   const pinnedStatus = provider.tree.backendStatuses.get(nestedStatusKey);
@@ -1374,25 +1437,25 @@ async function main() {
   await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
   assert.deepEqual(repositoryChoices, ['refreshRepo'], 'pending status offers only a local refresh');
   assert.equal(errors.length, errorsBeforePendingHide);
-  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested'));
+  assert.ok(overviewRows(snapshots.at(-1).repositories).some(item => item.name === 'nested'));
   provider.tree.backendStatuses.set(nestedStatusKey, pinnedStatus);
   provider.tree.changed();
-  pinnedRow = snapshots.at(-1).repositories.find(item => item.name === 'nested');
+  pinnedRow = overviewRows(snapshots.at(-1).repositories).find(item => item.name === 'nested');
   await receive({ type: 'menu', kind: 'repo', id: pinnedRow.id });
   assert.ok(repositoryChoices.includes('hideRepository'), 'verified status offers the hide action');
-  assert.ok(!snapshots.at(-1).repositories.some(item => item.name === 'nested'));
+  assert.ok(!overviewRows(snapshots.at(-1).repositories).some(item => item.name === 'nested'));
   assert.ok(workspaceState.get('gitpane.hiddenRepositories').repositories.some(item => item.repo_identity === pinnedStatus.repo_identity),
     'hiding stores the verified repository identity');
   assert.equal(workspaceState.get('gitpane.submodulePins').pins.length, 1, 'hiding does not remove the pin');
   pickChanges = choices => choices.find(choice => choice.label === 'nested');
   await commands.get('gitpane.restoreHiddenRepositories')();
-  const restoredPin = snapshots.at(-1).repositories.find(item => item.name === 'nested');
+  const restoredPin = overviewRows(snapshots.at(-1).repositories).find(item => item.name === 'nested');
   assert.ok(restoredPin?.pinned, 'restoring retains the pin');
   pickChanges = choices => choices.find(choice => choice.action === 'unpinSubmodule');
   await receive({ type: 'menu', kind: 'repo', id: restoredPin.id });
   assert.deepEqual(workspaceState.get('gitpane.submodulePins').pins, []);
   assert.ok(api.repositories.includes(grandRepo), 'unpin does not close a shared VS Code repository');
-  assert.ok(snapshots.at(-1).repositories.some(item => item.name === 'nested' && !item.pinned), 'the discovered repository remains visible without its pin');
+  assert.ok(overviewRows(snapshots.at(-1).repositories).some(item => item.name === 'nested' && !item.pinned), 'the discovered repository remains visible without its pin');
   let changedAncestor = false;
   pickChanges = choices => {
     const selected = choices.find(choice => choice.record?.path === 'nested.txt');

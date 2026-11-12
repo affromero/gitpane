@@ -7,6 +7,8 @@ const { groups } = require('./model');
 const { relativeFile } = require('./change-pager');
 const { SessionLiveness } = require('./session-liveness');
 const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
+const { SubmoduleHierarchy } = require('./submodule-hierarchy');
+const { SubmoduleDiscovery } = require('./submodule-discovery');
 
 function directoryIdentity(value) {
   try {
@@ -75,6 +77,8 @@ class RepositoryTree {
     this.onDidChangeTreeData = this.emitter.event;
     this.listeners = new Map();
     this.repositoryIdentities = new Map();
+    this.submoduleHierarchy = new SubmoduleHierarchy(this);
+    this.submoduleDiscovery = new SubmoduleDiscovery(this, vscode);
     this.repositoryTokens = new Map();
     this.repositoryRevisions = new Map();
     this.repositoryRevisionKeys = new Map();
@@ -152,6 +156,7 @@ class RepositoryTree {
     this.listeners.set(key, repo.state.onDidChange(() => {
       if (!this.isCurrentRepository(repo, token)) return;
       this.contentRevisions.set(key, (this.contentRevisions.get(key) || 0) + 1);
+      this.submoduleHierarchy.schedule();
       this.groupCache.delete(key);
       if (this.isVisible(repo)) this.scheduleChanged();
     }));
@@ -160,6 +165,7 @@ class RepositoryTree {
   unobserve(repo) {
     const key = repo.rootUri.toString();
     if (!this.listeners.has(key)) return;
+    this.submoduleHierarchy.schedule();
     const revisionKey = this.repositoryRevisionKey(repo.rootUri);
     this.repositoryRevisions.set(revisionKey, (this.repositoryRevisions.get(revisionKey) || 0) + 1);
     this.listeners.get(key)?.dispose();
@@ -433,7 +439,7 @@ class RepositoryTree {
 
   presentationView() {
     const view = this.workspaceView();
-    if (!this.hiddenRepositories) return view;
+    if (!this.hiddenRepositories) return this.withSubmodules(view);
     const verifiedToken = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : undefined;
     const identities = new Map();
     for (const items of view.worktrees.values()) for (const item of items) {
@@ -464,7 +470,30 @@ class RepositoryTree {
         if (child && visible.has(child.rootUri.toString())) nested.add(child.rootUri.toString());
       }
     }
-    return { ...view, records, worktrees, nested, pendingHidden };
+    return this.withSubmodules({ ...view, records, worktrees, nested, pendingHidden });
+  }
+
+  withSubmodules(view) {
+    const visible = new Set(view.records.map(record => record.key));
+    const submodules = new Map();
+    const parents = new Map();
+    for (const record of view.records) for (const item of view.worktrees.get(record.key) || []) {
+      const child = view.children.get(record.key)?.get(item.path)?.rootUri.toString();
+      if (child && visible.has(child)) parents.set(child, record.key);
+    }
+    for (const [child, edge] of this.submoduleHierarchy.edges) {
+      if (!visible.has(child) || !visible.has(edge.parent) || view.nested.has(child) || !edge.current()) continue;
+      let ancestor = edge.parent;
+      while (ancestor && ancestor !== child) ancestor = parents.get(ancestor);
+      if (ancestor === child) continue;
+      parents.set(child, edge.parent);
+      if (!submodules.has(edge.parent)) submodules.set(edge.parent, []);
+      submodules.get(edge.parent).push(child);
+      view.nested.add(child);
+    }
+    for (const children of submodules.values()) children.sort((a, b) =>
+      (this.sortRanks.get(a) ?? Number.MAX_SAFE_INTEGER) - (this.sortRanks.get(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b));
+    return { ...view, submodules };
   }
 
   directoryIdentity(value) { return directoryIdentity(value); }
@@ -568,7 +597,7 @@ class RepositoryTree {
     if (this.disposed || this.sortOrder === 'workspace') return;
     const generation = this.sortGeneration;
     const order = this.sortOrder;
-    const nodes = this.getChildren().filter(node => node.type === 'repo');
+    const nodes = this.presentationView().records.map(({ repo }) => ({ repo }));
     const tokens = nodes.map(node => this.repositoryToken(node.repo));
     const current = () => !this.disposed && generation === this.sortGeneration && order === this.sortOrder &&
       nodes.every((node, index) => this.isCurrentRepository(node.repo, tokens[index]));
@@ -680,10 +709,11 @@ class RepositoryTree {
     this.groupCache.delete(key);
   }
 
-  configureView({ refreshInterval, showSessionLiveness, showOutsideWorktrees }) {
+  configureView({ refreshInterval, showSessionLiveness, showOutsideWorktrees, autoDiscoverSubmodules }) {
     const intervalChanged = this.refreshInterval !== refreshInterval;
     const livenessChanged = this.showSessionLiveness !== showSessionLiveness;
     const outsideChanged = this.showOutsideWorktrees !== !!showOutsideWorktrees;
+    const discoveryChanged = this.submoduleDiscovery.configure(autoDiscoverSubmodules !== false);
     this.refreshInterval = refreshInterval;
     this.showSessionLiveness = showSessionLiveness;
     this.showOutsideWorktrees = !!showOutsideWorktrees;
@@ -694,7 +724,7 @@ class RepositoryTree {
     this.liveness?.setVisible(this.visible && showSessionLiveness);
     if (intervalChanged) this.schedulePoll();
     if (livenessChanged) this.changed();
-    if (outsideChanged) this.scheduleRefresh();
+    if (outsideChanged || discoveryChanged) this.scheduleRefresh();
   }
 
   setVisible(visible) {
@@ -731,6 +761,8 @@ class RepositoryTree {
       tokens: new Map(repos.map(repo => [repo.rootUri.toString(), this.repositoryToken(repo)])),
       visible: new Set(repos.map(repo => identityKey(this.repositoryIdentities.get(repo.rootUri.toString())))), groups: new Map() };
     await this.refreshRepositories(repos, cycle, true);
+    await this.submoduleDiscovery.refresh();
+    await this.submoduleHierarchy.refresh();
     this.pollError = undefined;
     this.scheduleChanged();
   }
@@ -805,6 +837,8 @@ class RepositoryTree {
         visible: new Set(visible.map(repo => identityKey(this.repositoryIdentities.get(repo.rootUri.toString())))),
         groups: new Map() };
       await this.refreshRepositories(repos, cycle, false);
+      await this.submoduleDiscovery.refresh();
+      await this.submoduleHierarchy.refresh();
     } finally {
       this.finishRefresh();
     }
@@ -865,6 +899,8 @@ class RepositoryTree {
         tokens: new Map(repos.map(repo => [repo.rootUri.toString(), this.repositoryToken(repo)])),
         visible: new Set(repos.map(repo => identityKey(this.repositoryIdentities.get(repo.rootUri.toString())))), groups: new Map() };
       await this.refreshRepositories(repos, cycle, false);
+      await this.submoduleDiscovery.refresh();
+      await this.submoduleHierarchy.refresh();
       const active = new Set(this.git.repositories.filter(repo => this.isVisible(repo)).map(repo => repo.rootUri.toString()));
       for (const key of this.statusErrors.keys()) {
         if (!active.has(key)) {
@@ -888,7 +924,7 @@ class RepositoryTree {
         if (!current) return [`Workspace folder unavailable: ${folder}`];
         return [`Workspace folder changed: ${folder}. Remove and re-add it to the workspace.`];
       });
-      const failures = [this.pollError, this.backendError, this.sortError, this.liveness?.error, this.pins?.error, this.workspaceRepositories?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
+      const failures = [this.pollError, this.backendError, this.sortError, this.submoduleHierarchy.error, this.submoduleDiscovery.error, this.liveness?.error, this.pins?.error, this.workspaceRepositories?.error, this.hiddenRepositories?.error, ...this.statusErrors.values(), ...this.backendErrors.values(), ...missingFolders].filter(Boolean).map(message => ({ type: 'error', message }));
       const view = workspaceView || this.presentationView();
       if (view.pendingHidden) failures.push({ type: 'error', message: 'Hidden repository identity verification is pending.' });
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
@@ -917,6 +953,7 @@ class RepositoryTree {
 
   dispose() {
     this.disposed = true;
+    this.submoduleHierarchy.dispose();
     this.liveness?.dispose();
     for (const waiter of this.allRefreshWaiters) waiter.resolve();
     this.refreshWaiters = [];

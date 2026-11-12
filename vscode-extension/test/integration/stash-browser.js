@@ -16,6 +16,7 @@ const stylesheet = fs.readFileSync(path.join(extension, 'src/webview/styles.css'
 const client = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
 const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const stashClient = fs.readFileSync(path.join(extension, 'src/webview/stash-files.js'), 'utf8');
+const repositoryLabel = fs.readFileSync(path.join(extension, 'src/webview/repository-label.js'), 'utf8');
 
 const repo = (stash) => ({ id: 'repo1', name: 'api-service', branch: 'main', dirty: true, stashCount: 1,
   stashes: [stash], groups: [{ id: 'working', label: 'Unstaged', files: [{ id: 'change1', status: 'M', path: 'src/server.rs' }] }] });
@@ -99,7 +100,7 @@ const documentFor = () => `<!DOCTYPE html><html lang="en"><head><meta charset="u
 <style nonce="gitpane-test">:root{--vscode-sideBar-background:#1e1e1e;--vscode-sideBar-foreground:#ddd;--vscode-focusBorder:#007acc;}${stylesheet}</style></head>
 <body class="vscode-dark"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="gitpane-test">window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${stashClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario}</script></body></html>`;
+<script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${stashClient}</script><script nonce="gitpane-test">${repositoryLabel}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario}</script></body></html>`;
 
 const fixture = path.join(temporary, 'stash.html');
 fs.writeFileSync(fixture, documentFor());

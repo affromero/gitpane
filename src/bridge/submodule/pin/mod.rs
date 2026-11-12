@@ -27,6 +27,14 @@ struct Link {
     child_identity: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::bridge) struct DiscoverRequest {
+    repo: PathBuf,
+    path: PathBuf,
+    expected_parent_identity: String,
+}
+
 fn valid_identity(value: &str) -> bool {
     value.len() == 64
         && value
@@ -55,6 +63,38 @@ fn has_gitlink(parent: &Path, path: &Path) -> Result<bool, BridgeError> {
             .get_path(path, stage)
             .is_some_and(|entry| entry.mode & 0o170000 == 0o160000)
     }))
+}
+
+pub(in crate::bridge) fn discover(
+    scope: &Scope,
+    input: DiscoverRequest,
+) -> Result<Value, BridgeError> {
+    if !input.repo.is_absolute()
+        || !valid_submodule_path(&input.path)
+        || !valid_identity(&input.expected_parent_identity)
+    {
+        return Err(BridgeError::new(
+            "invalid_request",
+            "Invalid submodule discovery request.",
+        ));
+    }
+    let read = || {
+        let link = registered_link(scope, &input.repo, &input.path, true)?;
+        if link.parent_identity.fingerprint()? != input.expected_parent_identity
+            || !has_gitlink(&link.parent_path, &input.path)?
+        {
+            return Err(stale());
+        }
+        Ok((link.child, link.child_identity.fingerprint()?))
+    };
+    let initial = read()?;
+    if read()? != initial {
+        return Err(stale());
+    }
+    Ok(
+        json!({"repo": initial.0, "parent_identity": input.expected_parent_identity,
+        "child_identity": initial.1}),
+    )
 }
 
 fn walk(scope: &Scope, root: &Path, chain: &[Link]) -> Result<Vec<PathBuf>, BridgeError> {

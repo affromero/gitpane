@@ -2,7 +2,7 @@
 
 const DEFAULT_REFRESH_INTERVAL = 5000;
 const KEYS = ['fontSize', 'sortOrder', 'worktrees.defaultVisibility', 'worktrees.showOutsideWorkspace', 'refreshInterval', 'showSessionLiveness',
-  'graph.firstParent', 'graph.labelMaxLength'];
+  'submodules.autoDiscover', 'graph.firstParent', 'graph.labelMaxLength'];
 
 function readPreferences(configuration, rememberedOrder) {
   const read = (key, fallback, valid) => {
@@ -21,6 +21,7 @@ function readPreferences(configuration, rememberedOrder) {
     refreshInterval: seconds * 1000,
     worktreeExpansion: visibility === 'native' ? undefined : visibility === 'expanded',
     showOutsideWorktrees: read('worktrees.showOutsideWorkspace', true, value => typeof value === 'boolean'),
+    autoDiscoverSubmodules: read('submodules.autoDiscover', true, value => typeof value === 'boolean'),
     showSessionLiveness: read('showSessionLiveness', true, value => typeof value === 'boolean'),
     graphFirstParent: read('graph.firstParent', false, value => typeof value === 'boolean'),
     graphLabelMaxLength: labelLength === -1 ? undefined : labelLength

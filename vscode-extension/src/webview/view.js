@@ -14,6 +14,7 @@ const searchPrev = document.getElementById('search-prev');
 const searchNext = document.getElementById('search-next');
 const saved = vscode.getState() || {};
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
+const collapsedSubmodules = new Set(Array.isArray(saved.collapsedSubmodules) ? saved.collapsedSubmodules : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
 const expandedStashes = new Set(Array.isArray(saved.expandedStashes) ? saved.expandedStashes : []);
 const expandedStashFiles = new Set(Array.isArray(saved.expandedStashFiles) ? saved.expandedStashFiles : []);
@@ -31,13 +32,15 @@ let visible = [];
 const pendingLoads = new Map();
 const pendingPages = new Map();
 const pendingStashFiles = new Map();
+function allRepositories(repos) { return repos.flatMap(repo => [repo, ...allRepositories(repo.submodules || []),
+  ...(repo.worktrees || []).flatMap(worktree => allRepositories(worktree.submodules || []))]); }
 let searchOwner;
 let searchTimer;
 const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
   selection: () => JSON.stringify([snapshot.selectedOwnerId, snapshot.selectionEpoch]) });
 
 function save() {
-  vscode.setState({ expanded: [...expanded], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
+  vscode.setState({ expanded: [...expanded], collapsedSubmodules: [...collapsedSubmodules], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
     expandedStashFiles: [...expandedStashFiles].slice(-1024),
     worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected });
 }
@@ -66,8 +69,18 @@ function toggleWorktrees(repo) {
   const children = visible.filter(item => item.parent === `repo:${repo.id}` && item.worktreeId && item.isExpanded);
   setWorktreesVisible(repo, show);
   if (!show) {
-    for (const item of children) releaseChanges(item);
+    for (const item of children) releaseDescendants(item);
   }
+  render();
+}
+
+function toggleSubmodules(key) {
+  if (collapsedSubmodules.has(key)) collapsedSubmodules.delete(key);
+  else {
+    for (const child of visible.filter(item => item.parent === key && item.owner?.submodule)) releaseDescendants(child);
+    collapsedSubmodules.add(key);
+  }
+  save();
   render();
 }
 
@@ -160,33 +173,19 @@ function reconcilePending(owner) {
     (pending.acknowledged || page.page !== pending.page))) pendingPages.delete(owner.id);
 }
 
-function labelForRepo(repo, info) {
-  const details = [repo.name, repo.worktree ? 'worktree' : '', repo.branch || 'unknown branch',
-    repo.statusUnavailable ? 'status unavailable' : repo.dirty ? 'has changes' : 'clean',
-    repo.statusUnavailable ? '' : countText(info)];
-  if (!repo.statusUnavailable) {
-    if (repo.stashCount > 0) details.push(`${repo.stashCount} ${repo.stashCount === 1 ? 'stash' : 'stashes'}`);
-    if (repo.worktreeCount > 0) details.push(`${repo.worktreeCount} ${repo.worktreeCount === 1 ? 'worktree' : 'worktrees'}`);
-    if (repo.ahead > 0) details.push(`${repo.ahead} ahead`);
-    if (repo.behind > 0) details.push(`${repo.behind} behind`);
-    if (repo.hasDirtySubmodules) details.push('dirty submodules');
-    if (repo.hasUnpushedSubmodules) details.push('submodules need attention');
-  }
-  if (repo.live) details.push('live session');
-  if (repo.pinned) details.push('pinned submodule');
-  return details.filter(Boolean).join(', ');
-}
-
 function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
   const name = add(row, 'name', '', repo.name);
   if (repo.pinned) add(name, 'pin', '⌖ ', 'Pinned submodule');
+  if (repo.submodule) add(name, 'submodule', '↳ ', 'Submodule');
   if (repo.worktree) add(name, 'worktree', '⎇ ');
   name.appendChild(document.createTextNode(repo.name));
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
+  if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
+    !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (repo.statusUnavailable) add(tail, 'behind', '!', 'Status unavailable');
   else {
@@ -244,25 +243,7 @@ function statusClass(status) {
   return ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted', '!': 'behind' })[status] || 'muted';
 }
 
-function submoduleParts(file) {
-  if (!file.submodule) return [];
-  const info = file.submoduleDetails;
-  if (!info) return [];
-  const parts = [];
-  const state = { modified: ['+commit', 'commit changed'], uninitialized: ['-uninit', 'uninitialized'], dirty: ['~dirty', 'dirty'] }[info.state];
-  if (state) parts.push([state[0], 'submodule-bracket', state[1]]);
-  if (info.state === 'uninitialized') return parts;
-  if (info.head) {
-    const branch = info.head.detached ? 'detached' : info.head.branch.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, ' ');
-    parts.push([`@${branch}`, 'submodule-branch', `branch ${branch}`]);
-  }
-  if (info.warn.pointer_unreachable) parts.push(['⚠unreach', 'submodule-unreachable', 'pointer unreachable']);
-  else {
-    if (info.warn.unpushed_commits > 0) parts.push([`↑${info.warn.unpushed_commits}`, 'submodule-unpushed', `${info.warn.unpushed_commits} unpushed commits`]);
-    if (info.warn.needs_merge_to_default) parts.push(['↛main', 'submodule-needs-merge', 'needs merge to default branch']);
-  }
-  return parts;
-}
+const submoduleParts = window.GitpaneSubmoduleParts;
 
 function fileRow(file) {
   const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}${file.submodule ? ' submodule-file-row' : ''}`);
@@ -298,6 +279,8 @@ function worktreeRow(worktree) {
     add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   }
   const tail = element('span', 'tail');
+  if (worktree.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, worktree,
+    !collapsedSubmodules.has(`worktree:${worktree.id}`), () => toggleSubmodules(`worktree:${worktree.id}`)));
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
@@ -488,7 +471,8 @@ function renderSelectedChanges(owners) {
 function render() {
   const hadFocus = tree.contains(document.activeElement);
   const previousSelection = visible.find(item => item.key === selected);
-  const focusedAction = document.activeElement.classList?.contains('worktree-action') ? 'worktree-action' :
+  const focusedAction = document.activeElement.classList?.contains('submodule-action') ? 'submodule-action' :
+    document.activeElement.classList?.contains('worktree-action') ? 'worktree-action' :
     document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
     document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
     document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
@@ -500,7 +484,7 @@ function render() {
   renderMessages();
   document.body.dataset.separateChanges = String(!changesMode && !!snapshot.separateChanges);
   if (changesMode) renderSelectedChanges(owners);
-  for (const repo of changesMode ? [] : snapshot.repositories) {
+  function renderRepository(repo, container, parentKey) {
     owners.add(repo.id);
     reconcilePending(repo);
     const key = `repo:${repo.id}`;
@@ -514,16 +498,19 @@ function render() {
     const hasPage = !!repo.changesPage && (repo.dirty || repo.hasUnpushedSubmodules || repo.changesPage.state === 'loading' ||
       repo.changesPage.state === 'error' || repo.changesPage.previous || repo.changesPage.next);
     const fileExpandable = groups.length > 0 || hasPage;
-    const hasChildren = (filesExpanded && (fileExpandable || stashes.length > 0)) || showWorktrees || stashOpen;
-    const item = createItem(key, labelForRepo(repo, info), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
-      fileExpandable || worktrees.length > 0 || stashes.length > 0, hasChildren, undefined);
+    const submodules = repo.submodules || [];
+    const submodulesOpen = submodules.length > 0 && !collapsedSubmodules.has(key);
+    const hasChildren = (filesExpanded && (fileExpandable || stashes.length > 0)) || showWorktrees || stashOpen || submodulesOpen;
+    const item = createItem(key, window.GitpaneRepositoryLabel(repo, countText(info)), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
+      fileExpandable || worktrees.length > 0 || stashes.length > 0 || submodules.length > 0, hasChildren, parentKey);
     item.owner = repo;
     item.filesExpanded = filesExpanded;
     item.fileExpandable = fileExpandable;
     item.showWorktrees = showWorktrees;
     item.stashOpen = stashOpen;
-    tree.appendChild(item.item);
-    if (!hasChildren) continue;
+    item.submodulesOpen = submodulesOpen;
+    container.appendChild(item.item);
+    if (!hasChildren) return;
     const children = element('div', 'children repository-children');
     children.setAttribute('role', 'group');
     item.item.appendChild(children);
@@ -554,10 +541,14 @@ function render() {
         (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
           worktree.changesPage.previous || worktree.changesPage.next);
       const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
-        worktreeGroups.length > 0 || worktreeHasPage, worktreeExpanded, key);
+        worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
+        worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
       worktreeItem.item.classList.add('worktree-item');
       worktreeItem.worktreeId = worktree.id;
       worktreeItem.owner = worktree;
+      worktreeItem.filesExpanded = worktreeExpanded;
+      worktreeItem.fileExpandable = worktreeGroups.length > 0 || worktreeHasPage;
+      worktreeItem.submodulesOpen = !!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey);
       children.appendChild(worktreeItem.item);
       if (worktreeExpanded && (worktreeGroups.length || worktreeHasPage)) {
         requestChanges(worktree);
@@ -567,7 +558,14 @@ function render() {
         renderGroups(files, worktreeGroups, worktreeKey, worktree.id, worktreeInfo.partial);
         renderPage(files, worktree, worktreeKey);
       }
+      if (worktreeItem.submodulesOpen) {
+        const nested = element('div', 'children');
+        nested.setAttribute('role', 'group');
+        worktreeItem.item.appendChild(nested);
+        for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);
+      }
     }
+    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
     if (stashes.length && (filesExpanded || stashOpen)) {
       const stashKey = `stash-group:${repo.id}`;
       const stashExpanded = expandedStashes.has(stashKey);
@@ -607,6 +605,7 @@ function render() {
       }
     }
   }
+  for (const repo of changesMode ? [] : snapshot.repositories) renderRepository(repo, tree, undefined);
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);
   for (const id of pendingPages.keys()) if (!owners.has(id)) pendingPages.delete(id);
   for (const id of pendingStashFiles.keys()) if (!stashIds.has(id)) pendingStashFiles.delete(id);
@@ -785,7 +784,8 @@ function toggle(item) {
     expanded.add(item.key);
     requestChanges(item.owner, true);
   } else if (item.key.startsWith('worktree:')) {
-    if (item.isExpanded) {
+    if (!item.fileExpandable) return;
+    if (item.filesExpanded) {
       expanded.delete(item.key);
       releaseDescendants(item);
     }
@@ -800,7 +800,7 @@ function toggle(item) {
     if (item.isExpanded) expandedStashFiles.delete(item.key);
     else {
       expandedStashFiles.add(item.key);
-      const stash = (snapshot.repositories || []).flatMap(repo => repo.stashes || []).find(value => value.id === item.stashId);
+      const stash = allRepositories(snapshot.repositories || []).flatMap(repo => repo.stashes || []).find(value => value.id === item.stashId);
       window.GitpaneStashFiles.retry(message => vscode.postMessage(message), pendingStashFiles, stash);
     }
   } else if (item.key.startsWith('stash-group:')) {
@@ -866,7 +866,7 @@ tree.addEventListener('contextmenu', event => {
 tree.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
-      event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action')) &&
+      event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action') || event.target.classList?.contains('submodule-action')) &&
       (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
@@ -907,7 +907,8 @@ tree.addEventListener('keydown', event => {
     case 'End': select(visible[visible.length - 1]); break;
     case 'l':
     case 'ArrowRight':
-      if (current.key.startsWith('repo:') && current.fileExpandable && !current.filesExpanded) toggle(current);
+      if (current.owner?.submodules?.length && !current.submodulesOpen) toggleSubmodules(current.key);
+      else if ((current.key.startsWith('repo:') || current.key.startsWith('worktree:')) && current.fileExpandable && !current.filesExpanded) toggle(current);
       else if (current.expandable && !current.isExpanded) toggle(current);
       else if (visible[index + 1]?.parent === current.key) select(visible[index + 1]);
       break;
@@ -919,6 +920,7 @@ tree.addEventListener('keydown', event => {
         expandedStashes.delete(`stash-group:${current.owner.id}`);
         render();
       }
+      else if (current.submodulesOpen) toggleSubmodules(current.key);
       else if (current.expandable && current.isExpanded) toggle(current);
       else select(visible.find(item => item.key === current.parent));
       break;
@@ -956,7 +958,7 @@ window.addEventListener('message', event => {
   for (const reveal of !changesMode && Array.isArray(snapshot.revealWorktrees) ? snapshot.revealWorktrees.slice(0, 128) : []) {
     if (!reveal || typeof reveal.id !== 'string' || reveal.id.length > 128 ||
         typeof reveal.identity !== 'string' || !/^[a-f0-9]{64}$/.test(reveal.identity)) continue;
-    const repo = snapshot.repositories.find(item => item.worktreeStateKey === reveal.identity);
+    const repo = allRepositories(snapshot.repositories).find(item => item.worktreeStateKey === reveal.identity);
     if (!repo) continue;
     if (!appliedWorktreeReveals.has(reveal.id)) {
       setWorktreesVisible(repo, true);

@@ -13,6 +13,9 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-theme-contrast-
 const css = fs.readFileSync(path.join(extension, 'src/webview/styles.css'), 'utf8');
 const theme = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const view = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
+const fileMenu = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
+const stashFiles = fs.readFileSync(path.join(extension, 'src/webview/stash-files.js'), 'utf8');
+const repositoryLabel = fs.readFileSync(path.join(extension, 'src/webview/repository-label.js'), 'utf8');
 const graphCss = fs.readFileSync(path.join(extension, 'src/graph/styles.css'), 'utf8');
 const graphView = fs.readFileSync(path.join(extension, 'src/graph/view.js'), 'utf8');
 const scenario = String.raw`
@@ -52,6 +55,36 @@ const scenario = String.raw`
     check('selected stash button uses selection foreground', getComputedStyle(row.querySelector('.stash-action')).color === getComputedStyle(row).color);
     if (!forced) check('VS Code high contrast uses inherited semantic color with nonempty palettes',
       window.GitpaneTheme.lane(0) === 'currentColor' && window.GitpaneTheme.author('Andres') === 'currentColor');
+    window.postMessage({ type: 'snapshot', errors: [], expandWorktrees: true, repositories: [{
+      id: 'hierarchy', name: 'parent', branch: 'main', groups: [], submodules: [{
+        id: 'module', name: 'module', branch: 'main', submodule: true, groups: [], worktrees: [], submodules: []
+      }], worktrees: [{ id: 'linked', name: 'linked', branch: 'topic', available: true, groups: [], submodules: [{
+        id: 'linked-module', name: 'linked-module', branch: 'main', submodule: true, groups: [], worktrees: [], submodules: []
+      }] }]
+    }] }, '*');
+    await tick();
+    const parent = document.querySelector('[data-key="repo:hierarchy"]');
+    const child = document.querySelector('[data-key="repo:module"]');
+    const linked = document.querySelector('[data-key="worktree:linked"]');
+    const linkedChild = document.querySelector('[data-key="repo:linked-module"]');
+    check('submodule is a labeled child of its repository', !!child && child.getAttribute('aria-label').includes('submodule') &&
+      child.parentElement.getAttribute('role') === 'group' && child.parentElement.parentElement === parent);
+    check('worktree submodule is a labeled child of its worktree', !!linkedChild && linkedChild.getAttribute('aria-label').includes('submodule') &&
+      linkedChild.parentElement.getAttribute('role') === 'group' && linkedChild.parentElement.parentElement === linked);
+    linked.focus();
+    linked.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    check('keyboard navigation reaches a worktree submodule', linkedChild.getAttribute('aria-selected') === 'true');
+    linkedChild.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    linked.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    let currentLinked = document.querySelector('[data-key="worktree:linked"]');
+    check('left arrow collapses worktree submodules', currentLinked.getAttribute('aria-expanded') === 'false' &&
+      !document.querySelector('[data-key="repo:linked-module"]'));
+    currentLinked.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    currentLinked = document.querySelector('[data-key="worktree:linked"]');
+    check('right arrow expands worktree submodules', currentLinked.getAttribute('aria-expanded') === 'true' &&
+      !!document.querySelector('[data-key="repo:linked-module"]'));
+    currentLinked.querySelector('.submodule-action').click();
+    check('submodule control collapses children', !document.querySelector('[data-key="repo:linked-module"]'));
     const searchable = { type: 'snapshot', errors: [], repositories: [{ id: 'repo', name: 'repo', branch: 'feature', dirty: true,
       groups: [{ id: 'working', label: 'Unstaged', files: [
         { id: 'file', path: 'match.txt', status: 'M' },
@@ -162,7 +195,7 @@ function run(mode) {
 <style nonce="test">:root {${colors}}\n${css}</style></head><body class="${bodyClass}">
 <div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="test">window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>
-<script nonce="test">${theme}</script><script nonce="test">${view}</script>
+<script nonce="test">${theme}</script><script nonce="test">${fileMenu}</script><script nonce="test">${stashFiles}</script><script nonce="test">${repositoryLabel}</script><script nonce="test">${view}</script>
 <script nonce="test">${scenario.replace('EXPECT_FORCED', String(forced))}</script></body></html>`;
   const fixture = path.join(temporary, `${mode}.html`);
   fs.writeFileSync(fixture, html);
