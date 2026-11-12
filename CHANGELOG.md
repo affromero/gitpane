@@ -12,6 +12,7 @@ All notable changes to gitpane are documented here.
 ### Fixed
 - Show full paths in VS Code diff titles so files with the same name are distinguishable. ([#149](https://github.com/affromero/gitpane/pull/149), closes [#148](https://github.com/affromero/gitpane/issues/148))
 - Open repository and worktree actions with a right click in Gitpane Explorer. ([#151](https://github.com/affromero/gitpane/pull/151), closes [#150](https://github.com/affromero/gitpane/issues/150))
+- Invalidate open diffs when an outside worktree disappears, without reporting a stale refresh error. ([#155](https://github.com/affromero/gitpane/pull/155), closes [#154](https://github.com/affromero/gitpane/issues/154))
 
 ## [0.18.7] - 2026-11-11
 
