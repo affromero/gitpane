@@ -195,6 +195,16 @@ class BridgeClient {
     }
   }
 
+  async discoverSubmodule(repo, path, identity) {
+    try { return await this.request('submodule_pin_discover', { repo, path, expected_parent_identity: identity }); }
+    catch (error) {
+      if (error?.code === 'invalid_request' && error.message === 'unknown bridge method') {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support submodule discovery. Update the backend and try again.');
+      }
+      throw error;
+    }
+  }
+
   async validateRepositoryIdentity(repo, identity) {
     try { return await this.request('repo_identity_validate', { repo, expected_repo_identity: identity }); }
     catch (error) {

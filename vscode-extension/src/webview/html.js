@@ -34,6 +34,7 @@ function getHtml(webview, extensionUri, mode = 'repositories') {
   <script src="${theme}"></script>
   <script src="${resource('file-menu.js')}"></script>
   <script src="${resource('stash-files.js')}"></script>
+  <script src="${resource('repository-label.js')}"></script>
   <script src="${script}"></script>
 </body>
 </html>`;

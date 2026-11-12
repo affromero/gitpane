@@ -82,6 +82,13 @@
           "scope": "window",
           "description": "Show registered worktrees outside the workspace and inspect their changes in the current window."
         },
+        "gitpane.submodules.autoDiscover": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "order": 25,
+          "description": "Automatically open initialized submodules inside the workspace in Gitpane. Turning this off does not close repositories already open in VS Code."
+        },
         "gitpane.refreshInterval": {
           "type": "integer",
           "default": 5,

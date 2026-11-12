@@ -19,6 +19,32 @@ fn request(root: &Path, chain: Vec<Link>) -> Request {
     }
 }
 
+#[test]
+fn discovery_checks_registration_and_identity_without_requiring_child_head() {
+    let (_temp, parent, child, scope) = fixture();
+    let expected = link(&scope, &parent, "child");
+    Repository::open(&child)
+        .unwrap()
+        .set_head("refs/heads/unborn")
+        .unwrap();
+    let input = || DiscoverRequest {
+        repo: parent.clone(),
+        path: "child".into(),
+        expected_parent_identity: expected.parent_identity.clone(),
+    };
+    let result = discover(&scope, input()).unwrap();
+    assert_eq!(result["repo"], json!(child.canonicalize().unwrap()));
+    assert_eq!(result["child_identity"], expected.child_identity);
+    let mut changed = input();
+    changed.expected_parent_identity = "0".repeat(64);
+    assert_eq!(discover(&scope, changed).unwrap_err().code, "stale_target");
+    fs::rename(&child, parent.join("saved-child")).unwrap();
+    assert_eq!(
+        discover(&scope, input()).unwrap_err().code,
+        "repository_error"
+    );
+}
+
 fn copy_directory(source: &Path, destination: &Path) {
     fs::create_dir(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {

@@ -31,12 +31,15 @@ class WorkspaceViews {
 
   updateOwners(snapshot) {
     const owners = new Map();
-    for (const repo of snapshot.repositories) {
+    const visit = repo => {
       owners.set(repo.id, { owner: repo, kind: 'repo' });
+      for (const child of repo.submodules || []) visit(child);
       for (const worktree of repo.worktrees || []) {
         owners.set(worktree.id, { owner: worktree, kind: 'worktree', parent: repo.id });
+        for (const child of worktree.submodules || []) visit(child);
       }
-    }
+    };
+    for (const repo of snapshot.repositories) visit(repo);
     this.owners = owners;
   }
 

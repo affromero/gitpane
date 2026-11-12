@@ -13,6 +13,15 @@ const Status = Object.freeze({
   BOTH_DELETED: 17, BOTH_MODIFIED: 18
 });
 
+const RICH_STATUS = {
+  index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
+  index_renamed: Status.INDEX_RENAMED, index_copied: Status.INDEX_COPIED, index_type_changed: Status.TYPE_CHANGED,
+  working_modified: Status.MODIFIED, working_deleted: Status.DELETED, working_renamed: Status.INTENT_TO_RENAME,
+  intent_to_add: Status.INTENT_TO_ADD, type_changed: Status.TYPE_CHANGED, untracked: Status.UNTRACKED,
+  untracked_directory: Status.UNTRACKED,
+  conflicted: Status.BOTH_MODIFIED
+};
+
 function groups(state) {
   const working = state.workingTreeChanges || [];
   return [
@@ -130,4 +139,4 @@ function isSubmodule(repoPath, filePath, submodules) {
   });
 }
 
-module.exports = { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, statusLabel, visibleRepository };
+module.exports = { Status, RICH_STATUS, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, statusLabel, visibleRepository };

@@ -344,6 +344,7 @@ class BackendManager {
       else if (method === 'external_worktree_validate') result = await client.validateExternalWorktree(repo, argument.path, argument.identity, argument.worktreeIdentity);
       else if (method === 'branch_review') result = await client.branchReview(repo);
       else if (method === 'submodule_inspect') result = await client.inspectSubmodule(repo, argument.path, true, argument.group, argument.originalPath);
+      else if (method === 'submodule_pin_discover') result = await client.discoverSubmodule(repo, argument.path, argument.identity);
       else if (method === 'repo_identity_validate') result = await client.validateRepositoryIdentity(repo, argument);
       else if (method === 'repo_blob_metadata') result = await client.repoBlobMetadata(repo, argument.identity, argument.ref, argument.path);
       else if (method === 'repo_blob_metadata_batch') result = await client.repoBlobMetadataBatch(repo, argument.identity, argument.items);
@@ -377,8 +378,8 @@ class BackendManager {
       const invalidWorktreePreview = method === 'worktree_remove_preview' && ['invalid_request', 'unsupported_backend', 'stale_target', 'outside_workspace', 'repository_error'].includes(error?.code);
       const invalidLink = method === 'working_symlink' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'file_changed', 'file_too_large'].includes(error?.code);
-      const invalidSubmodule = method === 'submodule_inspect' &&
-        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target'].includes(error?.code);
+      const invalidSubmodule = ['submodule_inspect', 'submodule_pin_discover'].includes(method) &&
+        ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const invalidIdentity = method === 'repo_identity_validate' &&
         ['invalid_request', 'repository_error', 'outside_workspace', 'stale_target', 'unsupported_backend'].includes(error?.code);
       const invalidBlob = ['repo_blob_metadata', 'repo_blob_metadata_batch'].includes(method) &&
@@ -763,6 +764,8 @@ class BackendManager {
   branchReview(repo) { return this.request('branch_review', repo); }
 
   inspectSubmodule(repo, path, group, originalPath) { return this.request('submodule_inspect', repo, { path, group, originalPath }); }
+
+  discoverSubmodule(repo, path, identity) { return this.request('submodule_pin_discover', repo, { path, identity }); }
 
   validateRepositoryIdentity(repo, identity) { return this.request('repo_identity_validate', repo, identity); }
 

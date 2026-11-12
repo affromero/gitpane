@@ -14,7 +14,7 @@ const { RepoTerminalProvider } = require('./repo-terminal-provider');
 const { LauncherProvider } = require('./launcher-provider');
 const { MutationManager } = require('./mutation-manager');
 const { SidebarActions } = require('./sidebar-actions');
-const { Status, isSubmodule, richComparison, statusLabel } = require('./model');
+const { RICH_STATUS, isSubmodule, richComparison, statusLabel } = require('./model');
 const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
@@ -32,15 +32,6 @@ const { StashView } = require('./stash-view');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
-
-const RICH_STATUS = {
-  index_modified: Status.INDEX_MODIFIED, index_added: Status.INDEX_ADDED, index_deleted: Status.INDEX_DELETED,
-  index_renamed: Status.INDEX_RENAMED, index_copied: Status.INDEX_COPIED, index_type_changed: Status.TYPE_CHANGED,
-  working_modified: Status.MODIFIED, working_deleted: Status.DELETED, working_renamed: Status.INTENT_TO_RENAME,
-  intent_to_add: Status.INTENT_TO_ADD, type_changed: Status.TYPE_CHANGED, untracked: Status.UNTRACKED,
-  untracked_directory: Status.UNTRACKED,
-  conflicted: Status.BOTH_MODIFIED
-};
 
 class GitpaneViewProvider {
   constructor(tree, extensionUri, theme, worktreeDisplay, options = {}) {
@@ -133,7 +124,10 @@ class GitpaneViewProvider {
     const lowerBound = status => status?.file_count_lower_bound ?? 0;
     const hierarchy = this.tree.presentationView?.();
     const children = this.tree.getChildren(undefined, hierarchy);
-    const repositories = children.filter(node => node.type === 'repo').map(node => {
+    const childNodes = key => (hierarchy?.submodules?.get(key) || []).map(child => ({
+      type: 'repo', repo: hierarchy.records.find(record => record.key === child).repo, submodule: true
+    }));
+    const buildRepository = node => {
       const repo = node.repo;
       const root = repo.rootUri.fsPath;
       const repoKey = repo.rootUri.toString();
@@ -158,7 +152,8 @@ class GitpaneViewProvider {
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
           changeCountLowerBound: child ? lowerBound(childStatus) : 0,
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
-            { repoKey, repoToken, path: item.path }) : [] };
+            { repoKey, repoToken, path: item.path }) : [],
+          submodules: child ? childNodes(childRepoKey).map(buildRepository) : [] };
       });
       if (this.showOutsideWorktrees && Array.isArray(status?.external_worktrees)) {
         for (const item of status.external_worktrees) {
@@ -187,6 +182,7 @@ class GitpaneViewProvider {
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
         worktree: repo.kind === 'worktree',
+        submodule: !!node.submodule,
         pinned: this.pins?.isPinned(repo) || false,
         live: this.tree.sessionLive?.(root) || false,
         statusUnavailable: !status,
@@ -197,9 +193,12 @@ class GitpaneViewProvider {
         worktrees: worktreeData,
         hasDirtySubmodules: status?.has_dirty_submodules || false,
         hasUnpushedSubmodules: status?.has_unpushed_submodules || false,
-        changeCountLowerBound: lowerBound(status), changesPage: pageFor(id), groups: groupData
+        changeCountLowerBound: lowerBound(status), changesPage: pageFor(id), groups: groupData,
+        submodules: childNodes(repoKey).map(buildRepository)
       };
-    });
+    };
+    const repositories = children.filter(node => node.type === 'repo').map(buildRepository);
+    const allRepositories = repos => repos.flatMap(repo => [repo, ...allRepositories(repo.submodules), ...repo.worktrees.flatMap(item => allRepositories(item.submodules || []))]);
     for (const key of this.ids.keys()) if (!live.has(key)) this.ids.delete(key);
     this.changes = changes;
     this.worktrees = worktrees;
@@ -209,7 +208,7 @@ class GitpaneViewProvider {
     for (const [id, entry] of this.worktreeReveals) {
       const current = entry.current();
       if (current === false) this.worktreeReveals.delete(id);
-      else if (current === true && repositories.some(repo => repo.worktreeStateKey === entry.identity)) {
+      else if (current === true && allRepositories(repositories).some(repo => repo.worktreeStateKey === entry.identity)) {
         reveals.push({ id, identity: entry.identity });
       }
     }

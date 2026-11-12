@@ -27,6 +27,8 @@ function getHtml(webview, extensionUri) {
       .replace(`<link rel="stylesheet" href="${uri(`${kind}/styles.css`)}">`, style(`${kind}/styles.css`))
       .replace(`<script src="${uri('theme-webview.js')}"></script>`, `${bootstrap}\n  ${script('theme-webview.js')}`)
       .replace(`<script src="${uri('webview/file-menu.js')}"></script>`, script('webview/file-menu.js'))
+      .replace(`<script src="${uri('webview/stash-files.js')}"></script>`, script('webview/stash-files.js'))
+      .replace(`<script src="${uri('webview/repository-label.js')}"></script>`, script('webview/repository-label.js'))
       .replace(`<script src="${uri(`${kind}/view.js`)}"></script>`, script(`${kind}/view.js`));
     return escapeAttribute(content);
   };

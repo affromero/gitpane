@@ -60,6 +60,11 @@ under their repository, with their own changed files and actions. A worktree
 added as a workspace folder appears at the top level. Repositories outside the
 workspace are not included.
 
+Initialized submodules inside the workspace are opened automatically and shown
+under their immediate repository or worktree. Set `gitpane.submodules.autoDiscover`
+to false to stop automatic discovery. Repositories already open in VS Code stay
+available.
+
 Registered worktrees outside the workspace appear beneath the repository by
 default. Set `gitpane.worktrees.showOutsideWorkspace` to false to hide them.
 Choose **Inspect Changes** to review one in the current window, or **Open in
@@ -346,6 +351,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace. Explicit choices are `workspace` (changed repositories first, then path), `alphabetical`, `reverse` and `dirty`. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Inherit `ui.expand_worktrees`, or use `expanded` or `collapsed`. Saved per-repository choices still take precedence. |
 | `gitpane.worktrees.showOutsideWorkspace` | `true` | Show registered outside worktrees and inspect their changes in the current window. |
+| `gitpane.submodules.autoDiscover` | `true` | Open initialized submodules inside the workspace automatically. Turning this off leaves already open repositories available. |
 | `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
 | `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
 | `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |

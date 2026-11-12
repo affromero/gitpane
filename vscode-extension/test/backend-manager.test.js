@@ -42,6 +42,10 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({id: request.id, error: {code: 'repository_error', message: 'Submodule unavailable'}});
   } else if (request.method === 'submodule_inspect' && request.params.path === 'offline') {
     process.exit(1);
+  } else if (request.method === 'submodule_pin_discover' && request.params.path === 'missing') {
+    send({id: request.id, error: {code: 'repository_error', message: 'Submodule unavailable'}});
+  } else if (request.method === 'submodule_pin_discover' && request.params.path === 'unsupported') {
+    send({id: request.id, error: {code: 'invalid_request', message: 'unknown bridge method'}});
   } else if (request.method === 'repo_blob_metadata' && request.params.path === 'tree') {
     send({id: request.id, error: {code: 'unsupported_content', message: 'The selected object is not a blob'}});
   } else if (request.method === 'stash_files' && request.params.oid === '2'.repeat(40)) {
@@ -752,6 +756,10 @@ test('unavailable submodules do not hide repository status while transport failu
   await manager.ready();
   const repo = path.join(root, 'repo');
   await assert.rejects(manager.inspectSubmodule(repo, 'missing'), error => error.code === 'repository_error');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.discoverSubmodule(repo, 'missing', 'a'.repeat(64)), error => error.code === 'repository_error');
+  assert.equal(manager.state.status, 'ready');
+  await assert.rejects(manager.discoverSubmodule(repo, 'unsupported', 'a'.repeat(64)), error => error.code === 'unsupported_backend');
   assert.equal(manager.state.status, 'ready');
   assert.equal((await manager.status(repo)).method, 'status');
   await assert.rejects(manager.inspectSubmodule(repo, 'offline'), error => error.code === 'service_exited');
