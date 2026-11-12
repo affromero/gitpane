@@ -146,10 +146,12 @@ test('opens committed rename and current dirty file comparisons using native edi
   assert.equal(f.commands[0][1].ref, f.base);
   assert.equal(f.commands[0][2].fsPath, path.join(f.childPath, 'new.txt'));
   assert.equal(f.commands[0][2].ref, f.head);
+  assert.equal(f.commands[0][3], `${path.join(f.childPath, 'new.txt')} (submodule)`);
   f.pick(choices => choices.find(choice => choice.kind === 'change') || choices.find(choice => choice.kind === 'browse'));
   await f.provider.open(f.node);
   assert.equal(f.commands[1][1].ref, ':0');
   assert.equal(f.commands[1][2].fsPath, path.join(f.childPath, 'dirty.txt'));
+  assert.equal(f.commands[1][3], `${path.join(f.childPath, 'dirty.txt')} (working)`);
   f.pick(choices => choices.find(choice => choice.kind === 'graph'));
   await f.provider.open(f.node);
   assert.deepEqual(f.graphs, [f.child]);
@@ -262,8 +264,9 @@ test('historical nested gitlinks open pointer diffs and keep ancestor guards', a
     const previous = f.commands.length;
     await f.provider.open(f.node);
     assert.equal(f.commands.length, previous + 1, f.errors.at(-1));
-    const [command, left, right] = f.commands.at(-1);
+    const [command, left, right, title] = f.commands.at(-1);
     assert.equal(command, 'vscode.diff');
+    assert.equal(title, `${path.join(f.childPath, 'nested')} (submodule)`);
     for (const [uri, side] of [[left, item.old], [right, item.new]]) {
       if (side) assert.equal(await links.provideTextDocumentContent(uri), `Subproject commit ${side.oid}\n`);
       else assert.match(uri.toString(), /^gitpane-empty:/);
