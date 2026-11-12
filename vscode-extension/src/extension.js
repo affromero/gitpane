@@ -289,10 +289,11 @@ class GitpaneViewProvider {
   async inspectExternalWorktree(id, actionGuard = () => true) {
     const item = this.resolveWorktree(id);
     if (!item?.external || !/^[a-f0-9]{64}$/.test(item.externalIdentity || '') || !vscode.workspace.isTrusted || !actionGuard()) throw new Error('Worktree is no longer available.');
-    const selected = this.worktrees.get(id);
+    const selected = this.worktrees.get(id), identity = this.tree.directoryIdentity(item.path);
+    if (!identity) throw new Error('Worktree is no longer available.');
     const guard = () => {
-      const current = this.resolveWorktree(id);
-      return !this.disposed && !!vscode.workspace.isTrusted && !!current?.external &&
+      const current = this.resolveWorktree(id), now = this.tree.directoryIdentity(item.path);
+      return !this.disposed && !!vscode.workspace.isTrusted && !!current?.external && !!now && identity.path === now.path && identity.dev === now.dev && identity.ino === now.ino &&
         current.path === item.path && current.externalIdentity === item.externalIdentity && current.repoIdentity === item.repoIdentity &&
         this.worktrees.get(id)?.repoToken === selected.repoToken;
     };
