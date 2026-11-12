@@ -198,6 +198,7 @@ test('commit files open native diffs against the first parent and reject stale a
     assert.equal(commands[1][1].ref, firstParent);
     assert.equal(commands[1][2].ref, mergeOid);
     assert.equal(commands[1][2].fsPath, path.join(root, 'src/file with spaces.rs'));
+    assert.equal(commands[1][3], `${path.join(root, 'src/file with spaces.rs')} (${mergeOid.slice(0, 8)})`);
     await receive({ type: 'openCommitFile', id: messages.at(-1).files[1].id });
     assert.equal(commands.length, 3);
     assert.equal(commands[2][1].content, `Subproject commit ${'1'.repeat(40)}\n`);
@@ -300,6 +301,7 @@ test('committed gitlinks use their tree endpoints and reject stale or unsupporte
       const value = side => side.content ? side.content.match(/[a-f0-9]{40}/)[0] : side.ref || (side.scheme === 'gitpane-empty' ? 'empty' : undefined);
       assert.equal(value(diff[1]), item.left);
       assert.equal(value(diff[2]), item.right);
+      assert.equal(diff[3], `${path.join(repo.rootUri.fsPath, 'child')} (${oid.slice(0, 8)})`);
     }
     const pointerDocument = commands.at(-1)[1];
     provider.selected = 'c'.repeat(40);

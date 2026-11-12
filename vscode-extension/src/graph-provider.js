@@ -552,7 +552,7 @@ class GraphProvider {
     const left = file.status === 'A' || !file.parent ? empty : await makeSide(file.status === 'R' ? file.oldPath : file.path, file.parent);
     const right = file.status === 'D' ? empty : await makeSide(file.path, file.oid);
     if (!await this.validateGraph(repo) || this.files.get(id) !== file || !this.isCurrentRepo(repo)) return;
-    await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (${file.oid.slice(0, 8)})`);
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (${file.oid.slice(0, 8)})`);
   }
 
   async openCommitGitlink(repo, file, id) {
@@ -578,7 +578,7 @@ class GraphProvider {
       readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
         file.repoIdentity, commit, relative, oid, mode),
       verifyAncestors: graphContext?.verifyAncestors, ancestorKey: graphContext?.ancestorKey, contextKey: graphContext?.contextKey,
-      title: `${path.basename(file.path)} (${file.oid.slice(0, 8)})` });
+      title: `${path.join(repo.rootUri.fsPath, file.path)} (${file.oid.slice(0, 8)})` });
   }
 
   async copyCommit(oid, summary = false) {

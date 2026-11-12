@@ -84,6 +84,7 @@ test('staged rename and type changes open guarded pointer and blob contents', as
     await openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode);
     assert.equal(f.commands.length, 1);
     assert.equal(f.commands[0][0], 'vscode.diff');
+    assert.equal(f.commands[0][3], `${path.join(f.repo.rootUri.fsPath, change.path)} (${change.group})`);
     assert.equal(await f.links.provideTextDocumentContent(f.commands[0][1]), `Subproject commit ${'1'.repeat(40)}\n`);
     const right = await f.links.provideTextDocumentContent(f.commands[0][2]);
     assert.equal(right, sides.index.kind === 'gitlink' ? `Subproject commit ${'2'.repeat(40)}\n` : 'contents of child\n');

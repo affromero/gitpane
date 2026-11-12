@@ -68,10 +68,6 @@ function stashFileLabel(file) {
   return `${file.status} ${renamed}${file.binary ? ' (binary)' : ''}${file.gitlink ? ' (submodule)' : ''}`;
 }
 
-function stashFileTitle(file, index) {
-  return `${path.basename(file.path)} (stash@{${index}})`;
-}
-
 function stashSides(file) {
   const left = file.source === 'saved-untracked' || file.status === 'A' ? null :
     file.old_path ?? file.path;
@@ -127,10 +123,10 @@ async function openStashDiff(options) {
   const left = await side(leftPath === null ? null : leftUri, leftText, 'left');
   const right = await side(rightPath === null ? null : display, rightText, 'right');
   if (!current()) throw new Error('The selected stash is no longer available. Refresh and try again.');
-  await vscode.commands.executeCommand('vscode.diff', left, right, stashFileTitle(file, index));
+  await vscode.commands.executeCommand('vscode.diff', left, right, `${display.fsPath} (stash@{${index}})`);
 }
 
 module.exports = {
-  isStashOid, openStashDiff, stashErrorMessage, stashFileLabel, stashFileTitle, stashSides,
+  isStashOid, openStashDiff, stashErrorMessage, stashFileLabel, stashSides,
   stashUnavailableMessage, validateStashContent, validateStashList
 };

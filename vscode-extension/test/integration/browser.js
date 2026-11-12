@@ -170,6 +170,11 @@ const scenario = String.raw`
     check('repository actions do not expand the row',
       window.posted.some(message => message.type === 'menu' && message.kind === 'repo' && message.id === 'api') &&
       repo.getAttribute('aria-expanded') === 'false');
+    const repoRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    repo.querySelector('.name').dispatchEvent(repoRightClick);
+    check('right-click selects the repository and opens its actions without expanding', repoRightClick.defaultPrevented &&
+      repo.getAttribute('aria-selected') === 'true' && repo.getAttribute('aria-expanded') === 'false' &&
+      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'repo', id: 'api' }));
     repoMenu.focus();
     repoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('action keyboard activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
@@ -316,6 +321,11 @@ const scenario = String.raw`
     worktreeMenu.click();
     check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'menu' &&
       message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
+    const worktreeRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    worktree.querySelector('.name').dispatchEvent(worktreeRightClick);
+    check('right-click selects the worktree and opens its actions without expanding', worktreeRightClick.defaultPrevented &&
+      worktree.getAttribute('aria-selected') === 'true' && worktree.getAttribute('aria-expanded') === 'false' &&
+      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'worktree', id: 'opaque-worktree' }));
     worktree.querySelector('.row').click();
     worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&

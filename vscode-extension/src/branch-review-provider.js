@@ -73,7 +73,7 @@ class BranchReviewProvider {
           readHistorical: (commit, relative, oid, mode) => this.backend.submoduleHistoricalContent(repo.rootUri.fsPath,
             result.repo_identity, commit, relative, oid, mode),
           contextKey: worktree?.contextKey,
-          title: `${path.basename(file.path)} (${result.base_ref}...HEAD)` });
+          title: `${path.join(repo.rootUri.fsPath, file.path)} (${result.base_ref}...HEAD)` });
       }
       const uri = this.vscode.Uri.file(path.join(repo.rootUri.fsPath, file.path));
       const empty = uri.with({ scheme: 'gitpane-empty', query: '' });
@@ -85,7 +85,7 @@ class BranchReviewProvider {
       const left = file.status === 'A' ? empty : await makeSide(file.status === 'R' ? file.old_path : file.path, result.base_oid);
       const right = file.status === 'D' ? empty : await makeSide(file.path, result.head_oid);
       if (!this.current(repo, generation, result.head_oid, currentGuard)) throw new Error('Repository or HEAD changed; refresh and try again.');
-      await this.vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(file.path)} (${result.base_ref}...HEAD)`);
+      await this.vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (${result.base_ref}...HEAD)`);
     } catch (error) {
       await this.vscode.window.showErrorMessage(`Gitpane branch review: ${error.message}`);
     }
