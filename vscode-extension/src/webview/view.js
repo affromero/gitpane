@@ -179,9 +179,6 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
   tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
-  if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
-    !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
-  if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (repo.statusUnavailable) add(tail, 'behind', '!', 'Status unavailable');
   else {
     if (repo.stashCount > 0) {
@@ -211,6 +208,11 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
         tail.appendChild(button);
       } else add(tail, 'worktree', `⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
     }
+  }
+  if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
+    !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
+  if (repo.live) add(tail, 'live', '◉', 'Live session');
+  if (!repo.statusUnavailable) {
     if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
     if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
     if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
@@ -234,9 +236,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   return row;
 }
 
-const statusClass = window.GitpaneStatusClass;
-
-const submoduleParts = window.GitpaneSubmoduleParts;
+const statusClass = window.GitpaneStatusClass, submoduleParts = window.GitpaneSubmoduleParts;
 
 function fileRow(file) {
   const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}${file.submodule ? ' submodule-file-row' : ''}`);
@@ -259,14 +259,14 @@ function fileRow(file) {
   return row;
 }
 
-function worktreeRow(worktree) {
-  const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}`);
+function worktreeRow(worktree, submodule) {
+  const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}${submodule ? ' submodule-worktree-row' : ''}`);
   const markers = element('span', 'worktree-markers');
   add(markers, 'subtree', '⎇');
   add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0');
   row.appendChild(markers);
   if (worktree.external) {
-    add(row, 'name worktree', worktree.branch || worktree.name || 'unknown branch', worktree.path || worktree.name);
+    add(row, 'name worktree', worktree.branch || worktree.name || 'unknown branch', [worktree.path || worktree.name, worktree.branch].filter(Boolean).join('\n'));
   } else {
     add(row, 'name', worktree.name || '', worktree.path || worktree.name);
     add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
@@ -519,53 +519,6 @@ function render() {
       renderGroups(children, groups, key, repo.id, info.partial);
       renderPage(children, repo, key);
     }
-    for (const worktree of showWorktrees ? worktrees : []) {
-      owners.add(worktree.id);
-      reconcilePending(worktree);
-      const worktreeKey = `worktree:${worktree.id}`;
-      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'outside workspace' : worktree.dirty ? 'has changes' : 'clean'];
-      if (worktree.statusUnavailable) worktreeDetails.push(worktree.statusError || 'status unavailable');
-      const worktreeInfo = countInfo(worktree);
-      if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
-      else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
-      if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
-      if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
-      if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
-      if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
-      if (worktree.live) worktreeDetails.push('live session');
-      if (!worktree.available && !worktree.external) worktreeDetails.push('repository unavailable');
-      const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
-      const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
-      const worktreeExpanded = !snapshot.separateChanges && expanded.has(worktreeKey);
-      const worktreeHasPage = worktree.available && !!worktree.changesPage &&
-        (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
-          worktree.changesPage.previous || worktree.changesPage.next);
-      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree),
-        worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
-        worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
-      worktreeItem.item.classList.add('worktree-item');
-      worktreeItem.worktreeId = worktree.id;
-      worktreeItem.owner = worktree;
-      worktreeItem.filesExpanded = worktreeExpanded;
-      worktreeItem.fileExpandable = worktreeGroups.length > 0 || worktreeHasPage;
-      worktreeItem.submodulesOpen = !!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey);
-      children.appendChild(worktreeItem.item);
-      if (worktreeExpanded && (worktreeGroups.length || worktreeHasPage)) {
-        requestChanges(worktree);
-        const files = element('div', 'children worktree-files');
-        files.setAttribute('role', 'group');
-        worktreeItem.item.appendChild(files);
-        renderGroups(files, worktreeGroups, worktreeKey, worktree.id, worktreeInfo.partial);
-        renderPage(files, worktree, worktreeKey);
-      }
-      if (worktreeItem.submodulesOpen) {
-        const nested = element('div', 'children repository-children');
-        nested.setAttribute('role', 'group');
-        worktreeItem.item.appendChild(nested);
-        for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);
-      }
-    }
-    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
     if (stashes.length && (filesExpanded || stashOpen)) {
       const stashKey = `stash-group:${repo.id}`;
       const stashExpanded = expandedStashes.has(stashKey);
@@ -604,6 +557,53 @@ function render() {
         }
       }
     }
+    for (const worktree of showWorktrees ? worktrees : []) {
+      owners.add(worktree.id);
+      reconcilePending(worktree);
+      const worktreeKey = `worktree:${worktree.id}`;
+      const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'outside workspace' : worktree.dirty ? 'has changes' : 'clean'];
+      if (worktree.statusUnavailable) worktreeDetails.push(worktree.statusError || 'status unavailable');
+      const worktreeInfo = countInfo(worktree);
+      if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
+      else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+      if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
+      if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
+      if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
+      if (worktree.live) worktreeDetails.push('live session');
+      if (!worktree.available && !worktree.external) worktreeDetails.push('repository unavailable');
+      const worktreeLabel = worktreeDetails.filter(Boolean).join(', ');
+      const worktreeGroups = worktree.available && Array.isArray(worktree.groups) ? worktree.groups : [];
+      const worktreeExpanded = !snapshot.separateChanges && expanded.has(worktreeKey);
+      const worktreeHasPage = worktree.available && !!worktree.changesPage &&
+        (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
+          worktree.changesPage.previous || worktree.changesPage.next);
+      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, repo.submodule),
+        worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
+        worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
+      worktreeItem.item.classList.add('worktree-item');
+      worktreeItem.worktreeId = worktree.id;
+      worktreeItem.owner = worktree;
+      worktreeItem.filesExpanded = worktreeExpanded;
+      worktreeItem.fileExpandable = worktreeGroups.length > 0 || worktreeHasPage;
+      worktreeItem.submodulesOpen = !!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey);
+      children.appendChild(worktreeItem.item);
+      if (worktreeExpanded && (worktreeGroups.length || worktreeHasPage)) {
+        requestChanges(worktree);
+        const files = element('div', 'children worktree-files');
+        files.setAttribute('role', 'group');
+        worktreeItem.item.appendChild(files);
+        renderGroups(files, worktreeGroups, worktreeKey, worktree.id, worktreeInfo.partial);
+        renderPage(files, worktree, worktreeKey);
+      }
+      if (worktreeItem.submodulesOpen) {
+        const nested = element('div', 'children repository-children');
+        nested.setAttribute('role', 'group');
+        worktreeItem.item.appendChild(nested);
+        for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);
+      }
+    }
+    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
   }
   for (const repo of changesMode ? [] : snapshot.repositories) renderRepository(repo, tree, undefined);
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);

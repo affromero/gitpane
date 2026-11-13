@@ -151,6 +151,9 @@ Linux or Windows behavior.
 
 ## Pull requests
 
+- Read the issue body and all comments before implementation. Account for each
+  request in the change and its tests, or state what remains. Recheck the
+  thread for new requirements before merging or closing the issue.
 - Open an issue first (bug report or feature request) and reference it with
   `Closes #<n>` in the PR body. Skip the issue only for trivial fixes (typos,
   doc tweaks).

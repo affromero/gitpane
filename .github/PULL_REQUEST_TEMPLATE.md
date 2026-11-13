@@ -22,6 +22,9 @@ One or two sentences describing what changes for users.
 
 What is wrong and why it matters. Include repro steps or observed output for bugs.
 
+- [ ] I reviewed the issue body and follow-up comments, and addressed each
+      request or listed what remains.
+
 ## Fix
 
 What the change does and why this approach.

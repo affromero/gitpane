@@ -57,6 +57,7 @@ jobs:
           node test/integration/graph-browser.js
           node test/integration/stacked-browser.js
           node test/integration/unified-browser.js
+          node test/integration/submodule-presentation-browser.js
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
