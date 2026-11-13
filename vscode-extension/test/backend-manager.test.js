@@ -15,6 +15,18 @@ test('Windows workspace identities compare ordinary and extended drive and UNC p
   assert.notEqual(normalizeWorkspacePath(String.raw`\\?\UNC\Server\Share\Repo`, 'win32'), normalizeWorkspacePath(String.raw`\\server\other\repo`, 'win32'));
 });
 
+test('restoring a diff with an older backend explains that an update is required', async t => {
+  const { manager, root } = fixture();
+  t.after(() => manager.dispose());
+  await manager.ready();
+  manager.gitApi = { git: { path: process.execPath, env: {} } };
+  const session = await manager.gitSideSession(root);
+  manager.gitContentWorkers.run = async () => { throw Object.assign(new Error('unknown field `regular_only`'), { code: 'invalid_request' }); };
+  await assert.rejects(manager.gitSideOperation(session, 'a'.repeat(64),
+    { kind: 'verified_content', ref: ':0', path: 'file', regular_only: true }),
+  error => error.code === 'unsupported_backend' && /update.*backend/i.test(error.message));
+});
+
 const server = String.raw`
 const readline = require('node:readline');
 let roots = [];
