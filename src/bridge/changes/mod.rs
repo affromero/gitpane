@@ -175,7 +175,6 @@ pub(super) struct Snapshots {
     entries: HashMap<PathBuf, Snapshot>,
     bytes: usize,
     last_expiry: Option<Instant>,
-    sequence: u64,
 }
 
 fn repository_error(error: impl std::fmt::Display) -> BridgeError {
@@ -452,13 +451,9 @@ impl Snapshots {
         }
         let starts = page_boundaries(&sizes)?;
         let revision = crate::hash::hex(hash.finalize().as_ref());
-        let sequence = self.sequence.checked_add(1).ok_or_else(|| {
-            BridgeError::new(
-                "snapshot_capacity",
-                "Change snapshot identifiers are exhausted.",
-            )
-        })?;
-        let id = format!("changes-{sequence}");
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(repository_error)?;
+        let id = format!("changes-{}", crate::hash::hex(&random));
         let mut snapshot = Snapshot {
             id: id.clone(),
             identity,
@@ -515,7 +510,6 @@ impl Snapshots {
             table.extend(self.entries.drain());
             self.entries = table;
         }
-        self.sequence = sequence;
         let added = snapshot.bytes;
         if let Some(previous) = self.entries.insert(repo, snapshot) {
             self.bytes = self.bytes.saturating_sub(previous.bytes);

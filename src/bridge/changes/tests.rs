@@ -423,6 +423,23 @@ fn pages_are_revisitable_revision_is_stable_and_snapshots_are_scoped() {
     let replacement = begin(&mut store, &scope, &path);
     assert_eq!(first["revision"], replacement["revision"]);
     assert_ne!(first["snapshot"], replacement["snapshot"]);
+    let mut restarted = Snapshots::default();
+    let after_restart = begin(&mut restarted, &scope, &path);
+    assert_ne!(first["snapshot"], after_restart["snapshot"]);
+    assert_eq!(
+        restarted
+            .page(
+                &scope,
+                PageRequest {
+                    repo: path.clone(),
+                    snapshot: token.into(),
+                    cursor: 0,
+                },
+            )
+            .unwrap_err()
+            .code,
+        "snapshot_stale"
+    );
     let old = store
         .page(
             &scope,

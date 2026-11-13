@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -21,6 +22,7 @@ class BridgeClient {
     this.executable = executable;
     this.spawn = options.spawn || spawn;
     this.timeoutMs = options.timeoutMs ?? 30000;
+    this.abortOnTimeout = options.abortOnTimeout === true;
     this.serviceArgs = options.serviceArgs || ['serve'];
     this.killGraceMs = options.killGraceMs ?? 1000;
     this.maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
@@ -30,6 +32,7 @@ class BridgeClient {
     this.pending = new Map();
     this.expired = new Set();
     this.nextId = 1;
+    this.diagnosticId = randomUUID();
     this.parts = [];
     this.lineBytes = 0;
     this.initialization = undefined;
@@ -410,13 +413,22 @@ class BridgeClient {
     if (this.pending.size >= MAX_PENDING) return Promise.reject(new BridgeError('busy', 'Too many Gitpane service requests are pending.'));
     if (!Number.isSafeInteger(this.nextId)) return Promise.reject(new BridgeError('protocol_error', 'Gitpane request IDs exhausted.'));
     const id = this.nextId++;
+    const started = performance.now();
     const line = `${JSON.stringify({ id, method, params })}\n`;
     if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) return Promise.reject(new BridgeError('request_too_large', 'Gitpane request exceeds the size limit.'));
     return new Promise((resolve, reject) => {
       const timer = this.timeoutMs > 0 ? setTimeout(() => {
+        const inner = method === 'external_worktree_read' && typeof params?.method === 'string' &&
+          /^[a-z_]+$/.test(params.method) ? ` (${params.method})` : '';
+        const error = new BridgeError('timeout', `Gitpane service request timed out: ${method}${inner}. Retry to refresh.`);
+        this.onStderr(`Gitpane request timeout: client=${this.diagnosticId} id=${id} method=${method}${inner} elapsed_ms=${Math.round(performance.now() - started)} pending=${this.pending.size} phase=unknown\n`);
+        if (this.abortOnTimeout) {
+          this.abort(this.child, error);
+          return;
+        }
         this.pending.delete(id);
         this.expired.add(id);
-        reject(new BridgeError('timeout', `Gitpane service request timed out: ${method}.`));
+        reject(error);
         if (this.expired.size >= MAX_PENDING) {
           this.abort(this.child, new BridgeError('timeout', 'Too many Gitpane service responses timed out.'));
         }

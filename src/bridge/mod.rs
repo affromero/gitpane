@@ -241,7 +241,9 @@ fn process(
             };
         snapshots.clear();
         *scope = Some(updated);
-        return Ok(json!({ "version": PROTOCOL_VERSION }));
+        return Ok(
+            json!({ "version": PROTOCOL_VERSION, "capabilities": { "unique_changes_snapshots": true } }),
+        );
     }
     let scope = scope.as_ref().ok_or_else(|| {
         BridgeError::new(
