@@ -4,6 +4,22 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.9] - 2026-11-13
+
+### Added
+- Compare commits, branches, and tags from the VS Code graph, with pinned revisions, file search, and native diffs. ([#171](https://github.com/affromero/gitpane/pull/171), closes [#161](https://github.com/affromero/gitpane/issues/161))
+- Resize columns in the VS Code Repositories view. ([#166](https://github.com/affromero/gitpane/pull/166), closes [#159](https://github.com/affromero/gitpane/issues/159))
+- Align worktree status indicators with the Status column. ([#168](https://github.com/affromero/gitpane/pull/168), closes [#163](https://github.com/affromero/gitpane/issues/163))
+
+### Fixed
+- Restore supported Gitpane diff editors after a VS Code reload. ([#169](https://github.com/affromero/gitpane/pull/169), closes [#162](https://github.com/affromero/gitpane/issues/162))
+- Open repository, worktree, and commit actions beside their rows. ([#170](https://github.com/affromero/gitpane/pull/170), closes [#164](https://github.com/affromero/gitpane/issues/164))
+- Align nested submodule rows and distinguish submodule names. ([#165](https://github.com/affromero/gitpane/pull/165), closes [#158](https://github.com/affromero/gitpane/issues/158))
+- Explain when submodules listed in `.gitmodules` lack registrations. ([#167](https://github.com/affromero/gitpane/pull/167), closes [#160](https://github.com/affromero/gitpane/issues/160))
+
+### Notes
+- Comparisons support up to 100,000 changed files. Changes between a file and a submodule require inspection in Git. ([#171](https://github.com/affromero/gitpane/pull/171))
+
 ## [0.18.8] - 2026-11-11
 
 ### Added
