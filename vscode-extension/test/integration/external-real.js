@@ -11,14 +11,15 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.path', 'external-child');
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.url', '../external-child');
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.ignore', 'all');
-  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.path', 'external-mixed');
-  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.url', '../external-mixed');
-  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.ignore', 'all');
   fs.writeFileSync(path.join(siblingPath, 'external-mixed'), 'original file\n');
   gitAt(siblingPath, 'add', '.gitmodules', 'external-mixed');
   gitAt(siblingPath, 'update-index', '--add', '--cacheinfo', '160000', pointerOld, 'external-child');
   gitAt(siblingPath, 'commit', '-qm', 'external pointer base');
   const pointerNew = gitAt(siblingPath, 'rev-parse', 'HEAD');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.path', 'external-mixed');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.url', '../external-mixed');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.ignore', 'all');
+  gitAt(siblingPath, 'add', '.gitmodules');
   gitAt(siblingPath, 'update-index', '--cacheinfo', '160000', pointerNew, 'external-child');
   gitAt(siblingPath, 'update-index', '--force-remove', 'external-mixed');
   fs.unlinkSync(path.join(siblingPath, 'external-mixed'));
