@@ -16,7 +16,9 @@ const view = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8'
 const fileMenu = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const stashFiles = fs.readFileSync(path.join(extension, 'src/webview/stash-files.js'), 'utf8');
 const repositoryLabel = fs.readFileSync(path.join(extension, 'src/webview/repository-label.js'), 'utf8');
+const columnResize = fs.readFileSync(path.join(extension, 'src/webview/column-resize.js'), 'utf8');
 const graphCss = fs.readFileSync(path.join(extension, 'src/graph/styles.css'), 'utf8');
+const graphComparison = fs.readFileSync(path.join(extension, 'src/graph/comparison.js'), 'utf8');
 const graphView = fs.readFileSync(path.join(extension, 'src/graph/view.js'), 'utf8');
 const scenario = String.raw`
 (async () => {
@@ -195,7 +197,7 @@ function run(mode) {
 <style nonce="test">:root {${colors}}\n${css}</style></head><body class="${bodyClass}">
 <div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="test">window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>
-<script nonce="test">${theme}</script><script nonce="test">${fileMenu}</script><script nonce="test">${stashFiles}</script><script nonce="test">${repositoryLabel}</script><script nonce="test">${view}</script>
+<script nonce="test">${theme}</script><script nonce="test">${fileMenu}</script><script nonce="test">${stashFiles}</script><script nonce="test">${repositoryLabel}</script><script nonce="test">${columnResize}</script><script nonce="test">${view}</script>
 <script nonce="test">${scenario.replace('EXPECT_FORCED', String(forced))}</script></body></html>`;
   const fixture = path.join(temporary, `${mode}.html`);
   fs.writeFileSync(fixture, html);
@@ -225,7 +227,7 @@ function runGraph(mode) {
 <button id="refresh"></button><button id="collapse"></button><button id="expand-all"></button><button id="commit-actions"></button>
 <div id="graph" role="listbox" tabindex="0"></div><h2 id="files-heading"></h2><div id="files-status"></div>
 <ul id="files"></ul><input id="file-search"><script nonce="test">window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>
-<script nonce="test">${theme}</script><script nonce="test">${graphView}</script>
+<script nonce="test">${theme}</script><script nonce="test">${fileMenu}</script><script nonce="test">${graphComparison}</script><script nonce="test">${graphView}</script>
 <script nonce="test">${graphScenario.replaceAll('EXPECT_FORCED', String(forced))}</script></body></html>`;
   const fixture = path.join(temporary, `graph-${mode}.html`);
   fs.writeFileSync(fixture, html);
