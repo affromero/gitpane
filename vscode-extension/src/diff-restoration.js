@@ -20,6 +20,8 @@ class DiffRestoration {
     this.writes = Promise.resolve();
     this.pending = new Map();
     this.closed = new Set();
+    this.waiters = new Map();
+    this.disposed = false;
   }
 
   entries() {
@@ -96,6 +98,44 @@ class DiffRestoration {
     return pending;
   }
 
+  async waitForState(key, deadline, find) {
+    if (this.disposed || this.links.disposed || this.closed.has(key) || this.vscode.workspace.isTrusted !== true) return;
+    const existing = find();
+    if (existing) return existing;
+    return new Promise(resolve => {
+      let subscription, treeSubscription, timer;
+      const finish = repo => {
+        clearTimeout(timer);
+        subscription?.dispose();
+        treeSubscription?.dispose();
+        this.waiters.delete(key);
+        resolve(repo);
+      };
+      const check = () => {
+        if (this.disposed || this.links.disposed || this.closed.has(key) || this.vscode.workspace.isTrusted !== true) return finish();
+        const value = find();
+        if (value) finish(value);
+      };
+      this.waiters.set(key, check);
+      subscription = this.tree.git.onDidOpenRepository?.(check);
+      treeSubscription = this.tree.onDidChangeTreeData?.(check);
+      timer = setTimeout(() => finish(), Math.max(0, deadline - Date.now()));
+      check();
+    });
+  }
+
+  async canRetry(descriptor, key) {
+    await this.writes;
+    if (this.disposed || this.links.disposed || this.closed.has(key) || this.vscode.workspace.isTrusted !== true ||
+        JSON.stringify(this.entries()[key]) !== JSON.stringify(descriptor) || !this.independent(descriptor.repo)) return false;
+    const repo = this.tree.git.repositories.find(item => item.rootUri.fsPath === descriptor.repo);
+    if (!repo) return scopeKey(await this.backend.mutationSnapshot()) === descriptor.scope;
+    if (this.tree.submoduleHierarchy?.edges.has(repo.rootUri.toString())) return false;
+    const status = this.tree.backendStatuses.get(repo.rootUri.toString());
+    if (status && (status.repo_identity !== descriptor.identity || status.is_linked_worktree)) return false;
+    return scopeKey(await this.backend.mutationSnapshot()) === descriptor.scope;
+  }
+
   async restoreOnce(uri) {
     await this.writes;
     const descriptor = this.entries()[uri.toString()];
@@ -103,30 +143,71 @@ class DiffRestoration {
         !/^[a-f0-9]{64}$/.test(descriptor.identity || '') || !validRecord(descriptor.record) ||
         descriptor.record.is_submodule || !supported.has(descriptor.record.kind) ||
         !['left', 'right'].includes(descriptor.which) || typeof descriptor.scope !== 'string') return false;
-    const repo = this.tree.git.repositories.find(item => item.rootUri.fsPath === descriptor.repo);
-    if (!repo) return false;
-    const token = this.tree.repositoryToken(repo);
-    const snapshot = await this.backend.mutationSnapshot();
-    const current = () => !this.closed.has(uri.toString()) && this.current(repo, token, descriptor.identity, snapshot) &&
-      JSON.stringify(this.entries()[uri.toString()]) === JSON.stringify(descriptor);
-    if (!current() || scopeKey(snapshot) !== descriptor.scope) return false;
-    const revision = this.tree.contentRevision(repo);
-    const result = await this.backend.verifyChanges(descriptor.repo, descriptor.record);
-    await this.writes;
-    if (!current() || revision !== this.tree.contentRevision(repo) || !validRecord(result?.change) || JSON.stringify(result.change) !== JSON.stringify(descriptor.record)) return false;
-    const side = richComparison(descriptor.record)[descriptor.which];
-    if (!side?.gitPath) return false;
-    await createLiveGitSide({ vscode: this.vscode, links: this.links, backend: this.backend, repo,
-      repoIdentity: descriptor.identity, repoToken: token, side, current, restoreUri: uri, requireRegular: true,
-      revision: () => this.tree.contentRevision(repo) });
-    if (current() && revision === this.tree.contentRevision(repo)) return true;
-    this.links.remove(uri.toString());
+    const deadline = Date.now() + 15000;
+    let attempts = 0, lastChange;
+    while (Date.now() < deadline) {
+      if (++attempts > 8) {
+        if (lastChange) throw lastChange;
+        throw new Error('The repository kept changing while restoring the Gitpane diff.');
+      }
+      const repo = await this.waitForState(uri.toString(), deadline,
+        () => this.tree.git.repositories.find(item => item.rootUri.fsPath === descriptor.repo));
+      if (!repo) return false;
+      if (!this.tree.backendStatuses.has(repo.rootUri.toString()) && typeof this.tree.refresh === 'function') await this.tree.refresh();
+      const statusError = this.tree.backendErrors?.get(repo.rootUri.toString()) || this.tree.statusErrors?.get(repo.rootUri.toString());
+      if (statusError) throw new Error(statusError);
+      if (!this.tree.backendStatuses.has(repo.rootUri.toString())) {
+        const changed = await this.waitForState(uri.toString(), deadline, () =>
+          this.tree.backendStatuses.has(repo.rootUri.toString()) || this.tree.backendErrors?.has(repo.rootUri.toString()) ||
+          this.tree.statusErrors?.has(repo.rootUri.toString()));
+        if (!changed) return false;
+        continue;
+      }
+      const token = this.tree.repositoryToken(repo);
+      const snapshot = await this.backend.mutationSnapshot();
+      const current = () => !this.closed.has(uri.toString()) && this.current(repo, token, descriptor.identity, snapshot) &&
+        JSON.stringify(this.entries()[uri.toString()]) === JSON.stringify(descriptor);
+      if (scopeKey(snapshot) !== descriptor.scope) return false;
+      if (!current()) { if (await this.canRetry(descriptor, uri.toString())) continue; return false; }
+      const revision = this.tree.contentRevision(repo);
+      let result;
+      try { result = await this.backend.verifyChanges(descriptor.repo, descriptor.record); }
+      catch (error) {
+        if (error?.code === 'workspace_changed' && await this.canRetry(descriptor, uri.toString())) { lastChange = error; continue; }
+        throw error;
+      }
+      await this.writes;
+      if (!current() || revision !== this.tree.contentRevision(repo)) {
+        if (await this.canRetry(descriptor, uri.toString())) continue;
+        return false;
+      }
+      if (!validRecord(result?.change) || JSON.stringify(result.change) !== JSON.stringify(descriptor.record)) return false;
+      const side = richComparison(descriptor.record)[descriptor.which];
+      if (!side?.gitPath) return false;
+      try {
+        await createLiveGitSide({ vscode: this.vscode, links: this.links, backend: this.backend, repo,
+          repoIdentity: descriptor.identity, repoToken: token, side, current, restoreUri: uri, requireRegular: true,
+          revision: () => this.tree.contentRevision(repo) });
+      } catch (error) {
+        if ((!current() || revision !== this.tree.contentRevision(repo)) && await this.canRetry(descriptor, uri.toString())) continue;
+        throw error;
+      }
+      if (current() && revision === this.tree.contentRevision(repo)) return true;
+      this.links.remove(uri.toString(), { forget: false });
+      if (!await this.canRetry(descriptor, uri.toString())) return false;
+    }
     return false;
   }
 
   forget(key) {
     this.closed.add(key);
+    this.waiters.get(key)?.();
     return this.update(entries => { delete entries[key]; }).then(() => { this.closed.delete(key); });
+  }
+
+  dispose() {
+    this.disposed = true;
+    for (const wake of this.waiters.values()) wake();
   }
 }
 

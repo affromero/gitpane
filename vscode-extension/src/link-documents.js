@@ -638,14 +638,14 @@ class LinkDocuments {
     return content;
   }
 
-  remove(key) {
+  remove(key, { forget = true } = {}) {
     const entry = this.documents.get(key);
     if (!entry) return;
     entry.closed = true;
     entry.abort?.abort();
     clearTimeout(entry.timer);
     this.documents.delete(key);
-    if (!this.disposed && this.restoration && key.startsWith('gitpane-blob:')) this.restoration.forget(key).catch(error => this.output?.appendLine(`Could not update restored diffs: ${error.message}`));
+    if (forget && !this.disposed && this.restoration && key.startsWith('gitpane-blob:')) this.restoration.forget(key).catch(error => this.output?.appendLine(`Could not update restored diffs: ${error.message}`));
   }
 
   watchedPaths(repo) {
@@ -666,6 +666,7 @@ class LinkDocuments {
 
   dispose() {
     this.disposed = true;
+    this.restoration?.dispose();
     this.finishInitialization();
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     for (const waiter of this.waiters.splice(0)) waiter.reject(new Error('The symlink diff is no longer available.'));
