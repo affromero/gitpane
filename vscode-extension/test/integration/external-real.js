@@ -11,16 +11,31 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.path', 'external-child');
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.url', '../external-child');
   gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.ignore', 'all');
-  gitAt(siblingPath, 'add', '.gitmodules');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.path', 'external-mixed');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.url', '../external-mixed');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-mixed.ignore', 'all');
+  fs.writeFileSync(path.join(siblingPath, 'external-mixed'), 'original file\n');
+  gitAt(siblingPath, 'add', '.gitmodules', 'external-mixed');
   gitAt(siblingPath, 'update-index', '--add', '--cacheinfo', '160000', pointerOld, 'external-child');
   gitAt(siblingPath, 'commit', '-qm', 'external pointer base');
   const pointerNew = gitAt(siblingPath, 'rev-parse', 'HEAD');
   gitAt(siblingPath, 'update-index', '--cacheinfo', '160000', pointerNew, 'external-child');
+  gitAt(siblingPath, 'update-index', '--force-remove', 'external-mixed');
+  fs.unlinkSync(path.join(siblingPath, 'external-mixed'));
+  gitAt(siblingPath, 'update-index', '--add', '--cacheinfo', '160000', pointerNew, 'external-mixed');
   fs.writeFileSync(tracked, 'committed\n');
   gitAt(siblingPath, 'add', '--', 'external-tracked.txt');
   gitAt(siblingPath, 'commit', '-qm', 'external fixture');
+  const originalBlob = gitAt(siblingPath, 'rev-parse', `${pointerNew}:external-mixed`);
+  const replacement = path.join(path.dirname(siblingPath), 'replacement-blob');
+  fs.writeFileSync(replacement, 'replacement file\n');
+  const replacementBlob = gitAt(siblingPath, 'hash-object', '-w', replacement);
+  gitAt(siblingPath, 'replace', originalBlob, replacementBlob);
+  assert.equal(gitAt(siblingPath, 'cat-file', '-p', originalBlob), 'replacement file');
   gitAt(siblingPath, '-c', 'protocol.file.allow=always', 'clone', '-q', '--no-checkout', siblingPath, 'external-child');
   gitAt(path.join(siblingPath, 'external-child'), 'checkout', '-q', '--detach', pointerNew);
+  gitAt(siblingPath, '-c', 'protocol.file.allow=always', 'clone', '-q', '--no-checkout', siblingPath, 'external-mixed');
+  gitAt(path.join(siblingPath, 'external-mixed'), 'checkout', '-q', '--detach', pointerNew);
   fs.writeFileSync(tracked, 'staged\n');
   gitAt(siblingPath, 'add', '--', 'external-tracked.txt');
   fs.writeFileSync(tracked, 'working\n');
@@ -136,6 +151,8 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
       'an open diff cannot retain access after worktree removal');
     await assert.rejects(blobs.readFile(comparison.file), /no longer|changed|stale|unavailable/i,
       'a comparison closed with its graph cannot retain access after worktree removal');
+    await assert.rejects(blobs.readFile(comparison.mixedFile), /no longer|changed|stale|unavailable/i,
+      'a mixed comparison cannot retain file access after worktree removal');
     for (const pointer of comparison.pointers) await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(pointer),
       /no longer|changed|stale|unavailable/i, 'a pointer diff cannot retain access after worktree removal');
     gitAt(repoPath, 'worktree', 'add', '-qb', 'feature/replacement', siblingPath);

@@ -12,7 +12,7 @@ function validGitlink(value) {
 }
 
 async function openGitlinkDiff(options) {
-  const { vscode, links, repo, repoIdentity, repoToken, file, oldRef, newRef, current, verify, title, readHistorical,
+  const { vscode, links, repo, repoIdentity, repoToken, file, oldRef, newRef, current, verify, title, readHistorical, createHistorical,
     verifyAncestors, ancestorKey, contextKey } = options;
   if (!links || !validGitlink(file.gitlink) || !/^[a-f0-9]{64}$/.test(repoIdentity || '')) {
     throw new Error('The configured Gitpane backend does not provide verified submodule pointer details. Update the backend and try again.');
@@ -40,6 +40,7 @@ async function openGitlinkDiff(options) {
   const side = async (value, target, ref, relative) => {
     if (!value) return empty;
     if (value.kind === 'gitlink') return links.createStatic(target, `Subproject commit ${value.oid}\n`, documentGuard, current, group);
+    if (typeof createHistorical === 'function') return createHistorical(relative, ref);
     if (typeof readHistorical !== 'function' || typeof repo.buffer !== 'function' ||
         typeof ref !== 'string' || !/^[a-f0-9]{40,64}$/.test(ref)) {
       throw new Error('The configured Gitpane backend does not provide verified historical file contents. Update the backend and try again.');

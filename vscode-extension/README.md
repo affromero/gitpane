@@ -114,7 +114,7 @@ Ctrl/Cmd-click another. Choose
 endpoint or common-ancestor comparison, swap endpoints, and search the file list.
 Uncommitted changes are excluded. Ref selections stay pinned until **Refresh
 refs**; moved refs are marked. Comparisons support up to 100,000 changed files.
-Submodule changes to or from a file require inspection in Git.
+File and submodule type changes show the committed file and submodule pointer.
 The graph uses Gitpane's `[graph]` settings for branch visibility, label length
 and diff statistics. Restart the VS Code extension host after changing them.
 The sidebar and graph use Gitpane's configured theme and adapt its colors for
