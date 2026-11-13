@@ -138,6 +138,8 @@ jobs:
         run: |
           curl --fail --location --retry 3 https://update.code.visualstudio.com/1.145.2/linux-x64/stable --output "$RUNNER_TEMP/vscode.tar.gz"
           tar -xzf "$RUNNER_TEMP/vscode.tar.gz" -C "$RUNNER_TEMP"
+          sudo chown root:root "$RUNNER_TEMP/VSCode-linux-x64/chrome-sandbox"
+          sudo chmod 4755 "$RUNNER_TEMP/VSCode-linux-x64/chrome-sandbox"
           echo "VSCODE_EXECUTABLE=$RUNNER_TEMP/VSCode-linux-x64/code" >> "$GITHUB_ENV"
           echo "VSCODE_CLI_EXECUTABLE=$RUNNER_TEMP/VSCode-linux-x64/bin/code" >> "$GITHUB_ENV"
           sudo apt-get update
