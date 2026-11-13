@@ -19,7 +19,7 @@ const server = http.createServer((request, response) => {
   response.end(asset.body);
 });
 const add = (route, body, type = 'text/html') => assets.set(route, { body, type });
-for (const file of ['webview/styles.css', 'webview/view.js', 'webview/file-menu.js', 'webview/stash-files.js', 'webview/repository-label.js', 'graph/styles.css', 'graph/view.js',
+for (const file of ['webview/styles.css', 'webview/view.js', 'webview/file-menu.js', 'webview/stash-files.js', 'webview/repository-label.js', 'webview/column-resize.js', 'graph/styles.css', 'graph/view.js',
   'theme-webview.js', 'unified/styles.css', 'unified/view.js', 'unified/frame.js']) {
   add(`/src/${file}`, fs.readFileSync(path.join(extension, 'src', file)), file.endsWith('.css') ? 'text/css' : 'text/javascript');
 }
@@ -47,8 +47,10 @@ const scenario = String.raw`
  const group = { id: 'working', label: 'Unstaged', files: [{ id: 'file', status: 'M', path: 'changed.txt' }] };
  const owner = { id: 'repo', name: 'repo', branch: 'main', dirty: true, groups: [group], worktrees: [],
   changesPage: { state: 'ready', page: 0, previous: false, next: false } };
+ owner.worktrees.push({ id: 'external', name: 'long-external-worktree', branch: 'feature/review', external: true,
+  available: false, dirty: true, fileCount: 2, groups: [] });
  const snapshot = { type: 'snapshot', repositories: [owner], selectedOwner: owner, selectedOwnerId: owner.id,
-  selectedKind: 'repo', selectionEpoch: 7, separateChanges: true, errors: [], loading: false };
+  selectedKind: 'repo', selectionEpoch: 7, separateChanges: true, expandWorktrees: true, errors: [], loading: false };
  try {
   for (let n = 0; n < 100 && new Set(received.filter(p => p.message.type === 'ready').map(p => p.surface)).size < 3; n++) await tick();
   check('three frames initialize independently', new Set(received.filter(p => p.message.type === 'ready').map(p => p.surface)).size === 3);
@@ -63,6 +65,76 @@ const scenario = String.raw`
   check('repositories snapshot reaches repository pane', doc('repositories').body.textContent.includes('repo'));
   check('selected changes reach changes pane', doc('changes').body.textContent.includes('changed.txt'));
   check('graph snapshot reaches graph pane', doc('graph').body.textContent.includes('first commit'));
+  let repoDoc = doc('repositories');
+  let handles = repoDoc.querySelectorAll('.column-separator');
+  check('repository columns have accessible resize controls', handles.length === 2 &&
+   [...handles].every(handle => handle.getAttribute('aria-label') && handle.getAttribute('aria-orientation') === 'vertical'));
+  const nameWidth = repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width;
+  handles[0].focus();
+  handles[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  check('keyboard resizing changes the name column and saves its width',
+   repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width > nameWidth &&
+   saved.views.repositories.columnWidths[0] > nameWidth);
+  const branchWidth = repoDoc.querySelector('.repo-row .branch').getBoundingClientRect().width;
+  handles[1].setPointerCapture = () => {};
+  handles[1].dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 1, clientX: 100, bubbles: true }));
+  handles[1].dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 90, bubbles: true }));
+  handles[1].dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 90, bubbles: true }));
+  check('dragging resizes the branch column', repoDoc.querySelector('.repo-row .branch').getBoundingClientRect().width < branchWidth);
+  send('repositories', { ...snapshot, fontSize: 20 }); await tick();
+  check('refresh keeps resize focus and preferences', repoDoc.activeElement === handles[0] &&
+   saved.views.repositories.columnWidths.length === 2);
+  let preferredWidths = [...saved.views.repositories.columnWidths];
+  frame('repositories').style.width = '210px';
+  await tick(); await tick();
+  check('narrowing preserves the saved widths and keeps the row within the panel',
+   JSON.stringify(saved.views.repositories.columnWidths) === JSON.stringify(preferredWidths) &&
+   repoDoc.querySelector('.repo-row').getBoundingClientRect().right <= repoDoc.documentElement.clientWidth + 1);
+  const externalRow = repoDoc.querySelector('.external-worktree-row');
+  const externalTail = externalRow.querySelector('.tail').getBoundingClientRect();
+  const parentTail = repoDoc.querySelector('.repo-row .tail').getBoundingClientRect();
+  check('outside worktree status aligns and actions remain visible in a narrow panel',
+   Math.abs(externalTail.left - parentTail.left) < 1 && [...externalRow.querySelector('.tail').children].every(item => {
+    const element = externalRow.querySelector('.tail');
+    element.scrollLeft += Math.max(0, item.getBoundingClientRect().right - externalTail.right);
+    const bounds = item.getBoundingClientRect();
+    return bounds.left >= externalTail.left - 1 && bounds.right <= externalTail.right + 1;
+   }));
+  const scrollTail = externalRow.querySelector('.tail');
+  scrollTail.focus();
+  const scrollKey = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+  scrollTail.dispatchEvent(scrollKey);
+  check('status scrolling preserves keyboard access', repoDoc.activeElement === scrollTail && !scrollKey.defaultPrevented);
+  send('repositories', { ...snapshot, fontSize: 20, statusAlignment: 'left' }); await tick();
+  check('refresh restores focus to status controls', repoDoc.activeElement.classList.contains('tail'));
+  handles[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  check('resizing a narrow name column preserves the saved branch width',
+   saved.views.repositories.columnWidths[1] === preferredWidths[1]);
+  preferredWidths = [...saved.views.repositories.columnWidths];
+  send('repositories', { ...snapshot, fontSize: 40 }); await tick(); await tick();
+  const largeRow = repoDoc.querySelector('.external-worktree-row');
+  check('large text keeps name visible', repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width > 0 &&
+   repoDoc.querySelector('.repo-row .branch').getBoundingClientRect().width > 0);
+  check('large text keeps worktree status on one line inside the panel',
+   repoDoc.documentElement.scrollWidth <= repoDoc.documentElement.clientWidth + 1 &&
+   [...largeRow.querySelector('.tail').children].every(item =>
+    Math.abs(item.getBoundingClientRect().top - largeRow.querySelector('.tail').firstElementChild.getBoundingClientRect().top) < 1));
+  send('repositories', { ...snapshot, fontSize: 20 }); await tick();
+  frame('repositories').style.width = '';
+  await tick(); await tick();
+  check('widening restores the chosen width',
+   Math.abs(repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width - preferredWidths[0]) < 1);
+  const repoFrame = frame('repositories');
+  const reloaded = new Promise(resolve => repoFrame.addEventListener('load', resolve, { once: true }));
+  repoFrame.srcdoc = repoFrame.srcdoc;
+  await reloaded;
+  send('repositories', snapshot); await tick(); await tick();
+  repoDoc = doc('repositories');
+  handles = repoDoc.querySelectorAll('.column-separator');
+  check('recreating the view restores the chosen widths', handles.length === 2 &&
+   Math.abs(repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width - preferredWidths[0]) < 1);
+  repoDoc.querySelector('.column-reset').click();
+  check('reset restores automatic column widths', saved.views.repositories.columnWidths === null);
   send('repositories', { ...snapshot, fontSize: 20 }); await tick();
   check('font size applies to all three panes and their headings',
    getComputedStyle(document.querySelector('.pane h2')).fontSize === '20px' &&
