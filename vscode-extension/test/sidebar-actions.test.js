@@ -100,6 +100,20 @@ function fixture() {
 
 const action = (action, id) => ({ type: 'action', action, id });
 
+test('inline repository menus reject stale targets and replayed actions', async () => {
+  const f = fixture();
+  const first = await f.actions.rowMenu('repo', 'repo');
+  assert.ok(first.choices.some(choice => choice.action === 'refreshRepo'));
+  f.setRepo({ ...f.getRepo(), branch: 'changed' });
+  await f.actions.rowMenuAction('repo', 'repo', first.token, 'refreshRepo');
+  assert.deepEqual(f.calls, []);
+  const current = await f.actions.rowMenu('repo', 'repo');
+  await f.actions.rowMenuAction('repo', 'repo', current.token, 'refreshRepo');
+  assert.deepEqual(f.calls, [['refreshRepository', 'repo', 'repo']]);
+  await f.actions.rowMenuAction('repo', 'repo', current.token, 'refreshRepo');
+  assert.deepEqual(f.calls, [['refreshRepository', 'repo', 'repo']]);
+});
+
 test('outside worktrees open only after explicit selection and current validation', async () => {
   const f = fixture();
   const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
