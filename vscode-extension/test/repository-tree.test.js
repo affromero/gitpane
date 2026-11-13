@@ -207,10 +207,10 @@ test('slow detailed refresh finishes one sweep before scheduling another', async
     assert.deepEqual(calls, []);
     t.mock.timers.tick(1);
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(calls, [roots[0]]);
+    assert.deepEqual(calls, roots);
     t.mock.timers.tick(10000);
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(calls, [roots[0]]);
+    assert.deepEqual(calls, roots);
     hold = false;
     release();
     await new Promise(resolve => setImmediate(resolve));

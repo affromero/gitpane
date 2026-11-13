@@ -48,6 +48,7 @@ class BackendManager {
     this.pinValidationClient = undefined;
     this.activeValidations = 0;
     this.verifyClients = new Set();
+    this.externalStatusClients = new Set();
     this.launcherClients = new Set();
     this.pointerClients = new Set();
     this.pointerChecks = new Map();
@@ -106,6 +107,8 @@ class BackendManager {
     for (const client of this.launcherClients) client.dispose({ immediate: true });
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
+    for (const client of this.externalStatusClients) client.dispose({ immediate: true });
+    this.externalStatusClients.clear();
     this.roots = undefined;
     this.rootSources = undefined;
     this.rootIdentities = undefined;
@@ -430,7 +433,8 @@ class BackendManager {
     this.changesClient = client;
     const pending = (async () => {
       try {
-        await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+        const initialized = await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+        client.abortOnTimeout = initialized.capabilities?.unique_changes_snapshots === true;
         if (this.disposed || epoch !== this.changesEpoch || snapshot.generation !== this.generation || client !== this.changesClient) {
           throw new BridgeError('workspace_changed', 'Workspace changed before changes could load.');
         }
@@ -747,10 +751,10 @@ class BackendManager {
   async inspectExternalWorktree(selection, guard, actionGuard = () => true) {
     if (!this.vscode.workspace.isTrusted || !guard() || !actionGuard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
     await this.ready();
-    const generation = this.generation, client = this.client;
-    const result = await client.request('external_worktree_read', { selection, method: 'status',
-      params: { repo: selection.path, include_worktrees: false, summary_only: true, watched_paths: [] } });
-    if (!this.vscode.workspace.isTrusted || !guard() || !actionGuard() || generation !== this.generation || client !== this.client) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    const generation = this.generation;
+    const current = () => generation === this.generation && this.vscode.workspace.isTrusted && guard() && actionGuard();
+    const result = await this.readExternalStatus(selection.path, selection, current);
+    if (!current()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
     this.externalSelections.set(selection.path, { selection, guard: () => this.vscode.workspace.isTrusted && guard() });
     return result;
   }
@@ -758,14 +762,30 @@ class BackendManager {
   async externalStatus(repo) {
     const external = this.externalSelections.get(repo);
     if (!external?.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
-    await this.ready();
-    const client = this.client, generation = this.generation;
-    const result = await client.request('external_worktree_read', { selection: external.selection, method: 'status',
-      params: { repo, include_worktrees: false, summary_only: true, watched_paths: [] } });
-    if (generation !== this.generation || client !== this.client || this.externalSelections.get(repo) !== external || !external.guard()) {
-      throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    return this.readExternalStatus(repo, external.selection,
+      () => this.externalSelections.get(repo) === external && external.guard());
+  }
+
+  async readExternalStatus(repo, selection, current) {
+    const snapshot = await this.mutationSnapshot();
+    if (this.externalStatusClients.size >= 4) throw new BridgeError('busy', 'Too many worktree checks are running. Try again.');
+    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk), abortOnTimeout: true });
+    this.externalStatusClients.add(client);
+    try {
+      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
+      if (snapshot.generation !== this.generation || !current()) {
+        throw new BridgeError('stale_target', 'Worktree is no longer available.');
+      }
+      const result = await client.request('external_worktree_read', { selection, method: 'status',
+        params: { repo, include_worktrees: false, summary_only: true, watched_paths: [] } });
+      if (snapshot.generation !== this.generation || !current()) {
+        throw new BridgeError('stale_target', 'Worktree is no longer available.');
+      }
+      return result;
+    } finally {
+      this.externalStatusClients.delete(client);
+      client.dispose({ immediate: true });
     }
-    return result;
   }
 
   branchReview(repo) { return this.request('branch_review', repo); }
@@ -972,6 +992,8 @@ class BackendManager {
     this.cancelPointerChecks();
     for (const client of this.verifyClients) client.dispose({ immediate: true });
     this.verifyClients.clear();
+    for (const client of this.externalStatusClients) client.dispose({ immediate: true });
+    this.externalStatusClients.clear();
     this.sessionMutations.dispose();
     this.gitMetadataBatches.dispose();
     this.gitContentWorkers.dispose();

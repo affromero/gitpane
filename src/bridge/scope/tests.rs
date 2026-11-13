@@ -138,7 +138,7 @@ fn captured_root_identity_blocks_replacement_before_worker_init_and_mutation() {
     };
     assert_eq!(
         process(&mut main_scope, &mut main_snapshots, initialize(), &options).unwrap(),
-        json!({"version": 1})
+        json!({"version": 1, "capabilities": {"unique_changes_snapshots": true}})
     );
     let captured = process(
         &mut main_scope,
@@ -211,7 +211,7 @@ fn captured_root_identity_blocks_replacement_before_worker_init_and_mutation() {
     fs::rename(&saved, &workspace).unwrap();
     assert_eq!(
         process(&mut late_scope, &mut late_snapshots, strict(), &options).unwrap(),
-        json!({"version": 1})
+        json!({"version": 1, "capabilities": {"unique_changes_snapshots": true}})
     );
 }
 

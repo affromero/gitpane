@@ -40,7 +40,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'initialize') {
     roots = request.params.workspace_roots;
     sources = request.params.workspace_root_sources || roots;
-    send({id: request.id, result: {version: 1, capabilities: {liveness_worker: true,
+    send({id: request.id, result: {version: 1, capabilities: {liveness_worker: true, unique_changes_snapshots: true,
       launcher_choices_worker: process.env.GITPANE_TEST_LAUNCHER_CAPABILITY !== '0'}}});
   } else if (request.method === 'workspace_root_identities') {
     send({id: request.id, result: {roots: roots.map((path, index) => ({path, source: sources[index], identity: 'a'.repeat(64)}))}});
@@ -83,6 +83,12 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     } else send({id: request.id, result: {oid: request.params.revision}});
   } else if (request.method === 'external_worktree_read') {
     process.stderr.write('external-worktree-started\n');
+    if (request.params.selection.path.endsWith('blocked') && process.env.GITPANE_TEST_BLOCK_MARKER) {
+      try {
+        require('node:fs').closeSync(require('node:fs').openSync(process.env.GITPANE_TEST_BLOCK_MARKER, 'wx'));
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+      } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
     setTimeout(() => send({id: request.id, result: {is_dirty: false}}), 100);
   } else if (request.method === 'changes_begin') {
     const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
@@ -163,6 +169,7 @@ function fixture(options = {}) {
     onDidChangeConfiguration: configuration.event
   };
   const executed = [];
+  const blockMarker = options.blockExternalOnce ? path.join(os.tmpdir(), `gitpane-block-${require('node:crypto').randomUUID()}`) : '';
   const manager = new BackendManager({ extensionPath: path.resolve('extension') }, {
     vscode: { EventEmitter, workspace },
     output: options.output,
@@ -172,13 +179,15 @@ function fixture(options = {}) {
       executed.push(executable);
       return new BridgeClient(executable, {
         ...callbacks,
+        ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
         spawn: () => spawn(process.execPath, ['-e', server], { stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, GITPANE_TEST_LAUNCHER_CAPABILITY: options.launcherCapability === false ? '0' : '1' } })
+          env: { ...process.env, GITPANE_TEST_LAUNCHER_CAPABILITY: options.launcherCapability === false ? '0' : '1',
+            GITPANE_TEST_BLOCK_MARKER: blockMarker } })
       });
     }
   });
   return {
-    manager, workspace, root, executed,
+    manager, workspace, root, executed, blockMarker,
     setFolders(values) {
       workspace.workspaceFolders = values.map(value => ({ uri: { scheme: 'file', fsPath: value } }));
       folders.fire({});
@@ -193,6 +202,32 @@ function fixture(options = {}) {
     }
   };
 }
+
+test('a stalled outside-worktree refresh times out without blocking other repositories or a retry', async t => {
+  const f = fixture({ timeoutMs: 500, blockExternalOnce: true });
+  t.after(() => { f.manager.dispose(); fsSync.rmSync(f.blockMarker, { force: true }); });
+  await f.manager.ready();
+  const blocked = path.resolve('private-blocked');
+  const healthy = path.resolve('private-healthy');
+  for (const repo of [blocked, healthy]) {
+    f.manager.externalSelections.set(repo, { selection: { repo: path.join(f.root, 'repo'), path: repo }, guard: () => true });
+  }
+  const pending = f.manager.externalStatus(blocked);
+  assert.equal((await f.manager.status(path.join(f.root, 'other'), false)).method, 'status');
+  await assert.rejects(pending, error => error.code === 'timeout' && /status.*retry/i.test(error.message) && !error.message.includes(blocked));
+  assert.equal((await f.manager.externalStatus(healthy)).is_dirty, false);
+  assert.equal((await f.manager.externalStatus(blocked)).is_dirty, false);
+});
+
+test('a timed out changes scan replaces its worker for later scans', async t => {
+  const f = fixture();
+  t.after(() => f.manager.dispose());
+  await f.manager.ready();
+  const client = await f.manager.getChangesClient(f.manager.changesEpoch);
+  client.timeoutMs = 100;
+  await assert.rejects(f.manager.beginChanges(path.join(f.root, 'slow')), error => error.code === 'timeout');
+  assert.equal((await f.manager.beginChanges(path.join(f.root, 'other'))).snapshot, 'sample');
+});
 
 test('cancelled outside-worktree authorization does not leave a usable selection', async t => {
   let entered, selected = true, output = '';
