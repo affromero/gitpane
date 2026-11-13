@@ -176,7 +176,7 @@ function reconcilePending(owner) {
 function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees) {
   const row = element('div', 'row repo-row');
   add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
-  const name = add(row, 'name', '', repo.name);
+  const name = add(row, `name${repo.submodule ? ' submodule-name' : ''}`, '', repo.name);
   if (repo.pinned) add(name, 'pin', '⌖ ', 'Pinned submodule');
   if (repo.submodule) add(name, 'submodule', '↳ ', 'Submodule');
   if (repo.worktree) add(name, 'worktree', '⎇ ');
@@ -503,6 +503,7 @@ function render() {
     const hasChildren = (filesExpanded && (fileExpandable || stashes.length > 0)) || showWorktrees || stashOpen || submodulesOpen;
     const item = createItem(key, window.GitpaneRepositoryLabel(repo, countText(info)), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
       fileExpandable || worktrees.length > 0 || stashes.length > 0 || submodules.length > 0, hasChildren, parentKey);
+    item.item.classList.add('repository-item');
     item.owner = repo;
     item.filesExpanded = filesExpanded;
     item.fileExpandable = fileExpandable;
@@ -559,7 +560,7 @@ function render() {
         renderPage(files, worktree, worktreeKey);
       }
       if (worktreeItem.submodulesOpen) {
-        const nested = element('div', 'children');
+        const nested = element('div', 'children repository-children');
         nested.setAttribute('role', 'group');
         worktreeItem.item.appendChild(nested);
         for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);

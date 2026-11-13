@@ -86,7 +86,7 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 #repositories > .treeitem > .children { grid-column: 1 / -1; }
 
-.repository-children, .worktree-item {
+.repository-children, .worktree-item, .repository-children > .repository-item {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
@@ -124,6 +124,7 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+.repo-row .submodule-name { color: var(--submodule); }
 .worktree-row .name { padding-left: .2ch; }
 .external-worktree-row { grid-template-columns: minmax(calc(2.5ch + 9px), max-content) minmax(0, 1fr) auto; }
 .dirty { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }

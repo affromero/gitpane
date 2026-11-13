@@ -110,6 +110,34 @@ const scenario = String.raw`
     await tick();
     const root = document.querySelector('[role="tree"]');
     check('tree label', root.getAttribute('aria-label') === 'Gitpane repositories');
+    const hierarchy = structuredClone(snapshot);
+    const child = (id, submodules = []) => ({ id, name: id, branch: 'feature/child', dirty: true,
+      submodule: true, groups: [], submodules });
+    hierarchy.expandWorktrees = true;
+    hierarchy.repositories[0].submodules = [child('child', [child('nested-child')])];
+    hierarchy.repositories[0].worktrees = [{ id: 'layout-worktree', name: 'layout-worktree', branch: 'review',
+      available: true, groups: [], submodules: [child('worktree-child')] }];
+    window.postMessage(hierarchy, '*');
+    await tick();
+    for (const width of [210, 300, 500]) {
+      root.style.width = width + 'px';
+      const rows = [...root.querySelectorAll('.repo-row')];
+      const parent = rows.find(row => row.querySelector('.name').textContent.includes('api-service'));
+      const descendants = rows.filter(row => ['child', 'nested-child', 'worktree-child'].some(id =>
+        row.querySelector('.name').textContent.trim() === '↳ ' + id));
+      check('all nested submodules are visible at ' + width, descendants.length === 3);
+      for (const row of descendants) {
+        const fields = ['.dirty', '.name', '.branch', '.tail'].map(selector => row.querySelector(selector).getBoundingClientRect());
+        check('submodule fields share a row at ' + width, fields.every(field => field.top < fields[0].bottom));
+        check('submodule columns align at ' + width, ['.branch', '.tail'].every(selector =>
+          Math.abs(row.querySelector(selector).getBoundingClientRect().left - parent.querySelector(selector).getBoundingClientRect().left) < 1));
+        check('submodule name has a distinct color at ' + width,
+          getComputedStyle(row.querySelector('.name')).color !== getComputedStyle(parent.querySelector('.name')).color);
+      }
+    }
+    root.style.width = '';
+    window.postMessage(snapshot, '*');
+    await tick();
     for (const width of [500, 300, 210]) {
       root.style.width = width + 'px';
       const rows = [...document.querySelectorAll('#repositories > .treeitem > .repo-row')];
