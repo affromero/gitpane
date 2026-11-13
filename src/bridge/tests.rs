@@ -311,7 +311,10 @@ fn status_and_graph_use_workspace_repositories_and_canonical_git_logic() {
         json!({"id": 5, "method": "status", "params": {"repo": repo_path, "include_worktrees": true}}),
         json!({"id": 6, "method": "status", "params": {"repo": repo_path, "include_worktrees": "false"}}),
     ]);
-    assert_eq!(replies[0], json!({"id": 1, "result": {"version": 1}}));
+    assert_eq!(
+        replies[0],
+        json!({"id": 1, "result": {"version": 1, "capabilities": {"unique_changes_snapshots": true}}})
+    );
     let status = &replies[1]["result"];
     assert_eq!(status["is_dirty"], true);
     assert!(

@@ -985,6 +985,7 @@ dependencies = [
  "dirs",
  "fs2",
  "futures",
+ "getrandom 0.4.3",
  "git2",
  "ignore",
  "libc",

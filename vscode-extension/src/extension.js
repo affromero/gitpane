@@ -324,10 +324,17 @@ class GitpaneViewProvider {
       this.refreshChangesTimer = undefined;
       if (!this.visible) return;
       const sweep = (async () => {
-        for (const id of [...this.pager.entries.keys()]) {
+        const ids = [...this.pager.entries.keys()];
+        for (let offset = 0; offset < ids.length; offset += 4) {
           if (!this.visible) return;
-          if (!this.currentOwner(id)) { this.pager.release(id); continue; }
-          await this.loadChanges(id);
+          await Promise.all(ids.slice(offset, offset + 4).map(async id => {
+            if (!this.currentOwner(id)) { this.pager.release(id); return; }
+            try { await this.loadChanges(id); }
+            catch (error) {
+              this.tree.fail(`Could not refresh changes: ${error.message}`);
+              this.tree.changed();
+            }
+          }));
         }
       })();
       this.refreshChangesInFlight = sweep;
