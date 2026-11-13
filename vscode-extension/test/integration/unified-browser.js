@@ -89,6 +89,9 @@ const scenario = String.raw`
   let handles = repoDoc.querySelectorAll('.column-separator');
   check('repository columns have accessible resize controls', handles.length === 2 &&
    [...handles].every(handle => handle.getAttribute('aria-label') && handle.getAttribute('aria-orientation') === 'vertical'));
+  frame('repositories').style.width = '210px';
+  repoDoc.querySelector('.column-reset').click();
+  frame('repositories').style.width = '';
   const nameWidth = repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width;
   handles[0].focus();
   handles[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
