@@ -47,8 +47,8 @@ window.GitpaneColumns = (document, window, tree, stored, save) => {
     const gap = parseFloat(window.getComputedStyle(layout).columnGap) || 0;
     const available = Math.max(48, width - markerWidth - gap * 3 - 85);
     if (preferred) {
-      const name = Math.max(24, Math.min(preferred[0], available - 24));
-      const branch = Math.max(24, Math.min(preferred[1], available - name));
+      const name = preferred[0];
+      const branch = preferred[1];
       layout.dataset.resized = 'true';
       layout.style.setProperty('--column-name', `${name}px`);
       layout.style.setProperty('--column-branch', `${branch}px`);
@@ -68,7 +68,6 @@ window.GitpaneColumns = (document, window, tree, stored, save) => {
     preferred = preferred ? [...preferred] : displayed.map(value => Math.max(24, value));
     preferred[index] = Math.max(24, Math.min(2000, displayed[index] + delta));
     render();
-    preferred[index] = Math.max(24, displayed[index]);
     save();
   }
   handles.forEach((handle, index) => {
