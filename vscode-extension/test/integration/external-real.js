@@ -49,7 +49,8 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   const selected = row();
   assert.ok(selected?.external, 'the sibling remains outside the workspace');
   assert.equal(selected.available, false, 'status is visible before inspection');
-  assert.equal(selected.dirty, true);
+  assert.ok(!selected.statusUnavailable, `outside worktree status unavailable: ${selected.statusError}; Git: ${gitAt(siblingPath, 'status', '--porcelain=v1')}`);
+  assert.equal(selected.dirty, true, `outside worktree status: ${JSON.stringify(selected)}; Git: ${gitAt(siblingPath, 'status', '--porcelain=v1')}`);
   assert.equal(selected.fileCount, 2);
   const comparison = await require('./comparison-external-real')({ vscode, provider, documents, diffs, errors, gitAt, siblingPath, selected, pointerOld, pointerNew });
   await receive({ type: 'loadChanges', id: selected.id });
