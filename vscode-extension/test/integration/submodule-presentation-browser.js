@@ -51,8 +51,24 @@ const scenario = String.raw`
   try {
     check('forced colors match the requested mode', matchMedia('(forced-colors: active)').matches === EXPECT_FORCED);
     check('contrast calculation rejects identical colors', contrast('rgb(128, 128, 128)', 'rgb(128, 128, 128)') === 1);
-    window.postMessage({ type: 'snapshot', repositories: [root], errors: [], expandWorktrees: true }, '*');
+    const standalone = { id: 'standalone', name: 'a-very-long-standalone-repository-name', branch: 'main', groups: [], submodule: true };
+    window.postMessage({ type: 'snapshot', repositories: [root, standalone], errors: [], expandWorktrees: true }, '*');
     await tick();
+    const name = key => row(key).querySelector('.name');
+    const weight = key => Number(getComputedStyle(name(key)).fontWeight);
+    for (const key of ['repo:root', 'repo:standalone']) {
+      check('top-level repository is bold: ' + key, weight(key) >= 700);
+    }
+    for (const key of ['repo:module', 'repo:nested', 'repo:worktree-child', 'worktree:ordinary', 'worktree:internal']) {
+      check('nested repository or worktree keeps normal weight: ' + key, weight(key) === 400);
+    }
+    check('root submodule marker keeps normal weight', Number(getComputedStyle(name('repo:standalone').querySelector('.submodule')).fontWeight) === 400);
+    const standaloneName = name('repo:standalone');
+    check('long root name truncates and keeps its tooltip', standaloneName.scrollWidth > standaloneName.clientWidth && standaloneName.title === standalone.name && getComputedStyle(standaloneName).textOverflow === 'ellipsis');
+    row('repo:standalone').click();
+    check('focused root remains bold', document.activeElement === item('repo:standalone') && weight('repo:standalone') >= 700);
+    document.getElementById('start-search').focus();
+    check('selected root remains bold', item('repo:standalone').getAttribute('aria-selected') === 'true' && weight('repo:standalone') >= 700);
     const controls = [...row('repo:root').querySelector('.tail').children];
     const index = selector => controls.findIndex(node => node.matches(selector));
     check('disclosure indicators follow stash, worktree, submodule order',

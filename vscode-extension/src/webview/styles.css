@@ -139,6 +139,8 @@ body[data-view="changes"] #column-layout { display: block; }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+#repositories > .repository-item > .repo-row > .name { font-weight: bold; }
+#repositories > .repository-item > .repo-row > .name > * { font-weight: normal; }
 .repo-row .submodule-name { color: var(--submodule); }
 .worktree-row .name { margin-left: .2ch; }
 .external-worktree-row .name { grid-column: 2 / 4; }
