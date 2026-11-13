@@ -110,6 +110,17 @@ const scenario = String.raw`
     await tick();
     const root = document.querySelector('[role="tree"]');
     check('tree label', root.getAttribute('aria-label') === 'Gitpane repositories');
+    const incomplete = structuredClone(snapshot);
+    incomplete.repositories[0].incompleteSubmodules = ['dependencies/<img src=x>'];
+    window.postMessage(incomplete, '*');
+    await tick();
+    check('incomplete registrations are explained as text without opening a submodule',
+      document.getElementById('messages').textContent.includes('dependencies/<img src=x> has no stage-0 index gitlink') &&
+      !document.getElementById('messages').querySelector('img'));
+    window.postMessage(snapshot, '*');
+    await tick();
+    check('resolved incomplete registrations clear on refresh',
+      !document.getElementById('messages').textContent.includes('stage-0 index gitlink'));
     const hierarchy = structuredClone(snapshot);
     const child = (id, submodules = []) => ({ id, name: id, branch: 'feature/child', dirty: true,
       submodule: true, groups: [], submodules });

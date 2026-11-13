@@ -4,6 +4,20 @@ const DEFAULT_REFRESH_INTERVAL = 5000;
 const KEYS = ['fontSize', 'sortOrder', 'worktrees.defaultVisibility', 'worktrees.showOutsideWorkspace', 'refreshInterval', 'showSessionLiveness',
   'submodules.autoDiscover', 'graph.firstParent', 'graph.labelMaxLength'];
 
+function configureViewProvider(provider, { refreshInterval, worktreeExpansion, showOutsideWorktrees, fontSize }) {
+  const intervalChanged = provider.refreshInterval !== refreshInterval;
+  provider.refreshInterval = refreshInterval;
+  provider.worktreeExpansion = worktreeExpansion;
+  provider.showOutsideWorktrees = showOutsideWorktrees;
+  provider.fontSize = fontSize;
+  if (intervalChanged && provider.refreshChangesTimer !== undefined) {
+    clearTimeout(provider.refreshChangesTimer);
+    provider.refreshChangesTimer = undefined;
+  }
+  if (intervalChanged) provider.scheduleChangesRefresh();
+  provider.publish();
+}
+
 function readPreferences(configuration, rememberedOrder) {
   const read = (key, fallback, valid) => {
     const value = configuration.get(key, fallback);
@@ -69,4 +83,4 @@ class ViewSettings {
   dispose() { this.subscription.dispose(); this.command.dispose(); }
 }
 
-module.exports = { DEFAULT_REFRESH_INTERVAL, ViewSettings, readPreferences };
+module.exports = { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider, readPreferences };
