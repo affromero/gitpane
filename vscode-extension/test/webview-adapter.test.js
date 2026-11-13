@@ -34,6 +34,7 @@ test('webview shows workspace state and opens only currently visible changes', a
   let current = { uri: uri(path.join(root, 'file.txt')), status: 0 };
   let childCurrent = { uri: uri(path.join(worktreePath, 'child.txt')), status: 5 };
   let visible = true;
+  let revision = 1;
   let onChange;
   const page = records => ({ snapshot: 'fixture-snapshot', revision: createHash('sha256').update(JSON.stringify(records)).digest('hex'), cursor: 0,
     previous_cursor: null, next_cursor: null, changes: records });
@@ -62,12 +63,14 @@ test('webview shows workspace state and opens only currently visible changes', a
       common_dir: path.join(root, '.git'), branch: 'topic', is_dirty: true, ahead: 2, behind: 1,
       stashes: [{ index: 0, message: 'WIP on topic', oid: 'stash-commit-id' }], worktrees: [{ path: worktreePath, branch: 'worktree-branch' },
         { path: path.resolve('outside/worktree'), branch: 'outside' }], has_dirty_submodules: false,
-      has_unpushed_submodules: false, file_count_lower_bound: 1
+      has_unpushed_submodules: false, file_count_lower_bound: 1,
+      incomplete_submodules: ['dependencies/child'], submoduleWarningRevision: 1
     }], [worktreePath, { common_dir: path.join(root, '.git'), file_count_lower_bound: 1 }]]),
     onDidChangeTreeData(handler) { onChange = handler; return { dispose() {} }; },
     setVisible(value) { visible = value; },
     isVisible() { return visible; },
     repositoryToken(target) { return target?.rootUri.fsPath === root ? 1 : target?.rootUri.fsPath === worktreePath ? 2 : undefined; },
+    contentRevision() { return revision; },
     isCurrentRepository(target, token) { return visible && this.repositoryToken(target) === token; },
     workspaceWorktrees(parent) {
       return visible && parent?.rootUri.fsPath === root ? this.backendStatuses.get(root).worktrees.filter(item => this.isPathInWorkspace(item.path)) : [];
@@ -121,6 +124,10 @@ test('webview shows workspace state and opens only currently visible changes', a
     assert.equal(first.repositories[0].name, 'repo');
     assert.equal(first.repositories[0].branch, 'topic');
     assert.equal(first.repositories[0].ahead, 2);
+    assert.deepEqual(first.repositories[0].incompleteSubmodules, ['dependencies/child']);
+    revision++;
+    provider.publish();
+    assert.deepEqual(snapshots.at(-1).repositories[0].incompleteSubmodules, []);
     const stash = first.repositories[0].stashes[0];
     assert.equal(stash.index, 0);
     assert.equal(stash.message, 'WIP on topic');

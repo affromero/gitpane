@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::config::SubmoduleConfig;
 use crate::git::status::{
-    FileEntry, FileStatus, query_status_scoped, validate_initialized_submodule, watched_file,
-    watched_symlinks,
+    FileEntry, FileStatus, query_status_scoped, submodule_registrations,
+    validate_initialized_submodule, watched_file, watched_symlinks,
 };
 
 use super::{
@@ -235,6 +235,41 @@ pub(super) fn query(
         .iter()
         .map(|stash| json!({ "index": stash.index, "message": stash.message, "oid": stash.oid }))
         .collect();
+    let mut incomplete_submodules = Vec::new();
+    let mut incomplete_submodules_omitted = 0usize;
+    if result.has_submodules {
+        let registrations = submodule_registrations(&common_repo)
+            .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+        for entry in registrations {
+            if !entry.configured_path || entry.configured_index_oid.is_some() {
+                continue;
+            }
+            let mut relative = PathBuf::new();
+            let safe = entry.path.components().all(|part| match part {
+                Component::CurDir => true,
+                Component::Normal(name) => {
+                    relative.push(name);
+                    true
+                }
+                _ => false,
+            });
+            let value = relative.to_str().map(|value| {
+                if cfg!(windows) {
+                    value.replace('\\', "/")
+                } else {
+                    value.to_owned()
+                }
+            });
+            if let Some(value) =
+                value.filter(|value| safe && !value.is_empty() && value.len() <= 4096)
+                && incomplete_submodules.len() < 256
+            {
+                incomplete_submodules.push(value);
+                continue;
+            }
+            incomplete_submodules_omitted += 1;
+        }
+    }
     let files_truncated = summary_only && included_compact < result.files.len();
     let mut response = json!({
         "repo_identity": repo_identity.fingerprint()?,
@@ -250,6 +285,8 @@ pub(super) fn query(
         "has_submodules": result.has_submodules,
         "has_dirty_submodules": result.has_dirty_submodules,
         "has_unpushed_submodules": result.has_unpushed_submodules,
+        "incomplete_submodules": incomplete_submodules,
+        "incomplete_submodules_omitted": incomplete_submodules_omitted,
         "stashes": stashes,
     });
     if summary_only {
@@ -318,6 +355,69 @@ mod tests {
             watched,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn status_reports_configured_paths_without_stage_zero_gitlinks() {
+        let (_temp, repo, scope) = fixture();
+        let repository = Repository::open(&repo).unwrap();
+        Repository::init(repo.join("child")).unwrap();
+        std::fs::write(
+            repo.join(".gitmodules"),
+            "[submodule \"child\"]\n path = ./child\n url = ./child\n[submodule \"url-only\"]\n url = ./other\n",
+        )
+        .unwrap();
+        assert_eq!(
+            status(&repo, &scope, &[])["incomplete_submodules"],
+            serde_json::json!(["child"])
+        );
+        let mut index = repository.index().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = repository
+            .commit(None, &signature, &signature, "initial", &tree, &[])
+            .unwrap();
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: commit,
+            flags: 0,
+            flags_extended: 0,
+            path: b"child".to_vec(),
+        };
+        index.add(&entry).unwrap();
+        index.write().unwrap();
+        assert_eq!(
+            status(&repo, &scope, &[])["incomplete_submodules"],
+            serde_json::json!([])
+        );
+        index.remove_path(Path::new("child")).unwrap();
+        index.write().unwrap();
+        assert_eq!(
+            status(&repo, &scope, &[])["incomplete_submodules"],
+            serde_json::json!(["child"])
+        );
+    }
+
+    #[test]
+    fn incomplete_submodule_warnings_are_bounded() {
+        let (_temp, repo, scope) = fixture();
+        let config = (0..260)
+            .map(|i| format!("[submodule \"child-{i}\"]\n path = child-{i}\n url = ./child-{i}\n"))
+            .collect::<String>();
+        std::fs::write(repo.join(".gitmodules"), config).unwrap();
+        let response = status(&repo, &scope, &[]);
+        assert_eq!(
+            response["incomplete_submodules"].as_array().unwrap().len(),
+            256
+        );
+        assert_eq!(response["incomplete_submodules_omitted"], 4);
     }
 
     #[test]
