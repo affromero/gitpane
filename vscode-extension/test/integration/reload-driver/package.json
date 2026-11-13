@@ -1,0 +1,9 @@
+{
+  "name": "gitpane-reload-test-driver",
+  "publisher": "gitpane-test",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.111.0" },
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js"
+}

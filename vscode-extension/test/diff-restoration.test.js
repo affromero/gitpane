@@ -33,20 +33,27 @@ test('an ordinary live diff restores after the extension host restarts', async t
     window: { async showWarningMessage(message) { warnings.push(message); } } };
   const repo = { rootUri: uri(repoPath) };
   const identity = 'a'.repeat(64);
-  const tree = { git: { repositories: [repo] }, backendStatuses: new Map([[repo.rootUri.toString(), { repo_identity: identity }]]),
+  let revision = 0, onRepository;
+  const tree = { git: { repositories: [repo], onDidOpenRepository(handler) { onRepository = handler; return { dispose() {} }; } },
+    backendStatuses: new Map([[repo.rootUri.toString(), { repo_identity: identity }]]),
     submoduleHierarchy: { edges: new Map() }, repositoryToken: () => 1, isCurrentRepository: () => true,
-    contentRevision: () => 0, onDidChangeTreeData: () => ({ dispose() {} }) };
+    contentRevision: () => revision, onDidChangeTreeData: () => ({ dispose() {} }),
+    async refresh() { this.backendStatuses.set(repo.rootUri.toString(), { repo_identity: identity }); } };
   const scope = { roots: [workspace], rootSources: [workspace], rootIdentities: ['b'.repeat(64)] };
   const record = { group: 'working', kind: 'working_modified', path: 'file.txt', original_path: null, conflict_stages: null, is_submodule: false };
   let content = Buffer.from('old');
-  let symlink = false;
+  let symlink = false, churn = false, workspaceChange = false;
   const backend = { async mutationSnapshot() { return scope; }, isCurrentMutation: () => true,
     async gitSideSession() { return { git: { key: 'git' } }; }, gitSideCurrent: () => true,
-    async verifyChanges() { return { change: record }; }, async gitSideOperation(_session, _identity, operation) {
+    async verifyChanges() {
+      if (workspaceChange) { workspaceChange = false; throw Object.assign(new Error('Workspace changed'), { code: 'workspace_changed' }); }
+      return { change: record };
+    }, async gitSideOperation(_session, _identity, operation) {
       if (operation.kind === 'verified_content') {
         if (symlink && operation.regular_only) throw new Error('The Gitpane diff file type changed.');
         return content;
       }
+      if (churn) { churn = false; revision++; }
       return { version: 1, volatile: false, replacements: 'c'.repeat(64), config: 'd'.repeat(64), results: [
         { metadata: { oid: 'e'.repeat(40), mode: 0o100644, size: content.length, head_oid: null } }
       ] };
@@ -59,8 +66,16 @@ test('an ordinary live diff restores after the extension host restarts', async t
     onDidChangeTabs: () => ({ dispose() {} }) };
   const restored = new LinkDocuments(vscode, tree, backend, workspaceState);
   t.after(() => restored.dispose());
+  tree.git.repositories = [];
+  tree.backendStatuses.clear();
   restored.finishInitialization();
-  assert.equal((await restored.readFile(document)).toString(), 'old');
+  const pendingDiscovery = restored.readFile(document);
+  await new Promise(resolve => setImmediate(resolve));
+  tree.git.repositories.push(repo);
+  churn = true;
+  workspaceChange = true;
+  onRepository(repo);
+  assert.equal((await pendingDiscovery).toString(), 'old');
   t.mock.timers.tick(61000);
   assert.equal((await restored.readFile(document)).toString(), 'old');
   content = Buffer.from('new');
@@ -87,6 +102,13 @@ test('an ordinary live diff restores after the extension host restarts', async t
   backend.verifyChanges = async () => { throw new Error('Repository unavailable'); };
   await assert.rejects(failing.readFile(document), /repository unavailable/i);
   assert.ok(warnings.some(message => message.includes('cannot be restored')));
+  backend.verifyChanges = verify;
+  const repeatedlyChanging = new LinkDocuments(vscode, tree, backend, workspaceState);
+  t.after(() => repeatedlyChanging.dispose());
+  repeatedlyChanging.finishInitialization();
+  backend.verifyChanges = async () => { throw Object.assign(new Error('Workspace changed'), { code: 'workspace_changed' }); };
+  await assert.rejects(repeatedlyChanging.readFile(document), /workspace changed/i);
+  assert.ok(Object.hasOwn(state.get('gitpane.diffRestoration').entries, document.toString()));
   backend.verifyChanges = verify;
   const replaced = new LinkDocuments(vscode, tree, backend, workspaceState);
   t.after(() => replaced.dispose());
@@ -139,6 +161,26 @@ test('closing an unopened restored tab removes its saved descriptor', async t =>
   onTabs({ closed: [{ input: { original: document } }] });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(state.get('gitpane.diffRestoration').entries, {});
+});
+
+test('disposing while repository discovery is pending ends the read', async t => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-restore-wait-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const document = uri('/opaque/file.txt', 'gitpane-blob');
+  const record = { group: 'working', kind: 'working_modified', path: 'file.txt', original_path: null,
+    conflict_stages: null, is_submodule: false };
+  const descriptor = { repo: workspace, identity: 'a'.repeat(64), record, which: 'left', scope: '[]' };
+  const state = new Map([['gitpane.diffRestoration', { version: 1, entries: { [document.toString()]: descriptor } }]]);
+  const vscode = { EventEmitter, workspace: { isTrusted: true } };
+  const tree = { git: { repositories: [], onDidOpenRepository: () => ({ dispose() {} }) },
+    onDidChangeTreeData: () => ({ dispose() {} }) };
+  const docs = new LinkDocuments(vscode, tree, {}, { get: key => state.get(key), async update(key, value) { state.set(key, value); } });
+  docs.finishInitialization();
+  const read = docs.readFile(document);
+  await new Promise(resolve => setImmediate(resolve));
+  docs.dispose();
+  await assert.rejects(read, /no longer available/i);
+  assert.deepEqual(state.get('gitpane.diffRestoration').entries[document.toString()], descriptor);
 });
 
 test('unsupported saved restoration data is preserved and reported', async () => {
