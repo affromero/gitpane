@@ -2,6 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { ComparisonController } = require('../src/comparison-controller');
 const { ComparisonModel } = require('../src/comparison-model');
 
@@ -36,8 +37,8 @@ test('renamed comparison files open the pinned old and new paths', async () => {
   const files = await controller.compare();
   await controller.open(files[0].id);
   assert.equal(opened[0][0], 'vscode.diff');
-  assert.equal(opened[0][1].fsPath, '/repo/old.txt');
-  assert.equal(opened[0][2].fsPath, '/repo/new.txt');
+  assert.equal(opened[0][1].fsPath, path.join('/repo', 'old.txt'));
+  assert.equal(opened[0][2].fsPath, path.join('/repo', 'new.txt'));
   assert.equal((await documents[0].read()).toString(), `${first}:old.txt`);
   assert.equal((await documents[1].read()).toString(), `${second}:new.txt`);
   authorized = false;
