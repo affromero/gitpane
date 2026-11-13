@@ -106,6 +106,15 @@ commit and then a file to open its diff; the file list is searchable too.
 Use **Commit actions** or right-click a commit to copy its hash or subject.
 With the graph focused, `y` copies the short hash and subject. On a commit
 file, `y` copies its path.
+
+Choose **Compare Revisions…** from a repository or worktree menu to compare two
+commits in a separate graph tab. Set From and To from a commit or branch menu,
+enter a ref or hash, browse branches and tags, or select one commit and
+Ctrl/Cmd-click another. Choose
+endpoint or common-ancestor comparison, swap endpoints, and search the file list.
+Uncommitted changes are excluded. Ref selections stay pinned until **Refresh
+refs**; moved refs are marked. Comparisons support up to 100,000 changed files.
+Submodule changes to or from a file require inspection in Git.
 The graph uses Gitpane's `[graph]` settings for branch visibility, label length
 and diff statistics. Restart the VS Code extension host after changing them.
 The sidebar and graph use Gitpane's configured theme and adapt its colors for

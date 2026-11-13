@@ -28,6 +28,7 @@ let graphInteractive = false;
 let menuEpoch = 0;
 const commitMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
   selection: () => JSON.stringify([selected, graphInteractive, menuEpoch]) });
+const comparison = window.GitpaneComparisonView?.({ document, post: message => vscode.postMessage(message), renderGraph });
 
 if (typeof state.search === 'string') search.value = state.search;
 
@@ -90,6 +91,7 @@ function addLabels(container, row) {
     const displayed = name.length > labelMaxLen ? `${name.slice(0, labelMaxLen).join('')}…` : label.name;
     const node = add(labels, kind, `${prefix}${displayed}`);
     node.title = label.name;
+    if (comparison?.enabled() && !label.is_stash) node.dataset.comparisonLabel = String(index);
   });
   add(labels, 'parenthesis', ')');
   container.appendChild(labels);
@@ -149,12 +151,20 @@ function renderGraph() {
       add(stats, 'deletion', `−${row.diff_stat.deletions}`);
       item.appendChild(stats);
     }
-    item.addEventListener('click', () => select(index));
+    comparison?.decorate(item, row);
+    item.addEventListener('click', event => {
+      if (comparison?.enabled() && (event.ctrlKey || event.metaKey) && !row.collapsed) {
+        event.preventDefault();
+        vscode.postMessage({ type: 'comparisonSelect', oid: row.oid, anchor: selected });
+      } else select(index);
+    });
     item.addEventListener('contextmenu', event => {
       event.preventDefault();
       if (!graphInteractive || row.collapsed) return;
+      const label = event.target.closest('[data-comparison-label]');
+      const labelIndex = label ? Number(label.dataset.comparisonLabel) : undefined;
       if (selected !== row.oid) select(index);
-      requestCommitAction('commitActions', { x: event.clientX, y: event.clientY });
+      requestCommitAction('commitActions', { x: event.clientX, y: event.clientY }, labelIndex);
     });
     graph.appendChild(item);
   });
@@ -232,15 +242,15 @@ function select(index, focus = true) {
   else vscode.postMessage({ type: 'selectCommit', oid: selected });
 }
 
-function requestCommitAction(type, position) {
+function requestCommitAction(type, position, labelIndex) {
   const row = rows.find(item => item.oid === selected);
   if (!graphInteractive || !row || row.collapsed) return;
   const rect = (position ? undefined : document.getElementById(`commit-${active}`)?.getBoundingClientRect()) || graph.getBoundingClientRect();
   const point = position || { x: rect.left, y: rect.bottom };
   if (detail?.oid === selected) {
-    if (type === 'commitActions') commitMenu.open(selected, point.x, point.y, 'commit');
+    if (type === 'commitActions') commitMenu.open(selected, point.x, point.y, 'commit', undefined, { labelIndex });
     else vscode.postMessage({ type, oid: selected });
-  } else pendingCommitAction = { type, oid: selected, point };
+  } else pendingCommitAction = { type, oid: selected, point, labelIndex };
 }
 
 document.addEventListener('pointerdown', () => { pendingCommitAction = undefined; });
@@ -323,6 +333,7 @@ expandAll.addEventListener('click', () => {
 
 window.addEventListener('message', event => {
   const message = event.data;
+  if (comparison?.receive(message)) return;
   if (message?.type === 'theme') {
     const error = document.getElementById('theme-status');
     if (error) error.textContent = window.GitpaneTheme?.set(message.theme) ? '' : 'Gitpane returned an invalid theme.';
@@ -377,7 +388,8 @@ window.addEventListener('message', event => {
     renderGraph();
     renderFiles();
     if (!message.loading && pendingCommitAction?.oid === selected && graphInteractive) {
-      if (pendingCommitAction.type === 'commitActions') commitMenu.open(selected, pendingCommitAction.point.x, pendingCommitAction.point.y, 'commit');
+      if (pendingCommitAction.type === 'commitActions') commitMenu.open(selected, pendingCommitAction.point.x, pendingCommitAction.point.y, 'commit', undefined,
+        { labelIndex: pendingCommitAction.labelIndex });
       else vscode.postMessage({ type: pendingCommitAction.type, oid: selected });
       pendingCommitAction = undefined;
     }

@@ -233,18 +233,20 @@ class BackendManager {
     return { executable: this.executable, roots: [...this.roots], rootSources: [...this.rootSources], rootIdentities: [...this.rootIdentities], generation: this.generation };
   }
 
-  async gitSideSession(repo) {
+  async gitSideSession(repo, { literalObjects = false } = {}) {
     const snapshot = await this.mutationSnapshot();
-    const git = captureGitEnvironment(this.gitApi);
+    let git = captureGitEnvironment(this.gitApi);
+    const sourceGitKey = git.key;
+    if (literalObjects) git = { ...git, key: `${git.key}:literal`, env: { ...git.env, GIT_NO_REPLACE_OBJECTS: '1' } };
     const external = this.externalSelections.get(repo);
     if (!this.isCurrentMutation(snapshot, external?.selection.repo || repo) || (external && !external.guard())) throw new BridgeError('workspace_changed', 'Gitpane workspace changed.');
-    return { snapshot, git, repo, external };
+    return { snapshot, git, sourceGitKey, repo, external };
   }
 
   gitSideCurrent(session) {
     if (!session || !this.isCurrentMutation(session.snapshot, session.external?.selection.repo || session.repo) ||
         (session.external && (this.externalSelections.get(session.repo) !== session.external || !session.external.guard()))) return false;
-    return captureGitEnvironment(this.gitApi).key === session.git.key;
+    return captureGitEnvironment(this.gitApi).key === (session.sourceGitKey || session.git.key);
   }
 
   async gitSideOperation(session, identity, operation, signal) {
@@ -321,14 +323,15 @@ class BackendManager {
       }
       let result;
       const external = this.externalSelections.get(repo);
-      if (external && (isChanges || ['graph', 'graph_revision', 'commit_files'].includes(method))) {
+      if (external && (isChanges || ['graph', 'graph_revision', 'commit_files', 'repo_identity_validate'].includes(method))) {
         if (!external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
         const parameters = method === 'changes_begin' ? { repo } : method === 'changes_next' ? { repo, snapshot: argument.snapshot, cursor: argument.cursor } :
           method === 'changes_search' ? { repo, snapshot: argument.snapshot, query: argument.query, direction: argument.direction, position: argument.position } :
           method === 'changes_release' ? { repo, snapshot: argument } :
           method === 'graph' ? { repo, first_parent: argument, ...(filters === undefined ? {} : { filters }),
             ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) } :
-          method === 'graph_revision' ? { repo } : method === 'commit_files' ? { repo, oid: argument } : undefined;
+          method === 'graph_revision' ? { repo } : method === 'commit_files' ? { repo, oid: argument } :
+          method === 'repo_identity_validate' ? { repo, expected_repo_identity: argument } : undefined;
         if (!parameters) throw new BridgeError('invalid_request', 'Unsupported external worktree operation.');
         result = await client.request('external_worktree_read', { selection: external.selection, method, params: parameters });
         if (!current() || generation !== this.generation || this.externalSelections.get(repo) !== external || !external.guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
@@ -741,13 +744,13 @@ class BackendManager {
   planWorktree(repo, branch) { return this.request('worktree_plan', repo, branch); }
   validateExternalWorktree(repo, path, identity, worktreeIdentity) { return this.request('external_worktree_validate', repo, { path, identity, worktreeIdentity }); }
 
-  async inspectExternalWorktree(selection, guard) {
-    if (!this.vscode.workspace.isTrusted || !guard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+  async inspectExternalWorktree(selection, guard, actionGuard = () => true) {
+    if (!this.vscode.workspace.isTrusted || !guard() || !actionGuard()) throw new BridgeError('stale_target', 'Worktree is no longer available.');
     await this.ready();
     const generation = this.generation, client = this.client;
     const result = await client.request('external_worktree_read', { selection, method: 'status',
       params: { repo: selection.path, include_worktrees: false, summary_only: true, watched_paths: [] } });
-    if (!this.vscode.workspace.isTrusted || !guard() || generation !== this.generation || client !== this.client) throw new BridgeError('stale_target', 'Worktree is no longer available.');
+    if (!this.vscode.workspace.isTrusted || !guard() || !actionGuard() || generation !== this.generation || client !== this.client) throw new BridgeError('stale_target', 'Worktree is no longer available.');
     this.externalSelections.set(selection.path, { selection, guard: () => this.vscode.workspace.isTrusted && guard() });
     return result;
   }

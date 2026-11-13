@@ -38,7 +38,7 @@ window.GitpaneFileMenu = function ({ document, window, postMessage, selection })
     returnLabel = undefined;
   }
 
-  function open(id, x, y, kind = 'file', focus = document.activeElement) {
+  function open(id, x, y, kind = 'file', focus = document.activeElement, metadata) {
     close();
     returnFocus = focus;
     returnKey = returnFocus?.closest?.('[data-key]')?.dataset.key;
@@ -46,7 +46,8 @@ window.GitpaneFileMenu = function ({ document, window, postMessage, selection })
     returnLabel = returnFocus?.getAttribute?.('aria-label');
     pending = { id, kind, x, y, requestId, selection: selection() };
     postMessage(kind === 'file' ? { type: 'fileMenuRequest', id, requestId } : kind === 'commit' ?
-      { type: 'commitMenuRequest', id, requestId } : { type: 'rowMenuRequest', kind, id, requestId });
+      { type: 'commitMenuRequest', id, requestId, ...(Number.isSafeInteger(metadata?.labelIndex) ? { labelIndex: metadata.labelIndex } : {}) } :
+      { type: 'rowMenuRequest', kind, id, requestId });
   }
 
   function openItem(item) {

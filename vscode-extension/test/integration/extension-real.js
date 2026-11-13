@@ -115,7 +115,8 @@ async function main() {
     onDidReceiveMessage: handler => { receive = handler; return { dispose() {} }; }
   }, onDidChangeVisibility: event, onDidDispose: event };
   const vscode = {
-    EventEmitter, Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
+    EventEmitter, CancellationTokenSource: class { constructor() { this.token = {}; } cancel() {} dispose() {} },
+    Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
     FileType: { File: 1 }, FileChangeType: { Changed: 1 },
     ConfigurationTarget: { Global: 1, Workspace: 2 },
     FileSystemError: { FileNotFound: () => Object.assign(new Error('File not found'), { code: 'FileNotFound' }) },
@@ -1097,10 +1098,12 @@ async function main() {
   repo.state.HEAD.commit = pointerCommit;
   await commands.get('gitpane.refresh')();
   let graphReceive, graphDispose;
+  const graphDisposeHandlers = [];
   const graphMessages = [];
   const graphPanel = { visible: true, webview: { postMessage: message => graphMessages.push(message),
     onDidReceiveMessage: handler => { graphReceive = handler; return event(); } },
-    onDidDispose: handler => { graphDispose = handler; return event(); }, onDidChangeViewState: event, reveal() {}, dispose() {} };
+    onDidDispose: handler => { graphDisposeHandlers.push(handler); graphDispose = () => graphDisposeHandlers.splice(0).forEach(callback => callback()); return event(); },
+    onDidChangeViewState: event, reveal() {}, dispose() {} };
   vscode.ViewColumn = { Active: 1 };
   vscode.window.createWebviewPanel = () => graphPanel;
   const graphRoot = snapshots.at(-1).repositories.find(item => item.name === 'repo');
@@ -1137,6 +1140,43 @@ async function main() {
   assert.equal(terminals.length, beforeGraphTerminals);
   assert.equal(api.repositories.length, beforeGraphRepos, 'opening a pointer diff does not open a child repository');
   console.log('PASS committed submodule pointer opens a native diff without a child checkout or terminal');
+
+  await receive({ type: 'selectOwner', id: graphRoot.id });
+  await receive({ type: 'rowMenuRequest', kind: 'repo', id: graphRoot.id, requestId: 991 });
+  const comparisonMenu = snapshots.findLast(message => message.type === 'rowMenu' && message.requestId === 991);
+  assert.ok(comparisonMenu?.choices.some(choice => choice.action === 'compareRepository'));
+  try {
+    Module._load = function(name, ...args) {
+      if (name === './graph/html') return { getHtml: () => '<html></html>' };
+      return load.call(this, name, ...args);
+    };
+    await receive({ type: 'rowMenuAction', kind: 'repo', id: graphRoot.id, token: comparisonMenu.token, action: 'compareRepository' });
+  } finally { Module._load = load; }
+  await graphReceive({ type: 'ready' });
+  submoduleInput = git('rev-parse', 'HEAD^');
+  await graphReceive({ type: 'comparisonPick', which: 'from' });
+  submoduleInput = pointerCommit;
+  await graphReceive({ type: 'comparisonPick', which: 'to' });
+  const comparisonState = graphMessages.findLast(message => message.type === 'comparisonState' && !message.loading);
+  const comparisonPointer = comparisonState?.files.find(file => file.path === 'child');
+  assert.ok(comparisonPointer, comparisonState?.error || 'comparison must include the changed gitlink');
+  repo.state.untrackedChanges = [{}];
+  provider.tree.changed();
+  assert.equal(graphMessages.findLast(message => message.type === 'comparisonState').dirty, true);
+  repo.state.untrackedChanges = [];
+  provider.tree.changed();
+  const refreshedComparison = graphMessages.findLast(message => message.type === 'comparisonState');
+  assert.equal(refreshedComparison.dirty, false);
+  assert.equal(refreshedComparison.to.oid, pointerCommit);
+  const beforeComparisonDiff = diffs.length;
+  await graphReceive({ type: 'openComparisonFile', id: comparisonPointer.id });
+  assert.equal(diffs.length, beforeComparisonDiff + 1, errors.at(-1));
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerA}\n`);
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[1]), `Subproject commit ${pointerB}\n`);
+  const comparisonDocuments = [diffs.at(-1)[0], diffs.at(-1)[1]];
+  graphDispose();
+  assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(comparisonDocuments[1]), `Subproject commit ${pointerB}\n`);
+  console.log('PASS repository menu opens a pinned revision comparison and gitlink diff');
 
   const reviewPath = path.join(path.dirname(repoPath), 'review-no-checkout');
   fs.mkdirSync(reviewPath);

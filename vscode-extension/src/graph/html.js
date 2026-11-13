@@ -42,6 +42,7 @@ function getHtml(webview, extensionUri, sidebar = false) {
   </section>
   <script src="${theme}"></script>
   <script src="${webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'src', 'webview', 'file-menu.js'))}"></script>
+  <script src="${resource('comparison.js')}"></script>
   <script src="${resource('view.js')}"></script>
 </body>
 </html>`;

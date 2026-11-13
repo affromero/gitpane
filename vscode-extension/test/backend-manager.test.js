@@ -4,10 +4,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { BackendManager, normalizeWorkspacePath } = require('../src/backend-manager');
 const { BridgeClient } = require('../src/bridge-client');
+const { ComparisonService } = require('../src/comparison-service');
+const { isolatedGitEnv } = require('./integration/git-env');
 
 test('Windows workspace identities compare ordinary and extended drive and UNC paths', () => {
   assert.equal(normalizeWorkspacePath(String.raw`\\?\C:\Work\Repo`, 'win32'), normalizeWorkspacePath(String.raw`c:\work\repo`, 'win32'));
@@ -73,6 +76,14 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   } else if (request.method === 'stash_files') {
     send({id: request.id, result: {oid: request.params.oid, message: 'WIP', parent_oid: 'a'.repeat(40),
       untracked_parent_oid: null, files: [], repo_identity: 'e'.repeat(64)}});
+  } else if (request.method === 'resolve_revision') {
+    if (request.params.revision === 'old') {
+      process.stderr.write('comparison-request-started\n');
+      setTimeout(() => send({id: request.id, result: {oid: 'old'}}), 5000);
+    } else send({id: request.id, result: {oid: request.params.revision}});
+  } else if (request.method === 'external_worktree_read') {
+    process.stderr.write('external-worktree-started\n');
+    setTimeout(() => send({id: request.id, result: {is_dirty: false}}), 100);
   } else if (request.method === 'changes_begin') {
     const result = {snapshot: 'sample', revision: 'a'.repeat(64), cursor: 0,
       previous_cursor: null, next_cursor: 1, changes: []};
@@ -182,6 +193,74 @@ function fixture(options = {}) {
     }
   };
 }
+
+test('cancelled outside-worktree authorization does not leave a usable selection', async t => {
+  let entered, selected = true, output = '';
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = fixture({ output: { append(chunk) { output += chunk; if (output.includes('external-worktree-started')) entered(); } } });
+  t.after(() => f.manager.dispose());
+  f.workspace.isTrusted = true;
+  await f.manager.ready();
+  const selection = { path: path.resolve('outside-worktree'), repo: path.join(f.root, 'repo') };
+  const request = f.manager.inspectExternalWorktree(selection, () => true, () => selected);
+  await started;
+  selected = false;
+  await assert.rejects(request, /no longer available/i);
+  await assert.rejects(f.manager.externalStatus(selection.path), /no longer available/i);
+  selected = true;
+  await f.manager.inspectExternalWorktree(selection, () => true, () => selected);
+  selected = false;
+  assert.equal((await f.manager.externalStatus(selection.path)).is_dirty, false);
+});
+
+test('a newer comparison cancels an older request and keeps workspace scope', async t => {
+  let entered, output = '';
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = fixture({ output: { append(chunk) { output += chunk; if (output.includes('comparison-request-started')) entered(); } } });
+  t.after(() => f.manager.dispose());
+  f.workspace.isTrusted = true;
+  await f.manager.ready();
+  const service = new ComparisonService(f.manager);
+  t.after(() => service.dispose());
+  const repo = path.join(f.root, 'repo');
+  const old = service.request('resolve_revision', repo, { revision: 'old' });
+  const rejected = assert.rejects(old, /disposed|closed|cancel|exited/i);
+  await started;
+  const next = await service.request('resolve_revision', repo, { revision: 'new' });
+  await rejected;
+  assert.equal(next.oid, 'new');
+  f.workspace.isTrusted = false;
+  await assert.rejects(service.request('resolve_revision', repo, { revision: 'HEAD' }), /no longer available/i);
+});
+
+test('comparison Git reads use the selected object even when replacement refs exist', async t => {
+  const probe = spawnSync('git', ['--version']);
+  if (probe.error?.code === 'ENOENT') return t.skip('Git is not on PATH');
+  assert.equal(probe.status, 0, probe.stderr?.toString());
+  const directory = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gitpane-comparison-'));
+  t.after(() => fsSync.rmSync(directory, { recursive: true, force: true }));
+  const env = isolatedGitEnv();
+  delete env.GIT_NO_REPLACE_OBJECTS;
+  delete env.GIT_REPLACE_REF_BASE;
+  const git = (args, input, environment = env) => {
+    const result = spawnSync('git', ['-C', directory, ...args], { env: environment, input, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(['init', '-q']);
+  const original = git(['hash-object', '-w', '--stdin'], 'original');
+  const replacement = git(['hash-object', '-w', '--stdin'], 'replacement');
+  git(['replace', original, replacement]);
+  const f = fixture();
+  t.after(() => f.manager.dispose());
+  f.workspace.isTrusted = true;
+  f.manager.gitApi = { git: { path: process.execPath, env } };
+  await f.manager.ready();
+  const session = await f.manager.gitSideSession(path.join(f.root, 'repo'), { literalObjects: true });
+  assert.equal(git(['cat-file', 'blob', original]), 'replacement');
+  assert.equal(git(['cat-file', 'blob', original], undefined, session.git.env), 'original');
+  assert.equal(f.manager.gitSideCurrent(session), true);
+});
 
 test('backend initializes workspace roots and reads status and graph', async t => {
   const { manager, root, executed } = fixture();

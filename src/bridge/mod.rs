@@ -261,6 +261,10 @@ fn process(
                 "status"
                     | "graph"
                     | "graph_revision"
+                    | "resolve_revision"
+                    | "revision_refs"
+                    | "compare_revisions"
+                    | "repo_identity_validate"
                     | "commit_files"
                     | "stash_files"
                     | "stash_file_content"
@@ -541,6 +545,9 @@ fn process(
             scope.repository(&repo)?;
             Ok(result)
         }
+        "resolve_revision" => graph::resolve_revision(scope, params(request.params)?),
+        "revision_refs" => graph::revision_refs(scope, params(request.params)?),
+        "compare_revisions" => graph::compare_revisions(scope, params(request.params)?),
         "github_list" => github::list(scope, params(request.params)?),
         "github_detail" => github::detail(scope, params(request.params)?),
         "sort_repositories" => repo_sort::sort(scope, params(request.params)?),

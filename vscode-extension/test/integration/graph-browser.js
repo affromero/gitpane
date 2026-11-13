@@ -13,6 +13,7 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-graph-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/graph/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/graph/view.js'), 'utf8');
 const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
+const comparisonClient = fs.readFileSync(path.join(extension, 'src/graph/comparison.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'graph', loading: false, firstParent: false, limit: 2,
@@ -285,6 +286,49 @@ const scenario = String.raw`
     options()[0].click();
     window.postMessage({ type: 'commitFiles', oid: 'abcdef1234', files: [{ id: 'safe-id', path: 'src/server.rs', status: 'M' }] }, '*');
     await tick();
+    const comparisonSnapshot = { type: 'comparisonState', repoName: 'repo', repoPath: '/work/repo', head: 'main', dirty: true,
+      from: { revision: 'main', oid: 'abcdef1234', moved: true }, to: { revision: 'feature', oid: '1234567890' },
+      mode: 'endpoints', hasResult: true, files: [{ id: 'comparison-file', path: 'new.txt', old_path: 'old.txt', status: 'R', is_submodule: false }] };
+    window.postMessage(comparisonSnapshot, '*');
+    await tick();
+    check('comparison shows target, dirty state and moved ref', document.querySelector('.comparison').textContent.includes('/work/repo') &&
+      document.querySelector('.comparison').textContent.includes('Uncommitted changes excluded') && document.querySelector('.comparison').textContent.includes('moved'));
+    [...document.querySelectorAll('.comparison-bar button')].find(button => button.textContent === 'Browse From refs').click();
+    check('branch and tag picker is keyboard accessible', window.posted.at(-1).type === 'comparisonBrowse' && window.posted.at(-1).which === 'from');
+    check('comparison endpoints have visible and accessible labels', options()[0].textContent.includes('From') &&
+      options()[0].getAttribute('aria-label').includes('From endpoint') && options()[1].getAttribute('aria-label').includes('To endpoint'));
+    document.body.className = 'vscode-high-contrast-light';
+    check('comparison controls and endpoint labels remain visible in high contrast',
+      document.querySelector('.comparison-bar button').getBoundingClientRect().width > 0 &&
+      options()[0].querySelector('.comparison-from').textContent === 'From' &&
+      options()[1].querySelector('.comparison-to').textContent === 'To');
+    document.body.className = originalClass;
+    options()[0].querySelector('[data-comparison-label]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    const comparisonRequest = window.posted.at(-1);
+    check('branch context menu identifies the clicked label', comparisonRequest.type === 'commitMenuRequest' && comparisonRequest.labelIndex === 0);
+    window.postMessage({ type: 'commitMenu', id: comparisonRequest.id, requestId: comparisonRequest.requestId,
+      token: 'comparison-token', choices: [{ label: 'Set as From', action: 'comparisonFrom' }] }, '*');
+    await tick();
+    document.querySelector('[role="menu"] button').click();
+    check('branch context action uses its guarded menu token', window.posted.at(-1).type === 'commitMenuAction' &&
+      window.posted.at(-1).token === 'comparison-token' && window.posted.at(-1).action === 'comparisonFrom');
+    check('renamed comparison file is visible below the graph', document.querySelector('.comparison-results .file').textContent.includes('old.txt → new.txt'));
+    const comparisonFile = document.querySelector('.comparison-results .file');
+    comparisonFile.focus();
+    window.postMessage({ ...comparisonSnapshot, dirty: false }, '*');
+    await tick();
+    check('status updates preserve focused comparison files', document.activeElement === comparisonFile && comparisonFile.isConnected);
+    document.querySelector('.comparison-results .file').click();
+    check('comparison file opens by opaque id', window.posted.at(-1).type === 'openComparisonFile' && window.posted.at(-1).id === 'comparison-file');
+    options()[1].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    check('control-click selects a comparison endpoint', window.posted.at(-1).type === 'comparisonSelect' && window.posted.at(-1).oid === '1234567890');
+    document.querySelector('.comparison-bar select').value = 'common_ancestor';
+    document.querySelector('.comparison-bar select').dispatchEvent(new Event('change', { bubbles: true }));
+    check('comparison mode is explicit', window.posted.at(-1).type === 'comparisonMode' && window.posted.at(-1).mode === 'common_ancestor');
+    window.postMessage({ type: 'comparisonState', from: { revision: 'main', oid: 'abcdef1234' },
+      to: { revision: 'feature', oid: '1234567890' }, files: [], hasResult: false }, '*');
+    await tick();
+    check('incomplete comparison does not claim an empty diff', document.querySelector('.comparison [role="status"]').textContent.includes('incomplete'));
     document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks }));
   } catch (error) {
     document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: error.stack || String(error) }));
@@ -301,7 +345,7 @@ function documentFor(theme) {
 <div id="search-status" class="search-status" role="status" aria-live="polite"></div><div id="graph-status" class="message" role="status" aria-live="polite"></div><div id="theme-status" role="alert"></div><div id="graph" class="graph" role="listbox" aria-label="Commit graph" tabindex="0"></div>
 <section class="details" aria-label="Commit files"><h2 id="files-heading">Commit files</h2><label class="search-label" for="file-search">Search commit files</label><input id="file-search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false" disabled><div id="files-status" class="message" role="status" aria-live="polite">Select a commit to see its files.</div><ul id="files" class="files" aria-labelledby="files-heading"></ul></section>
 <script nonce="gitpane-test">window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${comparisonClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme) {

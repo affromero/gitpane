@@ -30,6 +30,7 @@ function getHtml(webview, extensionUri) {
       .replace(`<script src="${uri('webview/stash-files.js')}"></script>`, script('webview/stash-files.js'))
       .replace(`<script src="${uri('webview/repository-label.js')}"></script>`, script('webview/repository-label.js'))
       .replace(`<script src="${uri('webview/column-resize.js')}"></script>`, script('webview/column-resize.js'))
+      .replace(`<script src="${uri('graph/comparison.js')}"></script>`, script('graph/comparison.js'))
       .replace(`<script src="${uri(`${kind}/view.js`)}"></script>`, script(`${kind}/view.js`));
     return escapeAttribute(content);
   };

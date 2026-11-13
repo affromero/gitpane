@@ -45,7 +45,7 @@ async function createLiveGitSide(options) {
     throw new Error('Gitpane cannot open this Git side. Update the backend and try again.');
   }
   const repoPath = repo.rootUri.fsPath;
-  const session = await backend.gitSideSession(repoPath);
+  const session = await backend.gitSideSession(repoPath, { literalObjects: options.literalObjects === true });
   const guard = () => current() && backend.gitSideCurrent(session);
   const uri = vscode.Uri.file(path.join(repoPath, ...side.gitPath.split('/')));
   const metadata = async signal => {
