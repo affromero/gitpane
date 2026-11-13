@@ -114,6 +114,8 @@ test('webview shows workspace state and opens only currently visible changes', a
   }
   try {
     await onMessage({ type: 'ready' });
+    provider.configureView({ refreshInterval: 5000, statusAlignment: 'right' });
+    assert.equal(snapshots.at(-1).statusAlignment, 'right');
     const initial = snapshots.at(-1).repositories[0];
     await onMessage({ type: 'loadChanges', id: initial.id });
     await onMessage({ type: 'loadChanges', id: initial.worktrees[0].id });

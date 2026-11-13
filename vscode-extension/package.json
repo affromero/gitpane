@@ -49,6 +49,13 @@
     "configuration": {
       "title": "Gitpane Explorer",
       "properties": {
+        "gitpane.statusAlignment": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "default": "left",
+          "scope": "window",
+          "description": "Align repository and worktree status indicators and actions within the Status column."
+        },
         "gitpane.fontSize": {
           "type": "integer",
           "default": 0,
