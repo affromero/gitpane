@@ -223,13 +223,18 @@ class RepositoryTree {
       this.isCurrentRepository(repo, cycle.tokens.get(key));
     if (!current()) return;
     try {
+      const contentRevision = this.contentRevision(repo);
       const watchedPaths = [...new Set(this.watchedPathsFor(repo.rootUri.fsPath))];
       const watchTokens = new Map(watchedPaths.map(value => [value, this.watchTokenFor(repo.rootUri.fsPath, value)]));
       if (watchedPaths.length > 256 || !watchedPaths.every(relativeFile)) throw new Error('Invalid symlink paths to watch.');
       const status = await this.backend.status(repo.rootUri.fsPath, includeWorktrees, { summaryOnly: true, watchedPaths,
         ...(includeWorktrees && this.showOutsideWorktrees ? { includeExternalWorktrees: true } : {}) });
       if (!current()) return;
-      if (!validBackendStatus(status) || status.files.some(file => !file || !relativeFile(file.path) || !watchedPaths.includes(file.path)) ||
+      if (!validBackendStatus(status) || (status.incomplete_submodules_omitted !== undefined &&
+          (!Number.isSafeInteger(status.incomplete_submodules_omitted) || status.incomplete_submodules_omitted < 0)) ||
+          (status.incomplete_submodules !== undefined &&
+          (!Array.isArray(status.incomplete_submodules) || !status.incomplete_submodules.every(relativeFile))) ||
+          status.files.some(file => !file || !relativeFile(file.path) || !watchedPaths.includes(file.path)) ||
           status.watched_errors.some(error => !error || !relativeFile(error.path) || !watchedPaths.includes(error.path) ||
             typeof error.code !== 'string' || typeof error.message !== 'string' || status.files.some(file => file.path === error.path)) ||
           new Set(status.watched_errors.map(error => error.path)).size !== status.watched_errors.length) {
@@ -241,7 +246,7 @@ class RepositoryTree {
       const preserveWorktrees = !includeWorktrees && (previous?.worktrees.length || previous?.external_worktrees?.length) &&
         previousEvidence?.generation === generation && previousEvidence.token === cycle.tokens.get(key) &&
         sameIdentity(previousEvidence.common, commonIdentity);
-      const stored = { ...status, watchedPaths, watchTokens, ...(preserveWorktrees ? {
+      const stored = { ...status, submoduleWarningRevision: contentRevision, watchedPaths, watchTokens, ...(preserveWorktrees ? {
         worktrees: previous.worktrees, external_worktrees: previous.external_worktrees
       } : {}) };
       this.statusEvidence.set(stored, { common: commonIdentity, generation, token: cycle.tokens.get(key) });

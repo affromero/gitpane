@@ -29,7 +29,7 @@ const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-di
 const { createLiveGitSide, createLiveWorkingSide } = require('./git-side-documents');
 const { createStashSource, unsupportedStashSource } = require('./stash-source');
 const { StashView } = require('./stash-view');
-const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
+const { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
 
@@ -71,19 +71,7 @@ class GitpaneViewProvider {
     return this.ids.get(key);
   }
 
-  configureView({ refreshInterval, worktreeExpansion, showOutsideWorktrees, fontSize }) {
-    const intervalChanged = this.refreshInterval !== refreshInterval;
-    this.refreshInterval = refreshInterval;
-    this.worktreeExpansion = worktreeExpansion;
-    this.showOutsideWorktrees = showOutsideWorktrees;
-    this.fontSize = fontSize;
-    if (intervalChanged && this.refreshChangesTimer !== undefined) {
-      clearTimeout(this.refreshChangesTimer);
-      this.refreshChangesTimer = undefined;
-    }
-    if (intervalChanged) this.scheduleChangesRefresh();
-    this.publish();
-  }
+  configureView(preferences) { configureViewProvider(this, preferences); }
 
   snapshot() {
     const live = new Set();
@@ -122,6 +110,10 @@ class GitpaneViewProvider {
         ...(state?.error ? { error: state.error } : {}) };
     };
     const lowerBound = status => status?.file_count_lower_bound ?? 0;
+    const incomplete = (status, repo) => Array.isArray(status?.incomplete_submodules) && repo &&
+      status.submoduleWarningRevision === this.tree.contentRevision(repo) ? {
+        incompleteSubmodules: status.incomplete_submodules || [], incompleteSubmodulesOmitted: status.incomplete_submodules_omitted || 0
+      } : {};
     const hierarchy = this.tree.presentationView?.();
     const children = this.tree.getChildren(undefined, hierarchy);
     const childNodes = key => (hierarchy?.submodules?.get(key) || []).map(child => ({
@@ -150,6 +142,7 @@ class GitpaneViewProvider {
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
           available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
+          ...incomplete(childStatus, child),
           changeCountLowerBound: child ? lowerBound(childStatus) : 0,
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
             { repoKey, repoToken, path: item.path }) : [],
@@ -193,6 +186,7 @@ class GitpaneViewProvider {
         worktrees: worktreeData,
         hasDirtySubmodules: status?.has_dirty_submodules || false,
         hasUnpushedSubmodules: status?.has_unpushed_submodules || false,
+        incompleteSubmodules: [], ...incomplete(status, repo),
         changeCountLowerBound: lowerBound(status), changesPage: pageFor(id), groups: groupData,
         submodules: childNodes(repoKey).map(buildRepository)
       };
