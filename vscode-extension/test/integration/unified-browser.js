@@ -66,9 +66,32 @@ const scenario = String.raw`
   check('selected changes reach changes pane', doc('changes').body.textContent.includes('changed.txt'));
   check('graph snapshot reaches graph pane', doc('graph').body.textContent.includes('first commit'));
   let repoDoc = doc('repositories');
+  const hierarchy = structuredClone(snapshot);
+  hierarchy.repositories[0].worktrees.push({ id: 'internal', name: 'internal', branch: 'review', available: true, dirty: false, groups: [] });
+  hierarchy.repositories[0].submodules = [{ id: 'child', name: 'child', branch: 'main', submodule: true, dirty: false, groups: [] }];
+  send('repositories', hierarchy); await tick();
+  const statusRows = () => [...repoDoc.querySelectorAll('.repo-row, .worktree-row')];
+  const aligned = edge => {
+   const values = statusRows().map(row => row.querySelector('.tail').getBoundingClientRect()[edge]);
+   return values.length === 4 && values.every(value => Math.abs(value - values[0]) < 1);
+  };
+  check('repository and worktree statuses align left by default', aligned('left'));
+  send('repositories', { ...hierarchy, statusAlignment: 'right' }); await tick();
+  check('setting aligns repository and worktree statuses right', aligned('right'));
+  for (const width of [210, 500]) {
+   frame('repositories').style.width = width + 'px'; await tick(); await tick();
+   check('right alignment is preserved at ' + width + 'px', aligned('right'));
+  }
+  frame('repositories').style.width = ''; await tick();
+  send('repositories', hierarchy); await tick();
+  check('removing the setting restores left alignment', aligned('left'));
+  send('repositories', snapshot); await tick();
   let handles = repoDoc.querySelectorAll('.column-separator');
   check('repository columns have accessible resize controls', handles.length === 2 &&
    [...handles].every(handle => handle.getAttribute('aria-label') && handle.getAttribute('aria-orientation') === 'vertical'));
+  frame('repositories').style.width = '210px';
+  repoDoc.querySelector('.column-reset').click();
+  frame('repositories').style.width = '';
   const nameWidth = repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width;
   handles[0].focus();
   handles[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
@@ -121,7 +144,8 @@ const scenario = String.raw`
     Math.abs(item.getBoundingClientRect().top - largeRow.querySelector('.tail').firstElementChild.getBoundingClientRect().top) < 1));
   send('repositories', { ...snapshot, fontSize: 20 }); await tick();
   frame('repositories').style.width = '';
-  await tick(); await tick();
+  for (let attempt = 0; attempt < 100 &&
+   Math.abs(repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width - preferredWidths[0]) >= 1; attempt++) await tick();
   check('widening restores the chosen width',
    Math.abs(repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width - preferredWidths[0]) < 1);
   const repoFrame = frame('repositories');

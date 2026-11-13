@@ -489,6 +489,7 @@ function render() {
   const stashIds = new Set();
   tree.replaceChildren();
   renderMessages();
+  document.body.dataset.statusAlignment = snapshot.statusAlignment === 'right' ? 'right' : 'left';
   document.body.dataset.separateChanges = String(!changesMode && !!snapshot.separateChanges);
   if (changesMode) renderSelectedChanges(owners);
   function renderRepository(repo, container, parentKey) {

@@ -65,6 +65,7 @@ window.GitpaneColumns = (document, window, tree, stored, save) => {
     });
   }
   function resize(index, delta) {
+    displayed = cells.slice(0, 2).map(cell => cell.getBoundingClientRect().width);
     preferred = preferred ? [...preferred] : displayed.map(value => Math.max(24, value));
     preferred[index] = Math.max(24, Math.min(2000, displayed[index] + delta));
     render();

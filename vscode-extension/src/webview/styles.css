@@ -163,6 +163,8 @@ body[data-view="changes"] #column-layout { display: block; }
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
 .pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
 .tail { display: flex; flex-wrap: nowrap; column-gap: .4ch; min-width: 0; width: max-content; max-width: 100%; overflow-x: auto; white-space: nowrap; }
+.repo-row > .tail, .worktree-row > .tail { justify-self: start; }
+body[data-status-alignment="right"] .repo-row > .tail, body[data-status-alignment="right"] .worktree-row > .tail { justify-self: end; }
 .tail:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .graph-action, .menu-action, .stash-action, .worktree-action {
   flex: none;

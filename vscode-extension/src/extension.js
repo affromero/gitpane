@@ -207,7 +207,7 @@ class GitpaneViewProvider {
       }
     }
     return {
-      type: 'snapshot', repositories, fontSize: this.fontSize || 0,
+      type: 'snapshot', repositories, fontSize: this.fontSize || 0, statusAlignment: this.statusAlignment || 'left',
       errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : []),
         ...(this.showOutsideWorktrees && children.some(node => node.type === 'repo' &&
