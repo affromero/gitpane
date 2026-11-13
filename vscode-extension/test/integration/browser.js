@@ -139,6 +139,13 @@ const scenario = String.raw`
     root.parentElement.style.width = '';
     window.postMessage(snapshot, '*');
     await tick();
+    root.parentElement.style.width = '210px';
+    document.body.style.fontSize = '40px';
+    for (const row of root.querySelectorAll('.repo-row')) {
+      check('large font retains name and branch', row.querySelector('.name').getBoundingClientRect().width > 0 &&
+        row.querySelector('.branch').getBoundingClientRect().width > 0);
+    }
+    document.body.style.fontSize = '';
     for (const width of [500, 300, 210]) {
       root.parentElement.style.width = width + 'px';
       const rows = [...document.querySelectorAll('#repositories > .treeitem > .repo-row')];
@@ -151,8 +158,10 @@ const scenario = String.raw`
         rows[0].querySelector('.name').getBoundingClientRect().left - markerText.getBoundingClientRect().right >= 4);
       for (const row of rows) {
         const tail = row.querySelector('.tail');
+        tail.scrollLeft = 0;
         const bounds = tail.getBoundingClientRect();
         for (const indicator of tail.children) {
+          tail.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - bounds.right);
           const indicatorBounds = indicator.getBoundingClientRect();
           check('status indicator visible at ' + width + 'px',
             indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
@@ -173,8 +182,10 @@ const scenario = String.raw`
     check('aligned branch columns in narrow viewport', narrowBranches.every(left => Math.abs(left - narrowBranches[0]) < 1));
     for (const row of narrowRows) {
       const tail = row.querySelector('.tail');
+      tail.scrollLeft = 0;
       const bounds = tail.getBoundingClientRect();
       for (const indicator of tail.children) {
+        tail.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - bounds.right);
         const indicatorBounds = indicator.getBoundingClientRect();
         check('status indicator visible in narrow viewport',
           indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
@@ -330,8 +341,12 @@ const scenario = String.raw`
           branchBounds.left - nameText.getBoundingClientRect().right <= parseFloat(getComputedStyle(row).fontSize) * 8);
         check('repository rows fit the pane at ' + width + 'px',
           row.getBoundingClientRect().right <= layout.getBoundingClientRect().right + 1);
-        const tail = row.querySelector('.tail').getBoundingClientRect();
-        for (const indicator of row.querySelector('.tail').children) {
+        const tailElement = row.querySelector('.tail');
+        tailElement.scrollLeft = 0;
+        const tail = tailElement.getBoundingClientRect();
+        check('repository and worktree name remains visible at ' + width, nameBounds.width > 0 && branchBounds.width > 0);
+        for (const indicator of tailElement.children) {
+          tailElement.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - tail.right);
           const bounds = indicator.getBoundingClientRect();
           check('repository and worktree badges stay visible at ' + width + 'px',
             bounds.left >= tail.left - 1 && bounds.right <= tail.right + 1);

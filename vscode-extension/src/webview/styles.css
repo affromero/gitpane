@@ -74,14 +74,14 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 #repositories {
   display: grid;
-  grid-template-columns: minmax(calc(2.5ch + 9px), max-content) fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%);
+  grid-template-columns: minmax(calc(3ch + 9px), max-content) fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%);
   column-gap: .6ch;
 }
 
-#column-layout { display: grid; container-type: inline-size; overflow-x: auto; grid-template-columns: minmax(calc(2.5ch + 9px), max-content)
-  fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%); column-gap: .6ch; }
-#column-layout[data-resized="true"] { grid-template-columns: minmax(calc(2.5ch + 9px), max-content)
-  minmax(0, var(--column-name)) minmax(0, var(--column-branch)) minmax(85px, 1fr); }
+#column-layout { display: grid; container-type: inline-size; overflow-x: auto; grid-template-columns: minmax(calc(3ch + 9px), max-content)
+  minmax(min(2ch, 10%), min(35%, 16ch)) minmax(min(2ch, 10%), 1fr) minmax(0, 45%); column-gap: .6ch; }
+#column-layout[data-resized="true"] { grid-template-columns: minmax(calc(3ch + 9px), max-content)
+  minmax(min(1ch, 5%), var(--column-name)) minmax(min(1ch, 5%), var(--column-branch)) minmax(min(8ch, 30%), 1fr); }
 #column-layout #repositories, .column-header { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 .column-header { align-items: center; color: var(--muted); padding: 0 9px; }
 .column-header > span { min-width: 0; position: relative; overflow: visible; white-space: nowrap; }
@@ -163,7 +163,7 @@ body[data-view="changes"] #column-layout { display: block; }
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
 .pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
 .tail { display: flex; flex-wrap: nowrap; column-gap: .4ch; min-width: 0; width: max-content; max-width: 100%; overflow-x: auto; white-space: nowrap; }
-@container (min-width: 15em) { #column-layout:not([data-resized]) .tail { min-width: max-content; } }
+.tail:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .graph-action, .menu-action, .stash-action, .worktree-action {
   flex: none;
   padding: 0;
