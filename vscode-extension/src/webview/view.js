@@ -13,6 +13,7 @@ const searchStatus = document.getElementById('search-status');
 const searchPrev = document.getElementById('search-prev');
 const searchNext = document.getElementById('search-next');
 const saved = vscode.getState() || {};
+const columns = changesMode ? undefined : window.GitpaneColumns(document, window, tree, saved.columnWidths, () => save());
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedSubmodules = new Set(Array.isArray(saved.collapsedSubmodules) ? saved.collapsedSubmodules : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
@@ -42,7 +43,7 @@ const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedSubmodules: [...collapsedSubmodules], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
     expandedStashFiles: [...expandedStashFiles].slice(-1024),
-    worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected });
+    worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected, columnWidths: columns?.widths() });
 }
 
 function worktreesVisible(repo) {
@@ -99,19 +100,13 @@ function add(parent, className, text, title) {
 }
 
 function menuButton(label, kind, id) {
-  const button = element('button', 'menu-action', '⋯');
-  button.type = 'button';
-  button.title = label;
-  button.setAttribute('aria-label', label);
-  button.addEventListener('click', event => {
-    event.stopPropagation();
+  return window.GitpaneMenuButton(document, label, button => {
     const rect = button.getBoundingClientRect();
     const item = visible.find(value => value.key === button.closest('.treeitem')?.dataset.key);
     if (item) select(item);
     if (kind !== 'file') vscode.postMessage({ type: 'selectOwner', id });
     fileMenu.open(id, rect.right, rect.bottom, kind, button);
   });
-  return button;
 }
 
 function fileCount(repo) {
@@ -183,6 +178,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
+  tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
   if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
     !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
@@ -278,6 +274,7 @@ function worktreeRow(worktree) {
     add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   }
   const tail = element('span', 'tail');
+  tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
   if (worktree.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, worktree,
     !collapsedSubmodules.has(`worktree:${worktree.id}`), () => toggleSubmodules(`worktree:${worktree.id}`)));
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
@@ -421,6 +418,10 @@ function renderMessages() {
     message.setAttribute('role', 'alert');
     messages.appendChild(message);
   }
+  if (!changesMode) for (const repo of allRepositories(snapshot.repositories || [])) for (const owner of [repo, ...(repo.worktrees || [])]) {
+    for (const relative of owner.incompleteSubmodules || []) messages.appendChild(element('div', 'message', `${owner.name}: .gitmodules entry ${relative} has no stage-0 index gitlink.`));
+    if (owner.incompleteSubmodulesOmitted) messages.appendChild(element('div', 'message', `${owner.name}: ${owner.incompleteSubmodulesOmitted} additional .gitmodules entries have no stage-0 index gitlink or cannot be displayed.`));
+  }
   if (errors.length) {
     const button = element('button', 'retry', 'Retry');
     button.type = 'button';
@@ -474,7 +475,7 @@ function render() {
     document.activeElement.classList?.contains('worktree-action') ? 'worktree-action' :
     document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
     document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
-    document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
+    document.activeElement.classList?.contains('menu-action') ? 'menu-action' : document.activeElement.classList?.contains('tail') ? 'tail' : undefined;
   const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
   visible = [];
   const owners = new Set();
@@ -870,6 +871,7 @@ tree.addEventListener('contextmenu', event => {
 });
 
 tree.addEventListener('keydown', event => {
+  if (event.target.classList?.contains('tail')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
       event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action') || event.target.classList?.contains('submodule-action')) &&

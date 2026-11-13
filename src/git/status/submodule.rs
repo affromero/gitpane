@@ -35,6 +35,8 @@ pub(crate) struct SubmoduleRegistration {
     pub(crate) ignore: git2::SubmoduleIgnore,
     pub(crate) head_oid: Option<git2::Oid>,
     pub(crate) index_oid: Option<git2::Oid>,
+    pub(crate) configured_path: bool,
+    pub(crate) configured_index_oid: Option<git2::Oid>,
 }
 
 fn recorded_gitlink_paths(
@@ -165,6 +167,8 @@ pub(crate) fn submodule_registrations(
                 ignore: git2::SubmoduleIgnore::None,
                 head_oid: None,
                 index_oid: None,
+                configured_path: false,
+                configured_index_oid: None,
             });
         match property {
             b".path" => {
@@ -181,6 +185,7 @@ pub(crate) fn submodule_registrations(
                 } else {
                     path
                 };
+                module.configured_path = !value.starts_with(b"-");
                 configured.insert(name.to_vec());
             }
             b".ignore" | b".update" | b".fetchrecursesubmodules" | b".url" | b".branch" => {
@@ -231,6 +236,8 @@ pub(crate) fn submodule_registrations(
                 ignore: git2::SubmoduleIgnore::None,
                 head_oid: None,
                 index_oid: None,
+                configured_path: false,
+                configured_index_oid: None,
             });
     }
     let index = repo.index()?;
@@ -257,6 +264,21 @@ pub(crate) fn submodule_registrations(
         module.index_oid = if index_path_valid {
             index
                 .get_path(&module.path, 0)
+                .filter(|entry| entry.mode & 0o170000 == 0o160000)
+                .map(|entry| entry.id)
+        } else {
+            None
+        };
+        let configured_path = module.path.strip_prefix(".").unwrap_or(&module.path);
+        module.configured_index_oid = if module.configured_path
+            && configured_path.to_str().is_some()
+            && !configured_path.as_os_str().as_encoded_bytes().contains(&0)
+            && matches!(
+                configured_path.components().next(),
+                Some(std::path::Component::Normal(_))
+            ) {
+            index
+                .get_path(configured_path, 0)
                 .filter(|entry| entry.mode & 0o170000 == 0o160000)
                 .map(|entry| entry.id)
         } else {

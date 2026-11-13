@@ -1,5 +1,16 @@
 'use strict';
 
+window.GitpaneMenuButton = function (document, label, activate) {
+  const button = document.createElement('button');
+  button.className = 'menu-action';
+  button.textContent = '⋯';
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.addEventListener('click', event => { event.stopPropagation(); activate(button); });
+  return button;
+};
+
 window.GitpaneFileMenu = function ({ document, window, postMessage, selection }) {
   let requestId = 0;
   let pending;
