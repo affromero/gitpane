@@ -87,7 +87,7 @@ async function waitForFile(file) {
     const root = fs.realpathSync.native(workspace);
     const repoPath = fs.realpathSync.native(repo);
     const outsidePath = fs.realpathSync.native(outside);
-    assert.deepEqual(await client.initialize([root]), { version: 1 });
+    assert.deepEqual(await client.initialize([root]), { version: 1, capabilities: { unique_changes_snapshots: true } });
 
     if (process.platform !== 'win32') {
       const alias = path.join(temporary, 'workspace-alias');
