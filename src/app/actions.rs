@@ -667,7 +667,10 @@ mod tests {
                 .handle_key_event(crossterm::event::KeyCode::Down.into())
                 .unwrap();
         }
-        assert_eq!(app.selected_launch_path(), Some(linked.join("child")));
+        assert_eq!(
+            app.selected_launch_path().unwrap().canonicalize().unwrap(),
+            linked.join("child").canonicalize().unwrap()
+        );
         app.handle_key_event(crossterm::event::KeyCode::Char('d').into())
             .unwrap();
         while let Ok(action) = app.action_rx.try_recv() {

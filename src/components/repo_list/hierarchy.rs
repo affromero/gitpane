@@ -178,15 +178,11 @@ pub(super) fn rows(
         let Some(status) = &entry.status else { return };
         let id = RepoId(entry.path.clone());
         if expanded(&id) {
-            for j in 0..status.worktree_info.len() {
+            for (j, worktree) in status.worktree_info.iter().enumerate() {
                 rows.push(DisplayRow::Worktree(index, j));
-                for (sub, info) in status.worktree_info[j]
-                    .checkout_submodules
-                    .iter()
-                    .enumerate()
-                {
+                for (sub, info) in worktree.checkout_submodules.iter().enumerate() {
                     if !repos.iter().enumerate().any(|(child, entry)| {
-                        entry.path == status.worktree_info[j].path.join(&info.path)
+                        entry.path == worktree.path.join(&info.path)
                             && parents[child] == Some(Parent::Worktree(index, j))
                     }) {
                         rows.push(DisplayRow::Submodule(index, Some(j), sub));
