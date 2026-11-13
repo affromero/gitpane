@@ -115,15 +115,26 @@ const scenario = String.raw`
   const parentTail = repoDoc.querySelector('.repo-row .tail').getBoundingClientRect();
   check('outside worktree status aligns and actions remain visible in a narrow panel',
    Math.abs(externalTail.left - parentTail.left) < 1 && [...externalRow.querySelector('.tail').children].every(item => {
+    const element = externalRow.querySelector('.tail');
+    element.scrollLeft += Math.max(0, item.getBoundingClientRect().right - externalTail.right);
     const bounds = item.getBoundingClientRect();
     return bounds.left >= externalTail.left - 1 && bounds.right <= externalTail.right + 1;
    }));
+  const scrollTail = externalRow.querySelector('.tail');
+  scrollTail.focus();
+  const scrollKey = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+  scrollTail.dispatchEvent(scrollKey);
+  check('status scrolling preserves keyboard access', repoDoc.activeElement === scrollTail && !scrollKey.defaultPrevented);
+  send('repositories', { ...snapshot, fontSize: 20, statusAlignment: 'left' }); await tick();
+  check('refresh restores focus to status controls', repoDoc.activeElement.classList.contains('tail'));
   handles[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
   check('resizing a narrow name column preserves the saved branch width',
    saved.views.repositories.columnWidths[1] === preferredWidths[1]);
   preferredWidths = [...saved.views.repositories.columnWidths];
   send('repositories', { ...snapshot, fontSize: 40 }); await tick(); await tick();
   const largeRow = repoDoc.querySelector('.external-worktree-row');
+  check('large text keeps name visible', repoDoc.querySelector('.repo-row .name').getBoundingClientRect().width > 0 &&
+   repoDoc.querySelector('.repo-row .branch').getBoundingClientRect().width > 0);
   check('large text keeps worktree status on one line inside the panel',
    repoDoc.documentElement.scrollWidth <= repoDoc.documentElement.clientWidth + 1 &&
    [...largeRow.querySelector('.tail').children].every(item =>

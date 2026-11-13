@@ -185,6 +185,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
   const tail = element('span', 'tail');
+  tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
   if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
     !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
@@ -280,6 +281,7 @@ function worktreeRow(worktree) {
     add(row, 'worktree branch', worktree.branch || 'unknown branch', worktree.branch);
   }
   const tail = element('span', 'tail');
+  tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
   if (worktree.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, worktree,
     !collapsedSubmodules.has(`worktree:${worktree.id}`), () => toggleSubmodules(`worktree:${worktree.id}`)));
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
@@ -476,7 +478,7 @@ function render() {
     document.activeElement.classList?.contains('worktree-action') ? 'worktree-action' :
     document.activeElement.classList?.contains('stash-action') ? 'stash-action' :
     document.activeElement.classList?.contains('graph-action') ? 'graph-action' :
-    document.activeElement.classList?.contains('menu-action') ? 'menu-action' : undefined;
+    document.activeElement.classList?.contains('menu-action') ? 'menu-action' : document.activeElement.classList?.contains('tail') ? 'tail' : undefined;
   const focusedActionKey = focusedAction ? document.activeElement.closest('.treeitem')?.dataset.key : undefined;
   visible = [];
   const owners = new Set();
@@ -871,6 +873,7 @@ tree.addEventListener('contextmenu', event => {
 });
 
 tree.addEventListener('keydown', event => {
+  if (event.target.classList?.contains('tail')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
       event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action') || event.target.classList?.contains('submodule-action')) &&
