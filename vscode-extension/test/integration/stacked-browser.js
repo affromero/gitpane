@@ -19,7 +19,7 @@ const server = http.createServer((request, response) => {
   response.end(asset.body);
 });
 const add = (route, body, type = 'text/html') => assets.set(route, { body, type });
-for (const file of ['webview/styles.css', 'webview/view.js', 'webview/file-menu.js', 'webview/stash-files.js', 'webview/repository-label.js', 'graph/styles.css', 'graph/view.js', 'theme-webview.js']) {
+for (const file of ['webview/styles.css', 'webview/view.js', 'webview/file-menu.js', 'webview/stash-files.js', 'webview/repository-label.js', 'webview/column-resize.js', 'graph/styles.css', 'graph/view.js', 'theme-webview.js']) {
   add(`/src/${file}`, fs.readFileSync(path.join(extension, 'src', file)), file.endsWith('.css') ? 'text/css' : 'text/javascript');
 }
 

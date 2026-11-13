@@ -13,6 +13,7 @@ const searchStatus = document.getElementById('search-status');
 const searchPrev = document.getElementById('search-prev');
 const searchNext = document.getElementById('search-next');
 const saved = vscode.getState() || {};
+const columns = changesMode ? undefined : window.GitpaneColumns(document, window, tree, saved.columnWidths, () => save());
 const expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
 const collapsedSubmodules = new Set(Array.isArray(saved.collapsedSubmodules) ? saved.collapsedSubmodules : []);
 const collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
@@ -42,7 +43,7 @@ const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedSubmodules: [...collapsedSubmodules], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
     expandedStashFiles: [...expandedStashFiles].slice(-1024),
-    worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected });
+    worktreeVisibility: [...worktreeVisibility].slice(-1024), appliedWorktreeReveals: [...appliedWorktreeReveals].slice(-128), selected, columnWidths: columns?.widths() });
 }
 
 function worktreesVisible(repo) {
