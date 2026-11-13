@@ -425,6 +425,10 @@ function renderMessages() {
     message.setAttribute('role', 'alert');
     messages.appendChild(message);
   }
+  if (!changesMode) for (const repo of allRepositories(snapshot.repositories || [])) for (const owner of [repo, ...(repo.worktrees || [])]) {
+    for (const relative of owner.incompleteSubmodules || []) messages.appendChild(element('div', 'message', `${owner.name}: .gitmodules entry ${relative} has no stage-0 index gitlink.`));
+    if (owner.incompleteSubmodulesOmitted) messages.appendChild(element('div', 'message', `${owner.name}: ${owner.incompleteSubmodulesOmitted} additional .gitmodules entries have no stage-0 index gitlink or cannot be displayed.`));
+  }
   if (errors.length) {
     const button = element('button', 'retry', 'Retry');
     button.type = 'button';
