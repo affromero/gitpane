@@ -39,6 +39,7 @@ pub(crate) struct RepoStatus {
     /// True when .gitmodules exists (repo uses submodules)
     pub has_submodules: bool,
     pub submodules: Vec<SubmoduleInfo>,
+    pub checkout_submodules: Vec<SubmoduleInfo>,
     pub has_dirty_submodules: bool,
     /// Any submodule has unpushed_commits>0 OR pointer_unreachable
     pub has_unpushed_submodules: bool,
@@ -209,6 +210,7 @@ pub(crate) struct WorktreeEntry {
     pub file_count: usize,
     pub has_dirty_submodules: bool,
     pub has_unpushed_submodules: bool,
+    pub checkout_submodules: Vec<SubmoduleInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -416,6 +418,7 @@ fn query_status_inner(
         is_dirty,
         has_submodules,
         submodules,
+        checkout_submodules,
         has_dirty_submodules,
         has_unpushed_submodules,
     } = collect_change_summary(&repo, path, false, sub_cfg, allow_worktree.is_some())?;
@@ -441,6 +444,7 @@ fn query_status_inner(
         worktree_info,
         has_submodules,
         submodules,
+        checkout_submodules,
         has_dirty_submodules,
         has_unpushed_submodules,
         fetch_failed,

@@ -33,6 +33,7 @@ const { StashView } = require('./stash-view');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
+const { externalSubmodules } = require('./external-submodules');
 
 class GitpaneViewProvider {
   constructor(tree, extensionUri, theme, worktreeDisplay, options = {}) {
@@ -78,6 +79,7 @@ class GitpaneViewProvider {
     const live = new Set();
     const changes = new Map();
     const worktrees = new Map();
+    const externalErrors = [];
     const repositoriesById = new Map();
     const groupsFor = (repo, ownerId, parentWorktree) => {
       const root = repo.rootUri.fsPath;
@@ -157,13 +159,16 @@ class GitpaneViewProvider {
           const inspected = this.externalOwners.get(worktreeId);
           const active = inspected && inspected.guard();
           const summary = item.status || inspected?.status;
+          if (summary?.checkout_submodule_error) externalErrors.push(`Could not inspect submodules in ${item.path}: ${summary.checkout_submodule_error}`);
+          else if (summary && !Array.isArray(summary.checkout_submodules)) externalErrors.push('The Gitpane backend does not support worktree submodule discovery. Update the configured backend.');
           worktreeData.push({ id: worktreeId, name: path.basename(item.path), path: item.path,
             branch: typeof item.branch === 'string' ? item.branch : 'branch unavailable',
             available: !!active, external: true, dirty: !!summary?.is_dirty,
             inspectable: /^[a-f0-9]{64}$/.test(item.identity || ''),
             statusUnavailable: !summary, ...(item.status_error ? { statusError: item.status_error } : {}),
             fileCount: summary?.file_count_lower_bound || 0, ahead: summary?.ahead || 0, behind: summary?.behind || 0,
-            ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [] });
+            ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [],
+            submodules: externalSubmodules(this, vscode, { item, repoKey, repoToken, worktreeId, summary, live, groupsFor, pageFor, errors: externalErrors }) });
         }
       }
       const groupData = groupsFor(repo, id);
@@ -195,6 +200,12 @@ class GitpaneViewProvider {
     const repositories = children.filter(node => node.type === 'repo').map(buildRepository);
     const allRepositories = repos => repos.flatMap(repo => [repo, ...allRepositories(repo.submodules), ...repo.worktrees.flatMap(item => allRepositories(item.submodules || []))]);
     for (const key of this.ids.keys()) if (!live.has(key)) this.ids.delete(key);
+    const liveIds = new Set(this.ids.values());
+    for (const [id, owner] of this.externalOwners) if (owner.submodule && !liveIds.has(id)) {
+      if (this.tree.backend.externalSelections.get(owner.repo.rootUri.fsPath)?.guard === owner.guard)
+        this.tree.backend.externalSelections.delete(owner.repo.rootUri.fsPath);
+      this.externalOwners.delete(id);
+    }
     this.changes = changes;
     this.worktrees = worktrees;
     this.repositories = repositoriesById;
@@ -209,7 +220,7 @@ class GitpaneViewProvider {
     }
     return {
       type: 'snapshot', repositories, fontSize: this.fontSize || 0, statusAlignment: this.statusAlignment || 'left',
-      errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
+      errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...new Set(externalErrors), ...(this.theme?.error ? [this.theme.error] : []),
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : []),
         ...(this.showOutsideWorktrees && children.some(node => node.type === 'repo' &&
           this.tree.backendStatuses.has(node.repo.rootUri.toString()) &&
@@ -403,6 +414,13 @@ class GitpaneViewProvider {
 
   async refreshTarget(id, kind, guard = () => true) {
     if (!guard()) return [];
+    if (kind === 'repo' && this.externalOwners.get(id)?.submodule) {
+      const repo = this.currentOwner(id);
+      if (!repo) return [];
+      await this.tree.refresh();
+      if (guard() && this.currentOwner(id)) await this.loadChanges(id);
+      return guard() ? [repo.rootUri.toString()] : [];
+    }
     const selected = kind === 'worktree' ? this.worktrees.get(id) : this.repositories.get(id);
     const target = kind === 'worktree' ? this.currentWorktreeRepository(id) : this.currentRepository(id);
     const anchor = kind === 'worktree'
@@ -500,6 +518,9 @@ class GitpaneViewProvider {
   }
 
   resolveRepository(id) {
+    const external = this.externalOwners.get(id);
+    if (external?.submodule && external.guard()) return { repoPath: external.repo.rootUri.fsPath,
+      repoIdentity: external.status.repo_identity, refreshOnly: true };
     const repo = this.currentRepository(id);
     const actionRepo = this.actionRepository(repo);
     if (!actionRepo) return repo ? { repoPath: repo.rootUri.fsPath, refreshOnly: true } : undefined;
@@ -763,7 +784,7 @@ async function activate(context) {
     catch (error) { vscode.window.showErrorMessage(`Gitpane could not open the graph: ${error.message}`); }
   };
   const workspaceViews = new WorkspaceViews(vscode, context, provider, sidebarGraph, (id, kind, guard) => {
-    if (kind === 'worktree') return openWorktreeGraph(id, guard, sidebarGraph);
+    if (kind === 'worktree' || provider.externalOwners.get(id)?.submodule) return openWorktreeGraph(id, guard, sidebarGraph);
     const repo = provider.currentRepository(id);
     if (repo && guard()) sidebarGraph.open(repo, () => guard() && !!provider.currentRepository(id));
   });
@@ -905,6 +926,7 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand('gitpane.openGraph', id => {
       try {
+        if (provider.externalOwners.get(id)?.submodule) return openWorktreeGraph(id);
         const repo = provider.currentRepository(id);
         if (!repo) throw new Error('Repository is no longer in the workspace.');
         graph.open(repo, () => !!provider.currentRepository(id));

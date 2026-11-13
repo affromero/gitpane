@@ -297,6 +297,7 @@ fn process(
                 object.insert("include_worktrees".into(), json!(false));
                 object.insert("include_external_worktrees".into(), json!(false));
             }
+            let include_submodules = input.method == "status";
             let result = process(
                 &mut Some(temporary),
                 snapshots,
@@ -307,8 +308,24 @@ fn process(
                 },
                 options,
             );
+            let mut result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+                    return Err(error);
+                }
+            };
+            if include_submodules {
+                let temporary =
+                    worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
+                let canonical = temporary.repository(&repo)?;
+                match worktree_plan::external_submodules::collect(&temporary, &canonical, sub_cfg) {
+                    Ok(children) => result["checkout_submodules"] = json!(children),
+                    Err(error) => result["checkout_submodule_error"] = json!(error.message),
+                }
+            }
             worktree_plan::external::read_scope(scope, &input.selection, &repo)?;
-            result
+            Ok(result)
         }
         "workspace_root_identities" => {
             let _: EmptyRequest = params(request.params)?;
@@ -425,8 +442,16 @@ fn process(
                         let temporary =
                             worktree_plan::external::read_scope(scope, &selection, &path)?;
                         let canonical = temporary.repository(&path)?;
-                        let summary =
+                        let mut summary =
                             status::query(&canonical, &temporary, sub_cfg, false, true, &[])?;
+                        match worktree_plan::external_submodules::collect(
+                            &temporary, &canonical, sub_cfg,
+                        ) {
+                            Ok(children) => summary["checkout_submodules"] = json!(children),
+                            Err(error) => {
+                                summary["checkout_submodule_error"] = json!(error.message)
+                            }
+                        }
                         worktree_plan::external::read_scope(scope, &selection, &path)?;
                         Ok::<_, BridgeError>(summary)
                     })();

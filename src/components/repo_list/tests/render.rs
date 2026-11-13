@@ -638,3 +638,36 @@ fn nested_submodule_row_draws_the_connector() {
         "nested row still shows its breadcrumb: {text}"
     );
 }
+
+#[test]
+fn renders_submodules_beneath_their_own_checkout() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let sub = |name: &str, state| SubmoduleInfo {
+        name: name.into(),
+        path: name.into(),
+        state,
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: SubmoduleWarn::default(),
+    };
+    let mut list = make_list(&["/repo"]);
+    let mut status = empty_status("main");
+    status.checkout_submodules.push(sub("main-child", None));
+    let mut worktree = worktree_entry("feature");
+    worktree
+        .checkout_submodules
+        .push(sub("worktree-child", Some(SubmoduleState::Dirty)));
+    status.worktree_info.push(worktree);
+    list.update_status(0, status);
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let line = |y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    assert!(line(2).contains("main-child [sub]"));
+    assert!(line(3).contains("feature"));
+    assert!(line(4).contains("* worktree-child [sub]"));
+}

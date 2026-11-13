@@ -115,42 +115,23 @@ impl App {
             Action::SelectSubmodule {
                 ref repo_id,
                 ref sub_path,
-            } => {
-                if let Some(idx) = self.repo_list.resolve_index(repo_id) {
-                    let entry = &self.repo_list.repos[idx];
-                    let repo_name = entry.name.clone();
-                    let sub_abs = entry.path.join(sub_path);
-                    // Uninitialized submodules have no checked-out repo to graph.
-                    let uninitialized = entry
-                        .status
-                        .as_ref()
-                        .and_then(|s| s.submodules.iter().find(|sm| sm.path == *sub_path))
-                        .and_then(|sm| sm.state.clone())
-                        == Some(crate::git::status::SubmoduleState::Uninitialized);
-                    if uninitialized {
-                        self.action_tx.send(Action::Error(format!(
-                            "Submodule {} is not initialized",
-                            sub_path.display()
-                        )))?;
-                    } else {
-                        let display_name = format!("{}/{}", repo_name, sub_path.display());
-                        self.activate_path_context(sub_abs, repo_id.clone(), display_name);
-                        self.github_touch_selection();
-                    }
-                }
-            }
+            } => self.select_submodule(repo_id, sub_path)?,
             Action::WorktreeFilesLoaded {
                 ref repo_id,
                 ref worktree_path,
                 ref name,
                 ref files,
+                ref submodules,
             } => {
                 // Only apply if this worktree is still selected
                 if self
                     .active_worktree
                     .as_ref()
-                    .is_some_and(|aw| aw.path == *worktree_path)
+                    .is_some_and(|aw| aw.path == *worktree_path && aw.repo_id == *repo_id)
                 {
+                    if let Some(active) = self.active_worktree.as_mut() {
+                        active.submodules.clone_from(submodules);
+                    }
                     self.file_list
                         .set_files(files.clone(), name, repo_id.clone());
                     if let Some(action) = self.file_list.refresh_diff() {
@@ -180,8 +161,17 @@ impl App {
                         status,
                         self.git_graph.graph_options.branch_filter,
                     );
+                    let selection = self.repo_list.selected_row_id();
                     let status_clone = status.clone();
                     self.repo_list.update_status(idx, status_clone);
+                    if matches!(
+                        selection,
+                        Some(crate::components::repo_list::RowId::Submodule(_, _))
+                    ) && selection != self.repo_list.selected_row_id()
+                        && let Some(action) = self.repo_list.emit_selection_action()
+                    {
+                        self.action_tx.send(action)?;
+                    }
                     // A stash preview follows its OID: renumbering refreshes
                     // the label, deletion falls back to the working tree.
                     self.reconcile_stash_preview();
@@ -327,6 +317,11 @@ impl App {
                 // the other context-menu items; a repo row loads the
                 // repo's own graph.
                 self.context_menu.hide();
+                if self.repo_list.selected_submodule_uninitialized() {
+                    self.action_tx
+                        .send(Action::Error("Submodule is not initialized".to_string()))?;
+                    return Ok(());
+                }
                 // A submodule/worktree context owns the graph: refresh from its
                 // path rather than reloading the selected parent repo over it.
                 if self.active_worktree.is_some() {
@@ -564,6 +559,36 @@ impl App {
         self.refresh_active_worktree();
     }
 
+    fn select_submodule(&mut self, repo_id: &RepoId, sub_path: &std::path::Path) -> Result<()> {
+        let Some(idx) = self.repo_list.resolve_index(repo_id) else {
+            return Ok(());
+        };
+        let entry = &self.repo_list.repos[idx];
+        let active = self
+            .active_worktree
+            .as_ref()
+            .filter(|aw| aw.repo_id == *repo_id);
+        let sub_abs = active.map_or(&entry.path, |aw| &aw.path).join(sub_path);
+        let submodules = active
+            .map(|aw| aw.submodules.as_slice())
+            .or_else(|| entry.status.as_ref().map(|s| s.submodules.as_slice()));
+        let uninitialized = submodules
+            .and_then(|modules| modules.iter().find(|sm| sm.path == sub_path))
+            .and_then(|sm| sm.state.clone())
+            == Some(crate::git::status::SubmoduleState::Uninitialized);
+        if uninitialized {
+            self.action_tx.send(Action::Error(format!(
+                "Submodule {} is not initialized",
+                sub_path.display()
+            )))?;
+            return Ok(());
+        }
+        let display_name = format!("{}/{}", entry.name, sub_path.display());
+        self.activate_path_context(sub_abs, repo_id.clone(), display_name);
+        self.github_touch_selection();
+        Ok(())
+    }
+
     /// Copy `text` to the system clipboard, reusing a long-lived `Clipboard`
     /// so the platform backend keeps serving the selection (see the field
     /// docs on `App::clipboard`). A failed or stale backend is dropped so the
@@ -591,5 +616,88 @@ impl App {
                 self.error_message = Some((format!("clipboard failed: {error}"), Instant::now()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::Component;
+    use crate::git::status::{SubmoduleInfo, SubmoduleState, SubmoduleWarn};
+
+    #[tokio::test]
+    async fn selecting_a_worktree_submodule_uses_its_checkout_and_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let repo = git2::Repository::init(&parent).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .unwrap();
+        let linked = temp.path().join("linked");
+        repo.worktree("linked", &linked, None).unwrap();
+        let linked = linked.canonicalize().unwrap();
+        git2::Repository::init(linked.join("child")).unwrap();
+        let info = |state| SubmoduleInfo {
+            name: "child".into(),
+            path: "child".into(),
+            state: Some(state),
+            head: None,
+            head_oid: None,
+            workdir_oid: None,
+            warn: SubmoduleWarn::default(),
+        };
+        let config = Config {
+            root_dirs: vec![parent.clone()],
+            write_target_override: Some(temp.path().join("config.toml")),
+            ..Config::default()
+        };
+        let mut app = App::new(config).unwrap();
+        let id = RepoId(parent.canonicalize().unwrap());
+        let index = app.repo_list.resolve_index(&id).unwrap();
+        let mut status = crate::git::status::query_status(&parent, &app.config.submodules).unwrap();
+        status.submodules = vec![info(SubmoduleState::Uninitialized)];
+        status.checkout_submodules = status.submodules.clone();
+        status.worktree_info[0].checkout_submodules = vec![info(SubmoduleState::Dirty)];
+        app.repo_list.update_status(index, status);
+        app.repo_list.select_repo_row(index);
+        for _ in 0..3 {
+            app.repo_list
+                .handle_key_event(crossterm::event::KeyCode::Down.into())
+                .unwrap();
+        }
+        assert_eq!(app.selected_launch_path(), Some(linked.join("child")));
+        app.handle_key_event(crossterm::event::KeyCode::Char('d').into())
+            .unwrap();
+        while let Ok(action) = app.action_rx.try_recv() {
+            assert!(!matches!(
+                action,
+                Action::ConfirmRemoveRepo(_) | Action::RemoveWorktreeSelected
+            ));
+        }
+        app.active_worktree = Some(ActiveWorktree {
+            path: linked.clone(),
+            repo_id: id.clone(),
+            display_name: "linked".into(),
+            submodules: vec![info(SubmoduleState::Dirty)],
+        });
+
+        app.select_submodule(&id, std::path::Path::new("child"))
+            .unwrap();
+        assert_eq!(
+            app.active_worktree.as_ref().unwrap().path,
+            linked.join("child")
+        );
+
+        app.active_worktree = Some(ActiveWorktree {
+            path: linked.clone(),
+            repo_id: id.clone(),
+            display_name: "linked".into(),
+            submodules: vec![info(SubmoduleState::Uninitialized)],
+        });
+        app.select_submodule(&id, std::path::Path::new("child"))
+            .unwrap();
+        assert_eq!(app.active_worktree.as_ref().unwrap().path, linked);
     }
 }

@@ -306,6 +306,7 @@ struct ActiveWorktree {
     path: std::path::PathBuf,
     repo_id: RepoId,
     display_name: String,
+    submodules: Vec<crate::git::status::SubmoduleInfo>,
 }
 
 /// A launch (`open`/`review`) parked while the placement picker is open, so it

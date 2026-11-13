@@ -62,6 +62,7 @@ pub(super) fn collect_worktree_info(
                 is_dirty: false,
                 has_submodules: false,
                 submodules: Vec::new(),
+                checkout_submodules: Vec::new(),
                 has_dirty_submodules: false,
                 has_unpushed_submodules: false,
             },
@@ -77,6 +78,7 @@ pub(super) fn collect_worktree_info(
             file_count: summary.files.len(),
             has_dirty_submodules: summary.has_dirty_submodules,
             has_unpushed_submodules: summary.has_unpushed_submodules,
+            checkout_submodules: summary.checkout_submodules,
         });
     }
     Ok(entries)

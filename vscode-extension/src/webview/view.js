@@ -557,6 +557,7 @@ function render() {
         }
       }
     }
+    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
     for (const worktree of showWorktrees ? worktrees : []) {
       owners.add(worktree.id);
       reconcilePending(worktree);
@@ -603,7 +604,6 @@ function render() {
         for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);
       }
     }
-    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
   }
   for (const repo of changesMode ? [] : snapshot.repositories) renderRepository(repo, tree, undefined);
   for (const id of pendingLoads.keys()) if (!owners.has(id)) pendingLoads.delete(id);

@@ -65,6 +65,38 @@ fn has_gitlink(parent: &Path, path: &Path) -> Result<bool, BridgeError> {
     }))
 }
 
+/// List initialized, registered children with identities suitable for a pin chain.
+pub(in crate::bridge) fn list(scope: &Scope, repo: &Path) -> Result<Value, BridgeError> {
+    let root = scope.repository(repo)?;
+    scope.validate_modules_file(&root)?;
+    let parent = git2::Repository::open(&root)
+        .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+    let modules = parent
+        .submodules()
+        .map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
+    let mut children = Vec::new();
+    for module in &modules {
+        let path = module.path();
+        if !valid_submodule_path(path) || !has_gitlink(&root, path)? {
+            continue;
+        }
+        super::require_pin_path(&root, path)?;
+        match root.join(path).join(".git").symlink_metadata() {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(BridgeError::new("repository_error", error.to_string())),
+        }
+        let link = registered_link(scope, &root, path, true)?;
+        children.push(json!({
+            "path": path,
+            "repo": link.child,
+            "parent_identity": link.parent_identity.fingerprint()?,
+            "child_identity": link.child_identity.fingerprint()?,
+        }));
+    }
+    Ok(json!({ "submodules": children }))
+}
+
 pub(in crate::bridge) fn discover(
     scope: &Scope,
     input: DiscoverRequest,

@@ -247,7 +247,9 @@ impl App {
                 // removes the repo. Both go through a confirmation.
                 if self.repo_list.selected_worktree().is_some() {
                     self.action_tx.send(Action::RemoveWorktreeSelected)?;
-                } else if let Some(idx) = self.repo_list.selected_index() {
+                } else if self.repo_list.selected_submodule_path().is_none()
+                    && let Some(idx) = self.repo_list.selected_index()
+                {
                     let repo_id = RepoId(self.repo_list.repos[idx].path.clone());
                     self.action_tx.send(Action::ConfirmRemoveRepo(repo_id))?;
                 }
@@ -259,9 +261,8 @@ impl App {
                 // Copy selected item to clipboard (OSC 52)
                 let text = match self.focus {
                     FocusPanel::Repos => self
-                        .repo_list
-                        .selected_repo()
-                        .map(|e| e.path.to_string_lossy().to_string()),
+                        .selected_launch_path()
+                        .map(|path| path.to_string_lossy().to_string()),
                     FocusPanel::Changes => self.file_list.selected_path(),
                     FocusPanel::Graph => self.git_graph.selected_text(),
                     FocusPanel::GitHub => self.github_panel.selected_url(),

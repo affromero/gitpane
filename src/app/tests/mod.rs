@@ -332,6 +332,7 @@ fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
         worktree_info: Vec::new(),
         has_submodules: false,
         submodules: Vec::new(),
+        checkout_submodules: Vec::new(),
         has_dirty_submodules: false,
         has_unpushed_submodules: false,
         fetch_failed: false,
@@ -673,6 +674,7 @@ async fn worktree_refresh_shows_new_commits_after_closing_details() {
         path: wt.clone(),
         repo_id: RepoId(wt.clone()),
         display_name: "live-wt".to_string(),
+        submodules: Vec::new(),
     });
 
     app.git_graph.graph_options.show_stats = false;
@@ -824,6 +826,7 @@ async fn removing_the_active_context_repo_clears_active_worktree() {
         path: entry_path.clone(),
         repo_id: RepoId(entry_path.clone()),
         display_name: "parent/sub".to_string(),
+        submodules: Vec::new(),
     });
 
     app.handle_repo_admin(Action::RemoveRepo(RepoId(entry_path)))

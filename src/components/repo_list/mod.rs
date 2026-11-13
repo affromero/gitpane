@@ -14,6 +14,7 @@ use crate::git::status::RepoStatus;
 use crate::repo_id::RepoId;
 use crate::theme::Theme;
 
+mod hierarchy;
 mod layout;
 mod render;
 #[cfg(test)]
@@ -93,8 +94,9 @@ pub(crate) struct OpTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DisplayRow {
     Repo(usize),
-    Worktree(usize, usize), // (repo_index, worktree_index)
-    Stash(usize, usize),    // (repo_index, stash_index_in_status.stashes)
+    Worktree(usize, usize),                 // (repo_index, worktree_index)
+    Submodule(usize, Option<usize>, usize), // repo, optional worktree, submodule index
+    Stash(usize, usize),                    // (repo_index, stash_index_in_status.stashes)
 }
 
 /// A `DisplayRow` re-keyed by the parent repo's path instead of positional
@@ -104,6 +106,7 @@ enum DisplayRow {
 pub(crate) enum RowId {
     Repo(PathBuf),
     Worktree(PathBuf, usize),
+    Submodule(PathBuf, PathBuf),
     Stash(PathBuf, String),
 }
 
@@ -181,7 +184,7 @@ pub(crate) fn submodule_parent<'a>(
 /// breadcrumb. Shared by `row_layout` and `render_repo_item` so column math
 /// and hit-testing agree.
 pub(crate) fn row_label<'a>(repos: &[RepoEntry], entry: &'a RepoEntry) -> (bool, &'a str) {
-    if submodule_parent(repos, entry).is_some() {
+    if hierarchy::parent(repos, entry).is_some() {
         (true, &entry.name)
     } else {
         (false, &entry.display)
@@ -299,23 +302,9 @@ impl RepoList {
 
     /// Recompute display_rows from repos + expansion state.
     fn rebuild_display_rows(&mut self) {
-        self.display_rows.clear();
-        for (i, entry) in self.repos.iter().enumerate() {
-            self.display_rows.push(DisplayRow::Repo(i));
-            let id = RepoId(entry.path.clone());
-            if let Some(status) = &entry.status {
-                if self.worktrees_expanded(&id) {
-                    for j in 0..status.worktree_info.len() {
-                        self.display_rows.push(DisplayRow::Worktree(i, j));
-                    }
-                }
-                if self.expanded_stashes.contains(&id) {
-                    for j in 0..status.stashes.len() {
-                        self.display_rows.push(DisplayRow::Stash(i, j));
-                    }
-                }
-            }
-        }
+        self.display_rows = hierarchy::rows(&self.repos, &self.expanded_stashes, |id| {
+            self.worktrees_expanded(id)
+        });
     }
 
     /// Returns the parent repo index for the current selection.
@@ -324,6 +313,7 @@ impl RepoList {
         match self.display_rows.get(di)? {
             DisplayRow::Repo(i) => Some(*i),
             DisplayRow::Worktree(ri, _) => Some(*ri),
+            DisplayRow::Submodule(ri, _, _) => Some(*ri),
             DisplayRow::Stash(ri, _) => Some(*ri),
         }
     }
@@ -379,25 +369,6 @@ impl RepoList {
         self.selected_index().and_then(|i| self.repos.get(i))
     }
 
-    /// Stable identity of the selected row: the parent repo's path plus the
-    /// subrow's identity (worktree index, or stash OID). Unlike a `DisplayRow`
-    /// (positional indices) it survives list reorders and row-count changes in
-    /// other repos, so it is the right thing to capture before a sort or rebuild.
-    pub fn selected_row_id(&self) -> Option<RowId> {
-        let di = self.state.selected()?;
-        match self.display_rows.get(di)? {
-            DisplayRow::Repo(i) => Some(RowId::Repo(self.repos.get(*i)?.path.clone())),
-            DisplayRow::Worktree(ri, wi) => {
-                Some(RowId::Worktree(self.repos.get(*ri)?.path.clone(), *wi))
-            }
-            DisplayRow::Stash(ri, si) => {
-                let entry = self.repos.get(*ri)?;
-                let oid = entry.status.as_ref()?.stashes.get(*si)?.oid.clone();
-                Some(RowId::Stash(entry.path.clone(), oid))
-            }
-        }
-    }
-
     /// The `RepoId` a sync action (`p` pull / `P` push) should target from the
     /// current selection, mirroring the right-click menu: a worktree row
     /// targets the worktree's own path (so pull/push act on it directly), a
@@ -412,7 +383,7 @@ impl RepoList {
                 .as_ref()
                 .and_then(|s| s.worktree_info.get(*wi))
                 .map(|wt| RepoId(wt.path.clone())),
-            DisplayRow::Stash(_, _) => None,
+            DisplayRow::Stash(_, _) | DisplayRow::Submodule(_, _, _) => None,
         }
     }
 
@@ -434,7 +405,7 @@ impl RepoList {
                     .get(*wi)?;
                 (RepoId(wt.path.clone()), true)
             }
-            DisplayRow::Stash(_, _) => return None,
+            DisplayRow::Stash(_, _) | DisplayRow::Submodule(_, _, _) => return None,
         };
         let row = self
             .render_area
@@ -460,12 +431,29 @@ impl RepoList {
         }
         let restored = target.and_then(|t| {
             let path = match &t {
-                RowId::Repo(p) | RowId::Worktree(p, _) | RowId::Stash(p, _) => p,
+                RowId::Repo(p)
+                | RowId::Worktree(p, _)
+                | RowId::Submodule(p, _)
+                | RowId::Stash(p, _) => p,
             };
             let ri = self.repos.iter().position(|e| &e.path == path)?;
             let want = match &t {
                 RowId::Repo(_) => Some(DisplayRow::Repo(ri)),
                 RowId::Worktree(_, wi) => Some(DisplayRow::Worktree(ri, *wi)),
+                RowId::Submodule(_, path) => self
+                    .display_rows
+                    .iter()
+                    .find(|row| {
+                        if let DisplayRow::Submodule(owner, wi, si) = row {
+                            *owner == ri
+                                && self
+                                    .submodule_at(*owner, *wi, *si)
+                                    .is_some_and(|(parent, sub)| parent.join(&sub.path) == *path)
+                        } else {
+                            false
+                        }
+                    })
+                    .cloned(),
                 RowId::Stash(_, oid) => self
                     .repos
                     .get(ri)
@@ -474,6 +462,30 @@ impl RepoList {
                     .map(|si| DisplayRow::Stash(ri, si)),
             };
             want.and_then(|want| self.display_rows.iter().position(|row| *row == want))
+                .or_else(|| {
+                    let RowId::Submodule(_, path) = &t else {
+                        return None;
+                    };
+                    self.display_rows
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, row)| {
+                            let DisplayRow::Worktree(owner, wi) = row else {
+                                return None;
+                            };
+                            let worktree = self
+                                .repos
+                                .get(*owner)?
+                                .status
+                                .as_ref()?
+                                .worktree_info
+                                .get(*wi)?;
+                            (*owner == ri && path.starts_with(&worktree.path))
+                                .then_some((index, worktree.path.components().count()))
+                        })
+                        .max_by_key(|(_, depth)| *depth)
+                        .map(|(index, _)| index)
+                })
                 .or_else(|| {
                     // Subrow gone (worktree removed, stash dropped): land on
                     // the parent repo row instead of a random neighbor.
@@ -493,7 +505,7 @@ impl RepoList {
     pub fn selected_worktree(&self) -> Option<(RepoId, &crate::git::status::WorktreeEntry)> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
-            DisplayRow::Repo(_) | DisplayRow::Stash(_, _) => None,
+            DisplayRow::Repo(_) | DisplayRow::Stash(_, _) | DisplayRow::Submodule(_, _, _) => None,
             DisplayRow::Worktree(ri, wi) => {
                 let entry = self.repos.get(*ri)?;
                 let wt = entry.status.as_ref()?.worktree_info.get(*wi)?;
@@ -619,7 +631,7 @@ impl RepoList {
     }
 
     /// Build the action to emit for the current selection.
-    fn emit_selection_action(&self) -> Option<Action> {
+    pub(crate) fn emit_selection_action(&self) -> Option<Action> {
         let di = self.state.selected()?;
         match self.display_rows.get(di)? {
             DisplayRow::Repo(i) => {
@@ -633,6 +645,21 @@ impl RepoList {
                     repo_id: RepoId(entry.path.clone()),
                     worktree_path: wt.path.clone(),
                     worktree_branch: wt.branch.clone(),
+                })
+            }
+            DisplayRow::Submodule(ri, wi, si) => {
+                let entry = self.repos.get(*ri)?;
+                let (parent, submodule) = self.submodule_at(*ri, *wi, *si)?;
+                if submodule.state == Some(crate::git::status::SubmoduleState::Uninitialized) {
+                    return Some(Action::Error(format!(
+                        "Submodule {} is not initialized",
+                        submodule.path.display()
+                    )));
+                }
+                Some(Action::SelectWorktree {
+                    repo_id: RepoId(entry.path.clone()),
+                    worktree_path: parent.join(&submodule.path),
+                    worktree_branch: submodule.path.display().to_string(),
                 })
             }
             DisplayRow::Stash(ri, si) => {
@@ -657,6 +684,7 @@ impl RepoList {
         match self.display_rows.get(di)? {
             DisplayRow::Repo(i) => Some(*i),
             DisplayRow::Worktree(ri, _) => Some(*ri),
+            DisplayRow::Submodule(ri, _, _) => Some(*ri),
             DisplayRow::Stash(ri, _) => Some(*ri),
         }
     }
@@ -676,6 +704,7 @@ impl RepoList {
         let parent_idx = match &prev {
             DisplayRow::Repo(i) => *i,
             DisplayRow::Worktree(ri, _) => *ri,
+            DisplayRow::Submodule(ri, _, _) => *ri,
             DisplayRow::Stash(ri, _) => *ri,
         };
         if let Some(new_idx) = self.display_rows.iter().position(|r| *r == prev) {
@@ -716,6 +745,7 @@ impl RepoList {
         let repo_idx = match self.display_rows.get(di) {
             Some(DisplayRow::Repo(i)) => *i,
             Some(DisplayRow::Worktree(ri, _)) => *ri,
+            Some(DisplayRow::Submodule(ri, _, _)) => *ri,
             Some(DisplayRow::Stash(ri, _)) => *ri,
             None => return,
         };

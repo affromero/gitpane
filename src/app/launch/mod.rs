@@ -102,6 +102,7 @@ impl App {
         Some(
             self.active_worktree
                 .as_ref()
+                .filter(|aw| aw.repo_id == *id)
                 .map(|aw| aw.path.clone())
                 .unwrap_or_else(|| self.repo_list.repos[idx].path.clone()),
         )
@@ -357,10 +358,12 @@ impl App {
     /// path, otherwise the selected repo's path (mirrors ShowGitGraph). Used by
     /// the keyboard `o`/`v` shortcuts; the context menu passes an explicit id.
     pub(super) fn selected_launch_path(&self) -> Option<std::path::PathBuf> {
-        self.repo_list
-            .selected_worktree()
-            .map(|(_, wt)| wt.path.clone())
-            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()))
+        self.repo_list.selected_submodule_path().or_else(|| {
+            self.repo_list
+                .selected_worktree()
+                .map(|(_, wt)| wt.path.clone())
+                .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()))
+        })
     }
     /// Open `path` via the `[open]` launcher (or the placement picker for "ask").
     pub(super) fn launch_open(&mut self, path: std::path::PathBuf, tui: &mut Tui) -> Result<()> {
@@ -547,11 +550,7 @@ impl App {
     /// Attach the live tmux session(s) for the currently selected row (the `G`
     /// key path).
     pub(super) fn goto_session_selected(&mut self) -> Result<()> {
-        let path = self
-            .repo_list
-            .selected_worktree()
-            .map(|(_, wt)| wt.path.clone())
-            .or_else(|| self.repo_list.selected_repo().map(|e| e.path.clone()));
+        let path = self.selected_launch_path();
         if let Some(path) = path {
             self.attach_sessions_for(&path)?;
         }
@@ -732,6 +731,7 @@ impl App {
             path: path.clone(),
             repo_id: repo_id.clone(),
             display_name: display_name.clone(),
+            submodules: Vec::new(),
         });
         // Clear the file list while loading (parent repo_id for resolve_index).
         self.file_list
@@ -748,6 +748,7 @@ impl App {
                         worktree_path: path,
                         name: display_name,
                         files: s.files,
+                        submodules: s.submodules,
                     });
                 }
                 Err(e) => {
@@ -789,6 +790,7 @@ impl App {
                     worktree_path: aw.path,
                     name: aw.display_name,
                     files: s.files,
+                    submodules: s.submodules,
                 });
             }
         });

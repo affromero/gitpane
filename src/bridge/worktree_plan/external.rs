@@ -178,6 +178,7 @@ mod tests {
             path: path.to_path_buf(),
             expected_repo_identity: identity.into(),
             expected_worktree_identity: target_identity.clone(),
+            chain: Vec::new(),
         };
         assert_eq!(
             validate(&scope, selection(registered, &identity)).unwrap()["path"],
@@ -258,6 +259,8 @@ pub(in crate::bridge) struct Selection {
     path: PathBuf,
     expected_repo_identity: String,
     expected_worktree_identity: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    chain: Vec<Value>,
 }
 
 pub(in crate::bridge) fn read_scope(
@@ -272,13 +275,28 @@ pub(in crate::bridge) fn read_scope(
     let canonical = Path::new(path).canonicalize().map_err(|_| {
         BridgeError::new("stale_target", "Worktree changed. Refresh and try again.")
     })?;
-    if requested_repo.canonicalize().ok().as_ref() != Some(&canonical) {
+    let temporary = Scope::new(vec![canonical.clone()])?;
+    let target = if selection.chain.is_empty() {
+        canonical
+    } else {
+        let request =
+            serde_json::from_value(json!({ "root": canonical, "chain": selection.chain }))
+                .map_err(|error| BridgeError::new("invalid_request", error.to_string()))?;
+        let proof = super::super::submodule::pin::validate(&temporary, request)?;
+        proof["repos"]
+            .as_array()
+            .and_then(|repos| repos.last())
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| BridgeError::new("repository_error", "Invalid submodule proof."))?
+    };
+    if requested_repo.canonicalize().ok().as_ref() != Some(&target) {
         return Err(BridgeError::new(
             "outside_workspace",
             "Request does not identify the selected worktree.",
         ));
     }
-    Scope::new(vec![canonical])
+    Ok(temporary)
 }
 
 pub(in crate::bridge) fn validate(scope: &Scope, input: Selection) -> Result<Value, BridgeError> {
