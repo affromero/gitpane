@@ -549,6 +549,26 @@ const scenario = String.raw`
     worktree.querySelector('[aria-label^="Actions for worktree"]').click();
     check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'rowMenuRequest' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
+    let externalRequest = window.posted.at(-1);
+    const answerExternal = request => window.postMessage({ type: 'rowMenu', kind: 'worktree', id: 'opaque-worktree',
+      requestId: request.requestId, token: 'external-token', choices: [{ label: 'Refresh', action: 'refreshWorktree' }] }, '*');
+    answerExternal(externalRequest);
+    await tick();
+    window.postMessage({ ...external, fontSize: 17 }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('outside worktree menu restores its own button after refresh',
+      document.activeElement.getAttribute('aria-label')?.startsWith('Actions for worktree'));
+    document.activeElement.click();
+    externalRequest = window.posted.at(-1);
+    answerExternal(externalRequest);
+    await tick();
+    const removedExternal = structuredClone(external);
+    removedExternal.repositories[1].worktrees.shift();
+    window.postMessage(removedExternal, '*');
+    await tick();
+    check('removing a worktree dismisses its menu and focuses the current row', !document.querySelector('[role="menu"]') &&
+      document.activeElement.getAttribute('role') === 'treeitem' && document.activeElement.getAttribute('aria-selected') === 'true');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
       id: 'overview-parent', name: 'overview-parent', branch: 'main', dirty: false, groups: [],
       worktreeStateKey: 'a'.repeat(64), worktreeCount: 1,

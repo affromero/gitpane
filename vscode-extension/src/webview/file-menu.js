@@ -18,6 +18,7 @@ window.GitpaneFileMenu = function ({ document, window, postMessage, selection })
   let returnFocus;
   let returnKey;
   let returnAction;
+  let returnLabel;
 
   function close() {
     const restoreFocus = menu?.contains(document.activeElement);
@@ -27,12 +28,14 @@ window.GitpaneFileMenu = function ({ document, window, postMessage, selection })
     menu = undefined;
     if (restoreFocus) {
       const row = [...document.querySelectorAll('[data-key]')].find(item => item.dataset.key === returnKey);
-      const target = returnFocus?.isConnected ? returnFocus : (returnAction && row?.querySelector('.menu-action')) || row;
+      const button = returnAction && [...(row?.querySelectorAll('.menu-action') || [])].find(item => item.getAttribute('aria-label') === returnLabel);
+      const target = returnFocus?.isConnected ? returnFocus : button || row || document.querySelector('[role="treeitem"][aria-selected="true"]') || document.querySelector('[role="tree"]');
       target?.focus();
     }
     returnFocus = undefined;
     returnKey = undefined;
     returnAction = false;
+    returnLabel = undefined;
   }
 
   function open(id, x, y, kind = 'file', focus = document.activeElement) {
@@ -40,6 +43,7 @@ window.GitpaneFileMenu = function ({ document, window, postMessage, selection })
     returnFocus = focus;
     returnKey = returnFocus?.closest?.('[data-key]')?.dataset.key;
     returnAction = returnFocus?.classList?.contains('menu-action');
+    returnLabel = returnFocus?.getAttribute?.('aria-label');
     pending = { id, kind, x, y, requestId, selection: selection() };
     postMessage(kind === 'file' ? { type: 'fileMenuRequest', id, requestId } : kind === 'commit' ?
       { type: 'commitMenuRequest', id, requestId } : { type: 'rowMenuRequest', kind, id, requestId });
