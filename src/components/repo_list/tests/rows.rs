@@ -1,6 +1,146 @@
 use super::*;
 
 #[test]
+fn pinned_submodules_follow_their_own_repo_or_worktree() {
+    let mut list = make_list(&["/repo", "/repo/module", "/linked/module", "/other"]);
+    list.repos[1].gitlink = true;
+    list.repos[2].gitlink = true;
+    let mut status = empty_status("main");
+    let mut worktree = worktree_entry("feature");
+    worktree.path = PathBuf::from("/linked");
+    status.worktree_info.push(worktree);
+    list.update_status(0, status);
+    assert!(matches!(
+        list.display_rows.as_slice(),
+        [
+            DisplayRow::Repo(0),
+            DisplayRow::Repo(1),
+            DisplayRow::Worktree(0, 0),
+            DisplayRow::Repo(2),
+            DisplayRow::Repo(3)
+        ]
+    ));
+    assert!(row_label(&list.repos, &list.repos[2]).0);
+    list.state.select(Some(0));
+    list.toggle_expand();
+    assert!(matches!(
+        list.display_rows.as_slice(),
+        [
+            DisplayRow::Repo(0),
+            DisplayRow::Repo(1),
+            DisplayRow::Repo(3)
+        ]
+    ));
+}
+
+#[test]
+fn crossing_worktree_paths_do_not_hide_repositories() {
+    let mut list = make_list(&["/y/a", "/x/b"]);
+    list.repos[0].gitlink = true;
+    list.repos[1].gitlink = true;
+    for (index, path) in [(0, "/x"), (1, "/y")] {
+        let mut status = empty_status("main");
+        let mut worktree = worktree_entry("feature");
+        worktree.path = path.into();
+        status.worktree_info.push(worktree);
+        list.update_status(index, status);
+    }
+    for index in 0..2 {
+        assert_eq!(
+            list.display_rows
+                .iter()
+                .filter(|row| matches!(row, DisplayRow::Repo(i) if *i == index))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn changed_submodules_appear_under_the_checkout_that_owns_them() {
+    let mut list = make_list(&["/repo"]);
+    let sub = |name: &str| SubmoduleInfo {
+        name: name.into(),
+        path: name.into(),
+        state: Some(SubmoduleState::Dirty),
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: SubmoduleWarn::default(),
+    };
+    let mut status = empty_status("main");
+    status.checkout_submodules.push(sub("main-child"));
+    let mut worktree = worktree_entry("feature");
+    worktree.checkout_submodules.push(sub("worktree-child"));
+    status.worktree_info.push(worktree);
+    list.update_status(0, status.clone());
+    assert!(matches!(
+        list.display_rows.as_slice(),
+        [
+            DisplayRow::Repo(0),
+            DisplayRow::Submodule(0, None, 0),
+            DisplayRow::Worktree(0, 0),
+            DisplayRow::Submodule(0, Some(0), 0)
+        ]
+    ));
+    list.state.select(Some(3));
+    assert!(
+        matches!(list.emit_selection_action(), Some(Action::SelectWorktree { worktree_path, .. })
+        if worktree_path == std::path::Path::new("/wt/feature/worktree-child"))
+    );
+    assert_eq!(
+        list.selected_submodule_path(),
+        Some(PathBuf::from("/wt/feature/worktree-child"))
+    );
+    assert!(list.selected_worktree().is_none());
+    assert!(list.selected_menu().is_none());
+    status.worktree_info[0]
+        .checkout_submodules
+        .insert(0, sub("new-child"));
+    list.update_status(0, status);
+    assert!(
+        matches!(list.emit_selection_action(), Some(Action::SelectWorktree { worktree_path, .. })
+        if worktree_path == std::path::Path::new("/wt/feature/worktree-child")),
+        "selection follows the submodule path after refresh"
+    );
+    let mut status = list.repos[0].status.clone().unwrap();
+    status.worktree_info[0].checkout_submodules[1].state = None;
+    list.update_status(0, status.clone());
+    assert_eq!(
+        list.selected_submodule_path(),
+        Some(PathBuf::from("/wt/feature/worktree-child")),
+        "a clean submodule remains visible and selected"
+    );
+    status.worktree_info[0].checkout_submodules.clear();
+    list.update_status(0, status);
+    assert!(
+        list.selected_worktree().is_some(),
+        "a removed child falls back to its worktree"
+    );
+}
+
+#[test]
+fn uninitialized_submodule_cannot_open_a_graph() {
+    let mut list = make_list(&["/repo"]);
+    let mut status = empty_status("main");
+    status.checkout_submodules.push(SubmoduleInfo {
+        name: "child".into(),
+        path: "child".into(),
+        state: Some(SubmoduleState::Uninitialized),
+        head: None,
+        head_oid: None,
+        workdir_oid: None,
+        warn: SubmoduleWarn::default(),
+    });
+    list.update_status(0, status);
+    list.state.select(Some(1));
+    assert!(list.selected_submodule_uninitialized());
+    assert!(
+        matches!(list.emit_selection_action(), Some(Action::Error(message)) if message.contains("not initialized"))
+    );
+}
+
+#[test]
 fn selected_sync_target_id_resolves_repo_worktree_and_stash() {
     let mut list = make_list(&["/a", "/b"]);
 

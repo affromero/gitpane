@@ -56,7 +56,7 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
     }
     provider.publish();
   } else if (message?.type === 'openGraph' && typeof message.id === 'string') {
-    if (provider.currentRepository(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
+    if (provider.currentOwner(message.id)) await vscode.commands.executeCommand('gitpane.openGraph', message.id);
   } else if (message?.type === 'openWorktreeGraph' && typeof message.id === 'string') {
     await provider.openWorktreeGraph?.(message.id);
   } else if (message?.type === 'fileMenuRequest' && typeof message.id === 'string' && Number.isSafeInteger(message.requestId)) {

@@ -182,7 +182,10 @@ impl App {
                 // skips the canonicalize syscall and the repo-list scan.
                 let submodule_repo = is_submodule
                     .then(|| {
-                        let abs = id.0.join(path);
+                        let abs = self
+                            .file_op_dir(id)
+                            .unwrap_or_else(|| id.0.clone())
+                            .join(path);
                         let abs = abs.canonicalize().unwrap_or(abs);
                         self.repo_list
                             .repos
@@ -197,6 +200,7 @@ impl App {
                     row,
                     crate::components::context_menu::FileMenuContext {
                         path: path.clone(),
+                        directory: self.file_op_dir(id).unwrap_or_else(|| id.0.clone()),
                         staged,
                         unstaged,
                         is_untracked,
@@ -440,13 +444,15 @@ impl App {
                 };
                 if let Some(idx) = self.repo_list.resolve_index(id) {
                     let entry = &self.repo_list.repos[idx];
-                    let sub_info = entry
-                        .status
-                        .as_ref()
-                        .and_then(|s| s.submodules.iter().find(|sm| sm.path == *file_path));
+                    let active = self.active_worktree.as_ref().filter(|aw| aw.repo_id == *id);
+                    let submodules = active
+                        .map(|aw| aw.submodules.as_slice())
+                        .or_else(|| entry.status.as_ref().map(|s| s.submodules.as_slice()));
+                    let sub_info = submodules
+                        .and_then(|modules| modules.iter().find(|sm| sm.path == *file_path));
 
                     if let Some(sub) = sub_info {
-                        let repo_path = entry.path.clone();
+                        let repo_path = active.map_or(&entry.path, |aw| &aw.path).clone();
                         let sub_path = file_path.clone();
                         let old_oid = sub.head_oid.clone().unwrap_or_default();
                         let new_oid = sub.workdir_oid.clone().unwrap_or_default();
@@ -570,6 +576,7 @@ impl App {
                         let path = self
                             .active_worktree
                             .as_ref()
+                            .filter(|aw| aw.repo_id == *id)
                             .map(|aw| aw.path.clone())
                             .unwrap_or_else(|| entry.path.clone());
                         let fp = file_path.clone();

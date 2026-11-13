@@ -85,6 +85,7 @@ pub(crate) struct MenuContext {
 /// File-row context that decides which file actions the menu offers.
 pub(crate) struct FileMenuContext {
     pub path: PathBuf,
+    pub directory: PathBuf,
     /// Index side dirty: offer Unstage.
     pub staged: bool,
     /// Worktree side dirty (or conflicted): offer Stage.
@@ -107,6 +108,7 @@ pub(crate) struct ContextMenu {
     /// Set in file mode when the row is a pinned submodule; see
     /// [`FileMenuContext::submodule_repo`].
     submodule_repo: Option<RepoId>,
+    file_directory: Option<PathBuf>,
     pub position: (u16, u16), // (col, row)
     rows: Vec<MenuRow>,
     state: ListState,
@@ -122,6 +124,7 @@ impl ContextMenu {
             repo_id: None,
             file_path: None,
             submodule_repo: None,
+            file_directory: None,
             position: (0, 0),
             rows: Vec::new(),
             state: ListState::default(),
@@ -149,6 +152,7 @@ impl ContextMenu {
         self.repo_id = Some(repo_id);
         self.file_path = None;
         self.submodule_repo = None;
+        self.file_directory = None;
         self.position = (col, row);
 
         let item = |label: String, action: MenuAction| MenuItem { label, action };
@@ -258,6 +262,7 @@ impl ContextMenu {
     pub fn show_file(&mut self, repo_id: RepoId, col: u16, row: u16, ctx: FileMenuContext) {
         let FileMenuContext {
             path,
+            directory,
             staged,
             unstaged,
             is_untracked,
@@ -267,6 +272,7 @@ impl ContextMenu {
         self.visible = true;
         self.repo_id = Some(repo_id);
         self.file_path = Some(path);
+        self.file_directory = Some(directory);
         self.submodule_repo = submodule_repo;
         self.position = (col, row);
 
@@ -424,7 +430,9 @@ impl ContextMenu {
                 repo_id: id,
                 sub_path: self.file_path.clone()?,
             },
-            MenuAction::AddSubmoduleAsRepo => Action::AddRepo(id.0.join(self.file_path.clone()?)),
+            MenuAction::AddSubmoduleAsRepo => {
+                Action::AddRepo(self.file_directory.as_ref()?.join(self.file_path.clone()?))
+            }
             MenuAction::RemoveSubmoduleRepo => {
                 Action::ConfirmRemoveRepo(self.submodule_repo.clone()?)
             }
@@ -601,6 +609,7 @@ mod file_menu_tests {
             0,
             FileMenuContext {
                 path: PathBuf::from("a.txt"),
+                directory: repo.clone(),
                 staged,
                 unstaged,
                 is_untracked,

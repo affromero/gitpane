@@ -1,7 +1,9 @@
 use super::render::indicator_columns;
 use super::*;
 use crate::components::Component;
-use crate::git::status::{RepoStatus, StashEntry, WorktreeEntry};
+use crate::git::status::{
+    RepoStatus, StashEntry, SubmoduleInfo, SubmoduleState, SubmoduleWarn, WorktreeEntry,
+};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 pub(super) fn empty_status(branch: &str) -> RepoStatus {
@@ -16,6 +18,7 @@ pub(super) fn empty_status(branch: &str) -> RepoStatus {
         worktree_info: Vec::new(),
         has_submodules: false,
         submodules: Vec::new(),
+        checkout_submodules: Vec::new(),
         has_dirty_submodules: false,
         has_unpushed_submodules: false,
         fetch_failed: false,
@@ -43,6 +46,7 @@ pub(super) fn worktree_entry(name: &str) -> WorktreeEntry {
         file_count: 0,
         has_dirty_submodules: false,
         has_unpushed_submodules: false,
+        checkout_submodules: Vec::new(),
     }
 }
 

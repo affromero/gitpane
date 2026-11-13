@@ -14,6 +14,7 @@ pub(super) struct ChangeSummary {
     pub(super) is_dirty: bool,
     pub(super) has_submodules: bool,
     pub(super) submodules: Vec<SubmoduleInfo>,
+    pub(super) checkout_submodules: Vec<SubmoduleInfo>,
     pub(super) has_dirty_submodules: bool,
     pub(super) has_unpushed_submodules: bool,
 }
@@ -80,6 +81,7 @@ pub(super) struct SubmoduleObservation {
     pub(super) in_index: bool,
     pub(super) status: SubmoduleStatus,
     pub(super) details: Option<SubmoduleInfo>,
+    pub(super) listing: Option<SubmoduleInfo>,
 }
 
 pub(super) fn collect_submodule_observations(
@@ -148,6 +150,7 @@ pub(super) fn collect_submodule_observations(
                     diff_ignore,
                     git2::SubmoduleIgnore::Unspecified | git2::SubmoduleIgnore::All
                 );
+            let mut missing_checkout = false;
             let inner = if uninitialized
                 || (ignore == git2::SubmoduleIgnore::All
                     && !sub_cfg.warn_unpushed
@@ -171,7 +174,17 @@ pub(super) fn collect_submodule_observations(
                 match open() {
                     Ok(inner) => Some(inner),
                     Err(error) if strict => return Err(error),
-                    Err(_) => None,
+                    Err(error) => {
+                        missing_checkout =
+                            error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                                matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::NotFound
+                                        | std::io::ErrorKind::NotADirectory
+                                )
+                            });
+                        None
+                    }
                 }
             };
             let inspect = if sub_cfg.ignore_dirty && !strict {
@@ -257,21 +270,25 @@ pub(super) fn collect_submodule_observations(
                 status.unwrap_or(SubmoduleStatus::empty())
             };
 
+            let info = SubmoduleInfo {
+                name,
+                path: sub_path.clone(),
+                state,
+                head,
+                head_oid,
+                workdir_oid,
+                warn,
+            };
+            let mut listing = info.clone();
+            if listing.state.is_none() && (replaced_link || is_uninit || missing_checkout) {
+                listing.state = Some(SubmoduleState::Uninitialized);
+            }
             submodules.push(SubmoduleObservation {
                 path: sub_path.clone(),
                 in_index: sub.index_oid.is_some(),
                 status: working_status,
-                details: (display_details && (has_dirty_signal || has_warn_signal)).then_some(
-                    SubmoduleInfo {
-                        name,
-                        path: sub_path,
-                        state,
-                        head,
-                        head_oid,
-                        workdir_oid,
-                        warn,
-                    },
-                ),
+                details: (display_details && (has_dirty_signal || has_warn_signal)).then_some(info),
+                listing: display_details.then_some(listing),
             });
         }
     }
@@ -318,6 +335,7 @@ pub(super) fn collect_change_summary(
             is_dirty: false,
             has_submodules: false,
             submodules: Vec::new(),
+            checkout_submodules: Vec::new(),
             has_dirty_submodules: false,
             has_unpushed_submodules: false,
         });
@@ -375,6 +393,10 @@ pub(super) fn collect_change_summary(
     // Detect submodules by checking for .gitmodules
     let has_submodules = path.join(".gitmodules").is_file();
 
+    let checkout_submodules = observations
+        .iter()
+        .filter_map(|module| module.listing.clone())
+        .collect();
     let submodules: Vec<_> = observations
         .into_iter()
         .filter_map(|module| module.details)
@@ -414,6 +436,7 @@ pub(super) fn collect_change_summary(
         is_dirty: is_dirty || has_dirty_submodules,
         has_submodules,
         submodules,
+        checkout_submodules,
         has_dirty_submodules,
         has_unpushed_submodules,
     })

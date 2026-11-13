@@ -77,9 +77,11 @@ const scenario = String.raw`
     row('repo:root').querySelector('.stash-action').click();
     await tick();
     const children = [...item('repo:root').querySelector(':scope > .children').children].map(node => node.dataset.key);
-    check('expanded entries follow stash, worktree, submodule order',
-      children.indexOf('stash-group:root') < children.indexOf('worktree:ordinary') &&
-      children.indexOf('worktree:ordinary') < children.indexOf('repo:module'));
+    check('expanded entries follow stash, submodule, worktree order',
+      children.indexOf('stash-group:root') < children.indexOf('repo:module') &&
+      children.indexOf('repo:module') < children.indexOf('worktree:ordinary'));
+    check('worktree submodules remain under their own worktree',
+      item('repo:worktree-child').closest('.worktree-item') === item('worktree:ordinary'));
     item('stash-group:root').focus();
     item('stash-group:root').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     check('keyboard navigation enters expanded stashes', item('stash:stash').getAttribute('aria-selected') === 'true');

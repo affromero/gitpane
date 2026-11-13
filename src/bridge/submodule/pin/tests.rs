@@ -45,6 +45,34 @@ fn discovery_checks_registration_and_identity_without_requiring_child_head() {
     );
 }
 
+#[test]
+fn lists_initialized_registered_children_with_validatable_identities() {
+    let (_temp, parent, child, scope) = fixture();
+    let result = list(&scope, &parent).unwrap();
+    let entries = result["submodules"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["path"], "child");
+    assert_eq!(entries[0]["repo"], json!(child.canonicalize().unwrap()));
+    let input: Request = serde_json::from_value(json!({
+        "root": parent,
+        "chain": [{ "path": "child", "parent_identity": entries[0]["parent_identity"],
+                    "child_identity": entries[0]["child_identity"] }],
+    }))
+    .unwrap();
+    assert_eq!(
+        validate(&scope, input.clone()).unwrap()["repos"][1],
+        entries[0]["repo"]
+    );
+    fs::rename(&child, child.with_file_name("moved")).unwrap();
+    assert!(validate(&scope, input).is_err());
+    assert!(
+        list(&scope, &parent).unwrap()["submodules"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn copy_directory(source: &Path, destination: &Path) {
     fs::create_dir(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -91,6 +119,17 @@ fn durable_nested_pin_survives_commits_and_working_changes() {
     let nested_repo = Repository::open(child.join("nested")).unwrap();
     commit_file(&nested_repo, "next", "nested commit");
     assert_eq!(validate(&scope, input).unwrap(), json!({"repos": expected}));
+    fs::write(child.join("nested/base"), "work in progress").unwrap();
+    let children = crate::bridge::worktree_plan::external_submodules::collect(
+        &scope,
+        &parent,
+        &crate::config::SubmoduleConfig::default(),
+    )
+    .unwrap();
+    let nested = &children[0]["submodules"][0];
+    assert_eq!(nested["path"], "nested");
+    assert_eq!(nested["status"]["is_dirty"], true);
+    assert_eq!(nested["chain"].as_array().unwrap().len(), 2);
 }
 
 #[test]

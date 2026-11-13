@@ -213,7 +213,9 @@ impl Component for RepoList {
             .and_then(|s| self.display_rows.get(s))
             .map(|row| match row {
                 DisplayRow::Repo(i) => *i,
-                DisplayRow::Worktree(ri, _) | DisplayRow::Stash(ri, _) => *ri,
+                DisplayRow::Worktree(ri, _)
+                | DisplayRow::Submodule(ri, _, _)
+                | DisplayRow::Stash(ri, _) => *ri,
             });
         let items: Vec<ListItem> = self
             .display_rows
@@ -223,6 +225,9 @@ impl Component for RepoList {
                     DisplayRow::Repo(i) => (self.render_repo_item(&self.repos[*i], &layout), *i),
                     DisplayRow::Worktree(ri, wi) => {
                         (self.render_worktree_item(&self.repos[*ri], *wi), *ri)
+                    }
+                    DisplayRow::Submodule(ri, wi, si) => {
+                        (self.render_submodule_item(*ri, *wi, *si), *ri)
                     }
                     DisplayRow::Stash(ri, si) => {
                         (self.render_stash_item(&self.repos[*ri], *si), *ri)

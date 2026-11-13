@@ -27,6 +27,7 @@ pub(crate) enum Action {
         worktree_path: std::path::PathBuf,
         name: String,
         files: Vec<crate::git::status::FileEntry>,
+        submodules: Vec<crate::git::status::SubmoduleInfo>,
     },
     RepoStatusUpdated {
         id: RepoId,

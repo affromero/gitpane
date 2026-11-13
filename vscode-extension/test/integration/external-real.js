@@ -56,6 +56,49 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   const comparison = await require('./comparison-external-real')({ vscode, provider, documents, diffs, errors, gitAt, siblingPath, selected, pointerOld, pointerNew });
   await receive({ type: 'loadChanges', id: selected.id });
   assert.equal(errors.length, previousErrors, errors.at(-1));
+  {
+    gitAt(siblingPath, 'config', '-f', '.gitmodules', '--unset', 'submodule.external-child.ignore');
+    const child = path.join(siblingPath, 'external-child');
+    fs.writeFileSync(path.join(child, 'worktree-only.txt'), 'worktree submodule change\n');
+    gitAt(child, 'add', 'worktree-only.txt');
+    gitAt(child, 'commit', '-qm', 'worktree submodule update');
+    await provider.tree.refresh();
+    assert.ok(row()?.submodules?.some(item => item.name === 'external-child'),
+      'an initialized submodule must appear under its worktree');
+    fs.writeFileSync(path.join(child, 'uncommitted.txt'), 'child work in progress\n');
+    await provider.tree.refresh();
+    const childRow = row().submodules.find(item => item.name === 'external-child');
+    assert.equal(childRow.dirty, true, 'worktree child status reflects its own changes');
+    await receive({ type: 'selectOwner', id: childRow.id });
+    assert.equal(provider.workspaceViews.selectedId, childRow.id);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fs.realpathSync.native(provider.workspaceViews.graph.currentRepo()?.rootUri.fsPath), fs.realpathSync.native(child),
+      'the graph follows the worktree submodule');
+    await receive({ type: 'loadChanges', id: childRow.id });
+    const changedChild = row().submodules.find(item => item.name === 'external-child');
+    const childFile = changedChild.groups.flatMap(group => group.files).find(file => file.path === 'uncommitted.txt');
+    assert.ok(childFile, 'the selected child shows its own changed files');
+    const childDiffs = diffs.length;
+    await receive({ type: 'openChange', id: childFile.id });
+    if (process.platform === 'win32') {
+      assert.equal(diffs.length, childDiffs);
+      assert.match(errors.at(-1), /file reads are unavailable on this platform/i);
+      errors.splice(previousErrors);
+    } else {
+      assert.equal(diffs.length, childDiffs + 1, errors.at(-1));
+      assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[1])).toString(), 'child work in progress\n');
+    }
+    const childSelection = provider.externalOwners.get(childRow.id).selection;
+    gitAt(siblingPath, 'config', '-f', '.gitmodules', '--unset', 'submodule.external-child.path');
+    await assert.rejects(provider.tree.backend.client.request('external_worktree_read', {
+      selection: childSelection, method: 'status', params: { repo: child, include_worktrees: false, summary_only: true }
+    }), /registered|submodule|changed/i);
+    gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.path', 'external-child');
+    gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.ignore', 'all');
+    gitAt(child, 'reset', '--hard', '-q', pointerNew);
+    fs.unlinkSync(path.join(child, 'uncommitted.txt'));
+    await provider.tree.refresh();
+  }
   assert.deepEqual(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath), folders);
   assert.ok(!provider.tree.backend.roots.some(root => path.resolve(root) === path.resolve(siblingPath)));
 

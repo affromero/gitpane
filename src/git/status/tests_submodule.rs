@@ -728,6 +728,18 @@ fn missing_submodule_worktree_has_no_push_warning() {
     let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
     assert!(status.has_submodules);
     assert!(!status.has_unpushed_submodules);
+    let cfg = SubmoduleConfig {
+        ignore_dirty: true,
+        warn_unpushed: true,
+    };
+    let status = query_status(tmp.path(), &cfg).unwrap();
+    assert!(
+        status
+            .checkout_submodules
+            .iter()
+            .any(|sub| sub.path == Path::new("my-sub")
+                && sub.state == Some(SubmoduleState::Uninitialized))
+    );
 }
 
 #[test]

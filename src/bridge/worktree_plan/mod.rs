@@ -8,6 +8,7 @@ use crate::config::{WorktreeConfig, worktree_path};
 use super::{BridgeError, mutation, scope::Scope};
 
 pub(super) mod external;
+pub(super) mod external_submodules;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

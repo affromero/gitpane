@@ -185,6 +185,52 @@ fn test_worktree_info_reflects_submodule_signals() {
     assert!(wt.is_dirty);
     assert!(wt.file_count > 0);
     assert!(wt.has_dirty_submodules);
+    assert!(
+        wt.checkout_submodules
+            .iter()
+            .any(|sub| sub.path == Path::new("my-sub")
+                && sub.state == Some(SubmoduleState::Uninitialized))
+    );
+
+    let linked = Repository::open(&wt_dir).unwrap();
+    linked
+        .find_submodule("my-sub")
+        .unwrap()
+        .update(true, None)
+        .unwrap();
+    let clean = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let wt = clean
+        .worktree_info
+        .iter()
+        .find(|wt| wt.name == "wt-submodule")
+        .unwrap();
+    assert!(
+        wt.checkout_submodules
+            .iter()
+            .any(|sub| sub.path == Path::new("my-sub") && sub.state.is_none())
+    );
+    assert!(
+        clean
+            .checkout_submodules
+            .iter()
+            .any(|sub| sub.path == Path::new("my-sub") && sub.state.is_none())
+    );
+    fs::write(wt_dir.join("my-sub/lib.rs"), "worktree-only edit").unwrap();
+    let refreshed = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let wt = refreshed
+        .worktree_info
+        .iter()
+        .find(|wt| wt.name == "wt-submodule")
+        .unwrap();
+    assert!(
+        wt.checkout_submodules
+            .iter()
+            .any(|sub| sub.path == Path::new("my-sub") && sub.state == Some(SubmoduleState::Dirty))
+    );
+    assert!(
+        refreshed.submodules.is_empty(),
+        "the main checkout stays clean"
+    );
 }
 
 #[test]
