@@ -22,7 +22,7 @@ body.vscode-light, body.vscode-high-contrast-light {
 
 * { box-sizing: border-box; }
 
-.file-context-menu { position: fixed; z-index: 100; display: flex; flex-direction: column; min-width: 150px;
+.file-context-menu { position: fixed; z-index: 100; display: flex; flex-direction: column; min-width: min(150px, 100vw);
   max-width: 100vw; max-height: 100vh; overflow: auto; padding: 4px 0;
   color: var(--vscode-menu-foreground, var(--text)); background: var(--vscode-menu-background, var(--vscode-sideBar-background));
   border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555)); box-shadow: 0 3px 10px #0006; }
@@ -74,9 +74,24 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 
 #repositories {
   display: grid;
-  grid-template-columns: minmax(calc(2.5ch + 9px), max-content) fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%);
+  grid-template-columns: minmax(calc(3ch + 9px), max-content) fit-content(min(35%, 16ch)) minmax(3ch, 1fr) fit-content(45%);
   column-gap: .6ch;
 }
+
+#column-layout { display: grid; container-type: inline-size; overflow-x: auto; grid-template-columns: minmax(calc(3ch + 9px), max-content)
+  minmax(min(2ch, 10%), min(35%, 16ch)) minmax(min(2ch, 10%), 1fr) minmax(0, 45%); column-gap: .6ch; }
+#column-layout[data-resized="true"] { grid-template-columns: minmax(calc(3ch + 9px), max-content)
+  minmax(min(1ch, 5%), var(--column-name)) minmax(min(1ch, 5%), var(--column-branch)) minmax(min(8ch, 30%), 1fr); }
+#column-layout #repositories, .column-header { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
+.column-header { align-items: center; color: var(--muted); padding: 0 9px; }
+.column-header > span { min-width: 0; position: relative; overflow: visible; white-space: nowrap; }
+.column-header .column-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.column-header > span:last-child { display: flex; }
+.column-header .column-reset { flex: none; }
+.column-header .column-reset { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.column-separator { position: absolute; z-index: 2; top: 0; right: -.6ch; width: 1.2ch; height: 100%; cursor: col-resize; touch-action: none; }
+.column-separator:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+body[data-view="changes"] #column-layout { display: block; }
 
 #repositories > .treeitem {
   display: grid;
@@ -125,8 +140,8 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
 .repo-row .submodule-name { color: var(--submodule); }
-.worktree-row .name { padding-left: .2ch; }
-.external-worktree-row { grid-template-columns: minmax(calc(2.5ch + 9px), max-content) minmax(0, 1fr) auto; }
+.worktree-row .name { margin-left: .2ch; }
+.external-worktree-row .name { grid-column: 2 / 4; }
 .dirty { color: var(--gitpane-repo-list-dirty-marker, var(--dirty)); }
 .count { color: var(--gitpane-repo-list-file-count, var(--dirty)); }
 .modified { color: var(--gitpane-file-list-status-modified, var(--dirty)); }
@@ -147,7 +162,10 @@ body[data-view="changes"] #repositories > .treeitem { display: block; }
 .unpushed-submodule { color: var(--gitpane-repo-list-unpushed-submodule, var(--behind)); }
 .live { color: var(--gitpane-repo-list-live, var(--ahead)); flex: none; }
 .pin { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); flex: none; }
-.tail { display: flex; flex-wrap: wrap; column-gap: .4ch; min-width: 0; overflow: hidden; white-space: nowrap; }
+.tail { display: flex; flex-wrap: nowrap; column-gap: .4ch; min-width: 0; width: max-content; max-width: 100%; overflow-x: auto; white-space: nowrap; }
+.repo-row > .tail, .worktree-row > .tail { justify-self: start; }
+body[data-status-alignment="right"] .repo-row > .tail, body[data-status-alignment="right"] .worktree-row > .tail { justify-self: end; }
+.tail:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .graph-action, .menu-action, .stash-action, .worktree-action {
   flex: none;
   padding: 0;

@@ -14,6 +14,7 @@ const stylesheet = fs.readFileSync(path.join(extension, 'src/webview/styles.css'
 const client = fs.readFileSync(path.join(extension, 'src/webview/view.js'), 'utf8');
 const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const repositoryLabel = fs.readFileSync(path.join(extension, 'src/webview/repository-label.js'), 'utf8');
+const columnResize = fs.readFileSync(path.join(extension, 'src/webview/column-resize.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'snapshot', errors: [], loading: false,
@@ -110,6 +111,17 @@ const scenario = String.raw`
     await tick();
     const root = document.querySelector('[role="tree"]');
     check('tree label', root.getAttribute('aria-label') === 'Gitpane repositories');
+    const incomplete = structuredClone(snapshot);
+    incomplete.repositories[0].incompleteSubmodules = ['dependencies/<img src=x>'];
+    window.postMessage(incomplete, '*');
+    await tick();
+    check('incomplete registrations are explained as text without opening a submodule',
+      document.getElementById('messages').textContent.includes('dependencies/<img src=x> has no stage-0 index gitlink') &&
+      !document.getElementById('messages').querySelector('img'));
+    window.postMessage(snapshot, '*');
+    await tick();
+    check('resolved incomplete registrations clear on refresh',
+      !document.getElementById('messages').textContent.includes('stage-0 index gitlink'));
     const hierarchy = structuredClone(snapshot);
     const child = (id, submodules = []) => ({ id, name: id, branch: 'feature/child', dirty: true,
       submodule: true, groups: [], submodules });
@@ -120,7 +132,7 @@ const scenario = String.raw`
     window.postMessage(hierarchy, '*');
     await tick();
     for (const width of [210, 300, 500]) {
-      root.style.width = width + 'px';
+      root.parentElement.style.width = width + 'px';
       const rows = [...root.querySelectorAll('.repo-row')];
       const parent = rows.find(row => row.querySelector('.name').textContent.includes('api-service'));
       const descendants = rows.filter(row => ['child', 'nested-child', 'worktree-child'].some(id =>
@@ -135,11 +147,18 @@ const scenario = String.raw`
           getComputedStyle(row.querySelector('.name')).color !== getComputedStyle(parent.querySelector('.name')).color);
       }
     }
-    root.style.width = '';
+    root.parentElement.style.width = '';
     window.postMessage(snapshot, '*');
     await tick();
+    root.parentElement.style.width = '210px';
+    document.body.style.fontSize = '40px';
+    for (const row of root.querySelectorAll('.repo-row')) {
+      check('large font retains name and branch', row.querySelector('.name').getBoundingClientRect().width > 0 &&
+        row.querySelector('.branch').getBoundingClientRect().width > 0);
+    }
+    document.body.style.fontSize = '';
     for (const width of [500, 300, 210]) {
-      root.style.width = width + 'px';
+      root.parentElement.style.width = width + 'px';
       const rows = [...document.querySelectorAll('#repositories > .treeitem > .repo-row')];
       const branches = rows.map(row => row.querySelector('.branch').getBoundingClientRect().left);
       check('aligned branch columns at ' + width + 'px', branches.every(left => Math.abs(left - branches[0]) < 1));
@@ -150,35 +169,46 @@ const scenario = String.raw`
         rows[0].querySelector('.name').getBoundingClientRect().left - markerText.getBoundingClientRect().right >= 4);
       for (const row of rows) {
         const tail = row.querySelector('.tail');
+        tail.scrollLeft = 0;
         const bounds = tail.getBoundingClientRect();
         for (const indicator of tail.children) {
+          tail.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - bounds.right);
           const indicatorBounds = indicator.getBoundingClientRect();
           check('status indicator visible at ' + width + 'px',
             indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
         }
       }
     }
-    root.style.width = '';
+    root.parentElement.style.width = '';
     const frame = document.createElement('iframe');
     frame.style.cssText = 'position:fixed;left:-9999px;width:210px;height:650px;border:0';
     document.body.appendChild(frame);
     const frameDocument = frame.contentDocument;
     frameDocument.head.appendChild(document.querySelector('style').cloneNode(true));
     frameDocument.body.className = document.body.className;
-    frameDocument.body.appendChild(root.cloneNode(true));
+    frameDocument.body.appendChild(root.parentElement.cloneNode(true));
     check('narrow viewport triggers compact layout', frame.contentWindow.innerWidth <= 230);
     const narrowRows = [...frameDocument.querySelectorAll('#repositories > .treeitem > .repo-row')];
     const narrowBranches = narrowRows.map(row => row.querySelector('.branch').getBoundingClientRect().left);
     check('aligned branch columns in narrow viewport', narrowBranches.every(left => Math.abs(left - narrowBranches[0]) < 1));
     for (const row of narrowRows) {
       const tail = row.querySelector('.tail');
+      tail.scrollLeft = 0;
       const bounds = tail.getBoundingClientRect();
       for (const indicator of tail.children) {
+        tail.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - bounds.right);
         const indicatorBounds = indicator.getBoundingClientRect();
         check('status indicator visible in narrow viewport',
           indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
       }
     }
+    frame.style.width = '100px';
+    const narrowMenu = frameDocument.createElement('div');
+    narrowMenu.className = 'file-context-menu';
+    narrowMenu.textContent = 'A long action label';
+    frameDocument.body.appendChild(narrowMenu);
+    check('menu fits a viewport narrower than its usual minimum',
+      narrowMenu.getBoundingClientRect().width <= frame.contentWindow.innerWidth);
     frame.remove();
     let repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository status and branch', repo.textContent.includes('*') && repo.textContent.includes('main'));
@@ -196,15 +226,54 @@ const scenario = String.raw`
     check('repository actions have an accessible name', repoMenu.getAttribute('aria-label') === 'Actions for api-service');
     repoMenu.click();
     check('repository actions do not expand the row',
-      window.posted.some(message => message.type === 'menu' && message.kind === 'repo' && message.id === 'api') &&
+      window.posted.some(message => message.type === 'rowMenuRequest' && message.kind === 'repo' && message.id === 'api') &&
       repo.getAttribute('aria-expanded') === 'false');
     const repoRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     repo.querySelector('.name').dispatchEvent(repoRightClick);
     check('right-click selects the repository and opens its actions without expanding', repoRightClick.defaultPrevented &&
       repo.getAttribute('aria-selected') === 'true' && repo.getAttribute('aria-expanded') === 'false' &&
-      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'repo', id: 'api' }));
+      window.posted.at(-1).type === 'rowMenuRequest' && window.posted.at(-1).kind === 'repo' && window.posted.at(-1).id === 'api');
+    const repoRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: repoRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    check('repository actions open inline', document.querySelector('[role="menu"] button')?.textContent === 'Refresh');
+    document.querySelector('[role="menu"] button').click();
+    check('inline action retains the selected repository and token', window.posted.at(-1).type === 'rowMenuAction' &&
+      window.posted.at(-1).id === 'api' && window.posted.at(-1).token === 'repo-token');
     repoMenu.focus();
-    repoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    repoMenu.click();
+    const buttonRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: buttonRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape returns focus to the action button', document.activeElement === repoMenu);
+    repoMenu.click();
+    const refreshRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: refreshRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    window.postMessage({ ...snapshot, fontSize: 17 }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape restores the action button after a refresh', document.activeElement.getAttribute('aria-label') === 'Actions for api-service');
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    const refreshedRepoMenu = repo.querySelector('.menu-action');
+    refreshedRepoMenu.click();
+    const removedRequest = window.posted.at(-1);
+    window.postMessage({ ...snapshot, repositories: [] }, '*');
+    await tick();
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: removedRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    check('a removed repository cancels its pending menu', !document.querySelector('[role="menu"]'));
+    window.postMessage(snapshot, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    const restoredRepoMenu = repo.querySelector('.menu-action');
+    restoredRepoMenu.focus();
+    restoredRepoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('action keyboard activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
     window.postMessage(snapshot, '*');
     await tick();
@@ -299,11 +368,11 @@ const scenario = String.raw`
     document.body.appendChild(worktreeFrame);
     worktreeFrame.contentDocument.head.appendChild(document.querySelector('style').cloneNode(true));
     worktreeFrame.contentDocument.body.className = document.body.className;
-    worktreeFrame.contentDocument.body.appendChild(layoutRoot.cloneNode(true));
+    worktreeFrame.contentDocument.body.appendChild(layoutRoot.parentElement.cloneNode(true));
     const layouts = [210, 300, 500, 900].map(width => ({ layout: layoutRoot, width }));
     layouts.push({ layout: worktreeFrame.contentDocument.querySelector('[role="tree"]'), width: 210 });
     for (const { layout, width } of layouts) {
-      layout.style.width = width + 'px';
+      (layout.parentElement.id === 'column-layout' ? layout.parentElement : layout).style.width = width + 'px';
       const rows = [...layout.querySelectorAll('.repo-row, .worktree-row')];
       const branchLeft = rows[0].querySelector('.branch').getBoundingClientRect().left;
       for (const row of rows) {
@@ -329,8 +398,12 @@ const scenario = String.raw`
           branchBounds.left - nameText.getBoundingClientRect().right <= parseFloat(getComputedStyle(row).fontSize) * 8);
         check('repository rows fit the pane at ' + width + 'px',
           row.getBoundingClientRect().right <= layout.getBoundingClientRect().right + 1);
-        const tail = row.querySelector('.tail').getBoundingClientRect();
-        for (const indicator of row.querySelector('.tail').children) {
+        const tailElement = row.querySelector('.tail');
+        tailElement.scrollLeft = 0;
+        const tail = tailElement.getBoundingClientRect();
+        check('repository and worktree name remains visible at ' + width, nameBounds.width > 0 && branchBounds.width > 0);
+        for (const indicator of tailElement.children) {
+          tailElement.scrollLeft += Math.max(0, indicator.getBoundingClientRect().right - tail.right);
           const bounds = indicator.getBoundingClientRect();
           check('repository and worktree badges stay visible at ' + width + 'px',
             bounds.left >= tail.left - 1 && bounds.right <= tail.right + 1);
@@ -338,7 +411,7 @@ const scenario = String.raw`
       }
     }
     worktreeFrame.remove();
-    layoutRoot.style.width = '';
+    layoutRoot.parentElement.style.width = '';
     const worktreeGraph = worktree.querySelector('.graph-action');
     check('worktree graph is accessible', worktreeGraph.getAttribute('aria-label') === 'Open commit graph for web-review');
     worktreeGraph.click();
@@ -347,13 +420,13 @@ const scenario = String.raw`
     const worktreeMenu = worktree.querySelector('.menu-action');
     check('worktree action has an accessible name', worktreeMenu.getAttribute('aria-label') === 'Actions for worktree web-review');
     worktreeMenu.click();
-    check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'menu' &&
+    check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'rowMenuRequest' &&
       message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
     const worktreeRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     worktree.querySelector('.name').dispatchEvent(worktreeRightClick);
     check('right-click selects the worktree and opens its actions without expanding', worktreeRightClick.defaultPrevented &&
       worktree.getAttribute('aria-selected') === 'true' && worktree.getAttribute('aria-expanded') === 'false' &&
-      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'worktree', id: 'opaque-worktree' }));
+      window.posted.at(-1).type === 'rowMenuRequest' && window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     worktree.querySelector('.row').click();
     worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&
@@ -367,11 +440,11 @@ const scenario = String.raw`
       submoduleFile.querySelector('.submodule-tag').textContent === '[sub: ~dirty @feature/test ↑2 ↛main]' &&
       ['dirty', 'branch feature/test', '2 unpushed commits', 'needs merge to default branch'].every(value => submoduleFile.getAttribute('aria-label').includes(value)) &&
       getComputedStyle(submoduleFile.querySelector('.submodule-branch')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-branch'));
-    root.style.width = '210px';
+    root.parentElement.style.width = '210px';
     const diagnosticRow = submoduleFile.querySelector('.row').getBoundingClientRect();
     const diagnosticPath = submoduleFile.querySelector('.file-path').getBoundingClientRect();
     check('submodule path remains within the narrow row', diagnosticPath.width > 0 && diagnosticPath.right <= diagnosticRow.right + 1);
-    root.style.width = '';
+    root.parentElement.style.width = '';
     nestedFile.querySelector('.row').click();
     check('clicking a worktree file opens its native change', window.posted.some(message =>
       message.type === 'openChange' && message.id === 'worktree-working' && !('path' in message)));
@@ -434,15 +507,16 @@ const scenario = String.raw`
     worktree = items().find(item => item.getAttribute('aria-label').includes('DrivingVideoEvaluation-semantic-plots, worktree'));
     check('outside worktree exposes its workspace state', worktree.getAttribute('aria-label').includes('outside workspace') &&
       !worktree.getAttribute('aria-label').includes('clean') && !worktree.querySelector('.graph-action'));
-    layoutRoot.style.width = '210px';
+    layoutRoot.parentElement.style.width = '210px';
     const externalRows = [...layoutRoot.querySelectorAll('.external-worktree-row')];
     check('outside worktrees show distinct branches in a narrow pane', externalRows.length === 2 && externalRows.every(row => {
       const label = row.querySelector('.name');
-      return label.scrollWidth <= label.clientWidth && label.textContent.startsWith('wt/') && label.title.startsWith('/projects/');
+      return label.clientWidth > 0 && getComputedStyle(label).textOverflow === 'ellipsis' &&
+        label.textContent.startsWith('wt/') && label.title.startsWith('/projects/');
     }));
     check('worktree labels are indented below their parent', worktree.querySelector('.name').getBoundingClientRect().left >
       items().find(item => item.getAttribute('aria-label').includes('web-app')).querySelector('.name').getBoundingClientRect().left);
-    layoutRoot.style.width = '';
+    layoutRoot.parentElement.style.width = '';
     worktree.querySelector('.row').click();
     check('clicking an outside worktree starts inspection', window.posted.at(-1).type === 'action' &&
       window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree');
@@ -473,8 +547,28 @@ const scenario = String.raw`
       window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
       !('path' in window.posted.at(-1)));
     worktree.querySelector('[aria-label^="Actions for worktree"]').click();
-    check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&
+    check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'rowMenuRequest' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
+    let externalRequest = window.posted.at(-1);
+    const answerExternal = request => window.postMessage({ type: 'rowMenu', kind: 'worktree', id: 'opaque-worktree',
+      requestId: request.requestId, token: 'external-token', choices: [{ label: 'Refresh', action: 'refreshWorktree' }] }, '*');
+    answerExternal(externalRequest);
+    await tick();
+    window.postMessage({ ...external, fontSize: 17 }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('outside worktree menu restores its own button after refresh',
+      document.activeElement.getAttribute('aria-label')?.startsWith('Actions for worktree'));
+    document.activeElement.click();
+    externalRequest = window.posted.at(-1);
+    answerExternal(externalRequest);
+    await tick();
+    const removedExternal = structuredClone(external);
+    removedExternal.repositories[1].worktrees.shift();
+    window.postMessage(removedExternal, '*');
+    await tick();
+    check('removing a worktree dismisses its menu and focuses the current row', !document.querySelector('[role="menu"]') &&
+      document.activeElement.getAttribute('role') === 'treeitem' && document.activeElement.getAttribute('aria-selected') === 'true');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
       id: 'overview-parent', name: 'overview-parent', branch: 'main', dirty: false, groups: [],
       worktreeStateKey: 'a'.repeat(64), worktreeCount: 1,
@@ -1000,7 +1094,7 @@ function documentFor(theme, restored = false) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-gitpane-test'; script-src 'nonce-gitpane-test'"><style nonce="gitpane-test">:root {${colors}}\n${stylesheet}</style></head>
 <body class="vscode-${theme}"><div id="messages" aria-live="polite"></div><div class="search-toolbar"><button id="start-search" type="button">⌕</button><div id="search-box" hidden><input id="file-search" type="search"><button id="search-prev" type="button" disabled>↑</button><button id="search-next" type="button" disabled>↓</button><div id="search-status" role="status"></div></div></div><div id="repositories" role="tree" aria-label="Gitpane repositories"></div>
 <script nonce="gitpane-test">window.posted=[];window.ackStates=[];window.savedState=${restored ? JSON.stringify({ expanded: ['repo:restored', 'worktree:restored-child'], worktreeVisibility: [['d'.repeat(64), false]], appliedWorktreeReveals: ['already-revealed'] }) : '{}'};window.acquireVsCodeApi=()=>({postMessage:m=>{window.posted.push(m);if(m.type==='ackWorktreeReveal')window.ackStates.push(structuredClone(window.savedState));},getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${repositoryLabel}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${repositoryLabel}</script><script nonce="gitpane-test">${columnResize}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${restored ? restoreScenario : scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme, restored = false) {

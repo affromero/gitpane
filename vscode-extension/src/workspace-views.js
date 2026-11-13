@@ -94,7 +94,13 @@ class WorkspaceViews {
   }
 
   messageGuard(message, surface) {
-    if (surface === 'repositories') return () => !this.disposed;
+    if (surface === 'repositories') {
+      const view = this.provider.view;
+      const epoch = this.selectionEpoch;
+      const rowMenu = ['rowMenuRequest', 'rowMenuAction'].includes(message.type);
+      return () => !this.disposed && this.provider.view === view && view?.visible !== false &&
+        (!rowMenu || (this.selectionEpoch === epoch && this.selectedId === message.id));
+    }
     const view = this.changes;
     return () => !this.disposed && this.changes === view && this.accepts(message, surface);
   }

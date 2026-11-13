@@ -270,6 +270,10 @@ class BackendManager {
           /unknown variant.*verified_content/i.test(error.message)) {
         throw new BridgeError('unsupported_backend', 'The configured Gitpane backend does not support verified Git reads. Update the backend and try again.');
       }
+      if (operation.kind === 'verified_content' && operation.regular_only && error?.code === 'invalid_request' &&
+          /unknown field.*regular_only/i.test(error.message)) {
+        throw new BridgeError('unsupported_backend', 'The configured Gitpane backend cannot safely restore this diff. Update the backend and try again.');
+      }
       throw error;
     }
     if (!this.gitSideCurrent(session)) throw new BridgeError('workspace_changed', 'Gitpane workspace or Git environment changed.');

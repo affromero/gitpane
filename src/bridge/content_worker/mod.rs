@@ -50,6 +50,8 @@ enum Operation {
         #[serde(rename = "ref")]
         reference: String,
         path: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        regular_only: bool,
     },
     Metadata {
         items: Vec<Item>,
@@ -101,7 +103,9 @@ fn validate(request: &Request) -> Result<(), BridgeError> {
             }
         }
         Operation::Content { reference, path } => validate_item(reference, path, true)?,
-        Operation::VerifiedContent { reference, path } => validate_item(reference, path, false)?,
+        Operation::VerifiedContent {
+            reference, path, ..
+        } => validate_item(reference, path, false)?,
         Operation::Metadata { items } => {
             if items.is_empty() || items.len() > 128 {
                 return Err(invalid("Metadata requires between 1 and 128 items."));
@@ -178,9 +182,11 @@ fn exec() -> Result<(), BridgeError> {
             }
         }
         Operation::Content { reference, path } => runner::content(&request, reference, path)?,
-        Operation::VerifiedContent { reference, path } => {
-            metadata::verified_content(&request, reference, path)?
-        }
+        Operation::VerifiedContent {
+            reference,
+            path,
+            regular_only,
+        } => metadata::verified_content(&request, reference, path, *regular_only)?,
         Operation::Metadata { items } => {
             let result = metadata::metadata(&request, items)?;
             let bytes = serde_json::to_vec(&result).map_err(failure)?;

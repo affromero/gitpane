@@ -29,7 +29,7 @@ const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-di
 const { createLiveGitSide, createLiveWorkingSide } = require('./git-side-documents');
 const { createStashSource, unsupportedStashSource } = require('./stash-source');
 const { StashView } = require('./stash-view');
-const { DEFAULT_REFRESH_INTERVAL, ViewSettings } = require('./settings');
+const { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
 
@@ -71,19 +71,7 @@ class GitpaneViewProvider {
     return this.ids.get(key);
   }
 
-  configureView({ refreshInterval, worktreeExpansion, showOutsideWorktrees, fontSize }) {
-    const intervalChanged = this.refreshInterval !== refreshInterval;
-    this.refreshInterval = refreshInterval;
-    this.worktreeExpansion = worktreeExpansion;
-    this.showOutsideWorktrees = showOutsideWorktrees;
-    this.fontSize = fontSize;
-    if (intervalChanged && this.refreshChangesTimer !== undefined) {
-      clearTimeout(this.refreshChangesTimer);
-      this.refreshChangesTimer = undefined;
-    }
-    if (intervalChanged) this.scheduleChangesRefresh();
-    this.publish();
-  }
+  configureView(preferences) { configureViewProvider(this, preferences); }
 
   snapshot() {
     const live = new Set();
@@ -122,6 +110,10 @@ class GitpaneViewProvider {
         ...(state?.error ? { error: state.error } : {}) };
     };
     const lowerBound = status => status?.file_count_lower_bound ?? 0;
+    const incomplete = (status, repo) => Array.isArray(status?.incomplete_submodules) && repo &&
+      status.submoduleWarningRevision === this.tree.contentRevision(repo) ? {
+        incompleteSubmodules: status.incomplete_submodules || [], incompleteSubmodulesOmitted: status.incomplete_submodules_omitted || 0
+      } : {};
     const hierarchy = this.tree.presentationView?.();
     const children = this.tree.getChildren(undefined, hierarchy);
     const childNodes = key => (hierarchy?.submodules?.get(key) || []).map(child => ({
@@ -150,6 +142,7 @@ class GitpaneViewProvider {
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
           available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
+          ...incomplete(childStatus, child),
           changeCountLowerBound: child ? lowerBound(childStatus) : 0,
           changesPage: pageFor(worktreeId), groups: child ? groupsFor(child, worktreeId,
             { repoKey, repoToken, path: item.path }) : [],
@@ -193,6 +186,7 @@ class GitpaneViewProvider {
         worktrees: worktreeData,
         hasDirtySubmodules: status?.has_dirty_submodules || false,
         hasUnpushedSubmodules: status?.has_unpushed_submodules || false,
+        incompleteSubmodules: [], ...incomplete(status, repo),
         changeCountLowerBound: lowerBound(status), changesPage: pageFor(id), groups: groupData,
         submodules: childNodes(repoKey).map(buildRepository)
       };
@@ -213,7 +207,7 @@ class GitpaneViewProvider {
       }
     }
     return {
-      type: 'snapshot', repositories, fontSize: this.fontSize || 0,
+      type: 'snapshot', repositories, fontSize: this.fontSize || 0, statusAlignment: this.statusAlignment || 'left',
       errors: [...children.filter(node => node.type === 'error').map(node => node.message), ...(this.theme?.error ? [this.theme.error] : []),
         ...(this.worktreeDisplay?.error ? [this.worktreeDisplay.error] : []), ...(this.worktreeRevealError ? [this.worktreeRevealError] : []),
         ...(this.showOutsideWorktrees && children.some(node => node.type === 'repo' &&
@@ -724,7 +718,7 @@ async function activate(context) {
   tree.workspaceRepositories = workspaceRepositories;
   provider.pins = pins;
   provider.workspaceRepositories = workspaceRepositories;
-  const links = new LinkDocuments(vscode, tree, backend);
+  const links = new LinkDocuments(vscode, tree, backend, context.workspaceState);
   provider.links = links;
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
@@ -958,7 +952,7 @@ async function activate(context) {
             const repoIdentity = node.external ? provider.externalOwners.get(node.ownerId)?.status?.repo_identity :
               tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
             return createLiveGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
-              side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null) });
+              side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null), restore: !node.external && !node.parentWorktree ? { record: node.record, which: side === plan.left ? 'left' : 'right' } : undefined });
           }
           if (node.external) {
             const repoIdentity = provider.externalOwners.get(node.ownerId)?.status?.repo_identity;
@@ -993,7 +987,7 @@ async function activate(context) {
       }
     })
   );
-  await tree.refresh();
+  try { await tree.refresh(); } finally { links.finishInitialization(); }
 }
 
 module.exports = { activate, GitpaneViewProvider, RepositoryTree };

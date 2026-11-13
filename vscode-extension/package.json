@@ -17,7 +17,7 @@
     "untrustedWorkspaces": { "supported": false },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onView:gitpane.repositories"],
+  "activationEvents": ["onView:gitpane.repositories", "onFileSystem:gitpane-blob", "onFileSystem:gitpane-link", "onFileSystem:gitpane-empty"],
   "contributes": {
     "views": {
       "explorer": [
@@ -49,6 +49,13 @@
     "configuration": {
       "title": "Gitpane Explorer",
       "properties": {
+        "gitpane.statusAlignment": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "default": "left",
+          "scope": "window",
+          "description": "Align repository and worktree status indicators and actions within the Status column."
+        },
         "gitpane.fontSize": {
           "type": "integer",
           "default": 0,

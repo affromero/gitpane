@@ -812,6 +812,7 @@ pub(super) fn verified_content(
     request: &Request,
     reference: &str,
     path: &str,
+    regular_only: bool,
 ) -> Result<(), BridgeError> {
     let fast = supports_object_mode(request)?;
     let items = [Item {
@@ -834,6 +835,18 @@ pub(super) fn verified_content(
             .and_then(Value::as_str)
             .ok_or_else(|| failure("Malformed Git metadata error."))?;
         return Err(BridgeError::new(code, message));
+    }
+    if regular_only
+        && !result
+            .get("metadata")
+            .and_then(|value| value.get("mode"))
+            .and_then(Value::as_u64)
+            .is_some_and(|mode| matches!(mode, 0o100644 | 0o100664 | 0o100755))
+    {
+        return Err(BridgeError::new(
+            "stale_target",
+            "The Gitpane diff file type changed.",
+        ));
     }
     let pinned = if reference == "HEAD" {
         let head = result

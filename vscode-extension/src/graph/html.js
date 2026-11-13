@@ -41,6 +41,7 @@ function getHtml(webview, extensionUri, sidebar = false) {
     <ul id="files" class="files" aria-labelledby="files-heading"></ul>
   </section>
   <script src="${theme}"></script>
+  <script src="${webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'src', 'webview', 'file-menu.js'))}"></script>
   <script src="${resource('view.js')}"></script>
 </body>
 </html>`;

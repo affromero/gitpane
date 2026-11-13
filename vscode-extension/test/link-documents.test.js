@@ -27,6 +27,33 @@ async function settleRefresh(docs) {
   } while (docs.refreshing);
 }
 
+test('a diff lost after reload offers a way to reopen Gitpane', async t => {
+  const changes = new EventEmitter();
+  const warnings = [], commands = [];
+  const vscode = { EventEmitter, workspace: {},
+    window: { async showWarningMessage(message, action) { warnings.push({ message, action }); return action; } },
+    commands: { async executeCommand(command) { commands.push(command); } } };
+  const tree = { onDidChangeTreeData: changes.event };
+  const old = new LinkDocuments(vscode, tree, {});
+  const blob = await old.createLiveBinary(uri('/repo/file'), async () => ({ size: 3, eventFingerprint: 'one' }),
+    async () => Buffer.from('old'), () => true, 'group');
+  const link = await old.createStatic(uri('/repo/sub'), `Subproject commit ${'a'.repeat(40)}\n`, () => true);
+  old.dispose();
+  const restored = new LinkDocuments(vscode, tree, {});
+  t.after(() => restored.dispose());
+  await assert.rejects(restored.stat(blob), /reopen.*gitpane/i);
+  await assert.rejects(restored.readFile(blob), /reopen.*gitpane/i);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /cannot be restored/i);
+  assert.equal(warnings[0].action, 'Show Gitpane');
+  assert.deepEqual(commands, ['gitpane.repositories.focus']);
+  await assert.rejects(restored.provideTextDocumentContent(link), /reopen.*gitpane/i);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(warnings.length, 2);
+  assert.deepEqual(commands, ['gitpane.repositories.focus', 'gitpane.repositories.focus']);
+});
+
 test('commit pointer documents are guarded, read-only, and do not watch filesystem paths', async t => {
   const changes = new EventEmitter(), closed = new EventEmitter();
   const vscode = { EventEmitter, workspace: { onDidCloseTextDocument: closed.event } };

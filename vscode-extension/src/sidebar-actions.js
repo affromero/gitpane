@@ -39,6 +39,35 @@ function fileOptions(item) {
   return choices;
 }
 
+function menuOptions(kind, item) {
+  if (kind === 'file') return fileOptions(item);
+  if (kind === 'repo' && item.refreshOnly) return [{ label: 'Refresh', action: 'refreshRepo' }];
+  if (kind === 'repo') return [
+    { label: 'Refresh', action: 'refreshRepo' }, { label: 'Create Worktree', action: 'createWorktree' },
+    { label: 'Pin Submodule…', action: 'browseSubmodules' }, { label: 'Hide from Gitpane', action: 'hideRepository' },
+    ...(item.added ? [{ label: 'Stop Restoring Repository', action: 'removeWorkspaceRepository' }] : []),
+    ...(item.worktreeRemoval ? [{ label: 'Remove Worktree', action: 'removeWorkspaceWorktree' }] : []),
+    ...(item.pinned ? [{ label: 'Unpin Submodule', action: 'unpinSubmodule' }] : []),
+    { label: 'Review Branch', action: 'reviewBranch' }, { label: 'GitHub Issues and Pull Requests', action: 'github' },
+    { label: 'Sessions', action: 'session' }, { label: 'Open Terminal', action: 'openTerminal' },
+    { label: 'Configured Launchers', action: 'openLauncher' }, { label: 'Sync Direct Submodules', action: 'syncSubmodules' },
+    { label: 'Update Submodules Recursively', action: 'updateSubmodules' }, { label: 'Pull Direct Submodules', action: 'pullSubmodules' },
+    { label: 'Pull with Submodules', action: 'pullWithSubmodules' }, { label: 'Reveal in Explorer', action: 'revealRepo' },
+    { label: 'Copy Path', action: 'copyRepo' }, { label: 'Push', action: 'push' }, { label: 'Pull', action: 'pull' },
+    { label: 'Pull with Rebase', action: 'pull_rebase' }
+  ];
+  if (kind === 'worktree' && item.external) return [
+    { label: 'Inspect Changes', action: 'inspectExternalWorktree' }, { label: 'Open in New Window', action: 'openExternalWorktree' }
+  ];
+  if (kind === 'worktree') return [
+    { label: 'Refresh', action: 'refreshWorktree' }, { label: 'Hide from Gitpane', action: 'hideWorktree' },
+    ...(item.available ? [{ label: 'Open Commit Graph', action: 'openWorktreeGraph' }, { label: 'Review Branch', action: 'reviewWorktree' },
+      { label: 'Pin Submodule…', action: 'browseWorktreeSubmodules' }, { label: 'Repository Actions', action: 'worktreeRepositoryActions' }] : []),
+    { label: 'Remove Worktree', action: 'removeWorktree' }
+  ];
+  return [];
+}
+
 class SidebarActions {
   constructor(options) {
     this.vscode = options.vscode;
@@ -73,6 +102,8 @@ class SidebarActions {
     this.validateChangePath = options.validateChangePath;
     this.pendingFileMenu = undefined;
     this.fileMenuGeneration = 0;
+    this.rowMenuGeneration = 0;
+    this.pendingRowMenu = undefined;
   }
 
   resolve(kind, id) {
@@ -109,52 +140,48 @@ class SidebarActions {
     await this.handle({ type: 'action', id, action }, pending.expected, () => pending.guard() && guard());
   }
 
+  async rowMenu(kind, id, guard = () => true) {
+    const generation = ++this.rowMenuGeneration;
+    this.pendingRowMenu = undefined;
+    if (!['repo', 'worktree'].includes(kind) || !guard()) return undefined;
+    const item = this.resolve(kind, id);
+    const expected = fingerprint(item, kind);
+    if (!expected || generation !== this.rowMenuGeneration) return undefined;
+    let choices = menuOptions(kind, item);
+    let child;
+    if (kind === 'worktree' && item.available && typeof item.childRepoId === 'string') {
+      child = { id: item.childRepoId, expected: fingerprint(this.resolve('repo', item.childRepoId), 'repo') };
+      if (child.expected) choices = choices.flatMap(choice => choice.action === 'worktreeRepositoryActions' ?
+        menuOptions('repo', this.resolve('repo', child.id)).map(option => ({ label: `Repository: ${option.label}`, action: `repo:${option.action}` })) : [choice]);
+    }
+    if (kind === 'worktree' && !child?.expected) choices = choices.filter(choice => choice.action !== 'worktreeRepositoryActions');
+    if (!choices.length) return undefined;
+    const token = require('node:crypto').randomUUID();
+    this.pendingRowMenu = { kind, id, expected, token, guard, choices, child };
+    return { token, choices };
+  }
+
+  async rowMenuAction(kind, id, token, action, guard = () => true) {
+    this.rowMenuGeneration++;
+    const pending = this.pendingRowMenu;
+    this.pendingRowMenu = undefined;
+    if (!pending || pending.kind !== kind || pending.id !== id || pending.token !== token ||
+        !pending.guard() || !guard() || !pending.choices.some(choice => choice.action === action) ||
+        !this.current(kind, id, pending.expected)) return;
+    if (action.startsWith('repo:')) {
+      if (!pending.child || !this.current('repo', pending.child.id, pending.child.expected)) return;
+      await this.handle({ type: 'action', id: pending.child.id, action: action.slice(5) }, pending.child.expected,
+        () => pending.guard() && guard() && this.current(kind, id, pending.expected));
+    } else await this.handle({ type: 'action', id, action }, pending.expected, () => pending.guard() && guard());
+  }
+
   async showMenu(kind, id, guard = () => true) {
     try {
       if (!guard() || (kind === 'file' && this.waitForChange && !await this.waitForChange(id)) || !guard()) return;
       const item = this.resolve(kind, id);
       const expected = fingerprint(item, kind);
       if (!expected) return;
-      let choices;
-      if (kind === 'file') choices = fileOptions(item);
-      else if (kind === 'repo' && item.refreshOnly) choices = [{ label: 'Refresh', action: 'refreshRepo' }];
-      else if (kind === 'repo') choices = [
-        { label: 'Refresh', action: 'refreshRepo' },
-        { label: 'Create Worktree', action: 'createWorktree' },
-        { label: 'Pin Submodule…', action: 'browseSubmodules' },
-        { label: 'Hide from Gitpane', action: 'hideRepository' },
-        ...(item.added ? [{ label: 'Stop Restoring Repository', action: 'removeWorkspaceRepository' }] : []),
-        ...(item.worktreeRemoval ? [{ label: 'Remove Worktree', action: 'removeWorkspaceWorktree' }] : []),
-        ...(item.pinned ? [{ label: 'Unpin Submodule', action: 'unpinSubmodule' }] : []),
-        { label: 'Review Branch', action: 'reviewBranch' },
-        { label: 'GitHub Issues and Pull Requests', action: 'github' },
-        { label: 'Sessions', action: 'session' },
-        { label: 'Open Terminal', action: 'openTerminal' },
-        { label: 'Configured Launchers', action: 'openLauncher' },
-        { label: 'Sync Direct Submodules', action: 'syncSubmodules' },
-        { label: 'Update Submodules Recursively', action: 'updateSubmodules' },
-        { label: 'Pull Direct Submodules', action: 'pullSubmodules' },
-        { label: 'Pull with Submodules', action: 'pullWithSubmodules' },
-        { label: 'Reveal in Explorer', action: 'revealRepo' },
-        { label: 'Copy Path', action: 'copyRepo' },
-        { label: 'Push', action: 'push' },
-        { label: 'Pull', action: 'pull' },
-        { label: 'Pull with Rebase', action: 'pull_rebase' }
-      ];
-      else if (kind === 'worktree' && item.external) choices = [
-        { label: 'Inspect Changes', action: 'inspectExternalWorktree' },
-        { label: 'Open in New Window', action: 'openExternalWorktree' }
-      ];
-      else if (kind === 'worktree') choices = [
-        { label: 'Refresh', action: 'refreshWorktree' },
-        { label: 'Hide from Gitpane', action: 'hideWorktree' },
-        ...(item.available ? [{ label: 'Open Commit Graph', action: 'openWorktreeGraph' },
-          { label: 'Review Branch', action: 'reviewWorktree' },
-          { label: 'Pin Submodule…', action: 'browseWorktreeSubmodules' },
-          { label: 'Repository Actions', action: 'worktreeRepositoryActions' }] : []),
-        { label: 'Remove Worktree', action: 'removeWorktree' }
-      ];
-      else return;
+      const choices = menuOptions(kind, item);
       if (!choices.length) return;
       const selected = await this.vscode.window.showQuickPick(choices, { placeHolder: 'Choose a Gitpane action' });
       if (selected && kind === 'file' && this.waitForChange && !await this.waitForChange(id)) return;

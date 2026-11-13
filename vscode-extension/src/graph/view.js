@@ -25,6 +25,9 @@ let pendingSegment;
 let pendingCommitAction;
 let labelMaxLen = 24;
 let graphInteractive = false;
+let menuEpoch = 0;
+const commitMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
+  selection: () => JSON.stringify([selected, graphInteractive, menuEpoch]) });
 
 if (typeof state.search === 'string') search.value = state.search;
 
@@ -151,7 +154,7 @@ function renderGraph() {
       event.preventDefault();
       if (!graphInteractive || row.collapsed) return;
       if (selected !== row.oid) select(index);
-      requestCommitAction('commitActions');
+      requestCommitAction('commitActions', { x: event.clientX, y: event.clientY });
     });
     graph.appendChild(item);
   });
@@ -215,6 +218,7 @@ function renderFiles() {
 
 function select(index, focus = true) {
   if (!graphInteractive || !rows[index]) return;
+  commitMenu.close();
   if (selected !== rows[index].oid) fileSearch.value = '';
   pendingCommitAction = undefined;
   active = index;
@@ -228,12 +232,19 @@ function select(index, focus = true) {
   else vscode.postMessage({ type: 'selectCommit', oid: selected });
 }
 
-function requestCommitAction(type) {
+function requestCommitAction(type, position) {
   const row = rows.find(item => item.oid === selected);
   if (!graphInteractive || !row || row.collapsed) return;
-  if (detail?.oid === selected) vscode.postMessage({ type, oid: selected });
-  else pendingCommitAction = { type, oid: selected };
+  const rect = (position ? undefined : document.getElementById(`commit-${active}`)?.getBoundingClientRect()) || graph.getBoundingClientRect();
+  const point = position || { x: rect.left, y: rect.bottom };
+  if (detail?.oid === selected) {
+    if (type === 'commitActions') commitMenu.open(selected, point.x, point.y, 'commit');
+    else vscode.postMessage({ type, oid: selected });
+  } else pendingCommitAction = { type, oid: selected, point };
 }
+
+document.addEventListener('pointerdown', () => { pendingCommitAction = undefined; });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') pendingCommitAction = undefined; });
 
 function navigateMatches(direction) {
   const query = search.value.trim().toLocaleLowerCase();
@@ -295,7 +306,7 @@ firstParent.addEventListener('change', () => {
 
 refresh.addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 filters.addEventListener('click', () => vscode.postMessage({ type: 'openFilters' }));
-commitActions.addEventListener('click', () => requestCommitAction('commitActions'));
+commitActions.addEventListener('click', () => { const rect = commitActions.getBoundingClientRect(); requestCommitAction('commitActions', { x: rect.left, y: rect.bottom }); });
 collapse.addEventListener('click', () => {
   if (!graphInteractive) return;
   const row = rows.find(item => item.oid === selected);
@@ -324,6 +335,7 @@ window.addEventListener('message', event => {
     return;
   }
   if (message?.type === 'graph') {
+    menuEpoch++; commitMenu.close();
     graphInteractive = !message.loading && !message.error && !message.emptyMessage;
     if (message.loading || message.error) { detail = undefined; pendingCommitAction = undefined; }
     rows = Array.isArray(message.rows) ? message.rows : [];
@@ -364,8 +376,9 @@ window.addEventListener('message', event => {
     detail = message;
     renderGraph();
     renderFiles();
-    if (pendingCommitAction?.oid === selected && graphInteractive) {
-      vscode.postMessage({ type: pendingCommitAction.type, oid: selected });
+    if (!message.loading && pendingCommitAction?.oid === selected && graphInteractive) {
+      if (pendingCommitAction.type === 'commitActions') commitMenu.open(selected, pendingCommitAction.point.x, pendingCommitAction.point.y, 'commit');
+      else vscode.postMessage({ type: pendingCommitAction.type, oid: selected });
       pendingCommitAction = undefined;
     }
   }

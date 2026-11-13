@@ -12,6 +12,7 @@ const browser = process.env.CHROME_EXECUTABLE || (process.platform === 'darwin'
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-graph-test-'));
 const stylesheet = fs.readFileSync(path.join(extension, 'src/graph/styles.css'), 'utf8');
 const client = fs.readFileSync(path.join(extension, 'src/graph/view.js'), 'utf8');
+const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-menu.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
   type: 'graph', loading: false, firstParent: false, limit: 2,
@@ -160,16 +161,36 @@ const scenario = String.raw`
     await tick();
     check('commit actions are available for a selected commit', !document.getElementById('commit-actions').disabled);
     document.getElementById('commit-actions').click();
-    check('commit actions use the selected OID', window.posted.at(-1).type === 'commitActions' && window.posted.at(-1).oid === 'abcdef1234');
+    check('commit actions use the selected OID', window.posted.at(-1).type === 'commitMenuRequest' && window.posted.at(-1).id === 'abcdef1234');
+    const commitRequest = window.posted.at(-1);
+    window.postMessage({ type: 'commitMenu', id: commitRequest.id, requestId: commitRequest.requestId,
+      token: 'commit-token', choices: [{ label: 'Copy full commit hash', action: 'full' }] }, '*');
+    await tick();
+    check('commit actions open inline', document.querySelector('[role="menu"] button')?.textContent === 'Copy full commit hash');
+    document.querySelector('[role="menu"] button').click();
+    check('inline commit action uses the guarded selection', window.posted.at(-1).type === 'commitMenuAction' &&
+      window.posted.at(-1).id === 'abcdef1234' && window.posted.at(-1).token === 'commit-token');
     graph.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', bubbles: true }));
     check('graph keyboard copies selected commit summary', window.posted.at(-1).type === 'copyCommitSummary' && window.posted.at(-1).oid === 'abcdef1234');
     graph.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
-    check('keyboard opens commit actions', window.posted.at(-1).type === 'commitActions' && window.posted.at(-1).oid === 'abcdef1234');
+    check('keyboard opens commit actions', window.posted.at(-1).type === 'commitMenuRequest' && window.posted.at(-1).id === 'abcdef1234');
     options()[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
     check('right click waits for new commit selection', window.posted.at(-1).type === 'selectCommit' && window.posted.at(-1).oid === '1234567890');
     window.postMessage({ type: 'commitFiles', oid: '1234567890', files: [], loading: true }, '*');
     await tick();
-    check('right click opens actions for the verified commit', window.posted.at(-1).type === 'commitActions' && window.posted.at(-1).oid === '1234567890');
+    check('commit menu waits for details to finish loading', window.posted.at(-1).type === 'selectCommit');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.postMessage({ type: 'commitFiles', oid: '1234567890', files: [], loading: false }, '*');
+    await tick();
+    check('escape cancels a pending commit menu', window.posted.at(-1).type === 'selectCommit');
+    options()[0].click();
+    options()[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    window.postMessage({ type: 'commitFiles', oid: '1234567890', files: [], loading: false }, '*');
+    await tick();
+    check('outside click cancels a pending commit menu', window.posted.at(-1).type === 'selectCommit');
+    options()[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    check('right click opens actions for the verified commit', window.posted.at(-1).type === 'commitMenuRequest' && window.posted.at(-1).id === '1234567890');
     options()[0].click();
     window.postMessage({ type: 'commitFiles', oid: 'abcdef1234', files: [
       { id: 'safe-id', path: '<img src=x>', status: 'M' }, { id: 'source-id', path: 'src/Server.rs', status: 'A' },
@@ -280,7 +301,7 @@ function documentFor(theme) {
 <div id="search-status" class="search-status" role="status" aria-live="polite"></div><div id="graph-status" class="message" role="status" aria-live="polite"></div><div id="theme-status" role="alert"></div><div id="graph" class="graph" role="listbox" aria-label="Commit graph" tabindex="0"></div>
 <section class="details" aria-label="Commit files"><h2 id="files-heading">Commit files</h2><label class="search-label" for="file-search">Search commit files</label><input id="file-search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false" disabled><div id="files-status" class="message" role="status" aria-live="polite">Select a commit to see its files.</div><ul id="files" class="files" aria-labelledby="files-heading"></ul></section>
 <script nonce="gitpane-test">window.posted=[];window.savedState={};window.acquireVsCodeApi=()=>({postMessage:m=>window.posted.push(m),getState:()=>window.savedState,setState:s=>window.savedState=s});</script>
-<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
+<script nonce="gitpane-test">${themeClient}</script><script nonce="gitpane-test">${fileMenuClient}</script><script nonce="gitpane-test">${client}</script><script nonce="gitpane-test">${scenario.replace('SNAPSHOT_BASE64', encodedSnapshot)}</script></body></html>`;
 }
 
 function run(theme) {
