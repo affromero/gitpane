@@ -121,10 +121,12 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release
 
-      - name: Test VS Code bridge against release binary
+      - name: Test VS Code bridge and comparisons against release binary
         env:
           GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: node vscode-extension/test/integration/bridge-real.js
+        run: |
+          node vscode-extension/test/integration/bridge-real.js
+          node vscode-extension/test/integration/comparison-real.js
 
       - name: Test VS Code extension against release binary
         env:

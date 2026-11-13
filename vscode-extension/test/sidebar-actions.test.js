@@ -63,6 +63,8 @@ function fixture() {
     refreshRepository: async (id, kind, guard) => { if (guard()) calls.push(['refreshRepository', id, kind]); },
     onWorktreeCreated: async target => { calls.push(['openWorktree', target]); },
     reviewBranch: async id => { calls.push(['reviewBranch', id]); },
+    compareRepository: async id => { calls.push(['compareRepository', id]); },
+    compareWorktree: async id => { calls.push(['compareWorktree', id]); },
     openGithub: async id => { calls.push(['openGithub', id]); },
     openSession: async id => { calls.push(['openSession', id]); },
     openTerminal: async id => { calls.push(['openTerminal', id]); },
@@ -114,13 +116,39 @@ test('inline repository menus reject stale targets and replayed actions', async 
   assert.deepEqual(f.calls, [['refreshRepository', 'repo', 'repo']]);
 });
 
+test('repository and available worktree actions open revision comparisons', async () => {
+  const f = fixture();
+  f.pick(choices => choices.find(choice => choice.action === 'compareRepository'));
+  await f.actions.showMenu('repo', 'repo');
+  f.setWorktree({ ...f.getWorktree(), available: true });
+  f.pick(choices => choices.find(choice => choice.action === 'compareWorktree'));
+  await f.actions.showMenu('worktree', 'worktree');
+  f.setWorktree({ ...f.getWorktree(), external: true });
+  await f.actions.showMenu('worktree', 'worktree');
+  const repoMenu = await f.actions.rowMenu('repo', 'repo');
+  assert.ok(repoMenu.choices.some(choice => choice.action === 'compareRepository'));
+  await f.actions.rowMenuAction('repo', 'repo', repoMenu.token, 'compareRepository');
+  const worktreeMenu = await f.actions.rowMenu('worktree', 'worktree');
+  assert.ok(worktreeMenu.choices.some(choice => choice.action === 'compareWorktree'));
+  await f.actions.rowMenuAction('worktree', 'worktree', worktreeMenu.token, 'compareWorktree');
+  assert.deepEqual(f.calls, [['compareRepository', 'repo'], ['compareWorktree', 'worktree'], ['compareWorktree', 'worktree'],
+    ['compareRepository', 'repo'], ['compareWorktree', 'worktree']]);
+  f.setWorktree({ ...f.getWorktree(), external: false, childRepoId: 'repo' });
+  const nested = await f.actions.rowMenu('worktree', 'worktree');
+  assert.ok(nested.choices.some(choice => choice.action === 'compareWorktree'));
+  assert.ok(!nested.choices.some(choice => choice.action === 'repo:compareRepository'));
+  f.setWorktree(undefined);
+  await f.actions.rowMenuAction('worktree', 'worktree', nested.token, 'compareWorktree');
+  assert.equal(f.calls.length, 5);
+});
+
 test('outside worktrees open only after explicit selection and current validation', async () => {
   const f = fixture();
   const item = { ...f.getWorktree(), repoIdentity: 'a'.repeat(64), externalIdentity: 'b'.repeat(64), external: true };
   f.setWorktree(item);
   f.pick(choices => {
-    assert.deepEqual(choices.map(choice => choice.action), ['inspectExternalWorktree', 'openExternalWorktree']);
-    return choices[1];
+    assert.deepEqual(choices.map(choice => choice.action), ['inspectExternalWorktree', 'compareWorktree', 'openExternalWorktree']);
+    return choices.find(choice => choice.action === 'openExternalWorktree');
   });
   let validated;
   f.setValidateExternal(async (...args) => { validated = args; return { path: item.path }; });

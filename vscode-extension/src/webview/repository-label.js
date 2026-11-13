@@ -1,5 +1,8 @@
 'use strict';
 
+window.GitpaneStatusClass = status =>
+  ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted', '!': 'behind' })[status] || 'muted';
+
 window.GitpaneRepositoryLabel = (repo, count) => {
   const details = [repo.name, repo.submodule ? 'submodule' : '', repo.worktree ? 'worktree' : '', repo.branch || 'unknown branch',
     repo.statusUnavailable ? 'status unavailable' : repo.dirty ? 'has changes' : 'clean',

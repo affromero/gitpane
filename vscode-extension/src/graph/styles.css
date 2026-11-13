@@ -60,6 +60,17 @@ body {
 .message.error { color: var(--vscode-errorForeground, var(--red)); }
 
 .graph { overflow: auto; outline: none; max-height: 65vh; }
+body.comparing .details { display: none; }
+.comparison, .comparison-results { margin: 8px 0; }
+.comparison[hidden], .comparison-results[hidden] { display: none; }
+.comparison-target { color: var(--muted); overflow-wrap: anywhere; }
+.comparison-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.comparison-bar button, .comparison-bar select { font: inherit; color: var(--vscode-button-foreground, var(--text));
+  background: var(--vscode-button-background, transparent); border: 1px solid var(--vscode-contrastBorder, var(--vscode-focusBorder)); padding: 3px 6px; }
+.comparison-bar button:focus-visible, .comparison-bar select:focus-visible { outline: 2px solid var(--vscode-focusBorder); }
+.comparison-from, .comparison-to { border: 1px solid currentColor; border-radius: 2px; padding: 0 3px; font-weight: bold; }
+.comparison-from { color: var(--cyan); }
+.comparison-to { color: var(--magenta); }
 body.sidebar { padding: 4px 8px; background: var(--vscode-sideBar-background); color: var(--vscode-sideBar-foreground, var(--text));
   display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .sidebar .toolbar { gap: 2px; margin-bottom: 3px; }

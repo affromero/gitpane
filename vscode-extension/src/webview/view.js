@@ -234,9 +234,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   return row;
 }
 
-function statusClass(status) {
-  return ({ M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked', C: 'conflicted', '!': 'behind' })[status] || 'muted';
-}
+const statusClass = window.GitpaneStatusClass;
 
 const submoduleParts = window.GitpaneSubmoduleParts;
 

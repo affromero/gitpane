@@ -80,6 +80,65 @@ test('inline commit actions reject stale selections and replayed tokens', async 
   assert.deepEqual(f.copies, ['first subject']);
 });
 
+test('comparison menu selects the clicked branch label and rejects stale actions', async t => {
+  const f = await fixture(t);
+  const { ComparisonGraph } = require('../src/comparison-graph');
+  Object.assign(f.provider.backend, { generation: 1, vscode: { workspace: { isTrusted: true } }, externalSelections: new Map(),
+    mutationSnapshot: async () => ({ generation: 1, executable: '/gitpane', roots: ['/repo'] }), isCurrentMutation: () => true,
+    createClient: () => ({ async initialize() {}, async request() { return { oid: f.oid, repo_identity: 'd'.repeat(64) }; },
+      dispose() {}, async shutdown() {} }) });
+  f.provider.comparison = new ComparisonGraph(f.provider, { window: {} }, f.provider.currentRepo(), 1, () => true);
+  f.provider.rows.get(f.oid).labels = [{ name: 'main', is_stash: false }, { name: 'stash@{0}', is_stash: true }];
+  await f.receive({ type: 'commitMenuRequest', id: f.oid, requestId: 2, labelIndex: 0 });
+  const menu = f.messages.at(-1);
+  assert.ok(menu.choices.some(choice => choice.action === 'comparisonFrom'));
+  await f.receive({ type: 'commitMenuAction', id: f.oid, token: menu.token, action: 'comparisonFrom' });
+  const state = f.messages.findLast(message => message.type === 'comparisonState');
+  assert.equal(state.from.revision, 'refs/heads/main');
+  assert.equal(state.from.oid, f.oid);
+  const after = f.messages.length;
+  await f.receive({ type: 'commitMenuAction', id: f.oid, token: menu.token, action: 'comparisonFrom' });
+  assert.equal(f.messages.length, after);
+  const before = f.messages.length;
+  await f.receive({ type: 'commitMenuRequest', id: f.oid, requestId: 3, labelIndex: 1 });
+  assert.equal(f.messages.length, before);
+});
+
+test('refreshing a graph dismisses its pending comparison ref picker', async t => {
+  const f = await fixture(t);
+  const { ComparisonGraph } = require('../src/comparison-graph');
+  let opened, close, cancelled = false;
+  const started = new Promise(resolve => { opened = resolve; });
+  const picker = new Promise(resolve => { close = resolve; });
+  const backend = f.provider.backend;
+  Object.assign(backend, { generation: 1, vscode: { workspace: { isTrusted: true } }, externalSelections: new Map(),
+    mutationSnapshot: async () => ({ generation: 1, executable: '/gitpane', roots: ['/repo'] }), isCurrentMutation: () => true,
+    createClient: () => ({ async initialize() {}, async request() { return { revision: 'e'.repeat(64), repo_identity: 'd'.repeat(64),
+      total: 1, next: null, refs: [{ name: 'refs/heads/main', oid: f.oid }] }; }, dispose() {}, async shutdown() {} }) });
+  const vscode = { CancellationTokenSource: class { constructor() { this.token = {}; } cancel() { cancelled = true; close(); } dispose() {} },
+    window: { showQuickPick() { opened(); return picker; } } };
+  const comparison = new ComparisonGraph(f.provider, vscode, f.provider.currentRepo(), 1, () => true);
+  f.provider.comparison = comparison;
+  const action = comparison.receive({ type: 'comparisonBrowse', which: 'from' });
+  await started;
+  await f.receive({ type: 'refresh' });
+  await action;
+  assert.equal(cancelled, true);
+  assert.equal(comparison.model.from, undefined);
+});
+
+test('graph invalidation clears an unfinished comparison loading state', async t => {
+  const f = await fixture(t);
+  const { ComparisonGraph } = require('../src/comparison-graph');
+  const comparison = new ComparisonGraph(f.provider, { window: {} }, f.provider.currentRepo(), 1, () => true);
+  f.provider.comparison = comparison;
+  comparison.loading = true;
+  f.provider.invalidate('Repository is no longer available.');
+  const state = f.messages.findLast(message => message.type === 'comparisonState');
+  assert.equal(state.loading, false);
+  assert.equal(state.hasResult, false);
+});
+
 test('commit actions reject stale, fabricated, collapsed and unavailable rows', async t => {
   const f = await fixture(t);
   await f.receive({ type: 'commitActions', oid: f.next });

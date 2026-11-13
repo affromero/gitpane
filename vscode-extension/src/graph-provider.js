@@ -7,6 +7,7 @@ const { openGitlinkDiff } = require('./gitlink-diff');
 const { createLiveGitSide } = require('./git-side-documents');
 const { relativeFile } = require('./change-pager');
 const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
+const { ComparisonGraph } = require('./comparison-graph');
 
 function defaultFilters() {
   return { branches: null, authors: null, refs: { local: true, remote: true, tags: true, stashes: true } };
@@ -22,7 +23,7 @@ function selectionSummary(values) {
 }
 
 class GraphProvider {
-  constructor(tree, backend, git, extensionUri, theme, links, { sidebar = false } = {}) {
+  constructor(tree, backend, git, extensionUri, theme, links, { sidebar = false, comparison = false } = {}) {
     this.tree = tree;
     this.backend = backend;
     this.git = git;
@@ -30,6 +31,7 @@ class GraphProvider {
     this.theme = theme;
     this.links = links;
     this.sidebar = sidebar;
+    this.comparisonMode = comparison;
     this.panelDisposables = [];
     this.emptyMessage = 'Select a repository to see its commit graph.';
     this.emptyError = false;
@@ -74,6 +76,7 @@ class GraphProvider {
       if (!this.panel || (this.sidebar && !this.repoKey)) return;
       const repo = this.currentRepo();
       if (!repo) return this.invalidate('Repository is no longer in the workspace.');
+      this.comparison?.publish();
       const head = repo.state?.HEAD?.commit;
       if (head !== this.lastHead) {
         this.lastHead = head;
@@ -112,6 +115,12 @@ class GraphProvider {
     this.guard = currentGuard;
     this.validateGuard = validateGuard;
     this.persistent = persistent;
+    this.comparison?.dispose();
+    const contentCurrent = () => repo.externalToken ? !!persistent?.current() :
+      this.tree.isCurrentRepository(repo, token) && this.tree.git.repositories.some(item => item.rootUri.toString() === repo.rootUri.toString()) &&
+      (!persistent || persistent.current());
+    this.comparison = this.comparisonMode ? new ComparisonGraph(this, vscode, repo, token,
+      contentCurrent, persistent) : undefined;
     this.lastHead = repo.state?.HEAD?.commit;
     this.stopPolling();
     this.ready = false;
@@ -166,6 +175,7 @@ class GraphProvider {
     const visibility = onVisibility?.call(panel, () => {
       if (this.panel !== panel || !this.ready) return;
       if (panel.visible === false) {
+        this.comparison?.suspend();
         this.stopPolling();
         this.revision = undefined;
         this.graphGeneration++;
@@ -173,7 +183,7 @@ class GraphProvider {
         this.files.clear();
         this.loading = false;
         this.interactive = false;
-      } else this.schedulePoll(0);
+      } else { this.comparison?.publish(); this.schedulePoll(0); }
     });
     if (visibility) this.panelDisposables.push(visibility);
     this.panelDisposables.push(panel.onDidDispose(() => {
@@ -194,6 +204,8 @@ class GraphProvider {
       this.segments.clear();
       this.collapsedSegments.clear();
       this.files.clear();
+      this.comparison?.dispose();
+      this.comparison = undefined;
     }));
   }
 
@@ -310,6 +322,7 @@ class GraphProvider {
     try {
       if (!await this.validateGraph(repo) || !current()) return;
       const revision = await this.readRevision(repo);
+      if (current() && repo.externalToken && this.comparison) await this.comparison.refreshExternalStatus();
       if (current()) {
         this.retryBackoff = false;
         if (revision !== this.revision) await this.loadGraph();
@@ -331,6 +344,8 @@ class GraphProvider {
   }
 
   invalidate(message, preserve = false, empty = false) {
+    this.comparison?.suspend();
+    this.comparison?.publish();
     const previousRows = preserve ? this.displayedRows : [];
     this.graphGeneration++;
     this.loading = false;
@@ -360,6 +375,8 @@ class GraphProvider {
       this.revision = undefined;
       return;
     }
+    this.comparison?.suspend();
+    this.comparison?.publish();
     const generation = ++this.graphGeneration;
     const panel = this.panel;
     const previousRows = this.displayedRows;
@@ -424,6 +441,7 @@ class GraphProvider {
       this.interactive = true;
       this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
         labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
+      this.comparison?.checkRefs();
       if (this.selected) await this.loadCommit(this.selected);
     } catch (error) {
       if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || !this.isCurrentRepo(repo)) return;
@@ -609,11 +627,13 @@ class GraphProvider {
     await vscode.env.clipboard.writeText(value);
   }
 
-  async commitMenu(oid) {
+  async commitMenu(oid, labelIndex) {
     const request = this.commitMenuGeneration = (this.commitMenuGeneration || 0) + 1;
     this.pendingCommitMenu = undefined;
     const repo = this.currentRepo(), row = this.rows.get(oid), panel = this.panel;
     if (!repo || !row || row.collapsed || !panel || panel.visible === false || !this.interactive || this.selected !== oid) return;
+    if (labelIndex !== undefined && (!this.comparison || !Number.isSafeInteger(labelIndex) ||
+        labelIndex < 0 || !row.labels?.[labelIndex] || row.labels[labelIndex].is_stash)) return;
     const graph = this.graphGeneration, owner = this.ownerEpoch, selection = this.selectionEpoch;
     const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === owner &&
       this.graphGeneration === graph && this.selectionEpoch === selection && this.interactive &&
@@ -625,8 +645,10 @@ class GraphProvider {
     const choices = [{ label: 'Copy full commit hash', action: 'full', value: oid },
       { label: 'Copy short commit hash', action: 'short', value: row.short_id },
       { label: 'Copy commit subject', action: 'subject', value: row.message }];
+    if (this.comparison) choices.push({ label: 'Set as From', action: 'comparisonFrom' },
+      { label: 'Set as To', action: 'comparisonTo' });
     const token = randomUUID();
-    this.pendingCommitMenu = { token, oid, choices, current, repo };
+    this.pendingCommitMenu = { token, oid, choices, current, repo, labelIndex };
     return { token, choices: choices.map(({ label, action }) => ({ label, action })) };
   }
 
@@ -637,6 +659,10 @@ class GraphProvider {
     const choice = pending?.choices.find(item => item.action === action);
     if (!pending || pending.oid !== oid || pending.token !== token || !choice || !pending.current()) return;
     if (!await this.validateGraph(pending.repo) || !pending.current()) return;
+    if (choice.action === 'comparisonFrom' || choice.action === 'comparisonTo') {
+      await this.comparison?.setRow(choice.action === 'comparisonFrom' ? 'from' : 'to', oid, pending.labelIndex, pending.current);
+      return;
+    }
     await vscode.env.clipboard.writeText(choice.value);
   }
 
@@ -655,9 +681,13 @@ class GraphProvider {
 
   async receive(message) {
     if (!message || typeof message.type !== 'string') return;
+    if (this.comparison && (message.type.startsWith('comparison') || message.type === 'openComparisonFile')) {
+      await this.comparison.receive(message); return;
+    }
     if (message.type === 'ready') {
       this.ready = true;
       this.publishTheme();
+      this.comparison?.publish();
       if (this.sidebar && !this.repoKey) return this.invalidate(this.emptyMessage, false, !this.emptyError);
       return this.loadGraph();
     }
@@ -689,7 +719,10 @@ class GraphProvider {
       this.detailGeneration++;
       this.selected = undefined;
       this.files.clear();
-      return this.loadCommit(message.oid);
+      const pending = { oid: message.oid, selection: this.selectionEpoch, promise: this.loadCommit(message.oid) };
+      this.pendingSelection = pending;
+      try { return await pending.promise; }
+      finally { if (this.pendingSelection === pending) this.pendingSelection = undefined; }
     }
     if (message.type === 'selectCollapsed' && typeof message.oid === 'string' && this.interactive && this.rows.get(message.oid)?.collapsed) {
       this.selectionEpoch++;
@@ -700,7 +733,7 @@ class GraphProvider {
     }
     if (message.type === 'commitMenuRequest' && typeof message.id === 'string' && Number.isSafeInteger(message.requestId)) {
       try {
-        const menu = await this.commitMenu(message.id);
+        const menu = await this.commitMenu(message.id, message.labelIndex);
         if (menu) this.post({ type: 'commitMenu', id: message.id, requestId: message.requestId, ...menu });
       } catch (error) { await vscode.window.showErrorMessage(`Gitpane could not open commit actions: ${error.message}`); }
       return;
@@ -727,6 +760,7 @@ class GraphProvider {
   }
 
   dispose() {
+    this.comparison?.dispose();
     this.themeSubscription?.dispose();
     this.ready = false;
     this.stopPolling();

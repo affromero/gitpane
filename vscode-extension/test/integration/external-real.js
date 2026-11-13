@@ -7,9 +7,20 @@ const path = require('node:path');
 module.exports = async function testExternalWorktree({ vscode, provider, snapshots, documents, diffs, errors, receive, gitAt, repoPath, siblingPath }) {
   const tracked = path.join(siblingPath, 'external-tracked.txt');
   const untracked = path.join(siblingPath, 'external-untracked.txt');
+  const pointerOld = gitAt(siblingPath, 'rev-parse', 'HEAD');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.path', 'external-child');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.url', '../external-child');
+  gitAt(siblingPath, 'config', '-f', '.gitmodules', 'submodule.external-child.ignore', 'all');
+  gitAt(siblingPath, 'add', '.gitmodules');
+  gitAt(siblingPath, 'update-index', '--add', '--cacheinfo', '160000', pointerOld, 'external-child');
+  gitAt(siblingPath, 'commit', '-qm', 'external pointer base');
+  const pointerNew = gitAt(siblingPath, 'rev-parse', 'HEAD');
+  gitAt(siblingPath, 'update-index', '--cacheinfo', '160000', pointerNew, 'external-child');
   fs.writeFileSync(tracked, 'committed\n');
   gitAt(siblingPath, 'add', '--', 'external-tracked.txt');
   gitAt(siblingPath, 'commit', '-qm', 'external fixture');
+  gitAt(siblingPath, '-c', 'protocol.file.allow=always', 'clone', '-q', '--no-checkout', siblingPath, 'external-child');
+  gitAt(path.join(siblingPath, 'external-child'), 'checkout', '-q', '--detach', pointerNew);
   fs.writeFileSync(tracked, 'staged\n');
   gitAt(siblingPath, 'add', '--', 'external-tracked.txt');
   fs.writeFileSync(tracked, 'working\n');
@@ -25,7 +36,7 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   assert.equal(selected.available, false, 'status is visible before inspection');
   assert.equal(selected.dirty, true);
   assert.equal(selected.fileCount, 2);
-  await receive({ type: 'action', action: 'inspectExternalWorktree', id: selected.id });
+  const comparison = await require('./comparison-external-real')({ vscode, provider, documents, diffs, errors, gitAt, siblingPath, selected, pointerOld, pointerNew });
   await receive({ type: 'loadChanges', id: selected.id });
   assert.equal(errors.length, previousErrors, errors.at(-1));
   assert.deepEqual(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath), folders);
@@ -37,6 +48,8 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   const added = file('untracked', 'external-untracked.txt');
   assert.ok(staged && working && added, 'all three changes must be selectable');
   const blobs = documents.get('gitpane-blob');
+  assert.equal((await blobs.readFile(comparison.file)).toString(), 'committed\n');
+  for (const pointer of comparison.pointers) assert.match(await documents.get('gitpane-link').provideTextDocumentContent(pointer), /^Subproject commit /);
   let count = diffs.length;
   await receive({ type: 'openChange', id: staged.id });
   assert.equal(diffs.length, ++count, errors.at(-1));
@@ -121,6 +134,10 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
     assert.equal(errors.length, beforeRefreshErrors, 'a stale worktree must not report a refresh failure');
     await assert.rejects(blobs.readFile(head), /no longer|changed|stale|unavailable/i,
       'an open diff cannot retain access after worktree removal');
+    await assert.rejects(blobs.readFile(comparison.file), /no longer|changed|stale|unavailable/i,
+      'a comparison closed with its graph cannot retain access after worktree removal');
+    for (const pointer of comparison.pointers) await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(pointer),
+      /no longer|changed|stale|unavailable/i, 'a pointer diff cannot retain access after worktree removal');
     gitAt(repoPath, 'worktree', 'add', '-qb', 'feature/replacement', siblingPath);
     fs.writeFileSync(path.join(siblingPath, 'external-tracked.txt'), 'replacement\n');
     await assert.rejects(blobs.readFile(workingSide), /no longer|changed|stale|unavailable/i,
@@ -137,6 +154,10 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
     gitAt(repoPath, 'worktree', 'remove', '--force', siblingPath);
     await assert.rejects(blobs.readFile(head), /no longer|changed|stale|unavailable/i,
       'an open diff cannot retain access after worktree removal');
+    await assert.rejects(blobs.readFile(comparison.file), /no longer|changed|stale|unavailable/i,
+      'a comparison closed with its graph cannot retain access after worktree removal');
+    for (const pointer of comparison.pointers) await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(pointer),
+      /no longer|changed|stale|unavailable/i, 'a pointer diff cannot retain access after worktree removal');
   }
   gitAt(repoPath, 'branch', '-D', 'feature/sibling', ...(process.platform === 'win32' ? [] : ['feature/replacement']));
   assert.deepEqual(vscode.workspace.workspaceFolders.map(folder => folder.uri.fsPath), folders);

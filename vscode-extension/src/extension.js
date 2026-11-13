@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { BackendManager } = require('./backend-manager');
 const { GraphProvider } = require('./graph-provider');
+const { ComparisonPanels } = require('./comparison-panels');
 const { BranchReviewProvider } = require('./branch-review-provider');
 const { GithubProvider } = require('./github-provider');
 const { SubmoduleProvider } = require('./submodule-provider');
@@ -293,7 +294,7 @@ class GitpaneViewProvider {
     };
     const selection = { repo: item.repoPath, path: item.path, expected_repo_identity: item.repoIdentity,
       expected_worktree_identity: item.externalIdentity };
-    const status = await this.tree.backend.inspectExternalWorktree(selection, guard);
+    const status = await this.tree.backend.inspectExternalWorktree(selection, guard, actionGuard);
     if (!guard() || !actionGuard() || !/^[a-f0-9]{64}$/.test(status?.repo_identity || '')) throw new Error('Worktree is no longer available.');
     const repo = { rootUri: vscode.Uri.file(item.path), state: { submodules: [] }, externalToken: id };
     this.externalOwners.set(id, { repo, status, guard });
@@ -723,6 +724,7 @@ async function activate(context) {
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
   const graph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links);
+  const comparisons = new ComparisonPanels(GraphProvider, tree, backend, api, context.extensionUri, theme, links);
   const sidebarGraph = new GraphProvider(tree, backend, api, context.extensionUri, theme, links, { sidebar: true });
   const review = new BranchReviewProvider(tree, backend, api, { links });
   const github = new GithubProvider(tree, backend);
@@ -753,7 +755,7 @@ async function activate(context) {
   const openWorktreeGraph = async (id, guard = () => true, target = graph) => {
     const repo = provider.currentOwner(id);
     const external = repo?.externalToken && provider.externalOwners.get(id);
-    const persistent = external ? { current: external.guard, contextKey: repo.externalToken } : worktreeContext(id, repo);
+    const persistent = external ? { current: external.guard, contextKey: repo.externalToken, status: () => provider.externalOwners.get(id)?.status } : worktreeContext(id, repo);
     if (!persistent) return;
     const current = () => guard() && provider.currentOwner(id)?.rootUri.toString() === repo.rootUri.toString();
     if (!current()) return;
@@ -768,6 +770,8 @@ async function activate(context) {
   provider.openWorktreeGraph = openWorktreeGraph;
   provider.openLauncherShortcut = (repo, guard, selector) => launchers.open(repo, guard, selector);
   provider.actions = new SidebarActions({ vscode, mutations,
+    compareRepository: (id, guard) => { const repo = provider.currentRepository(id); if (repo && guard()) comparisons.open(repo, () => !!provider.currentRepository(id)); },
+    compareWorktree: async (id, guard) => { if (!guard()) return; if (!provider.currentOwner(id)) await provider.inspectExternalWorktree(id, guard); if (guard()) await openWorktreeGraph(id, () => true, comparisons); },
     inspectExternalWorktree: (id, guard) => provider.inspectExternalWorktree(id, guard),
     removeWorkspaceRepository: async (id, guard) => {
       const repo = provider.currentRepository(id);
@@ -859,8 +863,8 @@ async function activate(context) {
       if (refreshed.includes(sidebarGraph.repoKey)) await sidebarGraph.pollRevision();
     },
     refresh: () => provider.refresh() });
-  const settings = new ViewSettings(vscode, context, tree, provider, [graph, sidebarGraph]);
-  context.subscriptions.push(settings, backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, workspaceViews, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
+  const settings = new ViewSettings(vscode, context, tree, provider, [graph, sidebarGraph, comparisons]);
+  context.subscriptions.push(settings, backend, theme, worktreeDisplay, themePicker, tree, provider, links, graph, comparisons, workspaceViews, review, github, sessions, terminals, launchers, submodules, pins, hidden, workspaceRepositories, mutations,
     vscode.window.registerWebviewViewProvider('gitpane.repositories', provider),
     vscode.window.registerWebviewViewProvider('gitpane.changes', { resolveWebviewView: view => workspaceViews.resolveChangesView(view) }),
     vscode.window.registerWebviewViewProvider('gitpane.commitGraph', { resolveWebviewView: view => workspaceViews.resolveGraphView(view) }),
