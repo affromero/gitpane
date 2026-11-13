@@ -41,9 +41,6 @@ class ComparisonController {
     const uri = this.vscode.Uri.file(path.join(root, ...file.path.split('/')));
     const title = `${uri.fsPath} (${result.base_oid.slice(0, 8)} → ${result.to_oid.slice(0, 8)})`;
     if (file.is_submodule) {
-      if ([file.gitlink?.old, file.gitlink?.new].some(side => side && side.kind !== 'gitlink')) {
-        throw new Error('A submodule changed type. Inspect this change in Git before opening its diff.');
-      }
       const verify = async () => {
         if (!selected() || !await this.validate()) return false;
         const latest = await this.verification.request('compare_revisions', root, {
@@ -58,6 +55,11 @@ class ComparisonController {
       return await openGitlinkDiff({ vscode: this.vscode, links: this.links, repo: this.repo,
         repoIdentity: result.repo_identity, repoToken: this.token, file: { ...file, oldPath: file.old_path },
         oldRef: result.base_oid, newRef: result.to_oid, current: this.current, verify, title,
+        createHistorical: (relative, ref) => createLiveGitSide({ vscode: this.vscode, links: this.links,
+          backend: this.backend, repo: this.repo, repoIdentity: result.repo_identity, repoToken: this.token,
+          side: { gitPath: relative, ref }, current: this.current, literalObjects: true,
+          revision: () => this.tree.contentRevision?.(this.repo), verifyAncestors: this.context?.verifyAncestors,
+          ancestorKey: this.context?.ancestorKey, contextKey: this.context?.contextKey }),
         verifyAncestors: this.context?.verifyAncestors, ancestorKey: this.context?.ancestorKey,
         contextKey: this.context?.contextKey });
     }

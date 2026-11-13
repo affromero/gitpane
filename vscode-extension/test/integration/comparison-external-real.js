@@ -50,6 +50,21 @@ module.exports = async function compareExternal({ vscode, provider, documents, d
     const pointers = [diffs.at(-1)[0], diffs.at(-1)[1]];
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointers[0]), `Subproject commit ${pointerOld}\n`);
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointers[1]), `Subproject commit ${pointerNew}\n`);
+    const mixed = state.files.find(item => item.path === 'external-mixed' && item.is_submodule);
+    assert.ok(mixed, 'comparison must include the file to submodule change');
+    await receive({ type: 'openComparisonFile', id: mixed.id });
+    assert.equal(diffs.length, before + 3, errors.at(-1));
+    const mixedFile = diffs.at(-1)[0], mixedPointer = diffs.at(-1)[1];
+    assert.equal((await documents.get('gitpane-blob').readFile(mixedFile)).toString(), 'original file\n');
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(mixedPointer), `Subproject commit ${pointerNew}\n`);
+    await receive({ type: 'comparisonSwap' });
+    const reverse = messages.findLast(message => message.type === 'comparisonState' && !message.loading);
+    const reversedMixed = reverse.files.find(item => item.path === 'external-mixed' && item.is_submodule);
+    assert.ok(reversedMixed, reverse.error);
+    await receive({ type: 'openComparisonFile', id: reversedMixed.id });
+    assert.equal(diffs.length, before + 4, errors.at(-1));
+    assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(diffs.at(-1)[0]), `Subproject commit ${pointerNew}\n`);
+    assert.equal((await documents.get('gitpane-blob').readFile(diffs.at(-1)[1])).toString(), 'original file\n');
     const originalVisibility = provider.view.visible;
     provider.view.visible = false;
     const tracked = path.join(siblingPath, 'external-tracked.txt');
@@ -80,10 +95,11 @@ module.exports = async function compareExternal({ vscode, provider, documents, d
     }
     panel.dispose();
     assert.equal((await documents.get('gitpane-blob').readFile(comparisonDocument)).toString(), 'committed\n');
+    assert.equal((await documents.get('gitpane-blob').readFile(mixedFile)).toString(), 'original file\n');
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointers[0]), `Subproject commit ${pointerOld}\n`);
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(pointers[1]), `Subproject commit ${pointerNew}\n`);
     console.log('PASS outside worktree comparison preserves its context and committed content');
-    return { file: comparisonDocument, pointers };
+    return { file: comparisonDocument, mixedFile, pointers: [...pointers, mixedPointer] };
   } finally {
     Module._load = load;
     panel.dispose();
