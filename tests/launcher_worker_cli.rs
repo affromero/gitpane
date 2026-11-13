@@ -7,9 +7,15 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-fn wait_for_file(path: &std::path::Path, child: &mut Child) {
+fn wait_for_pid(path: &std::path::Path, child: &mut Child) -> i32 {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Ok(pid) = contents.parse::<i32>()
+            && pid > 0
+        {
+            return pid;
+        }
         assert!(
             child.try_wait().unwrap().is_none(),
             "launcher worker exited before probe started"
@@ -41,8 +47,9 @@ fn check_probe_cancellation(signal: bool) {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nsleep 30 &\nprintf '%s' $! > '{}'\nprintf '%s' $$ > '{}'\nwait\n",
+            "#!/bin/sh\nsleep 30 &\nprintf '%s' $! > '{}'\n: > '{}'\nsleep 0.1\nprintf '%s' $$ > '{}'\nwait\n",
             descendant_file.display(),
+            pid_file.display(),
             pid_file.display()
         ),
     )
@@ -113,12 +120,8 @@ fn check_probe_cancellation(signal: bool) {
         true
     );
     writeln!(stdin, "{}", json!({"id":2,"method":"launcher_choices","params":{"repo":repo,"id":"open","fingerprint":fingerprint,"backend":"tmux"}})).unwrap();
-    wait_for_file(&pid_file, &mut child);
-    let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
-    let descendant: i32 = std::fs::read_to_string(&descendant_file)
-        .unwrap()
-        .parse()
-        .unwrap();
+    let pid = wait_for_pid(&pid_file, &mut child);
+    let descendant = wait_for_pid(&descendant_file, &mut child);
     stdin.write_all(b"unread").unwrap();
     std::thread::sleep(Duration::from_millis(200));
     assert!(
