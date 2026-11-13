@@ -195,8 +195,8 @@ const scenario = String.raw`
   send('changes', { type: 'fileMenu', id: 'file', requestId: received.at(-1).message.requestId,
    token: 'second-token', choices: [{ label: 'Open Changes', action: 'open' }] }); await tick();
   doc('changes').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  check('escape closes the file menu and returns focus to the file', !doc('changes').querySelector('[role="menu"]') &&
-   doc('changes').activeElement.getAttribute('role') === 'treeitem');
+  check('escape closes the file menu and returns focus to its button', !doc('changes').querySelector('[role="menu"]') &&
+   doc('changes').activeElement === doc('changes').querySelector('.file-row .menu-action'));
   const splitter = document.querySelector('.splitter');
   const before = document.getElementById('repositories-pane').getBoundingClientRect().height;
   splitter.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));

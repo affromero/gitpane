@@ -202,6 +202,13 @@ const scenario = String.raw`
           indicatorBounds.left >= bounds.left - 1 && indicatorBounds.right <= bounds.right + 1);
       }
     }
+    frame.style.width = '100px';
+    const narrowMenu = frameDocument.createElement('div');
+    narrowMenu.className = 'file-context-menu';
+    narrowMenu.textContent = 'A long action label';
+    frameDocument.body.appendChild(narrowMenu);
+    check('menu fits a viewport narrower than its usual minimum',
+      narrowMenu.getBoundingClientRect().width <= frame.contentWindow.innerWidth);
     frame.remove();
     let repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
     check('repository status and branch', repo.textContent.includes('*') && repo.textContent.includes('main'));
@@ -219,15 +226,54 @@ const scenario = String.raw`
     check('repository actions have an accessible name', repoMenu.getAttribute('aria-label') === 'Actions for api-service');
     repoMenu.click();
     check('repository actions do not expand the row',
-      window.posted.some(message => message.type === 'menu' && message.kind === 'repo' && message.id === 'api') &&
+      window.posted.some(message => message.type === 'rowMenuRequest' && message.kind === 'repo' && message.id === 'api') &&
       repo.getAttribute('aria-expanded') === 'false');
     const repoRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     repo.querySelector('.name').dispatchEvent(repoRightClick);
     check('right-click selects the repository and opens its actions without expanding', repoRightClick.defaultPrevented &&
       repo.getAttribute('aria-selected') === 'true' && repo.getAttribute('aria-expanded') === 'false' &&
-      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'repo', id: 'api' }));
+      window.posted.at(-1).type === 'rowMenuRequest' && window.posted.at(-1).kind === 'repo' && window.posted.at(-1).id === 'api');
+    const repoRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: repoRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    check('repository actions open inline', document.querySelector('[role="menu"] button')?.textContent === 'Refresh');
+    document.querySelector('[role="menu"] button').click();
+    check('inline action retains the selected repository and token', window.posted.at(-1).type === 'rowMenuAction' &&
+      window.posted.at(-1).id === 'api' && window.posted.at(-1).token === 'repo-token');
     repoMenu.focus();
-    repoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    repoMenu.click();
+    const buttonRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: buttonRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape returns focus to the action button', document.activeElement === repoMenu);
+    repoMenu.click();
+    const refreshRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: refreshRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    window.postMessage({ ...snapshot, fontSize: 17 }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape restores the action button after a refresh', document.activeElement.getAttribute('aria-label') === 'Actions for api-service');
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    const refreshedRepoMenu = repo.querySelector('.menu-action');
+    refreshedRepoMenu.click();
+    const removedRequest = window.posted.at(-1);
+    window.postMessage({ ...snapshot, repositories: [] }, '*');
+    await tick();
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: removedRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    check('a removed repository cancels its pending menu', !document.querySelector('[role="menu"]'));
+    window.postMessage(snapshot, '*');
+    await tick();
+    repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
+    const restoredRepoMenu = repo.querySelector('.menu-action');
+    restoredRepoMenu.focus();
+    restoredRepoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     check('action keyboard activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
     window.postMessage(snapshot, '*');
     await tick();
@@ -374,13 +420,13 @@ const scenario = String.raw`
     const worktreeMenu = worktree.querySelector('.menu-action');
     check('worktree action has an accessible name', worktreeMenu.getAttribute('aria-label') === 'Actions for worktree web-review');
     worktreeMenu.click();
-    check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'menu' &&
+    check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'rowMenuRequest' &&
       message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
     const worktreeRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     worktree.querySelector('.name').dispatchEvent(worktreeRightClick);
     check('right-click selects the worktree and opens its actions without expanding', worktreeRightClick.defaultPrevented &&
       worktree.getAttribute('aria-selected') === 'true' && worktree.getAttribute('aria-expanded') === 'false' &&
-      JSON.stringify(window.posted.at(-1)) === JSON.stringify({ type: 'menu', kind: 'worktree', id: 'opaque-worktree' }));
+      window.posted.at(-1).type === 'rowMenuRequest' && window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     worktree.querySelector('.row').click();
     worktree = items().find(item => item.getAttribute('aria-label').includes('web-review, worktree'));
     check('worktree expands staged and unstaged files', worktree.getAttribute('aria-expanded') === 'true' &&
@@ -501,8 +547,28 @@ const scenario = String.raw`
       window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
       !('path' in window.posted.at(-1)));
     worktree.querySelector('[aria-label^="Actions for worktree"]').click();
-    check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'menu' &&
+    check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'rowMenuRequest' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
+    let externalRequest = window.posted.at(-1);
+    const answerExternal = request => window.postMessage({ type: 'rowMenu', kind: 'worktree', id: 'opaque-worktree',
+      requestId: request.requestId, token: 'external-token', choices: [{ label: 'Refresh', action: 'refreshWorktree' }] }, '*');
+    answerExternal(externalRequest);
+    await tick();
+    window.postMessage({ ...external, fontSize: 17 }, '*');
+    await tick();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('outside worktree menu restores its own button after refresh',
+      document.activeElement.getAttribute('aria-label')?.startsWith('Actions for worktree'));
+    document.activeElement.click();
+    externalRequest = window.posted.at(-1);
+    answerExternal(externalRequest);
+    await tick();
+    const removedExternal = structuredClone(external);
+    removedExternal.repositories[1].worktrees.shift();
+    window.postMessage(removedExternal, '*');
+    await tick();
+    check('removing a worktree dismisses its menu and focuses the current row', !document.querySelector('[role="menu"]') &&
+      document.activeElement.getAttribute('role') === 'treeitem' && document.activeElement.getAttribute('aria-selected') === 'true');
     const overview = { type: 'snapshot', errors: [], loading: false, expandWorktrees: true, repositories: [{
       id: 'overview-parent', name: 'overview-parent', branch: 'main', dirty: false, groups: [],
       worktreeStateKey: 'a'.repeat(64), worktreeCount: 1,

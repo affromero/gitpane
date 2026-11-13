@@ -38,7 +38,7 @@ function allRepositories(repos) { return repos.flatMap(repo => [repo, ...allRepo
 let searchOwner;
 let searchTimer;
 const fileMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
-  selection: () => JSON.stringify([snapshot.selectedOwnerId, snapshot.selectionEpoch]) });
+  selection: () => JSON.stringify(changesMode ? [snapshot.selectedOwnerId, snapshot.selectionEpoch, selected] : [selected]) });
 
 function save() {
   vscode.setState({ expanded: [...expanded], collapsedSubmodules: [...collapsedSubmodules], collapsedGroups: [...collapsedGroups], expandedStashes: [...expandedStashes],
@@ -100,20 +100,13 @@ function add(parent, className, text, title) {
 }
 
 function menuButton(label, kind, id) {
-  const button = element('button', 'menu-action', '⋯');
-  button.type = 'button';
-  button.title = label;
-  button.setAttribute('aria-label', label);
-  button.addEventListener('click', event => {
-    event.stopPropagation();
-    if (kind === 'file') {
-      const rect = button.getBoundingClientRect();
-      const item = visible.find(value => value.key === button.closest('.treeitem')?.dataset.key);
-      if (item) select(item);
-      fileMenu.open(id, rect.right, rect.bottom);
-    } else vscode.postMessage({ type: 'menu', kind, id });
+  return window.GitpaneMenuButton(document, label, button => {
+    const rect = button.getBoundingClientRect();
+    const item = visible.find(value => value.key === button.closest('.treeitem')?.dataset.key);
+    if (item) select(item);
+    if (kind !== 'file') vscode.postMessage({ type: 'selectOwner', id });
+    fileMenu.open(id, rect.right, rect.bottom, kind, button);
   });
-  return button;
 }
 
 function fileCount(repo) {
@@ -653,6 +646,7 @@ function select(item, focus = true) {
   selected = item.key;
   item.item.setAttribute('aria-selected', 'true');
   item.item.setAttribute('tabindex', '0');
+  fileMenu.closeIfChanged();
   if (focus) item.item.focus();
   save();
 }
@@ -872,8 +866,9 @@ tree.addEventListener('contextmenu', event => {
   if (item.fileId === undefined && !kind) return;
   event.preventDefault();
   select(item);
+  if (kind) vscode.postMessage({ type: 'selectOwner', id: kind === 'repo' ? item.owner.id : item.worktreeId });
   if (item.fileId !== undefined) fileMenu.open(item.fileId, event.clientX, event.clientY);
-  else vscode.postMessage({ type: 'menu', kind, id: kind === 'repo' ? item.owner.id : item.worktreeId });
+  else fileMenu.open(kind === 'repo' ? item.owner.id : item.worktreeId, event.clientX, event.clientY, kind);
 });
 
 tree.addEventListener('keydown', event => {
@@ -884,6 +879,10 @@ tree.addEventListener('keydown', event => {
       (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    if (fileMenu.openItem(current)) event.preventDefault();
+    return;
+  }
   const globals = ['p', 'P', 'o', 'v', 'G', 'y', 'g', 'r', 'R', 't', 'a', 's', 'd'];
   if (['q', '=', '?'].includes(event.key)) return;
   if (globals.includes(event.key) || (Array.isArray(snapshot.launcherKeys) && snapshot.launcherKeys.includes(event.key))) {
@@ -989,7 +988,7 @@ window.addEventListener('message', event => {
   const renderKey = JSON.stringify(display);
   if (revealed || renderKey !== lastSnapshotRender) {
     lastSnapshotRender = renderKey;
-    render();
+    render(); fileMenu.closeIfChanged();
   }
 });
 

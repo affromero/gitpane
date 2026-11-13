@@ -2,7 +2,8 @@
 
 async function receiveViewMessage(provider, vscode, message, surface = 'repositories') {
   if (provider.workspaceViews && !provider.workspaceViews.accepts(message, surface)) return;
-  const guard = provider.workspaceViews?.messageGuard(message, surface) || (() => !provider.disposed);
+  const view = provider.view;
+  const guard = provider.workspaceViews?.messageGuard(message, surface) || (() => !provider.disposed && provider.view === view && view?.visible !== false);
   if (message?.type === 'ready') {
     provider.ready = true;
     provider.publish();
@@ -67,6 +68,15 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
   } else if (message?.type === 'fileMenuAction' && typeof message.id === 'string' &&
              typeof message.token === 'string' && typeof message.action === 'string') {
     await provider.actions?.fileMenuAction(message.id, message.token, message.action, guard);
+  } else if (message?.type === 'rowMenuRequest' && ['repo', 'worktree'].includes(message.kind) &&
+             typeof message.id === 'string' && Number.isSafeInteger(message.requestId)) {
+    try {
+      const menu = await provider.actions?.rowMenu(message.kind, message.id, guard);
+      if (menu && guard()) provider.view?.webview.postMessage({ type: 'rowMenu', kind: message.kind, id: message.id, requestId: message.requestId, ...menu });
+    } catch (error) { if (guard()) await provider.actions?.report(error); }
+  } else if (message?.type === 'rowMenuAction' && ['repo', 'worktree'].includes(message.kind) &&
+             typeof message.id === 'string' && typeof message.token === 'string' && typeof message.action === 'string') {
+    await provider.actions?.rowMenuAction(message.kind, message.id, message.token, message.action, guard);
   } else if (message?.type === 'action' && message.action === 'inspectExternalWorktree' && typeof message.id === 'string') {
     await provider.actions?.handle(message, undefined, guard);
   } else if (message?.type === 'shortcut' && typeof message.id === 'string' && typeof message.key === 'string') {

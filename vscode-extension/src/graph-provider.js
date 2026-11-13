@@ -609,6 +609,37 @@ class GraphProvider {
     await vscode.env.clipboard.writeText(value);
   }
 
+  async commitMenu(oid) {
+    const request = this.commitMenuGeneration = (this.commitMenuGeneration || 0) + 1;
+    this.pendingCommitMenu = undefined;
+    const repo = this.currentRepo(), row = this.rows.get(oid), panel = this.panel;
+    if (!repo || !row || row.collapsed || !panel || panel.visible === false || !this.interactive || this.selected !== oid) return;
+    const graph = this.graphGeneration, owner = this.ownerEpoch, selection = this.selectionEpoch;
+    const current = () => this.panel === panel && panel.visible !== false && this.ownerEpoch === owner &&
+      this.graphGeneration === graph && this.selectionEpoch === selection && this.interactive &&
+      this.selected === oid && this.rows.get(oid) === row && this.isCurrentRepo(repo);
+    if (!await this.validateGraph(repo) || !current() || request !== this.commitMenuGeneration) return;
+    if (typeof row.short_id !== 'string' || !row.short_id || !oid.startsWith(row.short_id) || typeof row.message !== 'string') {
+      throw new Error('Gitpane returned invalid commit details.');
+    }
+    const choices = [{ label: 'Copy full commit hash', action: 'full', value: oid },
+      { label: 'Copy short commit hash', action: 'short', value: row.short_id },
+      { label: 'Copy commit subject', action: 'subject', value: row.message }];
+    const token = randomUUID();
+    this.pendingCommitMenu = { token, oid, choices, current, repo };
+    return { token, choices: choices.map(({ label, action }) => ({ label, action })) };
+  }
+
+  async commitMenuAction(oid, token, action) {
+    this.commitMenuGeneration = (this.commitMenuGeneration || 0) + 1;
+    const pending = this.pendingCommitMenu;
+    this.pendingCommitMenu = undefined;
+    const choice = pending?.choices.find(item => item.action === action);
+    if (!pending || pending.oid !== oid || pending.token !== token || !choice || !pending.current()) return;
+    if (!await this.validateGraph(pending.repo) || !pending.current()) return;
+    await vscode.env.clipboard.writeText(choice.value);
+  }
+
   async copyCommitFile(id) {
     const repo = this.currentRepo();
     const file = this.files.get(id);
@@ -665,6 +696,18 @@ class GraphProvider {
       this.detailGeneration++;
       this.selected = undefined;
       this.files.clear();
+      return;
+    }
+    if (message.type === 'commitMenuRequest' && typeof message.id === 'string' && Number.isSafeInteger(message.requestId)) {
+      try {
+        const menu = await this.commitMenu(message.id);
+        if (menu) this.post({ type: 'commitMenu', id: message.id, requestId: message.requestId, ...menu });
+      } catch (error) { await vscode.window.showErrorMessage(`Gitpane could not open commit actions: ${error.message}`); }
+      return;
+    }
+    if (message.type === 'commitMenuAction' && typeof message.id === 'string' && typeof message.token === 'string' && typeof message.action === 'string') {
+      try { await this.commitMenuAction(message.id, message.token, message.action); }
+      catch (error) { await vscode.window.showErrorMessage(`Gitpane could not copy the commit: ${error.message}`); }
       return;
     }
     if ((message.type === 'commitActions' || message.type === 'copyCommitSummary') && typeof message.oid === 'string') {

@@ -64,6 +64,22 @@ test('commit actions copy the selected backend hash and subject', async t => {
   assert.deepEqual(f.errors, []);
 });
 
+test('inline commit actions reject stale selections and replayed tokens', async t => {
+  const f = await fixture(t);
+  await f.receive({ type: 'commitMenuRequest', id: f.oid, requestId: 1 });
+  const first = f.messages.at(-1);
+  assert.deepEqual(first.choices.map(choice => choice.action), ['full', 'short', 'subject']);
+  await f.receive({ type: 'selectCommit', oid: f.next });
+  await f.receive({ type: 'commitMenuAction', id: f.oid, token: first.token, action: 'full' });
+  assert.deepEqual(f.copies, []);
+  await f.receive({ type: 'selectCommit', oid: f.oid });
+  await f.receive({ type: 'commitMenuRequest', id: f.oid, requestId: 2 });
+  const current = f.messages.at(-1);
+  await f.receive({ type: 'commitMenuAction', id: f.oid, token: current.token, action: 'subject' });
+  await f.receive({ type: 'commitMenuAction', id: f.oid, token: current.token, action: 'subject' });
+  assert.deepEqual(f.copies, ['first subject']);
+});
+
 test('commit actions reject stale, fabricated, collapsed and unavailable rows', async t => {
   const f = await fixture(t);
   await f.receive({ type: 'commitActions', oid: f.next });
