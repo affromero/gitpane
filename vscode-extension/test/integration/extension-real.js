@@ -1499,6 +1499,56 @@ async function main() {
   git('add', 'child');
   await assert.rejects(documents.get('gitpane-link').provideTextDocumentContent(blockedPointer), /no longer|changed/i);
   console.log('PASS nested deleted gitlink opens despite a blocking ancestor and rejects changed parents');
+
+  fs.writeFileSync(path.join(repoPath, 'restore.txt'), 'committed\n');
+  git('add', 'restore.txt');
+  git('commit', '-qm', 'restore fixture');
+  fs.writeFileSync(path.join(repoPath, 'restore.txt'), 'modified\n');
+  await commands.get('gitpane.refresh')();
+  const restoreRepo = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+  await receive({ type: 'loadChanges', id: restoreRepo.id });
+  const restoreFile = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+    .find(group => group.id === 'working').files.find(file => file.path === 'restore.txt');
+  assert.ok(restoreFile);
+  const beforeRestoreDiff = diffs.length;
+  await receive({ type: 'openChange', id: restoreFile.id });
+  assert.equal(diffs.length, beforeRestoreDiff + 1, errors.at(-1));
+  const savedSide = diffs.at(-1)[0];
+  const { LinkDocuments } = require('../../src/link-documents');
+  const reloadedDocuments = new LinkDocuments(vscode, provider.tree, provider.tree.backend, context.workspaceState);
+  try {
+    reloadedDocuments.finishInitialization();
+    assert.equal((await reloadedDocuments.readFile(savedSide)).toString(), 'committed\n');
+  } finally { reloadedDocuments.dispose(); }
+  console.log('PASS ordinary diff Git side restores through a fresh document provider');
+  async function restoreStaged(file, expected) {
+    await commands.get('gitpane.refresh')();
+    const owner = snapshots.at(-1).repositories.find(item => item.name === 'repo');
+    await receive({ type: 'loadChanges', id: owner.id });
+    const row = snapshots.at(-1).repositories.find(item => item.name === 'repo').groups
+      .find(group => group.id === 'index').files.find(item => item.path === file);
+    assert.ok(row, `staged ${file} must be visible`);
+    const previous = diffs.length;
+    await receive({ type: 'openChange', id: row.id });
+    assert.equal(diffs.length, previous + 1, errors.at(-1));
+    const sides = diffs.at(-1);
+    const providerAfterReload = new LinkDocuments(vscode, provider.tree, provider.tree.backend, context.workspaceState);
+    try {
+      providerAfterReload.finishInitialization();
+      for (const [index, text] of expected.entries()) {
+        if (text === null) assert.equal(sides[index].scheme, 'gitpane-empty');
+        else assert.equal((await providerAfterReload.readFile(sides[index])).toString(), text);
+      }
+    } finally { providerAfterReload.dispose(); }
+  }
+  git('add', 'restore.txt');
+  await restoreStaged('restore.txt', ['committed\n', 'modified\n']);
+  fs.writeFileSync(path.join(repoPath, 'restore-added.txt'), 'added\n');
+  git('add', 'restore-added.txt');
+  await restoreStaged('restore-added.txt', [null, 'added\n']);
+  git('rm', '-f', 'restore.txt');
+  await restoreStaged('restore.txt', ['committed\n', null]);
+  console.log('PASS staged modifications, additions and deletions restore through a fresh provider');
 }
 
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; }).finally(async () => {

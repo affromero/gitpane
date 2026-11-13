@@ -724,7 +724,7 @@ async function activate(context) {
   tree.workspaceRepositories = workspaceRepositories;
   provider.pins = pins;
   provider.workspaceRepositories = workspaceRepositories;
-  const links = new LinkDocuments(vscode, tree, backend);
+  const links = new LinkDocuments(vscode, tree, backend, context.workspaceState);
   provider.links = links;
   tree.watchedPathsFor = repo => links.watchedPaths(repo);
   tree.watchTokenFor = (repo, relative) => links.watchTokenFor(repo, relative);
@@ -958,7 +958,7 @@ async function activate(context) {
             const repoIdentity = node.external ? provider.externalOwners.get(node.ownerId)?.status?.repo_identity :
               tree.backendStatuses.get(node.repo.rootUri.toString())?.repo_identity;
             return createLiveGitSide({ vscode, links, backend, repo: node.repo, repoIdentity, repoToken: node.repoToken,
-              side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null) });
+              side, current, revision: () => tree.contentRevision(node.repo), contextKey: JSON.stringify(node.parentWorktree || null), restore: !node.external && !node.parentWorktree ? { record: node.record, which: side === plan.left ? 'left' : 'right' } : undefined });
           }
           if (node.external) {
             const repoIdentity = provider.externalOwners.get(node.ownerId)?.status?.repo_identity;
@@ -993,7 +993,7 @@ async function activate(context) {
       }
     })
   );
-  await tree.refresh();
+  try { await tree.refresh(); } finally { links.finishInitialization(); }
 }
 
 module.exports = { activate, GitpaneViewProvider, RepositoryTree };

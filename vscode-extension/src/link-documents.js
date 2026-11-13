@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { MAX_REQUEST_BYTES } = require('./bridge-client');
+const { DiffRestoration } = require('./diff-restoration');
 
 function statusRevision(getStatus, watchedPath, getHead) {
   let observed, watchError, watchToken, suspended = false;
@@ -29,11 +30,15 @@ function statusRevision(getStatus, watchedPath, getHead) {
 // A Git symlink stores the link text, not the contents of the linked file.
 // Keep paths and guards in the extension host, never in the document URI.
 class LinkDocuments {
-  constructor(vscode, tree, backend) {
+  constructor(vscode, tree, backend, state) {
     this.vscode = vscode;
     this.backend = backend;
+    this.restoration = state && new DiffRestoration(vscode, tree, backend, this, state);
+    this.initialized = new Promise(resolve => { this.finishInitialization = resolve; });
     this.output = tree.output;
     this.documents = new Map();
+    this.recoveryShown = new Set();
+    this.recoveryPending = false;
     this.nextWatchToken = 0;
     this.disposed = false;
     this.activeReads = 0;
@@ -66,7 +71,7 @@ class LinkDocuments {
         if (entry.opened) this.expirePendingBinary(key, entry, 100);
         else this.expirePendingBinary(key, entry);
       }) || { dispose() {} },
-      vscode.window?.tabGroups?.onDidChangeTabs?.(() => this.updateBinaryTabs()) || { dispose() {} }
+      vscode.window?.tabGroups?.onDidChangeTabs?.(event => { this.updateBinaryTabs(); this.forgetClosedTabs(event); }) || { dispose() {} }
     ];
   }
 
@@ -436,17 +441,18 @@ class LinkDocuments {
     return entry.uri;
   }
 
-  async createLiveBinary(fileUri, readMetadata, readBinary, guard, group, batch) {
+  async createLiveBinary(fileUri, readMetadata, readBinary, guard, group, batch, restoreUri) {
     if (this.disposed || this.documents.size >= 256) throw new Error('Too many Gitpane diffs are open.');
     const entry = { readMetadata, readBinary, guard, guardSync: guard, group, liveBatch: batch, abort: new AbortController(),
-      closed: false, textOpen: false, tabOpen: false, mtime: Date.now() };
+      closed: false, textOpen: false, tabOpen: false, mtime: Date.now(), restored: !!restoreUri };
     const metadata = await this.binaryMetadata(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
-    entry.uri = fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${path.basename(fileUri.fsPath)}`, query: '', fragment: '' });
+    entry.uri = restoreUri || fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${path.basename(fileUri.fsPath)}`, query: '', fragment: '' });
     entry.fingerprint = metadata.eventFingerprint;
     entry.liveVersion = metadata.eventFingerprint;
     this.documents.set(entry.uri.toString(), entry);
     this.expirePendingBinary(entry.uri.toString(), entry);
+    if (restoreUri && this.vscode.window?.tabGroups) this.updateBinaryTabs();
     return entry.uri;
   }
 
@@ -468,8 +474,25 @@ class LinkDocuments {
 
   binaryEntry(uri) {
     const entry = this.documents.get(uri.toString());
-    if (!entry?.readBinary || entry.closed) throw new Error('The Gitpane diff is no longer available.');
+    if (!entry?.readBinary || entry.closed) {
+      this.offerRecovery(uri);
+      throw new Error('The Gitpane diff is no longer available. Reopen it from Gitpane Changes.');
+    }
     return entry;
+  }
+
+  offerRecovery(uri) {
+    const key = uri.toString();
+    if (this.disposed || this.recoveryPending || this.recoveryShown.has(key) || !this.vscode.window?.showWarningMessage) return;
+    if (this.recoveryShown.size >= 256) this.recoveryShown.delete(this.recoveryShown.values().next().value);
+    this.recoveryShown.add(key);
+    this.recoveryPending = true;
+    Promise.resolve(this.vscode.window.showWarningMessage(
+      'Some Gitpane diffs cannot be restored. Reopen them from Gitpane.', 'Show Gitpane'
+    )).then(choice => {
+      if (choice === 'Show Gitpane' && !this.disposed) return this.vscode.commands.executeCommand('gitpane.repositories.focus');
+    }).catch(error => { this.recoveryShown.delete(key); this.output?.appendLine(`Could not open Gitpane: ${error.message}`); })
+      .finally(() => { this.recoveryPending = false; });
   }
 
   updateLiveVersion(entry, fingerprint) {
@@ -479,18 +502,24 @@ class LinkDocuments {
   }
 
   async stat(uri) {
+    await this.restoreMissing(uri);
     const entry = this.binaryEntry(uri);
-    const metadata = await this.binaryMetadata(entry);
+    let metadata;
+    try { metadata = await this.binaryMetadata(entry); }
+    catch (error) { if (entry.restored) this.offerRecovery(uri); throw error; }
     if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
     if (entry.liveBatch || entry.liveWorking) this.updateLiveVersion(entry, metadata.eventFingerprint);
     return { type: this.vscode.FileType.File, size: metadata.size, ctime: 0, mtime: entry.mtime || 0 };
   }
 
   async readFile(uri) {
+    await this.restoreMissing(uri);
     const entry = this.binaryEntry(uri);
-    if (entry.refreshGuard || entry.liveBatch || entry.liveWorking) {
-      if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
-    } else await this.binaryMetadata(entry);
+    try {
+      if (entry.refreshGuard || entry.liveBatch || entry.liveWorking) {
+        if (!await this.current(entry)) throw new Error('The Gitpane diff is no longer available.');
+      } else await this.binaryMetadata(entry);
+    } catch (error) { if (entry.restored) this.offerRecovery(uri); throw error; }
     await this.acquireBinary();
     let counted = false;
     try {
@@ -502,6 +531,9 @@ class LinkDocuments {
       if (!entry.liveBatch && !entry.liveWorking) await this.binaryMetadata(entry);
       if (this.binaryEntry(uri) !== entry) throw new Error('The Gitpane diff is no longer available.');
       return bytes;
+    } catch (error) {
+      if (entry.restored) this.offerRecovery(uri);
+      throw error;
     } finally {
       if (counted && --entry.activeLiveReads === 0 && entry.pendingLiveChange) {
         entry.pendingLiveChange = false;
@@ -556,6 +588,27 @@ class LinkDocuments {
     }
   }
 
+  async restoreMissing(uri) {
+    if (!this.restoration || (this.documents.has(uri.toString()) && !this.restoration.pending.has(uri.toString()))) return;
+    await this.initialized;
+    try { await this.restoration.restore(uri); }
+    catch (error) {
+      this.offerRecovery(uri);
+      this.output?.appendLine(`Could not restore Gitpane diff: ${error.message}`);
+      throw error;
+    }
+  }
+
+  forgetClosedTabs(event) {
+    if (!this.restoration || !Array.isArray(event?.closed)) return;
+    const open = new Set(this.vscode.window.tabGroups.all.flatMap(group => group.tabs.flatMap(tab =>
+      [tab.input?.uri, tab.input?.original, tab.input?.modified].filter(Boolean).map(uri => uri.toString()))));
+    for (const tab of event.closed) for (const uri of [tab.input?.uri, tab.input?.original, tab.input?.modified]) {
+      const key = uri?.toString();
+      if (key?.startsWith('gitpane-blob:') && !open.has(key)) this.restoration.forget(key).catch(error => this.output?.appendLine(`Could not update restored diffs: ${error.message}`));
+    }
+  }
+
   async validateStaticIdentity(repo, identity, guard) {
     if (!guard() || this.disposed) return false;
     const key = JSON.stringify([repo, identity]);
@@ -576,7 +629,10 @@ class LinkDocuments {
 
   async provideTextDocumentContent(uri) {
     const entry = this.documents.get(uri.toString());
-    if (!entry) throw new Error('The symlink diff is no longer available.');
+    if (!entry) {
+      this.offerRecovery(uri);
+      throw new Error('The Gitpane diff is no longer available. Reopen it from Gitpane Changes.');
+    }
     const content = await this.read(entry);
     if (this.documents.get(uri.toString()) !== entry) throw new Error('The symlink diff is no longer available.');
     return content;
@@ -589,6 +645,7 @@ class LinkDocuments {
     entry.abort?.abort();
     clearTimeout(entry.timer);
     this.documents.delete(key);
+    if (!this.disposed && this.restoration && key.startsWith('gitpane-blob:')) this.restoration.forget(key).catch(error => this.output?.appendLine(`Could not update restored diffs: ${error.message}`));
   }
 
   watchedPaths(repo) {
@@ -609,6 +666,7 @@ class LinkDocuments {
 
   dispose() {
     this.disposed = true;
+    this.finishInitialization();
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     for (const waiter of this.waiters.splice(0)) waiter.reject(new Error('The symlink diff is no longer available.'));
     for (const waiter of this.binaryWaiters.splice(0)) waiter.reject(new Error('The Gitpane diff is no longer available.'));

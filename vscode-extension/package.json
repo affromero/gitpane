@@ -17,7 +17,7 @@
     "untrustedWorkspaces": { "supported": false },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onView:gitpane.repositories"],
+  "activationEvents": ["onView:gitpane.repositories", "onFileSystem:gitpane-blob", "onFileSystem:gitpane-link", "onFileSystem:gitpane-empty"],
   "contributes": {
     "views": {
       "explorer": [

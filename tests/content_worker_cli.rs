@@ -146,6 +146,39 @@ fn content_worker_returns_binary_from_scoped_repository() {
 }
 
 #[test]
+fn verified_regular_content_rejects_symlink_replacements() {
+    let Some(fixture) = Fixture::new(b"regular") else {
+        return;
+    };
+    let path = fixture.temporary.path().join("data");
+    std::fs::remove_file(&path).unwrap();
+    std::os::unix::fs::symlink("target", &path).unwrap();
+    let repo = git2::Repository::open(fixture.temporary.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("data")).unwrap();
+    index.write().unwrap();
+    let mut request = fixture.request();
+    request["operation"] =
+        json!({"kind":"verified_content","ref":":0","path":"data","regular_only":true});
+    let (child, stdin) = fixture.start(&request);
+    let output = child.wait_with_output().unwrap();
+    drop(stdin);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("stale_target"));
+    request["operation"] = json!({"kind":"verified_content","ref":":0","path":"data"});
+    let (child, stdin) = fixture.start(&request);
+    let output = child.wait_with_output().unwrap();
+    drop(stdin);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"target");
+}
+
+#[test]
 fn cancelled_worker_kills_converter_that_ignores_termination() {
     let Some(fixture) = Fixture::new(b"text\n") else {
         return;

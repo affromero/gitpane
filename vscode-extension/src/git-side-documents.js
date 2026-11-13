@@ -32,12 +32,12 @@ function metadataResult(response, ref, revision) {
   if (!validMetadata(result, ref)) throw new Error('Gitpane returned invalid Git file metadata.');
   const fingerprint = JSON.stringify([result.oid, result.mode, result.size, result.head_oid,
     response.replacements, response.config, response.volatile]);
-  return { size: result.size, ref: ref === 'HEAD' ? result.head_oid : ref === '' ? ':0' : ref, fingerprint,
+  return { size: result.size, mode: result.mode, ref: ref === 'HEAD' ? result.head_oid : ref === '' ? ':0' : ref, fingerprint,
     eventFingerprint: JSON.stringify([fingerprint, response.volatile ? revision?.() ?? null : null]) };
 }
 
 async function createLiveGitSide(options) {
-  const { vscode, links, backend, repo, repoIdentity, repoToken, side, current, verifyAncestors, ancestorKey, contextKey, revision } = options;
+  const { vscode, links, backend, repo, repoIdentity, repoToken, side, current, verifyAncestors, ancestorKey, contextKey, revision, restore, restoreUri, requireRegular } = options;
   if (!links || typeof links.createLiveBinary !== 'function' || typeof backend.gitSideSession !== 'function' ||
       typeof backend.gitSideOperation !== 'function' || !repo?.rootUri || !identity(repoIdentity) || !relativeFile(side?.gitPath) ||
       !(['HEAD', '', ':1', ':2', ':3'].includes(side.ref) || oid(side.ref)) ||
@@ -66,6 +66,7 @@ async function createLiveGitSide(options) {
     if (!guard() || (verifyAncestors && !await verifyAncestors()) || !guard()) {
       throw new Error('The Gitpane diff is no longer in the workspace.');
     }
+    if (requireRegular && ![0o100644, 0o100664, 0o100755].includes(result.mode)) throw new Error('The Gitpane diff file type changed.');
     return result;
   };
   const group = JSON.stringify([repoPath, repoIdentity, repoToken, side.ref, side.gitPath, ancestorKey, contextKey, session.git.key]);
@@ -84,7 +85,7 @@ async function createLiveGitSide(options) {
     let bytes;
     try {
       bytes = await backend.gitSideOperation(session, repoIdentity,
-        { kind: 'verified_content', ref: side.ref || ':0', path: side.gitPath }, signal);
+        { kind: 'verified_content', ref: side.ref || ':0', path: side.gitPath, ...(requireRegular ? { regular_only: true } : {}) }, signal);
     } catch (error) {
       if (error?.code === 'content_not_found') throw vscode.FileSystemError.FileNotFound(uri);
       throw error;
@@ -94,7 +95,12 @@ async function createLiveGitSide(options) {
     }
     return bytes;
   };
-  return links.createLiveBinary(uri, metadata, read, guard, group, batch);
+  const document = await links.createLiveBinary(uri, metadata, read, guard, group, batch, restoreUri);
+  if (restore && links.restoration) {
+    const details = await metadata();
+    await links.restoration.remember(document, repo, repoToken, repoIdentity, restore.record, restore.which, guard, details.mode);
+  }
+  return document;
 }
 
 async function createLiveWorkingSide({ vscode, links, backend, repo, repoIdentity, repoToken, side, current }) {
