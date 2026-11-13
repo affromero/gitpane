@@ -4,6 +4,7 @@ The reload tests open staged and working diffs in a dedicated VS Code profile an
 reload the window, and read both sides from the restored tabs. They require a
 built Gitpane backend and a VS Code executable on `PATH`, or an absolute
 `VSCODE_EXECUTABLE` path.
+Set `VSCODE_CLI_EXECUTABLE` when the VS Code CLI is not on `PATH`.
 
 ```sh
 GITPANE_TEST_BINARY="$(pwd)/target/debug/gitpane" node vscode-extension/test/integration/reload.js

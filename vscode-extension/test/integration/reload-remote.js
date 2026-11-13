@@ -91,7 +91,9 @@ function makeWritable(directory) {
       fs.mkdirSync(extensions);
       fs.cpSync(existing, path.join(extensions, 'ms-vscode-remote.remote-ssh'), { recursive: true });
     } else {
-      run(codeExecutable(), ['--install-extension', 'ms-vscode-remote.remote-ssh@0.128.0', '--extensions-dir', extensions,
+      const cli = process.env.VSCODE_CLI_EXECUTABLE || (process.platform === 'darwin'
+        ? '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' : 'code');
+      run(cli, ['--install-extension', 'ms-vscode-remote.remote-ssh@0.128.0', '--extensions-dir', extensions,
         '--user-data-dir', profile, '--shared-data-dir', path.join(temporary, 'shared-data'), '--force']);
     }
     const remote = 'vscode-remote://ssh-remote+gitpane-test';
