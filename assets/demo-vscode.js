@@ -23,7 +23,12 @@ replaceOnce('apiRepo.worktrees=[linked];apiRepo.worktreeCount=1;', `
 apiRepo.worktrees=[linked];apiRepo.worktreeCount=1;
 apiRepo.stashCount=1;apiRepo.stashes=[{id:'draft',index:0,message:'Draft search improvements'}];
 apiRepo.hasDirtySubmodules=true;
-apiRepo.submodules=[{...owner('module','shared-ui','main',true),submodule:true}];`);
+apiRepo.submodules=[{...owner('module','ui-module','main',true,
+  [group('working','Unstaged',[file('module-file','src/theme.ts','M')])]),submodule:true}];`);
+replaceOnce('const owners={api:apiRepo,auth:linked,web:webRepo,lib:cleanRepo};',
+  'const owners={api:apiRepo,auth:linked,web:webRepo,lib:cleanRepo,module:apiRepo.submodules[0]};');
+replaceOnce("const prefix={api:'a',auth:'b',web:'c',lib:'d'}[activeOwner];",
+  "const prefix={api:'a',auth:'b',web:'c',lib:'d',module:'e'}[activeOwner];");
 source = source.replaceAll('api-service', 'atlas-api').replaceAll('api-auth', 'atlas-search')
   .replaceAll('web-app', 'meadow-web').replaceAll('shared-lib', 'shared-ui')
   .replaceAll('Andres Romero', 'Alex')
@@ -59,10 +64,11 @@ window.addEventListener('DOMContentLoaded',()=>{(async()=>{
   setTimeout(()=>node.click(),400);
  };
  document.body.dataset.result=btoa(JSON.stringify({ok:true}));
- setTimeout(()=>click(document.getElementById('repos'),row('api').querySelector('.stash-action')),2200);
- setTimeout(()=>click(document.getElementById('repos'),doc('repos').querySelector('[data-key="worktree:auth"] > .row')),5200);
- setTimeout(()=>click(document.getElementById('repos'),row('api')),8200);
- setTimeout(()=>click(document.getElementById('graph'),doc('graph').querySelector('.commit')),11000);
+ setTimeout(()=>click(document.getElementById('repos'),row('module')),2200);
+ setTimeout(()=>click(document.getElementById('repos'),row('api').querySelector('.stash-action')),5200);
+ setTimeout(()=>click(document.getElementById('repos'),doc('repos').querySelector('[data-key="worktree:auth"] > .row')),8200);
+ setTimeout(()=>click(document.getElementById('repos'),row('api')),11200);
+ setTimeout(()=>click(document.getElementById('graph'),doc('graph').querySelector('.commit')),14000);
 })();});
 ` + source.slice(end + '})();});'.length);
 
@@ -78,7 +84,7 @@ source = source.slice(0, captureStart) + String.raw`
     fs.mkdirSync(frames);
     const start = Date.now();
     let frame = 0;
-    while (Date.now() - start < 14500) {
+    while (Date.now() - start < 17500) {
       const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false,
         clip: { x: 0, y: 0, width, height, scale: 1 } }, sessionId);
       fs.writeFileSync(path.join(frames, String(frame++).padStart(4, '0') + '.png'), Buffer.from(capture.data, 'base64'));

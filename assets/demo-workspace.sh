@@ -37,9 +37,9 @@ git -C "$repo" commit -q -m 'Version the API'
 # Exercise the same Git metadata that Gitpane reads in a real workspace.
 git -C "$repo" worktree add -q -b feature/filters "$root/atlas-filters"
 printf '\nexport const filters = true;\n' >> "$root/atlas-filters/src/app.ts"
-git -C "$repo" -c protocol.file.allow=always submodule add -q "$root/workspace/shared-ui" packages/shared-ui
+git -C "$repo" -c protocol.file.allow=always submodule add -q "$root/workspace/shared-ui" ui-submodule
 git -C "$repo" commit -qm 'Add shared UI submodule'
-printf '\nexport const theme = "ocean";\n' >> "$repo/packages/shared-ui/src/app.ts"
+printf '\nexport const theme = "ocean";\n' >> "$repo/ui-submodule/src/app.ts"
 printf '\nexport const draftSearch = true;\n' >> "$repo/src/app.ts"
 git -C "$repo" add src/app.ts
 printf '\nexport const draftLimit = 20;\n' >> "$repo/src/app.ts"

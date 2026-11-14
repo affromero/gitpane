@@ -18,6 +18,12 @@ Sleep 5s
 Show
 Sleep 2s
 
+# Select the submodule to show its own changes and history.
+Type "j"
+Sleep 3s
+Type "k"
+Sleep 1s
+
 # Expand and select the saved stash.
 Type "S"
 Sleep 2s
