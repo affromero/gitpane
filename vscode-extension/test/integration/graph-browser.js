@@ -52,6 +52,25 @@ const scenario = String.raw`
     const options = () => [...graph.querySelectorAll('[role="option"]')];
     check('graph is keyboard accessible', graph.getAttribute('role') === 'listbox' && graph.tabIndex === 0);
     check('service rows shown', options().length === 2);
+    const timeSnapshot = structuredClone(snapshot);
+    timeSnapshot.rows[0].time = Math.floor(Date.now() / 1000) - 7200;
+    timeSnapshot.rows[1].time = Math.floor(Date.now() / 1000) + 3600;
+    window.postMessage(timeSnapshot, '*');
+    await tick();
+    const timeNode = options()[0].querySelector('.time');
+    check('commit shows date and relative age', timeNode.textContent ===
+      new Date(timeSnapshot.rows[0].time * 1000).toLocaleDateString() + ' (2h ago)' &&
+      timeNode.title === new Date(timeSnapshot.rows[0].time * 1000).toLocaleString());
+    check('future commit age is clamped', options()[1].querySelector('.time').textContent.endsWith('(0s ago)'));
+    check('commit age is accessible', options()[0].getAttribute('aria-label').includes('2h ago'));
+    const realNow = Date.now;
+    Date.now = () => (timeSnapshot.rows[0].time + 86400) * 1000;
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    check('commit age advances while graph is open', timeNode.textContent.endsWith('(1d ago)') &&
+      options()[0].getAttribute('aria-label').includes('1d ago'));
+    Date.now = realNow;
+    window.postMessage(snapshot, '*');
+    await tick();
     document.documentElement.style.setProperty('--vscode-terminal-ansiRed', 'rgb(255, 0, 0)');
     const theme = { name: 'custom', values: { 'graph-head-marker': 'rgb(255, 0, 0)',
       'graph-tag-label': 'var(--vscode-terminal-ansiRed)', 'graph-commit-message': 'rgb(0, 180, 180)',

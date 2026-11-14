@@ -112,6 +112,26 @@ function accessibleRow(row) {
     row.author, labels].filter(Boolean).join(', ');
 }
 
+function relativeTime(epochSecs, nowSecs) {
+  const delta = Math.max(0, Math.floor(nowSecs - epochSecs));
+  const units = [[31536000, 'y'], [2592000, 'mo'], [604800, 'w'],
+    [86400, 'd'], [3600, 'h'], [60, 'm'], [1, 's']];
+  const [seconds, unit] = units.find(([seconds]) => delta >= seconds) || units.at(-1);
+  return `${Math.floor(delta / seconds)}${unit} ago`;
+}
+
+function updateTimes() {
+  const now = Date.now() / 1000;
+  graph.querySelectorAll('.time').forEach(node => {
+    const time = new Date(Number(node.dataset.epoch) * 1000);
+    const age = relativeTime(Number(node.dataset.epoch), now);
+    node.textContent = `${time.toLocaleDateString()} (${age})`;
+    node.parentElement.setAttribute('aria-label', `${node.parentElement.dataset.rowLabel}, ${time.toLocaleDateString()}, ${age}`);
+  });
+}
+
+window.setInterval(updateTimes, 1000);
+
 function renderGraph() {
   const query = search.value.trim().toLocaleLowerCase();
   const matchCount = rows.filter(row => !row.collapsed && matchRow(row, query)).length;
@@ -126,7 +146,8 @@ function renderGraph() {
     const item = element('div', `commit${index === active ? ' active' : ''}${matchRow(row, query) ? '' : ' nonmatch'}`);
     item.id = `commit-${index}`;
     item.setAttribute('role', 'option');
-    item.setAttribute('aria-label', accessibleRow(row));
+    item.dataset.rowLabel = accessibleRow(row);
+    item.setAttribute('aria-label', item.dataset.rowLabel);
     item.setAttribute('aria-selected', row.oid === selected ? 'true' : 'false');
     addLanes(item, row);
     if (row.segment_id) add(item, 'branch-toggle', row.collapsed ? '▸' : '▾');
@@ -140,8 +161,11 @@ function renderGraph() {
     if (Number.isFinite(row.time)) {
       const time = new Date(row.time * 1000);
       if (!Number.isNaN(time.valueOf())) {
-        const timeNode = add(item, 'time', time.toLocaleDateString());
+        const age = relativeTime(row.time, Date.now() / 1000);
+        const timeNode = add(item, 'time', `${time.toLocaleDateString()} (${age})`);
+        timeNode.dataset.epoch = String(row.time);
         timeNode.title = time.toLocaleString();
+        item.setAttribute('aria-label', `${item.dataset.rowLabel}, ${time.toLocaleDateString()}, ${age}`);
       }
     }
     if (row.diff_stat) {
