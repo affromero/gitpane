@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+unset TMUX TMUX_PANE
 trap 'tmux -L "$GITPANE_DEMO_SOCKET" kill-server 2>/dev/null || :' 0
 
 tmux -L "$GITPANE_DEMO_SOCKET" -f /dev/null new-session -d \
