@@ -14,10 +14,33 @@ class EventEmitter {
   dispose() { this.listeners.clear(); }
 }
 
-function uri(value, scheme = 'file') {
-  return { fsPath: value, toString: () => `${scheme}:${value}`,
-    with: change => uri(change.path || value, change.scheme || scheme) };
+function uri(value, scheme = 'file', query = '') {
+  return { fsPath: value, path: value, query, toString: () => `${scheme}:${value}${query ? `?${query}` : ''}`,
+    with: change => uri(change.path || value, change.scheme || scheme, change.query ?? query) };
 }
+
+test('binary documents keep their file paths and have independent identities', async t => {
+  const changes = new EventEmitter();
+  const docs = new LinkDocuments({ EventEmitter, workspace: {}, FileType: { File: 1 } },
+    { onDidChangeTreeData: changes.event }, {});
+  t.after(() => docs.dispose());
+  let current = true;
+  const metadata = async () => ({ size: 3, eventFingerprint: 'one' });
+  const read = async () => Buffer.from('one');
+  const file = uri('/workspace/worktree/dir with spaces/file #1.txt');
+  const first = await docs.createBinary(file, metadata, read, () => current);
+  const second = await docs.createLiveBinary(file, metadata, read, () => current);
+  const third = await docs.createLiveBinary(uri('/workspace/other/file #1.txt'), metadata, read, () => current);
+  assert.equal(first.path, file.path);
+  assert.equal(second.path, file.path);
+  assert.equal(third.path, '/workspace/other/file #1.txt');
+  assert.notEqual(first.toString(), second.toString());
+  assert.deepEqual(await docs.readFile(first), Buffer.from('one'));
+  assert.deepEqual(await docs.readFile(second), Buffer.from('one'));
+  current = false;
+  await assert.rejects(docs.readFile(first), /no longer/i);
+  await assert.rejects(docs.readFile(second), /no longer/i);
+});
 
 async function settleRefresh(docs) {
   const deadline = Date.now() + 5000;

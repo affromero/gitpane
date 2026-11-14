@@ -17,9 +17,9 @@ const siblingPath = path.join(temporary, 'outside sibling');
 const oldConfig = process.env.GITPANE_CONFIG;
 let context;
 
-function uri(value, scheme = 'file') {
-  return { scheme, fsPath: value, toString: () => `${scheme}:${value}`,
-    with: change => uri(change.path || value, change.scheme || scheme) };
+function uri(value, scheme = 'file', query = '') {
+  return { scheme, fsPath: value, toString: () => `${scheme}:${value}${query ? `?${query}` : ''}`,
+    with: change => uri(change.path || value, change.scheme || scheme, change.query ?? query) };
 }
 
 function sameLocation(first, second) {

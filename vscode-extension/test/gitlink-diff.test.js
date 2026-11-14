@@ -12,9 +12,9 @@ class EventEmitter {
   dispose() { this.listeners.clear(); }
 }
 
-function uri(value, scheme = 'file') {
-  return { fsPath: value, toString: () => `${scheme}:${value}`,
-    with: change => uri(change.path || value, change.scheme || scheme) };
+function uri(value, scheme = 'file', query = '') {
+  return { fsPath: value, toString: () => `${scheme}:${value}${query ? `?${query}` : ''}`,
+    with: change => uri(change.path || value, change.scheme || scheme, change.query ?? query) };
 }
 
 test('historical pointer documents validate their own ancestor chain', async t => {
