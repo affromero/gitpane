@@ -19,6 +19,11 @@ replaceOnce('Array.from({length:40}', 'Array.from({length:9}');
 replaceOnce('short_id:prefix.repeat(6)+(i%10)',
   "short_id:['9fd2a10','b73e912','4c6d832','e41fa58','3a5d1c7','d85e02b','824f6a3','f07ca24','62b4e91'][i]");
 replaceOnce('time:1793380000-i*3600', 'time:Math.floor(Date.now()/1000)-(i+1)*3600');
+replaceOnce('apiRepo.worktrees=[linked];apiRepo.worktreeCount=1;', `
+apiRepo.worktrees=[linked];apiRepo.worktreeCount=1;
+apiRepo.stashCount=1;apiRepo.stashes=[{id:'draft',index:0,message:'Draft search improvements'}];
+apiRepo.hasDirtySubmodules=true;
+apiRepo.submodules=[{...owner('module','shared-ui','main',true),submodule:true}];`);
 source = source.replaceAll('api-service', 'atlas-api').replaceAll('api-auth', 'atlas-search')
   .replaceAll('web-app', 'meadow-web').replaceAll('shared-lib', 'shared-ui')
   .replaceAll('Andres Romero', 'Alex')
@@ -54,9 +59,10 @@ window.addEventListener('DOMContentLoaded',()=>{(async()=>{
   setTimeout(()=>node.click(),400);
  };
  document.body.dataset.result=btoa(JSON.stringify({ok:true}));
- setTimeout(()=>click(document.getElementById('repos'),row('web')),2200);
- setTimeout(()=>click(document.getElementById('repos'),row('api')),5200);
- setTimeout(()=>click(document.getElementById('graph'),doc('graph').querySelector('.commit')),8000);
+ setTimeout(()=>click(document.getElementById('repos'),row('api').querySelector('.stash-action')),2200);
+ setTimeout(()=>click(document.getElementById('repos'),doc('repos').querySelector('[data-key="worktree:auth"] > .row')),5200);
+ setTimeout(()=>click(document.getElementById('repos'),row('api')),8200);
+ setTimeout(()=>click(document.getElementById('graph'),doc('graph').querySelector('.commit')),11000);
 })();});
 ` + source.slice(end + '})();});'.length);
 
@@ -72,7 +78,7 @@ source = source.slice(0, captureStart) + String.raw`
     fs.mkdirSync(frames);
     const start = Date.now();
     let frame = 0;
-    while (Date.now() - start < 11500) {
+    while (Date.now() - start < 14500) {
       const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false,
         clip: { x: 0, y: 0, width, height, scale: 1 } }, sessionId);
       fs.writeFileSync(path.join(frames, String(frame++).padStart(4, '0') + '.png'), Buffer.from(capture.data, 'base64'));

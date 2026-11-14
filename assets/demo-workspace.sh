@@ -33,6 +33,17 @@ git -C "$repo" commit -q -m 'Limit search results'
 printf '\nexport const apiVersion = "v1";\n' >> "$repo/src/app.ts"
 git -C "$repo" add src/app.ts
 git -C "$repo" commit -q -m 'Version the API'
+
+# Exercise the same Git metadata that Gitpane reads in a real workspace.
+git -C "$repo" worktree add -q -b feature/filters "$root/atlas-filters"
+printf '\nexport const filters = true;\n' >> "$root/atlas-filters/src/app.ts"
+git -C "$repo" -c protocol.file.allow=always submodule add -q "$root/workspace/shared-ui" packages/shared-ui
+git -C "$repo" commit -qm 'Add shared UI submodule'
+printf '\nexport const theme = "ocean";\n' >> "$repo/packages/shared-ui/src/app.ts"
+printf '\nexport const draftSearch = true;\n' >> "$repo/src/app.ts"
+git -C "$repo" add src/app.ts
+printf '\nexport const draftLimit = 20;\n' >> "$repo/src/app.ts"
+git -C "$repo" stash push -qm 'Draft search improvements'
 printf '\nexport const pageSize = 25;\n' >> "$repo/src/app.ts"
 printf 'export const timeoutMs = 5000;\n' > "$repo/src/config.ts"
 git -C "$repo" add src/config.ts

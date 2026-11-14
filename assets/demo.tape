@@ -4,7 +4,7 @@ Output assets/demo.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontFamily "Fira Code"
-Set FontSize 17
+Set FontSize 14
 Set Width 1200
 Set Height 760
 Set Padding 12
@@ -12,11 +12,19 @@ Set Framerate 10
 Set TypingSpeed 10ms
 
 Hide
-Type 'env -u NO_COLOR -u TMUX -u TMUX_PANE GITPANE_CONFIG="$GITPANE_DEMO_CONFIG" "$GITPANE_DEMO_BINARY" --root "$GITPANE_DEMO_ROOT" --no-sync-repos'
+Type 'sh assets/demo-session.sh'
 Enter
 Sleep 5s
 Show
 Sleep 2s
+
+# Expand and select the saved stash.
+Type "S"
+Sleep 2s
+Type "jjj"
+Sleep 3s
+Type "kkk"
+Sleep 1s
 
 # Browse the selected repository's changed files and diff.
 Tab
@@ -36,7 +44,7 @@ Sleep 3s
 Escape
 Sleep 1s
 Escape
-Sleep 1s
+Sleep 7s
 Hide
 Type "q"
 Sleep 500ms
