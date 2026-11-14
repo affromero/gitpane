@@ -33,7 +33,34 @@
     }
     return `rgb(${foreground.join(', ')})`;
   }
+  function selectionColors() {
+    const probe = document.createElement('span');
+    document.body.appendChild(probe);
+    const body = getComputedStyle(document.body);
+    const sidebar = rgb(body.backgroundColor);
+    probe.style.color = 'var(--submodule)';
+    const submodule = rgb(getComputedStyle(probe).color);
+    for (const state of ['active', 'inactive']) {
+      probe.style.color = `var(--vscode-list-${state}SelectionForeground, var(--text))`;
+      probe.style.backgroundColor = `var(--vscode-list-${state}SelectionBackground)`;
+      const style = getComputedStyle(probe);
+      let foreground = rgb(style.color);
+      const background = rgb(style.backgroundColor);
+      const alpha = Number(style.backgroundColor.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)$/)?.[1] ?? 1);
+      if (!sidebar || !submodule || !foreground || !background) continue;
+      const effective = background.map((channel, index) => channel * alpha + sidebar[index] * (1 - alpha));
+      if (contrast(foreground, effective) < 4.5) {
+        const black = [0, 0, 0], white = [255, 255, 255];
+        foreground = contrast(black, effective) > contrast(white, effective) ? black : white;
+      }
+      const softened = submodule.map((channel, index) => Math.round(channel * 0.6 + foreground[index] * 0.4));
+      const value = adjusted(`rgb(${softened.join(', ')})`, effective, foreground);
+      document.documentElement.style.setProperty(`--gitpane-submodule-${state}-selection`, value);
+    }
+    probe.remove();
+  }
   function apply() {
+    selectionColors();
     if (!source) return;
     const body = getComputedStyle(document.body);
     const bg = rgb(body.backgroundColor);
@@ -75,5 +102,8 @@
     return authors[hash % authors.length];
   }
   window.GitpaneTheme = { set, clear, lane: index => lanes.length ? lanes[(index % 6) % lanes.length] : 'currentColor', author };
-  new MutationObserver(apply).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  new MutationObserver(apply).observe(document.body, {
+    attributes: true, attributeFilter: ['class', 'data-vscode-theme-id', 'data-vscode-theme-kind']
+  });
+  apply();
 })();
