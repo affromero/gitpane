@@ -7,7 +7,7 @@ at the top, changes in the middle and the commit graph below. Select a repositor
 or worktree to update both lower sections. Select a changed file to open its
 native diff in the editor.
 
-![Gitpane for VS Code demo showing repository selection, changes, and commit history](https://raw.githubusercontent.com/affromero/gitpane/main/assets/demo-vscode.gif)
+![Gitpane for VS Code demo showing stashes, worktrees, submodules, changes, and commit history](https://raw.githubusercontent.com/affromero/gitpane/main/assets/demo-vscode.gif)
 
 Rendered preview with sample repositories and simulated Explorer section headers.
 
