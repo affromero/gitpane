@@ -198,6 +198,8 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
         tail.appendChild(button);
       } else add(tail, 'stash', `$${repo.stashCount}`, `${repo.stashCount} stashes`);
     }
+    if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
+      !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
     if (repo.worktreeCount > 0) {
       if (hasWorktrees) {
         const button = element('button', 'worktree worktree-action', `${showWorktrees ? '▾' : '▸'}⎇${repo.worktreeCount}`);
@@ -209,7 +211,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
       } else add(tail, 'worktree', `⎇${repo.worktreeCount}`, `${repo.worktreeCount} worktrees`);
     }
   }
-  if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
+  if (repo.statusUnavailable && repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
     !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (!repo.statusUnavailable) {

@@ -71,9 +71,9 @@ const scenario = String.raw`
     check('selected root remains bold', item('repo:standalone').getAttribute('aria-selected') === 'true' && weight('repo:standalone') >= 700);
     const controls = [...row('repo:root').querySelector('.tail').children];
     const index = selector => controls.findIndex(node => node.matches(selector));
-    check('disclosure indicators follow stash, worktree, submodule order',
-      index('.stash-action') < index('.worktree-action') && index('.worktree-action') < index('.submodule-action') &&
-      index('.submodule-action') < index('.live'));
+    check('disclosure indicators follow stash, submodule, worktree order',
+      index('.stash-action') < index('.submodule-action') && index('.submodule-action') < index('.worktree-action') &&
+      index('.worktree-action') < index('.live'));
     row('repo:root').querySelector('.stash-action').click();
     await tick();
     const children = [...item('repo:root').querySelector(':scope > .children').children].map(node => node.dataset.key);
@@ -92,6 +92,9 @@ const scenario = String.raw`
     check('submodule control matches neighboring background and border', subStyle.backgroundColor === worktreeStyle.backgroundColor && subStyle.borderStyle === worktreeStyle.borderStyle);
     if (!matchMedia('(forced-colors: active)').matches) check('submodule control has transparent background and no default border', subStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && subStyle.borderStyle === 'none');
     check('submodule control matches neighboring font and spacing', subStyle.font === worktreeStyle.font && subStyle.padding === worktreeStyle.padding);
+    check('submodule and worktree controls have the same height and alignment',
+      subControl.getBoundingClientRect().height === worktreeControl.getBoundingClientRect().height &&
+      subControl.getBoundingClientRect().top === worktreeControl.getBoundingClientRect().top);
     check('submodule control is keyboard accessible and labeled', subControl.tabIndex === 0 && /submodules/i.test(subControl.getAttribute('aria-label')) && subControl.getAttribute('aria-expanded') === 'true');
     subControl.focus();
     check('submodule control shows keyboard focus', document.activeElement === subControl && subControl.matches(':focus-visible') && getComputedStyle(subControl).outlineStyle !== 'none');
@@ -107,8 +110,27 @@ const scenario = String.raw`
       const distance = (first, second) => Math.hypot(...channels(first).map((channel, index) => channel - channels(second)[index]));
       check('submodule disclosure color is softened toward the foreground', distance(color(subControl), color(row('repo:root'))) < distance(color(sub), color(row('repo:root'))));
       check('submodule disclosure is readable on the normal background', contrast(color(subControl), getComputedStyle(document.body).backgroundColor) >= 4.5);
-      item('repo:root').focus();
-      check('selected submodule disclosure is readable', contrast(color(subControl), getComputedStyle(row('repo:root')).backgroundColor) >= 4.5);
+      for (const key of ['repo:root', 'worktree:ordinary']) {
+        row(key).click();
+        const control = row(key).querySelector('.submodule-action');
+        const selectedRow = row(key);
+        const activeColor = color(control);
+        check(key + ' selected with focus keeps a distinct readable submodule color',
+          activeColor !== color(selectedRow) && contrast(activeColor, getComputedStyle(selectedRow).backgroundColor) >= 4.5);
+        document.getElementById('start-search').focus();
+        check(key + ' selected without focus keeps a distinct readable submodule color',
+          color(control) !== color(selectedRow) && contrast(color(control), getComputedStyle(selectedRow).backgroundColor) >= 4.5);
+        control.focus();
+        check(key + ' button focus retains the inactive selection color', color(control) !== color(selectedRow));
+      }
+      if (MODE === 'custom') {
+        document.documentElement.style.setProperty('--vscode-list-activeSelectionBackground', 'rgb(154, 70, 150)');
+        document.body.setAttribute('data-vscode-theme-id', 'changed-dark-theme');
+        await tick();
+        item('repo:root').focus();
+        check('theme change recalculates contrast against the new selection background',
+          contrast(color(row('repo:root').querySelector('.submodule-action')), getComputedStyle(row('repo:root')).backgroundColor) >= 4.5);
+      }
     }
     const outside = row('worktree:outside').querySelector('.name');
     check('outside worktree tooltip includes path and full branch', outside.title.includes('/some/outside/worktree') && outside.title.includes('a-very-long-outside-branch-name'));
@@ -121,6 +143,14 @@ const scenario = String.raw`
     row('repo:root').querySelector('.submodule-action').click();
     row('repo:root').querySelector('.worktree-action').click();
     check('worktree disclosure collapses independently', !item('worktree:ordinary') && !!item('repo:module') && !!item('stash-group:root'));
+    if (MODE === 'custom') {
+      row('repo:root').click();
+      window.postMessage({ type: 'snapshot', repositories: [root, standalone], errors: [], expandWorktrees: true }, '*');
+      await tick();
+      check('refresh preserves the selected submodule cue',
+        color(row('repo:root').querySelector('.submodule-action')) !== color(row('repo:root')) &&
+        contrast(color(row('repo:root').querySelector('.submodule-action')), getComputedStyle(row('repo:root')).backgroundColor) >= 4.5);
+    }
     root.statusUnavailable = true;
     window.postMessage({ type: 'snapshot', repositories: [root], errors: [], expandWorktrees: true }, '*');
     await tick();
@@ -139,9 +169,9 @@ try {
     const bodyClass = mode === 'forced' ? 'vscode-dark' : mode === 'custom' ? 'vscode-dark' : `vscode-${mode}`;
     const colors = mode === 'custom' ? '--vscode-terminal-ansiMagenta:rgb(154, 70, 150);--vscode-terminal-ansiYellow:rgb(150, 110, 20);' : '';
     const light = mode === 'light' || mode === 'high-contrast-light';
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>:root{${colors}--vscode-sideBar-background:${light ? '#fff' : '#1e1e1e'};--vscode-sideBar-foreground:${light ? '#222' : '#ddd'};--vscode-list-activeSelectionBackground:#315e8a;--vscode-list-activeSelectionForeground:#fff;--vscode-list-inactiveSelectionBackground:#315e8a;--vscode-list-inactiveSelectionForeground:#fff;--vscode-focusBorder:#fff;}${stylesheet}</style></head>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>:root{${colors}--vscode-sideBar-background:${light ? '#fff' : '#1e1e1e'};--vscode-sideBar-foreground:${light ? '#222' : '#ddd'};--vscode-list-activeSelectionBackground:#315e8a;--vscode-list-activeSelectionForeground:#fff;--vscode-list-inactiveSelectionBackground:#394252;--vscode-list-inactiveSelectionForeground:#fff;--vscode-focusBorder:#fff;}${stylesheet}</style></head>
       <body class="${bodyClass}"><div id="messages"></div><button id="start-search"></button><div id="search-box" hidden><input id="file-search"><button id="search-prev"></button><button id="search-next"></button><div id="search-status"></div></div><div id="repositories" role="tree" style="width:210px"></div>
-      <script>window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>${scripts.map(script => `<script>${script}</script>`).join('')}<script>${scenario.replace('EXPECT_FORCED', String(mode === 'forced'))}</script></body></html>`;
+      <script>window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>${scripts.map(script => `<script>${script}</script>`).join('')}<script>${scenario.replace('EXPECT_FORCED', String(mode === 'forced')).replaceAll('MODE', JSON.stringify(mode))}</script></body></html>`;
     const fixture = path.join(temporary, `${mode}.html`);
     fs.writeFileSync(fixture, html);
     const args = ['--headless', '--disable-gpu', '--disable-background-networking', '--no-first-run', '--disable-extensions',
