@@ -4,6 +4,19 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.10] - 2026-11-14
+
+### Changed
+- Refresh the terminal and VS Code demos with sample repositories. ([#191](https://github.com/affromero/gitpane/issues/191))
+
+### Fixed
+- Show relative commit ages alongside dates in the VS Code graph. ([#190](https://github.com/affromero/gitpane/pull/190), closes [#189](https://github.com/affromero/gitpane/issues/189))
+- Show submodules under their owning worktrees and use the selected checkout for submodule actions. ([#188](https://github.com/affromero/gitpane/pull/188), closes [#187](https://github.com/affromero/gitpane/issues/187))
+- Recover from stalled outside-worktree refreshes without blocking other repositories. ([#186](https://github.com/affromero/gitpane/pull/186), closes [#185](https://github.com/affromero/gitpane/issues/185))
+- Make top-level repository names easier to distinguish and align submodule controls and worktree presentation. ([#184](https://github.com/affromero/gitpane/pull/184), closes [#183](https://github.com/affromero/gitpane/issues/183), [#182](https://github.com/affromero/gitpane/pull/182), closes [#177](https://github.com/affromero/gitpane/issues/177))
+- Restore staged and working diffs after a VS Code window reload, including Remote SSH. ([#181](https://github.com/affromero/gitpane/pull/181), closes [#173](https://github.com/affromero/gitpane/issues/173))
+- Compare files and submodule pointers in either direction. ([#175](https://github.com/affromero/gitpane/pull/175), closes [#174](https://github.com/affromero/gitpane/issues/174))
+
 ## [0.18.9] - 2026-11-13
 
 ### Added

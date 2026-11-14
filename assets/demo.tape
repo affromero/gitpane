@@ -1,116 +1,42 @@
-# VHS tape for gitpane demo GIF
-# Run: vhs assets/demo.tape
-
+# Run after creating the sample workspace with assets/demo-workspace.sh.
+# Set GITPANE_DEMO_ROOT, GITPANE_DEMO_CONFIG, and GITPANE_DEMO_BINARY.
 Output assets/demo.gif
 
 Set Theme "Catppuccin Mocha"
 Set FontFamily "Fira Code"
-Set FontSize 18
+Set FontSize 17
 Set Width 1200
-Set Height 900
-Set Padding 16
-Set Framerate 15
-Set TypingSpeed 20ms
-Set PlaybackSpeed 1
+Set Height 760
+Set Padding 12
+Set Framerate 10
+Set TypingSpeed 10ms
 
-# Start gitpane
-Type "gitpane --root /Users/afromero/Code"
+Hide
+Type 'env -u NO_COLOR -u TMUX -u TMUX_PANE GITPANE_CONFIG="$GITPANE_DEMO_CONFIG" "$GITPANE_DEMO_BINARY" --root "$GITPANE_DEMO_ROOT" --no-sync-repos'
 Enter
-
-# Wait for load
-# Repo order (yazi-ssh pinned first, then alpha):
-#   0. yazi-ssh (pinned)
-#   1. 3d-llm-client
-#   2. afromero
-#   3. capacitor-app
-#   4. gitpane        ← ⎇3 * dirty
-#   5. vendored-lib
-#   6. Sotto          ← ⎇3 * ↑13
-Sleep 4s
-
-# Navigate slowly to show indicators on each repo
-# j → 3d-llm-client
-Type "j"
-Sleep 500ms
-
-# j → afromero
-Type "j"
-Sleep 500ms
-
-# j → capacitor-app
-Type "j"
-Sleep 500ms
-
-# j → gitpane (⎇3 worktrees, * dirty) — our repo, explore it
-Type "j"
+Sleep 5s
+Show
 Sleep 2s
 
-# Tab to Changes panel — show gitpane's dirty files
+# Browse the selected repository's changed files and diff.
 Tab
 Sleep 1s
-
-# Navigate files
-Type "j"
-Sleep 300ms
-
-# Open diff for a changed file
 Enter
 Sleep 3s
-
-# Close diff
 Escape
-Sleep 500ms
+Sleep 1s
 
-# Tab to Graph panel — show gitpane's commit graph
+# Browse its history and open a commit.
 Tab
 Sleep 1s
-
-# Pause on commit graph
-Sleep 2s
-
-# Navigate commits
 Type "j"
-Sleep 200ms
-Type "j"
-Sleep 200ms
-Type "j"
-Sleep 200ms
-
-# Open commit detail
-Enter
-Sleep 2s
-
-# Navigate commit files, open commit diff
-Type "j"
-Sleep 200ms
-Enter
-Sleep 3s
-
-# Close all with Esc (layered: diff → files → graph)
-Escape
-Sleep 300ms
-Escape
-Sleep 300ms
-Escape
-Sleep 300ms
-
-# Back to repo list — continue down to Sotto
-# j → vendored-lib
-Type "j"
-Sleep 500ms
-
-# j → Sotto (⎇3 worktrees, * dirty, ↑13 ahead) — all indicators visible
-Type "j"
-Sleep 3s
-
-# Sort to dirty-first — gitpane and Sotto jump to top
-Type "s"
-Sleep 2s
-
-# Sort back to alphabetical
-Type "s"
 Sleep 1s
-
-# Quit
+Enter
+Sleep 3s
+Escape
+Sleep 1s
+Escape
+Sleep 1s
+Hide
 Type "q"
 Sleep 500ms

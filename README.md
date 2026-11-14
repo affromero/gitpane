@@ -29,8 +29,10 @@
 Monitor **all your repos at a glance**. See branches, local changes, worktrees and commit history in the terminal or VS Code's Explorer.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="gitpane demo" width="800">
+  <img src="assets/demo.gif" alt="Gitpane terminal demo showing repositories, changes, and commit history" width="800">
 </p>
+
+Terminal demo recorded with sample repositories.
 
 ## Install
 
@@ -73,9 +75,9 @@ at the top, changes in the middle and the commit graph below. Select a repositor
 or worktree to update both lower sections. Select a file to open its native diff
 in the editor.
 
-<img src="assets/screenshot-vscode-stacked.png" alt="Gitpane for VS Code with stacked repositories, changes and commit graph" width="440">
+<img src="assets/demo-vscode.gif" alt="Gitpane for VS Code demo showing repository selection, changes, and commit history" width="520">
 
-Rendered preview with example repositories and simulated Explorer section headers.
+Rendered preview with sample repositories and simulated Explorer section headers.
 
 The sections resize and collapse independently. Hide **Changes** to show changed
 files inline under repositories instead. The `●` action opens a larger graph
