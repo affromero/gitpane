@@ -28,7 +28,7 @@ function statusRevision(getStatus, watchedPath, getHead) {
 }
 
 // A Git symlink stores the link text, not the contents of the linked file.
-// Keep paths and guards in the extension host, never in the document URI.
+// Keep content and guards in the extension host; URI paths are display labels.
 class LinkDocuments {
   constructor(vscode, tree, backend, state) {
     this.vscode = vscode;
@@ -432,8 +432,7 @@ class LinkDocuments {
     const entry = { readMetadata, readBinary, guard, guardSync, group, refreshGuard, closed: false, textOpen: false, tabOpen: false };
     await this.binaryMetadata(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
-    const name = path.basename(fileUri.fsPath);
-    entry.uri = fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${name}`, query: '', fragment: '' });
+    entry.uri = fileUri.with({ scheme: 'gitpane-blob', query: randomUUID(), fragment: '' });
     const key = entry.uri.toString();
     entry.fingerprint = 'static';
     this.documents.set(key, entry);
@@ -447,7 +446,7 @@ class LinkDocuments {
       closed: false, textOpen: false, tabOpen: false, mtime: Date.now(), restored: !!restoreUri };
     const metadata = await this.binaryMetadata(entry);
     if (this.disposed || this.documents.size >= 256) throw new Error('The Gitpane diff is no longer available.');
-    entry.uri = restoreUri || fileUri.with({ scheme: 'gitpane-blob', path: `/${randomUUID()}/${path.basename(fileUri.fsPath)}`, query: '', fragment: '' });
+    entry.uri = restoreUri || fileUri.with({ scheme: 'gitpane-blob', query: randomUUID(), fragment: '' });
     entry.fingerprint = metadata.eventFingerprint;
     entry.liveVersion = metadata.eventFingerprint;
     this.documents.set(entry.uri.toString(), entry);
