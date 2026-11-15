@@ -5,7 +5,7 @@ use super::*;
 fn indicator_columns_returns_none_when_neither_subtree_present() {
     let mut list = make_list(&["/r"]);
     list.repos[0].status = Some(empty_status("main"));
-    let layout = row_layout(&list.repos, &[], 40);
+    let layout = row_layout(&list.repos, &[], 40, &hierarchy::child_counts(&list.repos));
     let cols = indicator_columns(&list.repos[0], 0, &layout);
     assert_eq!(cols.stash, None);
     assert_eq!(cols.worktree, None);
@@ -21,7 +21,7 @@ fn indicator_columns_locates_stash_then_worktree() {
     status.worktree_info.push(worktree_entry("wt"));
     list.repos[0].status = Some(status);
 
-    let layout = row_layout(&list.repos, &[], 40);
+    let layout = row_layout(&list.repos, &[], 40, &hierarchy::child_counts(&list.repos));
     let cols = indicator_columns(&list.repos[0], 0, &layout);
     // "▶$1" = 3 columns at the rail start.
     assert_eq!(cols.stash, Some((9, 12)));
@@ -40,7 +40,7 @@ fn indicator_columns_accounts_for_ahead_behind() {
     status.stashes.push(stash_entry(0));
     list.repos[0].status = Some(status);
 
-    let layout = row_layout(&list.repos, &[], 40);
+    let layout = row_layout(&list.repos, &[], 40, &hierarchy::child_counts(&list.repos));
     let cols = indicator_columns(&list.repos[0], 0, &layout);
     assert_eq!(cols.stash, Some((9, 12)));
 }
@@ -58,7 +58,7 @@ fn rows_share_the_same_status_columns() {
     list.repos[0].status = Some(short);
     list.repos[1].status = Some(long);
 
-    let layout = row_layout(&list.repos, &[], 90);
+    let layout = row_layout(&list.repos, &[], 90, &hierarchy::child_counts(&list.repos));
     let starts: Vec<u16> = list
         .repos
         .iter()
@@ -80,7 +80,7 @@ fn branch_cell_is_capped_to_a_third_of_the_panel() {
     list.repos[0].status = Some(empty_status(
         "codex/some-extremely-long-generated-branch-name",
     ));
-    let layout = row_layout(&list.repos, &[], 30);
+    let layout = row_layout(&list.repos, &[], 30, &hierarchy::child_counts(&list.repos));
     assert_eq!(layout.branch_col, 10);
 }
 
@@ -393,7 +393,7 @@ fn stash_toggle_glyph_sits_where_the_hit_test_says() {
 
     // Same anchors the mouse handler uses: content starts one column in from
     // the border, inner width excludes both borders.
-    let layout = row_layout(&list.repos, &[], 38);
+    let layout = row_layout(&list.repos, &[], 38, &hierarchy::child_counts(&list.repos));
     let cols = indicator_columns(&list.repos[0], 1, &layout);
     assert_eq!(drawn, cols.stash.expect("stash range").0);
 }
@@ -431,7 +431,8 @@ fn attention_cell_packs_per_row_without_reserved_columns() {
             .unwrap_or_else(|| panic!("{glyph} not drawn in row {row_y}"))
     };
 
-    let rail = 1 + row_layout(&list.repos, &[], 38).attention_x() as usize;
+    let rail = 1 + row_layout(&list.repos, &[], 38, &hierarchy::child_counts(&list.repos))
+        .attention_x() as usize;
     assert_eq!(glyph_x(1, '\u{25b6}'), rail, "row a starts at the rail");
     assert_eq!(glyph_x(2, '\u{2193}'), rail, "row b starts at the rail too");
 }
@@ -507,7 +508,12 @@ fn narrow_panel_renders_without_panic() {
             })
             .unwrap();
         let inner = width.saturating_sub(2);
-        let layout = row_layout(&list.repos, &[], inner);
+        let layout = row_layout(
+            &list.repos,
+            &[],
+            inner,
+            &hierarchy::child_counts(&list.repos),
+        );
         let _ = indicator_columns(&list.repos[0], 1, &layout);
     }
 }
@@ -583,7 +589,7 @@ fn pinned_submodule_labels_as_nested_basename() {
 
     // The name column budgets connector + basename + badge for the nested
     // row: "\u{2514} " + "dep" + " [sub]" (11) outweighs "parent" (6).
-    let layout = row_layout(&list.repos, &[], 60);
+    let layout = row_layout(&list.repos, &[], 60, &hierarchy::child_counts(&list.repos));
     assert_eq!(layout.name_col, 11);
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 mod robustness;
 mod stash;
+mod submodule_disclosure;
 mod text_selection;
 mod watcher_membership;
 use crate::git::status::StashEntry;

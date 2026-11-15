@@ -129,6 +129,7 @@ impl App {
                         self.active_worktree = None;
                     }
                     self.repo_list.repos.remove(idx);
+                    self.repo_list.forget_submodule_disclosures(&id.0);
                     self.rebuild_watcher();
                     self.prune_github_cache(std::slice::from_ref(&id.0));
                     // Fix selection

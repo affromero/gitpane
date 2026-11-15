@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{DisplayRow, RepoEntry, RepoId, RepoList, RowId};
 use crate::git::status::SubmoduleInfo;
@@ -10,6 +10,142 @@ use ratatui::{
 use std::path::Path;
 
 impl RepoList {
+    pub(crate) fn forget_submodule_disclosures(&mut self, repo: &Path) {
+        self.collapsed_submodules.retain(|_, owner| owner != repo);
+    }
+
+    pub(super) fn render_worktree_item(
+        &self,
+        entry: &RepoEntry,
+        wt_idx: usize,
+    ) -> ListItem<'static> {
+        let t = &self.theme.repo_list;
+        let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
+        let mut spans = vec![Span::styled(
+            "    \u{2387} ",
+            Style::default().fg(t.worktree_subtree_icon),
+        )];
+        if wt.is_dirty {
+            spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+        let count = self.submodule_counts.get(&wt.path).copied().unwrap_or(0);
+        if count > 0 {
+            spans.push(Span::styled(
+                format!("{} ", disclosure(count, self.submodules_expanded(&wt.path))),
+                Style::default().fg(t.dirty_submodule),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("{:<12} ", wt.branch),
+            Style::default().fg(t.worktree_subtree_branch),
+        ));
+        if wt.ahead > 0 {
+            spans.push(Span::styled(
+                format!("\u{2191}{} ", wt.ahead),
+                Style::default().fg(t.ahead),
+            ));
+        }
+        if wt.behind > 0 {
+            spans.push(Span::styled(
+                format!("\u{2193}{} ", wt.behind),
+                Style::default().fg(t.behind),
+            ));
+        }
+        if wt.has_dirty_submodules {
+            spans.push(Span::styled(
+                "\u{25c8} ",
+                Style::default().fg(t.dirty_submodule),
+            ));
+        }
+        if wt.has_unpushed_submodules {
+            spans.push(Span::styled(
+                "\u{21e1} ",
+                Style::default().fg(t.unpushed_submodule),
+            ));
+        }
+        if wt.file_count > 0 {
+            spans.push(Span::styled(
+                format!("[{}] ", wt.file_count),
+                Style::default().fg(t.file_count),
+            ));
+        }
+        if crate::session::liveness::is_live(&wt.path, &self.live_panes) {
+            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
+        }
+        ListItem::new(Line::from(spans))
+    }
+
+    pub(super) fn submodules_expanded(&self, path: &Path) -> bool {
+        !self.collapsed_submodules.contains_key(path)
+    }
+
+    pub(super) fn toggle_selected_submodules(&mut self) -> bool {
+        let Some(row) = self.state.selected().and_then(|i| self.display_rows.get(i)) else {
+            return false;
+        };
+        let owner = match *row {
+            DisplayRow::Repo(i) => {
+                let own = Parent::Repo(i);
+                if self.child_count(own) > 0 {
+                    Some(own)
+                } else {
+                    parent(&self.repos, &self.repos[i])
+                }
+            }
+            DisplayRow::Worktree(i, w) | DisplayRow::Submodule(i, Some(w), _) => {
+                Some(Parent::Worktree(i, w))
+            }
+            DisplayRow::Submodule(i, None, _) | DisplayRow::Stash(i, _) => Some(Parent::Repo(i)),
+        };
+        owner.is_some_and(|owner| self.toggle_submodules(owner))
+    }
+
+    fn child_count(&self, owner: Parent) -> usize {
+        let path = match owner {
+            Parent::Repo(i) => &self.repos[i].path,
+            Parent::Worktree(i, w) => &self.repos[i].status.as_ref().unwrap().worktree_info[w].path,
+        };
+        self.submodule_counts.get(path).copied().unwrap_or(0)
+    }
+
+    pub(super) fn toggle_submodules(&mut self, owner: Parent) -> bool {
+        if self.child_count(owner) == 0 {
+            return false;
+        }
+        let (path, repo, owner_row) = match owner {
+            Parent::Repo(i) => (
+                self.repos[i].path.clone(),
+                self.repos[i].path.clone(),
+                DisplayRow::Repo(i),
+            ),
+            Parent::Worktree(i, w) => (
+                self.repos[i].status.as_ref().unwrap().worktree_info[w]
+                    .path
+                    .clone(),
+                self.repos[i].path.clone(),
+                DisplayRow::Worktree(i, w),
+            ),
+        };
+        let previous = self.selected_row_id();
+        let collapsing = !self.collapsed_submodules.contains_key(&path);
+        if collapsing {
+            self.collapsed_submodules.insert(path.clone(), repo);
+        } else {
+            self.collapsed_submodules.remove(&path);
+        }
+        self.resync_rows(previous.clone());
+        let changed = self.selected_row_id() != previous;
+        if collapsing
+            && changed
+            && let Some(index) = self.display_rows.iter().position(|row| *row == owner_row)
+        {
+            self.state.select(Some(index));
+        }
+        self.selected_row_id() != previous
+    }
+
     /// Identify the selection across sorting and status updates.
     pub fn selected_row_id(&self) -> Option<RowId> {
         let di = self.state.selected()?;
@@ -110,6 +246,46 @@ pub(super) enum Parent {
     Worktree(usize, usize),
 }
 
+pub(super) fn child_counts(repos: &[RepoEntry]) -> HashMap<std::path::PathBuf, usize> {
+    let mut paths: HashMap<std::path::PathBuf, HashSet<std::path::PathBuf>> = HashMap::new();
+    for entry in repos {
+        if let Some(status) = &entry.status {
+            for sub in &status.checkout_submodules {
+                paths
+                    .entry(entry.path.clone())
+                    .or_default()
+                    .insert(entry.path.join(&sub.path));
+            }
+            for wt in &status.worktree_info {
+                for sub in &wt.checkout_submodules {
+                    paths
+                        .entry(wt.path.clone())
+                        .or_default()
+                        .insert(wt.path.join(&sub.path));
+                }
+            }
+        }
+        if let Some(owner) = parent(repos, entry) {
+            let path = match owner {
+                Parent::Repo(i) => &repos[i].path,
+                Parent::Worktree(i, w) => &repos[i].status.as_ref().unwrap().worktree_info[w].path,
+            };
+            paths
+                .entry(path.clone())
+                .or_default()
+                .insert(entry.path.clone());
+        }
+    }
+    paths
+        .into_iter()
+        .map(|(path, children)| (path, children.len()))
+        .collect()
+}
+
+pub(super) fn disclosure(count: usize, expanded: bool) -> String {
+    format!("{}◈{count}", if expanded { '▾' } else { '▸' })
+}
+
 /// Attach a pinned checkout to the deepest listed repository or worktree.
 pub(super) fn parent(repos: &[RepoEntry], entry: &RepoEntry) -> Option<Parent> {
     if !entry.gitlink {
@@ -149,6 +325,7 @@ pub(super) fn rows(
     repos: &[RepoEntry],
     expanded_stashes: &HashSet<RepoId>,
     worktrees_expanded: impl Fn(&RepoId) -> bool,
+    submodules_expanded: impl Fn(&Path) -> bool,
 ) -> Vec<DisplayRow> {
     fn append(
         index: usize,
@@ -156,22 +333,33 @@ pub(super) fn rows(
         parents: &[Option<Parent>],
         stashes: &HashSet<RepoId>,
         expanded: &impl Fn(&RepoId) -> bool,
+        submodules_expanded: &impl Fn(&Path) -> bool,
         rows: &mut Vec<DisplayRow>,
     ) {
         rows.push(DisplayRow::Repo(index));
-        if let Some(status) = &repos[index].status {
-            for (sub, info) in status.checkout_submodules.iter().enumerate() {
-                if !repos.iter().enumerate().any(|(child, entry)| {
-                    entry.path == repos[index].path.join(&info.path)
-                        && parents[child] == Some(Parent::Repo(index))
-                }) {
-                    rows.push(DisplayRow::Submodule(index, None, sub));
+        if submodules_expanded(&repos[index].path) {
+            if let Some(status) = &repos[index].status {
+                for (sub, info) in status.checkout_submodules.iter().enumerate() {
+                    if !repos.iter().enumerate().any(|(child, entry)| {
+                        entry.path == repos[index].path.join(&info.path)
+                            && parents[child] == Some(Parent::Repo(index))
+                    }) {
+                        rows.push(DisplayRow::Submodule(index, None, sub));
+                    }
                 }
             }
-        }
-        for (child, parent) in parents.iter().enumerate() {
-            if *parent == Some(Parent::Repo(index)) {
-                append(child, repos, parents, stashes, expanded, rows);
+            for (child, parent) in parents.iter().enumerate() {
+                if *parent == Some(Parent::Repo(index)) {
+                    append(
+                        child,
+                        repos,
+                        parents,
+                        stashes,
+                        expanded,
+                        submodules_expanded,
+                        rows,
+                    );
+                }
             }
         }
         let entry = &repos[index];
@@ -180,17 +368,27 @@ pub(super) fn rows(
         if expanded(&id) {
             for (j, worktree) in status.worktree_info.iter().enumerate() {
                 rows.push(DisplayRow::Worktree(index, j));
-                for (sub, info) in worktree.checkout_submodules.iter().enumerate() {
-                    if !repos.iter().enumerate().any(|(child, entry)| {
-                        entry.path == worktree.path.join(&info.path)
-                            && parents[child] == Some(Parent::Worktree(index, j))
-                    }) {
-                        rows.push(DisplayRow::Submodule(index, Some(j), sub));
+                if submodules_expanded(&worktree.path) {
+                    for (sub, info) in worktree.checkout_submodules.iter().enumerate() {
+                        if !repos.iter().enumerate().any(|(child, entry)| {
+                            entry.path == worktree.path.join(&info.path)
+                                && parents[child] == Some(Parent::Worktree(index, j))
+                        }) {
+                            rows.push(DisplayRow::Submodule(index, Some(j), sub));
+                        }
                     }
-                }
-                for (child, parent) in parents.iter().enumerate() {
-                    if *parent == Some(Parent::Worktree(index, j)) {
-                        append(child, repos, parents, stashes, expanded, rows);
+                    for (child, parent) in parents.iter().enumerate() {
+                        if *parent == Some(Parent::Worktree(index, j)) {
+                            append(
+                                child,
+                                repos,
+                                parents,
+                                stashes,
+                                expanded,
+                                submodules_expanded,
+                                rows,
+                            );
+                        }
                     }
                 }
             }
@@ -224,6 +422,7 @@ pub(super) fn rows(
                 &parents,
                 expanded_stashes,
                 &worktrees_expanded,
+                &submodules_expanded,
                 &mut result,
             );
         }

@@ -4,7 +4,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{ListItem, ListState},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -129,6 +129,8 @@ pub(crate) struct RepoList {
     /// Storing the delta rather than the state means a repo discovered later
     /// picks up the configured default with no bookkeeping.
     worktrees_toggled: HashSet<RepoId>,
+    collapsed_submodules: HashMap<PathBuf, PathBuf>,
+    submodule_counts: HashMap<PathBuf, usize>,
     /// `ui.expand_worktrees`: whether worktrees show without pressing `w`.
     expand_worktrees: bool,
     /// Which repos have their stash list expanded
@@ -277,6 +279,8 @@ impl RepoList {
             focused: true,
             action_tx: None,
             worktrees_toggled: HashSet::new(),
+            collapsed_submodules: HashMap::new(),
+            submodule_counts: HashMap::new(),
             expand_worktrees,
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
@@ -302,9 +306,13 @@ impl RepoList {
 
     /// Recompute display_rows from repos + expansion state.
     fn rebuild_display_rows(&mut self) {
-        self.display_rows = hierarchy::rows(&self.repos, &self.expanded_stashes, |id| {
-            self.worktrees_expanded(id)
-        });
+        self.submodule_counts = hierarchy::child_counts(&self.repos);
+        self.display_rows = hierarchy::rows(
+            &self.repos,
+            &self.expanded_stashes,
+            |id| self.worktrees_expanded(id),
+            |path| self.submodules_expanded(path),
+        );
     }
 
     /// Returns the parent repo index for the current selection.
@@ -610,6 +618,7 @@ impl RepoList {
             let id = RepoId(path.clone());
             self.worktrees_toggled.remove(&id);
             self.expanded_stashes.remove(&id);
+            self.forget_submodule_disclosures(path);
         }
 
         self.repos = next;
@@ -890,6 +899,13 @@ impl RepoList {
                 tail.push((text, color));
             }
         }
+        let count = self.submodule_counts.get(&entry.path).copied().unwrap_or(0);
+        if count > 0 {
+            tail.push((
+                hierarchy::disclosure(count, self.submodules_expanded(&entry.path)),
+                t.dirty_submodule,
+            ));
+        }
         if live {
             tail.push(("\u{25c9}".to_string(), t.live));
         }
@@ -908,66 +924,6 @@ impl RepoList {
                 }
                 spans.push(Span::styled(text, Style::default().fg(color)));
             }
-        }
-
-        ListItem::new(Line::from(spans))
-    }
-
-    fn render_worktree_item(&self, entry: &RepoEntry, wt_idx: usize) -> ListItem<'static> {
-        let t = &self.theme.repo_list;
-        let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
-        let mut spans = vec![Span::styled(
-            "    \u{2387} ",
-            Style::default().fg(t.worktree_subtree_icon),
-        )];
-
-        if wt.is_dirty {
-            spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
-        } else {
-            spans.push(Span::raw("  "));
-        }
-
-        spans.push(Span::styled(
-            format!("{:<12} ", wt.branch),
-            Style::default().fg(t.worktree_subtree_branch),
-        ));
-
-        if wt.ahead > 0 {
-            spans.push(Span::styled(
-                format!("\u{2191}{} ", wt.ahead),
-                Style::default().fg(t.ahead),
-            ));
-        }
-        if wt.behind > 0 {
-            spans.push(Span::styled(
-                format!("\u{2193}{} ", wt.behind),
-                Style::default().fg(t.behind),
-            ));
-        }
-
-        if wt.has_dirty_submodules {
-            spans.push(Span::styled(
-                "\u{25c8} ",
-                Style::default().fg(t.dirty_submodule),
-            ));
-        }
-
-        if wt.has_unpushed_submodules {
-            spans.push(Span::styled(
-                "\u{21e1} ",
-                Style::default().fg(t.unpushed_submodule),
-            ));
-        }
-
-        if wt.file_count > 0 {
-            spans.push(Span::styled(
-                format!("[{}] ", wt.file_count),
-                Style::default().fg(t.file_count),
-            ));
-        }
-
-        if crate::session::liveness::is_live(&wt.path, &self.live_panes) {
-            spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
 
         ListItem::new(Line::from(spans))

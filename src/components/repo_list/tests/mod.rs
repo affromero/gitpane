@@ -64,5 +64,6 @@ pub(super) fn make_list_with_expand(paths: &[&str], expand_worktrees: bool) -> R
     )
 }
 
+mod disclosure;
 mod render;
 mod rows;
