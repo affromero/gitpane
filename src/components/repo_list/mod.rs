@@ -836,7 +836,12 @@ impl RepoList {
         });
         let name = middle_ellipsize(label, budget);
         x += name.chars().count() as u16;
-        spans.push(Span::styled(name, Style::default().fg(t.repo_name)));
+        let name_color = if nested {
+            self.theme.file_list.submodule_path
+        } else {
+            t.repo_name
+        };
+        spans.push(Span::styled(name, Style::default().fg(name_color)));
         if nested {
             spans.push(Span::styled(
                 NESTED_BADGE,

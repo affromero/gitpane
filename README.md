@@ -621,6 +621,8 @@ lane_palette = ["Red", "#5fafd7", "Cyan", "67", "Magenta", "Yellow"]
 
 Color values accept ratatui's standard names (`"Yellow"`, `"LightMagenta"`, ...), 8 bit indices as bare integers (`"67"`), or 24 bit hex (`"#5fafd7"`). If `$GITPANE_CONFIG` points to a non XDG location, the `themes/` directory next to that file is searched first.
 
+The `file_list.submodule_path` color also applies to submodule names in the repository list.
+
 **Switching themes:**
 
 - **From inside the app**: press `t` to open the picker. Up/Down (or `j`/`k`) cycles through themes with live preview, `Enter` saves the choice to `config.toml`, `Esc` cancels and restores.

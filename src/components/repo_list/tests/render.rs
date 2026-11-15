@@ -637,6 +637,20 @@ fn nested_submodule_row_draws_the_connector() {
         !text.contains("parent/dep") && !text.contains("parent\\dep"),
         "nested row still shows its breadcrumb: {text}"
     );
+    let buffer = terminal.backend().buffer();
+    let row: String = (0..40).map(|x| buffer[(x, 2)].symbol()).collect();
+    let position = row.chars().position(|ch| ch == 'd').unwrap() as u16;
+    assert_eq!(
+        buffer[(position, 2)].fg,
+        list.theme.file_list.submodule_path
+    );
+    assert_ne!(buffer[(position, 2)].fg, list.theme.repo_list.repo_name);
+    list.state.select(Some(1));
+    terminal.draw(|f| list.draw(f, f.area()).unwrap()).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(position, 2)].fg,
+        list.theme.file_list.submodule_path
+    );
 }
 
 #[test]
@@ -653,6 +667,9 @@ fn renders_submodules_beneath_their_own_checkout() {
         warn: SubmoduleWarn::default(),
     };
     let mut list = make_list(&["/repo"]);
+    let theme = Arc::make_mut(&mut list.theme);
+    theme.file_list.submodule_path = ratatui::style::Color::Magenta;
+    theme.repo_list.repo_name = ratatui::style::Color::White;
     let mut status = empty_status("main");
     status.checkout_submodules.push(sub("main-child", None));
     let mut worktree = worktree_entry("feature");
@@ -670,4 +687,16 @@ fn renders_submodules_beneath_their_own_checkout() {
     assert!(line(2).contains("main-child [sub]"));
     assert!(line(3).contains("feature"));
     assert!(line(4).contains("* worktree-child [sub]"));
+    for (y, name) in [(2, "main-child"), (4, "worktree-child")] {
+        let x = line(y).split_once(name).unwrap().0.chars().count() as u16;
+        assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Magenta);
+    }
+    list.state.select(Some(3));
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let row: String = (0..80).map(|x| buffer[(x, 4)].symbol()).collect();
+    let x = row.split_once("worktree-child").unwrap().0.chars().count() as u16;
+    assert_eq!(buffer[(x, 4)].fg, ratatui::style::Color::Magenta);
 }
