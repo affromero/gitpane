@@ -213,6 +213,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows dirty indicator (`*`), branch (dimmed on the default branch), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`) and lists them under it. In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work. Worktrees show on startup; press `w` to collapse a repo you want quiet, or set `[ui] expand_worktrees = false` to start every repo collapsed.
+- **Submodule visibility**: Submodules show under their owning repository or worktree. Press `m` on an owner or click its `▾◈` indicator to collapse them; toggle again to expand them. Each owner keeps its own setting during the session.
 - **Open / jump in**: Press `o` (or the `Open` context menu item) to drop into the selected repo or worktree, a new tmux pane at its directory by default, or any `[open]` command you configure (`cursor {path}`, `code {path}`, ...). Turns the overview into a launchpad instead of a dead end.
 - **Custom keybindings**: Bind your own keys to shell commands with `[[keybindings]]`, each run against the selected repo/worktree with `{path}` substitution and the same placement options as `[open]`. Extend gitpane with your own verbs without waiting on a feature.
 - **Agent liveness**: A `◉` marks any repo or worktree that has a live tmux pane (or herdr pane) open inside it, so at a glance you can see which parallel agents are actively working where. tmux and herdr; toggle with `[ui] show_liveness`.
@@ -249,6 +250,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 | `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
 | `s` | Cycle sort order (Alphabetical / Dirty first) |
 | `w` | Toggle worktree subtree for the selected repo (shown by default) |
+| `m` | Toggle submodules for the selected repository or worktree |
 | `S` | Toggle stash subtree for the selected repo |
 | `t` | Open the theme picker (live preview, Enter to persist) |
 | `Menu` | Open the context menu for the selected row (right-click fallback; needed under herdr, which has its own right-click) |
@@ -593,7 +595,7 @@ placement = "inline"             # suspend gitpane and run in the current termin
 
 `command` and `placement` work exactly like [`[open]`](#opening-a-repo-or-worktree): `{path}` is the target directory, the default `command` placement runs the command directly (so embed your own `tmux …` for a pane/window), and `split-window`/`new-window`/`inline`/`ask` place a plain command for you. Only `{path}` is substituted (there is no review base).
 
-Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s =`, plus `Tab`/`Esc`/`?`/`Menu`) are consumed by the built-in handler first, so a binding on one of them never fires. A key that a focused panel handles (`j`/`k`/`Enter`/…, and the repo panel's `w`/`S` subtree toggles) can be bound, but the custom binding then shadows that panel action. Run `gitpane diagnostic` to see the bindings gitpane loaded.
+Keys already used by the built-in **Global** actions (`o v G r R t g p P q y a d s =`, plus `Tab`/`Esc`/`?`/`Menu`) are consumed by the built-in handler first, so a binding on one of them never fires. A key that a focused panel handles (`j`/`k`/`Enter`/…, and the repo panel's `w`/`m`/`S` subtree toggles) can be bound, but the custom binding then shadows that panel action. Run `gitpane diagnostic` to see the bindings gitpane loaded.
 
 ### Theming
 

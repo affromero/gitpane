@@ -18,6 +18,12 @@ Sleep 5s
 Show
 Sleep 2s
 
+# Collapse and reopen the repository's submodules.
+Type "m"
+Sleep 2s
+Type "m"
+Sleep 2s
+
 # Select the submodule to show its own changes and history.
 Type "j"
 Sleep 3s

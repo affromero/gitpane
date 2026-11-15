@@ -372,6 +372,7 @@ impl App {
                 ]));
                 lines.push(Line::from(vec![key("s"), desc("Cycle sort order")]));
                 lines.push(Line::from(vec![key("w"), desc("Toggle worktrees")]));
+                lines.push(Line::from(vec![key("m"), desc("Toggle submodules")]));
                 lines.push(Line::from(vec![key("S"), desc("Toggle stashes")]));
                 lines.push(Line::from(vec![
                     key("f"),

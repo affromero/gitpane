@@ -139,6 +139,7 @@ pub(super) fn row_layout(
     repos: &[RepoEntry],
     live_panes: &[(String, PathBuf)],
     inner_width: u16,
+    submodule_counts: &std::collections::HashMap<PathBuf, usize>,
 ) -> RowLayout {
     let mut l = RowLayout::default();
     let widest_name = repos
@@ -171,6 +172,11 @@ pub(super) fn row_layout(
                 let count = 2 + status.files.len().to_string().len() as u16;
                 tail += count + u16::from(tail > 0);
             }
+        }
+        let count = submodule_counts.get(&entry.path).copied().unwrap_or(0);
+        if count > 0 {
+            tail += super::hierarchy::disclosure(count, true).chars().count() as u16
+                + u16::from(tail > 0);
         }
         tail_max = tail_max.max(tail);
     }

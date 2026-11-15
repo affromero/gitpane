@@ -51,6 +51,33 @@ pub(super) fn indicator_columns(
     out
 }
 
+fn repo_attention_start(repos: &[RepoEntry], entry: &RepoEntry, layout: &RowLayout) -> u16 {
+    let (nested, label) = row_label(repos, entry);
+    let decoration = if nested {
+        NESTED_CONNECTOR.chars().count() + NESTED_BADGE.chars().count()
+    } else {
+        0
+    };
+    let name = middle_ellipsize(label, (layout.name_col as usize).saturating_sub(decoration));
+    let connector = if nested { NESTED_CONNECTOR } else { "" };
+    let badge = if nested { NESTED_BADGE } else { "" };
+    let mut x = 2 + decoration as u16 + name.chars().count() as u16;
+    let mut visible = 2
+        + Span::raw(connector).width()
+        + Span::raw(name.as_str()).width()
+        + Span::raw(badge).width();
+    if let Some(status) = &entry.status
+        && layout.branch_col > 0
+    {
+        let padding = layout.branch_x().saturating_sub(x);
+        let branch = middle_ellipsize(&status.branch, layout.branch_col as usize);
+        x += padding + branch.chars().count() as u16;
+        visible += padding as usize + Span::raw(branch.as_str()).width();
+    }
+    visible += layout.attention_x().saturating_sub(x).max(1) as usize;
+    visible.min(u16::MAX as usize) as u16
+}
+
 impl Component for RepoList {
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.action_tx = Some(tx);
@@ -75,6 +102,10 @@ impl Component for RepoList {
                 self.toggle_expand();
                 Ok(self.emit_selection_action())
             }
+            KeyCode::Char('m') => {
+                let changed = self.toggle_selected_submodules();
+                Ok(changed.then(|| self.emit_selection_action()).flatten())
+            }
             KeyCode::Char('S') => {
                 self.toggle_stash_expand();
                 Ok(self.emit_selection_action())
@@ -90,14 +121,67 @@ impl Component for RepoList {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let content_y = self.render_area.y + 1;
+                let content_y = self.render_area.y + 1 + u16::from(!self.missing_roots.is_empty());
                 if mouse.column >= self.render_area.x
-                    && mouse.column < self.render_area.x + self.render_area.width
+                    && mouse.column < self.render_area.x + self.render_area.width.saturating_sub(1)
                     && mouse.row >= content_y
+                    && mouse.row < self.render_area.y + self.render_area.height.saturating_sub(1)
                 {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
+                        let base_x = self.render_area.x + 1;
+                        let inner_width = self.render_area.width.saturating_sub(2);
+                        let layout = row_layout(
+                            &self.repos,
+                            &self.live_panes,
+                            inner_width,
+                            &self.submodule_counts,
+                        );
+                        let owner = match self.display_rows.get(idx) {
+                            Some(DisplayRow::Repo(i)) => {
+                                let entry = &self.repos[*i];
+                                let owner = hierarchy::Parent::Repo(*i);
+                                let count =
+                                    self.submodule_counts.get(&entry.path).copied().unwrap_or(0);
+                                let cells = entry
+                                    .status
+                                    .as_ref()
+                                    .map(|s| attention_cells(s, false, false))
+                                    .unwrap_or_default();
+                                let preceding = packed_width(&cells);
+                                let start = base_x
+                                    + repo_attention_start(&self.repos, entry, &layout)
+                                    + preceding
+                                    + u16::from(!cells.is_empty());
+                                (count > 0
+                                    && mouse.column >= start
+                                    && mouse.column
+                                        < start
+                                            + hierarchy::disclosure(count, true).chars().count()
+                                                as u16)
+                                    .then_some(owner)
+                            }
+                            Some(DisplayRow::Worktree(i, w)) => {
+                                let owner = hierarchy::Parent::Worktree(*i, *w);
+                                let wt = &self.repos[*i].status.as_ref().unwrap().worktree_info[*w];
+                                let count =
+                                    self.submodule_counts.get(&wt.path).copied().unwrap_or(0);
+                                let start = base_x + 8;
+                                (count > 0
+                                    && mouse.column >= start
+                                    && mouse.column
+                                        < start
+                                            + hierarchy::disclosure(count, true).chars().count()
+                                                as u16)
+                                    .then_some(owner)
+                            }
+                            _ => None,
+                        };
+                        if let Some(owner) = owner {
+                            let changed = self.toggle_submodules(owner);
+                            return Ok(changed.then(|| self.emit_selection_action()).flatten());
+                        }
                         // Click on the already-selected repo row toggles a subtree.
                         // When both worktrees and stashes are present we hit-test
                         // the click column against each indicator's range so the
@@ -107,9 +191,6 @@ impl Component for RepoList {
                             && let Some(DisplayRow::Repo(i)) = self.display_rows.get(idx)
                             && let Some(status) = self.repos[*i].status.as_ref()
                         {
-                            let base_x = self.render_area.x + 1;
-                            let inner_width = self.render_area.width.saturating_sub(2);
-                            let layout = row_layout(&self.repos, &self.live_panes, inner_width);
                             let cols = indicator_columns(&self.repos[*i], base_x, &layout);
                             let clicked_stash = cols
                                 .stash
@@ -141,7 +222,7 @@ impl Component for RepoList {
                 Ok(None)
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                let content_y = self.render_area.y + 1;
+                let content_y = self.render_area.y + 1 + u16::from(!self.missing_roots.is_empty());
                 if mouse.column >= self.render_area.x
                     && mouse.column < self.render_area.x + self.render_area.width
                     && mouse.row >= content_y
@@ -206,7 +287,12 @@ impl Component for RepoList {
         self.rebuild_display_rows();
 
         let inner_width = area.width.saturating_sub(2);
-        let layout = row_layout(&self.repos, &self.live_panes, inner_width);
+        let layout = row_layout(
+            &self.repos,
+            &self.live_panes,
+            inner_width,
+            &self.submodule_counts,
+        );
         let selected_repo = self
             .state
             .selected()
