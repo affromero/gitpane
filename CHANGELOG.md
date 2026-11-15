@@ -4,6 +4,18 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.11] - 2026-11-15
+
+### Added
+- Collapse and expand submodules independently for each repository and worktree in the TUI. ([#204](https://github.com/affromero/gitpane/pull/204), closes [#203](https://github.com/affromero/gitpane/issues/203))
+
+### Fixed
+- Show the full file path in VS Code diff breadcrumbs. ([#196](https://github.com/affromero/gitpane/pull/196), closes [#195](https://github.com/affromero/gitpane/issues/195))
+- Keep submodule names and status indicators distinguishable in the TUI and VS Code, including when selected. ([#202](https://github.com/affromero/gitpane/pull/202), closes [#201](https://github.com/affromero/gitpane/issues/201), [#194](https://github.com/affromero/gitpane/pull/194), closes [#193](https://github.com/affromero/gitpane/issues/193))
+
+### Changed
+- Expand the README demos to show submodules, worktrees, stashes, and layout changes. ([#198](https://github.com/affromero/gitpane/pull/198), [#200](https://github.com/affromero/gitpane/pull/200))
+
 ## [0.18.10] - 2026-11-14
 
 ### Changed
