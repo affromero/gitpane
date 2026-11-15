@@ -97,7 +97,7 @@ impl RepoList {
             Span::styled(marker, Style::default().fg(theme.dirty_marker)),
             Span::styled(
                 submodule.path.display().to_string(),
-                Style::default().fg(theme.repo_name),
+                Style::default().fg(self.theme.file_list.submodule_path),
             ),
             Span::styled(" [sub]", Style::default().fg(theme.worktree_subtree_icon)),
         ]))

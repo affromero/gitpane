@@ -29,7 +29,8 @@ replaceOnce('const owners={api:apiRepo,auth:linked,web:webRepo,lib:cleanRepo};',
   'const owners={api:apiRepo,auth:linked,web:webRepo,lib:cleanRepo,module:apiRepo.submodules[0]};');
 replaceOnce("const prefix={api:'a',auth:'b',web:'c',lib:'d'}[activeOwner];",
   "const prefix={api:'a',auth:'b',web:'c',lib:'d',module:'e'}[activeOwner];");
-source = source.replaceAll('api-service', 'atlas-api').replaceAll('api-auth', 'atlas-search')
+source = source.replaceAll('api-service', 'atlas-api').replaceAll('api-auth', 'atlas-wt')
+  .replaceAll('feature/oauth', 'feature/filters')
   .replaceAll('web-app', 'meadow-web').replaceAll('shared-lib', 'shared-ui')
   .replaceAll('Andres Romero', 'Alex')
   .replaceAll('Merge workspace updates', 'Merge search')
