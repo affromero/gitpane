@@ -19,6 +19,7 @@ class WorkspaceViews {
     this.changes = undefined;
     this.graphView = undefined;
     this.graphOwner = undefined;
+    this.unifiedView = undefined;
     this.graphDisposables = [];
     this.publishing = false;
     this.disposed = false;
@@ -145,12 +146,16 @@ class WorkspaceViews {
         this.fallbackSelection = !!this.preferredPath && !preferred;
       }
       const selected = this.current(this.selectedId);
+      const ownerPath = selected && (this.provider.currentOwner(this.selectedId)?.rootUri.fsPath ||
+        this.provider.worktrees?.get(this.selectedId)?.path || selected.owner.path);
+      const ownerLabel = selected && [ownerPath || selected.owner.name || selected.owner.branch,
+        selected.owner.branch === 'HEAD' ? 'detached HEAD' : selected.owner.branch].filter(Boolean).join(' · ');
       const common = { ...snapshot, selectedOwnerId: this.selectedId, selectionEpoch: this.selectionEpoch };
       if (this.provider.ready && this.provider.view?.visible !== false) {
         this.provider.view?.webview.postMessage({ ...common, separateChanges: this.changes?.view.visible === true });
       }
       if (this.changes?.ready && this.changes.view.visible !== false) {
-        this.changes.view.title = selected ? `Changes: ${selected.owner.name || selected.owner.branch}` : 'Changes';
+        this.changes.view.title = ownerLabel ? `Changes: ${ownerLabel}` : 'Changes';
         this.changes.view.webview.postMessage({ ...common, selectedOwner: selected?.owner, selectedKind: selected?.kind });
       }
       const blocked = !selected || selected.owner.available === false || selected.owner.statusUnavailable;
@@ -159,8 +164,9 @@ class WorkspaceViews {
         this.graphOwner = graphOwner;
         const epoch = this.selectionEpoch;
         const ownerId = this.selectedId;
-        if (blocked) this.graph.clearSelection(selected ? 'Repository status is unavailable.' : 'Select a repository to see its commit graph.', !!selected);
-        else {
+        this.graph.clearSelection(blocked && selected ? 'Repository status is unavailable.' :
+          selected ? 'Waiting for commit graph.' : 'Select a repository to see its commit graph.', !!selected && blocked);
+        if (!blocked) {
           Promise.resolve().then(() => this.openGraph(ownerId, selected.kind, () =>
             !this.disposed && this.selectionEpoch === epoch && this.selectedId === ownerId && !!this.current(ownerId)))
             .catch(error => {
@@ -168,10 +174,17 @@ class WorkspaceViews {
             });
         }
       }
+      if (this.unifiedView) {
+        for (const [surface, title] of [['changes', 'Changes'], ['graph', 'Git Graph']]) {
+          this.unifiedView.webview.postMessage({ surface, message: { type: 'sectionTitle',
+            title: ownerLabel ? `${title}: ${ownerLabel}` : title } });
+        }
+      }
     } finally { this.publishing = false; }
   }
 
   resolveUnifiedView(view) {
+    this.unifiedView = view;
     view.webview.options = { enableScripts: true,
       localResourceRoots: [this.vscode.Uri.joinPath(this.context.extensionUri, 'src')] };
     view.webview.html = require('./unified/html').getHtml(view.webview, this.context.extensionUri);
@@ -181,7 +194,10 @@ class WorkspaceViews {
         asWebviewUri: uri => view.webview.asWebviewUri(uri),
         postMessage: message => view.webview.postMessage({ surface, message }),
         onDidReceiveMessage: listener => view.webview.onDidReceiveMessage(envelope => {
-          if (envelope?.surface === surface && envelope.message && typeof envelope.message === 'object') listener(envelope.message);
+          if (envelope?.surface === surface && envelope.message && typeof envelope.message === 'object') {
+            listener(envelope.message);
+            if (envelope.message.type === 'ready') this.publish();
+          }
         }),
         set html(_value) {},
         set options(_value) {}
@@ -191,7 +207,10 @@ class WorkspaceViews {
         get visible() { return view.visible; },
         set title(_value) {},
         onDidChangeVisibility: listener => view.onDidChangeVisibility(listener),
-        onDidDispose: listener => view.onDidDispose(listener)
+        onDidDispose: listener => view.onDidDispose(() => {
+          if (this.unifiedView === view) this.unifiedView = undefined;
+          listener();
+        })
       };
     };
     this.provider.resolveRepositoryView(section('repositories'));

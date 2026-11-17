@@ -24,6 +24,12 @@
   window.addEventListener('message', event => {
     const { surface, message } = event.data || {};
     if (surfaces.has(surface) && message && !Object.values(frames).some(frame => event.source === frame.contentWindow)) {
+      if (message.type === 'sectionTitle' && ['changes', 'graph'].includes(surface) && typeof message.title === 'string') {
+        const heading = document.getElementById(`${surface}-title`);
+        heading.textContent = message.title;
+        heading.title = message.title;
+        return;
+      }
       if (surface === 'repositories' && message.type === 'snapshot') {
         if (Number.isInteger(message.fontSize) && message.fontSize >= 8 && message.fontSize <= 40)
           document.documentElement.style.setProperty('--gitpane-font-size', `${message.fontSize}px`);
