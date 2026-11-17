@@ -148,12 +148,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth
 
-      - name: Test diff restoration in VS Code and Remote SSH
+      - name: Test extension and diff restoration in VS Code and Remote SSH
         if: runner.os == 'Linux'
         env:
           GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane
           GITPANE_LINUX_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane
         run: |
+          xvfb-run -a node vscode-extension/test/integration/run.js
           xvfb-run -a node vscode-extension/test/integration/reload.js
           xvfb-run -a node vscode-extension/test/integration/reload-remote.js
 

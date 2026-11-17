@@ -59,6 +59,10 @@ const scenario = String.raw`
   send('changes', { type: 'sectionTitle', title }); await tick();
   const heading = document.getElementById('changes-title');
   check('section heading shows its owner and full tooltip', heading.textContent === title && heading.title === title);
+  heading.style.width = '100px';
+  check('long heading is truncated while the tooltip retains its full text', heading.scrollWidth > heading.clientWidth &&
+   getComputedStyle(heading).textOverflow === 'ellipsis' && heading.title === title);
+  heading.style.width = '';
   window.dispatchEvent(new MessageEvent('message', { source: frame('graph').contentWindow,
    data: { surface: 'changes', message: { type: 'sectionTitle', title: 'spoofed' } } }));
   await tick();

@@ -59,5 +59,9 @@ test('unified view routes each section and shares the selected repository', asyn
     'Git Graph: /two/lib · detached HEAD');
   assert.equal(repositoryMessages.length, 2);
   assert.equal(graphMessages.length, 1);
+  sent.length = 0;
+  deliver({ surface: 'graph', message: { type: 'ready' } });
+  assert.equal(sent.filter(item => item.surface === 'graph' && item.message.type === 'sectionTitle').at(-1).message.title,
+    'Git Graph: /two/lib · detached HEAD', 'a reloaded graph receives the current owner heading');
   workspace.dispose();
 });

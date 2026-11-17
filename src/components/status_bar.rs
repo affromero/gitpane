@@ -261,17 +261,52 @@ fn key_span<'a>(key: &'a str, theme: &StatusBarTheme) -> Span<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_span, pulse_on};
-    use crate::theme::StatusBarTheme;
-    use ratatui::style::{Color, Modifier};
+    use super::{StatusBar, pulse_on};
+    use crate::{components::Component, theme::Theme};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Color, Modifier},
+    };
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn key_hints_keep_black_text_distinct_from_bright_black_background() {
-        let hint = key_span("Enter", &StatusBarTheme::default());
-        assert_eq!(hint.content, " Enter ");
-        assert_eq!(hint.style.fg, Some(Color::Black));
-        assert_eq!(hint.style.bg, Some(Color::DarkGray));
-        assert!(!hint.style.add_modifier.contains(Modifier::BOLD));
+        for variant in 0..3 {
+            let mut bar = StatusBar::new(Arc::new(Theme::default()));
+            if variant == 1 {
+                bar.overlay_hint = Some("Filter".to_string());
+            } else if variant == 2 {
+                bar.started_at = Instant::now() - Duration::from_secs(61);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(300, 1)).unwrap();
+            terminal
+                .draw(|frame| bar.draw(frame, frame.area()).unwrap())
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let symbols: Vec<_> = (0..300).map(|x| buffer[(x, 0)].symbol()).collect();
+            for key in ["Tab", "Enter"] {
+                let letters: Vec<_> = key.chars().map(|ch| ch.to_string()).collect();
+                let offset = symbols
+                    .windows(letters.len())
+                    .position(|slice| {
+                        slice
+                            .iter()
+                            .zip(&letters)
+                            .all(|(actual, expected)| *actual == expected)
+                    })
+                    .expect("key hint is visible");
+                for x in offset..offset + key.len() {
+                    let cell = &buffer[(x as u16, 0)];
+                    assert_eq!(cell.fg, Color::Black);
+                    assert_eq!(cell.bg, Color::DarkGray);
+                    assert!(!cell.modifier.contains(Modifier::BOLD));
+                }
+            }
+        }
     }
 
     #[test]
