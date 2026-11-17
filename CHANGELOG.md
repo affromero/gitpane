@@ -10,6 +10,7 @@ All notable changes to gitpane are documented here.
 - Keep terminal key hints readable when bold text uses bright ANSI colors. ([#210](https://github.com/affromero/gitpane/pull/210), closes [#208](https://github.com/affromero/gitpane/issues/208); reported by [denis-erp](https://github.com/denis-erp))
 - Identify the selected repository or worktree in the combined Changes and Git Graph headings. ([#211](https://github.com/affromero/gitpane/pull/211), closes [#207](https://github.com/affromero/gitpane/issues/207))
 - Remove repeated repository and worktree action buttons while keeping their context menus accessible by mouse and keyboard. ([#212](https://github.com/affromero/gitpane/pull/212), closes [#209](https://github.com/affromero/gitpane/issues/209))
+- Keep outside-worktree changes accessible while background refreshes run. ([#219](https://github.com/affromero/gitpane/pull/219), closes [#218](https://github.com/affromero/gitpane/issues/218))
 
 ## [0.18.11] - 2026-11-15
 
