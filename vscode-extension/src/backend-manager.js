@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { BridgeClient, BridgeError } = require('./bridge-client');
+const { openChangesSession } = require('./changes-session');
 const { MutationManager } = require('./mutation-manager');
 const { GitContentWorkers, captureGitEnvironment } = require('./git-content-worker');
 const { GitMetadataBatches } = require('./git-metadata-batches');
@@ -596,48 +597,7 @@ class BackendManager {
   }
 
   async openChangesSession(repo) {
-    const snapshot = await this.mutationSnapshot();
-    const external = this.externalSelections.get(repo);
-    const repoPath = await this.realpath(repo);
-    const anchor = external ? await this.realpath(external.selection.repo) : repoPath;
-    const valid = () => this.isCurrentMutation(snapshot, anchor) &&
-      (!external || (this.externalSelections.get(repo) === external && external.guard()));
-    if (!valid()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
-    if (this.verifyClients.size >= 4) throw new BridgeError('busy', 'Too many file checks are running. Try again.');
-    const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk) });
-    this.verifyClients.add(client);
-    let closed = false;
-    const close = () => {
-      if (closed) return;
-      closed = true;
-      this.verifyClients.delete(client);
-      client.dispose({ immediate: true });
-    };
-    const current = async () => {
-      if (closed || !valid()) return false;
-      const resolved = await this.realpath(repo);
-      const currentAnchor = external ? await this.realpath(external.selection.repo) : resolved;
-      return !closed && valid() && resolved === repoPath && currentAnchor === anchor;
-    };
-    const run = async operation => {
-      if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
-      const result = await operation();
-      if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed while checking the file.');
-      return result;
-    };
-    try {
-      await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
-      if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
-      const externalRead = (method, params) => client.request('external_worktree_read',
-        { selection: external.selection, method, params: { repo, ...params } });
-      return {
-        begin: () => run(() => external ? externalRead('changes_begin', {}) : client.beginChanges(repoPath)),
-        next: (id, cursor) => run(() => external ? externalRead('changes_next', { snapshot: id, cursor }) : client.nextChanges(repoPath, id, cursor)),
-        find: (id, record) => run(() => external ? externalRead('changes_find', { snapshot: id, path: record.path, group: record.group }) :
-          client.findChange(repoPath, id, record.path, record.group)),
-        close
-      };
-    } catch (error) { close(); throw error; }
+    return openChangesSession(this, repo);
   }
 
   async verifyChanges(repo, record) {
