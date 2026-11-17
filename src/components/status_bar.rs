@@ -255,16 +255,24 @@ fn dim_sep(theme: &StatusBarTheme) -> Span<'static> {
 fn key_span<'a>(key: &'a str, theme: &StatusBarTheme) -> Span<'a> {
     Span::styled(
         format!(" {} ", key),
-        Style::default()
-            .fg(theme.key_hint_fg)
-            .bg(theme.key_hint_bg)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(theme.key_hint_fg).bg(theme.key_hint_bg),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pulse_on;
+    use super::{key_span, pulse_on};
+    use crate::theme::StatusBarTheme;
+    use ratatui::style::{Color, Modifier};
+
+    #[test]
+    fn key_hints_keep_black_text_distinct_from_bright_black_background() {
+        let hint = key_span("Enter", &StatusBarTheme::default());
+        assert_eq!(hint.content, " Enter ");
+        assert_eq!(hint.style.fg, Some(Color::Black));
+        assert_eq!(hint.style.bg, Some(Color::DarkGray));
+        assert!(!hint.style.add_modifier.contains(Modifier::BOLD));
+    }
 
     #[test]
     fn pulse_alternates_for_the_whole_lifetime() {
