@@ -103,6 +103,29 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   assert.ok(!provider.tree.backend.roots.some(root => path.resolve(root) === path.resolve(siblingPath)));
 
   const file = (group, name) => row()?.groups.find(item => item.id === group)?.files.find(item => item.path === name);
+  const interval = provider.refreshInterval;
+  provider.refreshInterval = 300000;
+  try {
+    if (provider.refreshChangesTimer !== undefined) clearTimeout(provider.refreshChangesTimer);
+    provider.refreshChangesTimer = undefined;
+    if (provider.refreshChangesInFlight) await provider.refreshChangesInFlight;
+    if (provider.refreshChangesTimer !== undefined) clearTimeout(provider.refreshChangesTimer);
+    provider.refreshChangesTimer = undefined;
+    await provider.loadChanges(selected.id);
+    const displayed = provider.pager.get(selected.id)?.snapshot;
+    const stagedNode = provider.changes.get(file('index', 'external-tracked.txt')?.id);
+    assert.ok(displayed && stagedNode?.record, 'the displayed outside-worktree snapshot must be available');
+    const ownerPath = stagedNode.repo.rootUri.fsPath;
+    assert.equal(fs.realpathSync.native(ownerPath), fs.realpathSync.native(siblingPath));
+    assert.deepEqual((await provider.tree.backend.verifyChanges(ownerPath, stagedNode.record)).change, stagedNode.record);
+    assert.equal((await provider.tree.backend.nextChanges(ownerPath, displayed, 0)).snapshot, displayed,
+      'verifying a change must preserve the displayed outside-worktree snapshot');
+  } finally {
+    if (provider.refreshChangesTimer !== undefined) clearTimeout(provider.refreshChangesTimer);
+    provider.refreshChangesTimer = undefined;
+    provider.refreshInterval = interval;
+    provider.scheduleChangesRefresh();
+  }
   const staged = file('index', 'external-tracked.txt');
   const working = file('working', 'external-tracked.txt');
   const added = file('untracked', 'external-untracked.txt');
