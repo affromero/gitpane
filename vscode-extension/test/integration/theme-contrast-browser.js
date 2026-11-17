@@ -50,7 +50,7 @@ const scenario = String.raw`
     await tick();
     const row = treeitem.querySelector('.repo-row');
     const background = getComputedStyle(row).backgroundColor;
-    for (const selector of ['.name', '.branch', '.dirty', '.stash-action', '.worktree-action', '.graph-action', '.menu-action']) {
+    for (const selector of ['.name', '.branch', '.dirty', '.stash-action', '.worktree-action', '.graph-action']) {
       const node = row.querySelector(selector);
       check('selected ' + selector + ' is readable', !!node && contrast(getComputedStyle(node).color, background) >= 4.5);
     }

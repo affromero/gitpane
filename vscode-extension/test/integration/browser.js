@@ -148,6 +148,34 @@ const scenario = String.raw`
       }
     }
     root.parentElement.style.width = '';
+    let childItem = items().find(item => item.dataset.key === 'repo:worktree-child');
+    let childRow = childItem.querySelector('.repo-row');
+    check('submodule row has no repeated action button', !childRow.querySelector('.menu-action'));
+    childRow.querySelector('.name').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    check('right-click targets a worktree submodule', window.posted.at(-1).type === 'rowMenuRequest' &&
+      window.posted.at(-1).kind === 'repo' && window.posted.at(-1).id === 'worktree-child');
+    items().find(item => item.dataset.key === 'repo:api').focus();
+    const childGraph = childRow.querySelector('.graph-action');
+    childGraph.focus();
+    childGraph.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+    check('keyboard menu follows the focused control in another row', window.posted.at(-1).type === 'rowMenuRequest' &&
+      window.posted.at(-1).id === 'worktree-child' && childItem.getAttribute('aria-selected') === 'true');
+    const childRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'worktree-child', requestId: childRequest.requestId,
+      token: 'child-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
+    window.postMessage({ ...hierarchy, fontSize: 17 }, '*');
+    await tick();
+    check('refresh replaces the focused graph control', !childGraph.isConnected);
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    childItem = items().find(item => item.dataset.key === 'repo:worktree-child');
+    childRow = childItem.querySelector('.repo-row');
+    check('menu from a graph control restores the row after refresh', document.activeElement === childItem);
+    const childTail = childRow.querySelector('.tail');
+    childTail.focus();
+    childTail.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
+    check('context menu key works on a scrollable status tail', window.posted.at(-1).type === 'rowMenuRequest' &&
+      window.posted.at(-1).id === 'worktree-child');
     window.postMessage(snapshot, '*');
     await tick();
     root.parentElement.style.width = '210px';
@@ -222,12 +250,7 @@ const scenario = String.raw`
     graphButton.click();
     check('graph action selects the repository without expanding',
       window.posted.some(message => message.type === 'openGraph' && message.id === 'api') && repo.getAttribute('aria-expanded') === 'false');
-    const repoMenu = repo.querySelector('.menu-action');
-    check('repository actions have an accessible name', repoMenu.getAttribute('aria-label') === 'Actions for api-service');
-    repoMenu.click();
-    check('repository actions do not expand the row',
-      window.posted.some(message => message.type === 'rowMenuRequest' && message.kind === 'repo' && message.id === 'api') &&
-      repo.getAttribute('aria-expanded') === 'false');
+    check('repository row has no repeated action button', !repo.querySelector('.menu-action'));
     const repoRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     repo.querySelector('.name').dispatchEvent(repoRightClick);
     check('right-click selects the repository and opens its actions without expanding', repoRightClick.defaultPrevented &&
@@ -238,18 +261,25 @@ const scenario = String.raw`
       token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
     await tick();
     check('repository actions open inline', document.querySelector('[role="menu"] button')?.textContent === 'Refresh');
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('escape after right-click restores the repository', document.activeElement === repo);
+    repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
+    const actionRequest = window.posted.at(-1);
+    window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: actionRequest.requestId,
+      token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
+    await tick();
     document.querySelector('[role="menu"] button').click();
     check('inline action retains the selected repository and token', window.posted.at(-1).type === 'rowMenuAction' &&
       window.posted.at(-1).id === 'api' && window.posted.at(-1).token === 'repo-token');
-    repoMenu.focus();
-    repoMenu.click();
+    repo.focus();
+    repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
     const buttonRequest = window.posted.at(-1);
     window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: buttonRequest.requestId,
       token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
     await tick();
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    check('escape returns focus to the action button', document.activeElement === repoMenu);
-    repoMenu.click();
+    check('escape returns focus to the repository', document.activeElement === repo);
+    repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
     const refreshRequest = window.posted.at(-1);
     window.postMessage({ type: 'rowMenu', kind: 'repo', id: 'api', requestId: refreshRequest.requestId,
       token: 'repo-token', choices: [{ label: 'Refresh', action: 'refreshRepo' }] }, '*');
@@ -257,10 +287,10 @@ const scenario = String.raw`
     window.postMessage({ ...snapshot, fontSize: 17 }, '*');
     await tick();
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    check('escape restores the action button after a refresh', document.activeElement.getAttribute('aria-label') === 'Actions for api-service');
+    check('escape restores the repository after a refresh', document.activeElement.getAttribute('role') === 'treeitem' &&
+      document.activeElement.getAttribute('aria-label').includes('api-service'));
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
-    const refreshedRepoMenu = repo.querySelector('.menu-action');
-    refreshedRepoMenu.click();
+    repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
     const removedRequest = window.posted.at(-1);
     window.postMessage({ ...snapshot, repositories: [] }, '*');
     await tick();
@@ -271,13 +301,12 @@ const scenario = String.raw`
     window.postMessage(snapshot, '*');
     await tick();
     repo = items().find(item => item.getAttribute('aria-label').includes('api-service'));
-    const restoredRepoMenu = repo.querySelector('.menu-action');
-    restoredRepoMenu.focus();
-    restoredRepoMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    check('action keyboard activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
+    repo.focus();
+    repo.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
+    check('keyboard menu activation does not expand the row', repo.getAttribute('aria-expanded') === 'false');
     window.postMessage(snapshot, '*');
     await tick();
-    check('focused action survives refresh', document.activeElement.getAttribute('aria-label') === 'Actions for api-service');
+    check('focused repository survives refresh', document.activeElement.getAttribute('aria-label').includes('api-service'));
     const badges = JSON.parse(JSON.stringify(snapshot));
     Object.assign(badges.repositories[0], { stashCount: 2, worktreeCount: 1, hasDirtySubmodules: true, hasUnpushedSubmodules: true });
     window.postMessage(badges, '*');
@@ -417,9 +446,9 @@ const scenario = String.raw`
     worktreeGraph.click();
     check('worktree graph sends only opaque id', window.posted.some(message => message.type === 'openWorktreeGraph' &&
       message.id === 'opaque-worktree' && !('path' in message)) && worktree.getAttribute('aria-expanded') === 'false');
-    const worktreeMenu = worktree.querySelector('.menu-action');
-    check('worktree action has an accessible name', worktreeMenu.getAttribute('aria-label') === 'Actions for worktree web-review');
-    worktreeMenu.click();
+    check('worktree row has no repeated action button', !worktree.querySelector('.menu-action'));
+    worktree.focus();
+    worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
     check('worktree menu sends only opaque id', window.posted.some(message => message.type === 'rowMenuRequest' &&
       message.kind === 'worktree' && message.id === 'opaque-worktree' && !('path' in message)) && cleanRepo.getAttribute('aria-expanded') === 'true');
     const worktreeRightClick = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
@@ -546,7 +575,11 @@ const scenario = String.raw`
     check('outside worktree inspect action sends only its opaque id', window.posted.at(-1).type === 'action' &&
       window.posted.at(-1).action === 'inspectExternalWorktree' && window.posted.at(-1).id === 'opaque-worktree' &&
       !('path' in window.posted.at(-1)));
-    worktree.querySelector('[aria-label^="Actions for worktree"]').click();
+    worktree.querySelector('.name').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    check('right-click targets the outside worktree', window.posted.at(-1).type === 'rowMenuRequest' &&
+      window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
+    worktree.focus();
+    worktree.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
     check('outside worktree menu targets its displayed row', window.posted.at(-1).type === 'rowMenuRequest' &&
       window.posted.at(-1).kind === 'worktree' && window.posted.at(-1).id === 'opaque-worktree');
     let externalRequest = window.posted.at(-1);
@@ -557,9 +590,9 @@ const scenario = String.raw`
     window.postMessage({ ...external, fontSize: 17 }, '*');
     await tick();
     document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    check('outside worktree menu restores its own button after refresh',
-      document.activeElement.getAttribute('aria-label')?.startsWith('Actions for worktree'));
-    document.activeElement.click();
+    check('outside worktree menu restores its row after refresh',
+      document.activeElement.getAttribute('aria-label')?.includes('DrivingVideoEvaluation-semantic-plots'));
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
     externalRequest = window.posted.at(-1);
     answerExternal(externalRequest);
     await tick();
