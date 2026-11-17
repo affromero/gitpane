@@ -597,8 +597,12 @@ class BackendManager {
 
   async openChangesSession(repo) {
     const snapshot = await this.mutationSnapshot();
+    const external = this.externalSelections.get(repo);
     const repoPath = await this.realpath(repo);
-    if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
+    const anchor = external ? await this.realpath(external.selection.repo) : repoPath;
+    const valid = () => this.isCurrentMutation(snapshot, anchor) &&
+      (!external || (this.externalSelections.get(repo) === external && external.guard()));
+    if (!valid()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
     if (this.verifyClients.size >= 4) throw new BridgeError('busy', 'Too many file checks are running. Try again.');
     const client = this.createClient(snapshot.executable, { onStderr: chunk => this.output?.append(chunk) });
     this.verifyClients.add(client);
@@ -610,9 +614,10 @@ class BackendManager {
       client.dispose({ immediate: true });
     };
     const current = async () => {
-      if (closed || !this.isCurrentMutation(snapshot, repoPath)) return false;
+      if (closed || !valid()) return false;
       const resolved = await this.realpath(repo);
-      return !closed && this.isCurrentMutation(snapshot, repoPath) && resolved === repoPath;
+      const currentAnchor = external ? await this.realpath(external.selection.repo) : resolved;
+      return !closed && valid() && resolved === repoPath && currentAnchor === anchor;
     };
     const run = async operation => {
       if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
@@ -623,31 +628,19 @@ class BackendManager {
     try {
       await client.initialize(snapshot.roots, snapshot.rootIdentities, snapshot.rootSources);
       if (!await current()) throw new BridgeError('workspace_changed', 'Workspace changed before checking the file.');
+      const externalRead = (method, params) => client.request('external_worktree_read',
+        { selection: external.selection, method, params: { repo, ...params } });
       return {
-        begin: () => run(() => client.beginChanges(repoPath)),
-        next: (id, cursor) => run(() => client.nextChanges(repoPath, id, cursor)),
-        find: (id, record) => run(() => client.findChange(repoPath, id, record.path, record.group)),
+        begin: () => run(() => external ? externalRead('changes_begin', {}) : client.beginChanges(repoPath)),
+        next: (id, cursor) => run(() => external ? externalRead('changes_next', { snapshot: id, cursor }) : client.nextChanges(repoPath, id, cursor)),
+        find: (id, record) => run(() => external ? externalRead('changes_find', { snapshot: id, path: record.path, group: record.group }) :
+          client.findChange(repoPath, id, record.path, record.group)),
         close
       };
     } catch (error) { close(); throw error; }
   }
 
   async verifyChanges(repo, record) {
-    const external = this.externalSelections.get(repo);
-    if (external) {
-      const page = await this.beginChanges(repo);
-      const client = await this.getChangesClient(this.changesEpoch);
-      try {
-        if (!external.guard() || this.externalSelections.get(repo) !== external) throw new BridgeError('stale_target', 'Worktree is no longer available.');
-        const result = await client.request('external_worktree_read', { selection: external.selection, method: 'changes_find',
-          params: { repo, snapshot: page.snapshot, path: record.path, group: record.group } });
-        if (!external.guard() || this.externalSelections.get(repo) !== external) throw new BridgeError('stale_target', 'Worktree is no longer available.');
-        return { page, change: result?.change };
-      } finally {
-        await client.request('external_worktree_read', { selection: external.selection, method: 'changes_release',
-          params: { repo, snapshot: page.snapshot } }).catch(() => {});
-      }
-    }
     const session = await this.openChangesSession(repo);
     try {
       const page = await session.begin();
