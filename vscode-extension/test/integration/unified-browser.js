@@ -55,6 +55,14 @@ const scenario = String.raw`
   for (let n = 0; n < 100 && new Set(received.filter(p => p.message.type === 'ready').map(p => p.surface)).size < 3; n++) await tick();
   check('three frames initialize independently', new Set(received.filter(p => p.message.type === 'ready').map(p => p.surface)).size === 3);
   check('three titled sections exist', ['repositories','changes','graph'].every(name => frame(name).title));
+  const title = 'Changes: /workspace/long-worktree/submodule · detached HEAD';
+  send('changes', { type: 'sectionTitle', title }); await tick();
+  const heading = document.getElementById('changes-title');
+  check('section heading shows its owner and full tooltip', heading.textContent === title && heading.title === title);
+  window.dispatchEvent(new MessageEvent('message', { source: frame('graph').contentWindow,
+   data: { surface: 'changes', message: { type: 'sectionTitle', title: 'spoofed' } } }));
+  await tick();
+  check('embedded frames cannot change section headings', heading.textContent === title);
   check('stored pane sizes are restored', Math.abs(document.getElementById('repositories-pane').getBoundingClientRect().height /
     [...document.querySelectorAll('.pane')].reduce((sum, pane) => sum + pane.getBoundingClientRect().height, 0) - 0.25) < 0.03);
   for (const surface of ['repositories', 'changes']) send(surface, snapshot);
