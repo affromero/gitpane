@@ -121,8 +121,15 @@ module.exports = async function testExternalWorktree({ vscode, provider, snapsho
   const menu = snapshots.pop();
   assert.equal(menu.type, 'fileMenu');
   assert.deepEqual(menu.choices.map(choice => choice.action), ['open', 'copy']);
+  const pending = provider.actions.pendingFileMenu;
+  const menuState = () => ({ selectedOwner: provider.workspaceViews.selectedId, fileId: staged.id,
+    resolved: !!provider.actions.resolve('file', staged.id), pending: !!provider.actions.pendingFileMenu,
+    tokenMatches: provider.actions.pendingFileMenu?.token === menu.token,
+    generation: provider.actions.fileMenuGeneration, guard: pending?.guard(),
+    current: pending && provider.actions.current('file', staged.id, pending.expected), errors: errors.slice(previousErrors) });
+  const beforeMenuAction = menuState();
   await receive({ type: 'fileMenuAction', id: staged.id, token: menu.token, action: 'open' });
-  assert.equal(diffs.length, ++count, 'outside worktree menu opens its selected diff');
+  assert.equal(diffs.length, ++count, `outside worktree menu opens its selected diff; before: ${JSON.stringify(beforeMenuAction)}; after: ${JSON.stringify(menuState())}`);
 
   await receive({ type: 'openChange', id: working.id });
   if (process.platform === 'win32') {

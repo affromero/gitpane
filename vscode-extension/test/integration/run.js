@@ -12,6 +12,9 @@ const extension = process.env.GITPANE_TEST_EXTENSION || sourceExtension;
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-vscode-test-'));
 const root = path.join(temporary, 'workspace with spaces');
 const repo = path.join(root, 'repo-a');
+const linked = path.join(root, 'repo-a-linked');
+const submoduleSource = path.join(temporary, 'submodule-source');
+const linkedSubmodule = path.join(linked, 'dependency');
 const nested = path.join(root, 'projects', 'repo-b');
 const secondRoot = path.join(temporary, 'second workspace');
 const second = path.join(secondRoot, 'repo-c');
@@ -46,6 +49,13 @@ try {
   for (const name of ['staged', 'working', 'partial', 'original', 'deleted']) write(`${name}.txt`, `original ${name}\n`);
   git(repo, 'add', '--', '.');
   git(repo, 'commit', '-qm', 'fixture');
+  fs.mkdirSync(submoduleSource);
+  git(submoduleSource, 'init', '-q');
+  git(submoduleSource, 'commit', '--allow-empty', '-qm', 'detached submodule fixture');
+  git(repo, 'worktree', 'add', '-qb', 'fixture-worktree', linked);
+  git(linked, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', submoduleSource, 'dependency');
+  git(linked, 'commit', '-qam', 'linked worktree fixture');
+  git(linkedSubmodule, 'checkout', '-q', '--detach');
   write('staged.txt', 'staged value\n');
   write('working.txt', 'working value\n');
   write('partial.txt', 'index partial\n');
@@ -65,6 +75,8 @@ try {
     ...(process.env.GITPANE_TEST_BINARY ? { GITPANE_TEST_BINARY: process.env.GITPANE_TEST_BINARY } : {}),
     GITPANE_TEST_EXTENSION: extension,
     GITPANE_TEST_REPO: fs.realpathSync(repo),
+    GITPANE_TEST_LINKED: fs.realpathSync(linked),
+    GITPANE_TEST_LINKED_SUBMODULE: fs.realpathSync(linkedSubmodule),
     GITPANE_TEST_NESTED: fs.realpathSync(nested),
     GITPANE_TEST_SECOND: fs.realpathSync(second),
     GITPANE_TEST_OUTSIDE: fs.realpathSync(outside),

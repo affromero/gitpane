@@ -107,6 +107,61 @@ exports.run = async () => {
     await waitFor(() => !rootNode(process.env.GITPANE_TEST_ADDED), 'removed workspace repository remained visible');
   });
 
+  await test('combined view follows a linked worktree and detached submodule', async () => {
+    const linked = process.env.GITPANE_TEST_LINKED;
+    const child = process.env.GITPANE_TEST_LINKED_SUBMODULE;
+    for (const target of [linked, child]) {
+      if (!api.repositories.some(repo => samePath(repo.rootUri.fsPath, target))) {
+        await api.openRepository(vscode.Uri.file(target));
+      }
+      await waitFor(() => api.repositories.some(repo => samePath(repo.rootUri.fsPath, target)),
+        () => `repository ${target} did not open; available: ${api.repositories.map(repo => repo.rootUri.fsPath).join(', ')}`, 30000);
+    }
+    await provider.refresh();
+    const owner = () => snapshotRepo(fixture);
+    await waitFor(() => owner()?.worktrees?.some(item => item.name === path.basename(linked) &&
+      item.submodules?.some(submodule => submodule.name === path.basename(child))),
+    'linked worktree and submodule were not discovered', 30000);
+    const sections = provider.workspaceViews;
+    const webview = sections.unifiedView.webview;
+    const send = webview.postMessage;
+    const packets = [];
+    webview.postMessage = function (packet) { packets.push(packet); return send.call(this, packet); };
+    try {
+      for (const [target, root, commit, branch] of [
+        [owner(), fixture, 'fixture', undefined],
+        [owner().worktrees.find(item => item.name === path.basename(linked)), linked, 'linked worktree fixture', 'fixture-worktree'],
+        [owner().worktrees.find(item => item.name === path.basename(linked)).submodules.find(item => item.name === path.basename(child)),
+          child, 'detached submodule fixture', 'detached HEAD']
+      ]) {
+        packets.length = 0;
+        sections.select(target.id);
+        await waitFor(() => sections.selectedId === target.id && sections.graph.currentRepo() &&
+          samePath(sections.graph.currentRepo().rootUri.fsPath, root) &&
+          sections.graph.displayedRows.some(row => row.message === commit), `graph did not load ${root}`, 30000);
+        const title = surface => packets.filter(packet => packet.surface === surface && packet.message?.type === 'sectionTitle').at(-1)?.message.title;
+        const displayedPath = provider.currentOwner(target.id)?.rootUri.fsPath;
+        for (const surface of ['changes', 'graph']) {
+          assert.ok(displayedPath && title(surface)?.includes(displayedPath),
+            `${surface} heading must identify ${displayedPath}; received: ${title(surface)}`);
+          if (branch) assert.ok(title(surface).includes(branch), `${surface} heading must identify ${branch}`);
+        }
+        const changes = packets.filter(packet => packet.surface === 'changes' && packet.message?.type === 'snapshot').at(-1);
+        assert.equal(changes?.message.selectedOwnerId, target.id);
+      }
+      const worktree = owner().worktrees.find(item => item.name === path.basename(linked));
+      sections.select(worktree.id);
+      const receive = require('../../src/view-messages').receiveViewMessage;
+      await receive(provider, vscode, { type: 'rowMenuRequest', kind: 'worktree', id: worktree.id, requestId: 17 });
+      const menu = packets.findLast(packet => packet.surface === 'repositories' && packet.message?.type === 'rowMenu' &&
+        packet.message.requestId === 17)?.message;
+      assert.ok(menu?.choices.some(choice => choice.action === 'hideWorktree'), 'worktree menu must offer hide');
+      await receive(provider, vscode, { type: 'rowMenuAction', kind: 'worktree', id: worktree.id,
+        token: menu.token, action: 'hideWorktree' });
+      await waitFor(() => !owner()?.worktrees?.some(item => item.id === worktree.id), 'worktree menu action did not hide the row');
+    } finally { webview.postMessage = send; }
+  });
+
   publishResult(process.env.GITPANE_TEST_RESULT, results);
   if (results.some(result => !result.ok)) throw new Error('Gitpane integration tests failed.');
 };
