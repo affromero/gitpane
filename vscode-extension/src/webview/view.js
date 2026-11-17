@@ -233,7 +233,6 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
     vscode.postMessage({ type: 'openGraph', id: repo.id });
   });
   tail.appendChild(graphButton);
-  tail.appendChild(menuButton(`Actions for ${repo.name}`, 'repo', repo.id));
   row.appendChild(tail);
   return row;
 }
@@ -311,7 +310,6 @@ function worktreeRow(worktree, submodule) {
     tail.appendChild(button);
   }
   else if (!worktree.available) add(tail, 'behind', '!', 'Worktree repository unavailable');
-  tail.appendChild(menuButton(`Actions for worktree ${worktree.name || worktree.branch}`, 'worktree', worktree.id));
   row.appendChild(tail);
   return row;
 }
@@ -872,17 +870,20 @@ tree.addEventListener('contextmenu', event => {
 });
 
 tree.addEventListener('keydown', event => {
-  if (event.target.classList?.contains('tail')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, textarea, [contenteditable="true"]')) return;
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    const key = event.target.closest('.treeitem')?.dataset.key;
+    const item = visible.find(value => value.key === key);
+    if (item) select(item, false);
+    if (item && fileMenu.openItem(item)) event.preventDefault();
+    return;
+  }
+  if (event.target.classList?.contains('tail')) return;
   if ((event.target.classList?.contains('graph-action') || event.target.classList?.contains('menu-action') ||
       event.target.classList?.contains('stash-action') || event.target.classList?.contains('worktree-action') || event.target.classList?.contains('submodule-action')) &&
       (event.key === 'Enter' || event.key === ' ')) return;
   const current = visible.find(item => item.key === selected);
   if (!current) return;
-  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-    if (fileMenu.openItem(current)) event.preventDefault();
-    return;
-  }
   const globals = ['p', 'P', 'o', 'v', 'G', 'y', 'g', 'r', 'R', 't', 'a', 's', 'd'];
   if (['q', '=', '?'].includes(event.key)) return;
   if (globals.includes(event.key) || (Array.isArray(snapshot.launcherKeys) && snapshot.launcherKeys.includes(event.key))) {
