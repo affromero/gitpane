@@ -141,6 +141,7 @@ async fn nothing_staged_asks_first_then_stages_everything() {
     if !crate::git::git_test_available() {
         return;
     }
+    let _count = GIT_OP_COUNT.lock().await;
     let (_tmp, mut app, path) = fixture(false, None);
     open_box(&mut app);
     type_text(&mut app, "Change a");
@@ -173,6 +174,7 @@ async fn a_rejecting_hook_keeps_the_box_and_the_message() {
     if !crate::git::git_test_available() {
         return;
     }
+    let _count = GIT_OP_COUNT.lock().await;
     let (_tmp, mut app, path) = fixture(true, None);
     let hook = path.join("hooks").join("pre-commit");
     std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").unwrap();
