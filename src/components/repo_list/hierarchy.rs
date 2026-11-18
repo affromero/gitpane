@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::ListItem,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 impl RepoList {
     pub(crate) fn forget_submodule_disclosures(&mut self, repo: &Path) {
@@ -351,8 +351,10 @@ pub(super) fn rows(list: &RepoList) -> Vec<DisplayRow> {
                 children.push((child_path, DisplayRow::Submodule(index, worktree, sub)));
             }
         }
-        children
-            .sort_by_cached_key(|(path, _)| (path.to_string_lossy().to_lowercase(), path.clone()));
+        children.sort_by_cached_key(|(path, _)| {
+            let normalized = path.components().collect::<PathBuf>();
+            (normalized.to_string_lossy().to_lowercase(), path.clone())
+        });
         if list.reverse_submodules {
             children.reverse();
         }
