@@ -82,6 +82,39 @@ fn repo_and_worktree_submodules_collapse_independently_and_restore_selection() {
 }
 
 #[test]
+fn sorting_interleaves_pinned_and_status_children_and_keeps_selection() {
+    let mut list = make_list(&["/repo", "/repo/beta", "/wt/feature/beta"]);
+    list.repos[1].gitlink = true;
+    list.repos[2].gitlink = true;
+    let children = || ["zulu", "beta", "alpha"].map(submodule).to_vec();
+    let mut status = empty_status("main");
+    status.checkout_submodules = children();
+    let mut wt = worktree_entry("feature");
+    wt.checkout_submodules = children();
+    status.worktree_info.push(wt);
+    list.update_status(0, status);
+    let check = |list: &mut RepoList, names: [&str; 3]| {
+        let rows = text_rows(list);
+        for start in [2, 6] {
+            for (row, name) in rows[start..start + 3].iter().zip(names) {
+                assert!(row.contains(&format!("{name} [sub]")), "{row}");
+            }
+        }
+    };
+    check(&mut list, ["alpha", "beta", "zulu"]);
+    list.state.select(Some(1));
+    let selected = list.selected_row_id();
+    assert_eq!(
+        selected,
+        Some(RowId::Submodule("/repo".into(), "/repo/alpha".into()))
+    );
+    list.reverse_submodules = true;
+    list.resync_rows(selected.clone());
+    check(&mut list, ["zulu", "beta", "alpha"]);
+    assert_eq!(list.selected_row_id(), selected);
+}
+
+#[test]
 fn pinned_and_status_submodules_share_a_clickable_disclosure() {
     let mut list = make_list(&["/repo", "/repo/child", "/repo/other"]);
     list.repos[1].gitlink = true;

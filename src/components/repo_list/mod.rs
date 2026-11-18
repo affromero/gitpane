@@ -140,6 +140,7 @@ pub(crate) struct RepoList {
     live_panes: Vec<(String, PathBuf)>,
     /// Computed mapping from visual row → data
     display_rows: Vec<DisplayRow>,
+    pub(crate) reverse_submodules: bool,
     /// Focus mode: dim every row except the selected one. Toggled with `f`.
     pub focus_mode: bool,
     theme: Arc<Theme>,
@@ -285,6 +286,7 @@ impl RepoList {
             expanded_stashes: HashSet::new(),
             live_panes: Vec::new(),
             display_rows: Vec::new(),
+            reverse_submodules: false,
             focus_mode: true,
             theme,
         };
@@ -307,12 +309,7 @@ impl RepoList {
     /// Recompute display_rows from repos + expansion state.
     fn rebuild_display_rows(&mut self) {
         self.submodule_counts = hierarchy::child_counts(&self.repos);
-        self.display_rows = hierarchy::rows(
-            &self.repos,
-            &self.expanded_stashes,
-            |id| self.worktrees_expanded(id),
-            |path| self.submodules_expanded(path),
-        );
+        self.display_rows = hierarchy::rows(self);
     }
 
     /// Returns the parent repo index for the current selection.

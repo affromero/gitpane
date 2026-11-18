@@ -9,6 +9,7 @@ const { SessionLiveness } = require('./session-liveness');
 const { DEFAULT_REFRESH_INTERVAL } = require('./settings');
 const { SubmoduleHierarchy } = require('./submodule-hierarchy');
 const { SubmoduleDiscovery } = require('./submodule-discovery');
+const { compareSubmodulePaths } = require('./external-submodules');
 
 function directoryIdentity(value) {
   try {
@@ -479,7 +480,7 @@ class RepositoryTree {
   }
 
   withSubmodules(view) {
-    const visible = new Set(view.records.map(record => record.key));
+    const visible = new Map(view.records.map(record => [record.key, record.repo.rootUri.fsPath]));
     const submodules = new Map();
     const parents = new Map();
     for (const record of view.records) for (const item of view.worktrees.get(record.key) || []) {
@@ -497,7 +498,7 @@ class RepositoryTree {
       view.nested.add(child);
     }
     for (const children of submodules.values()) children.sort((a, b) =>
-      (this.sortRanks.get(a) ?? Number.MAX_SAFE_INTEGER) - (this.sortRanks.get(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b));
+      compareSubmodulePaths(visible.get(a), visible.get(b), this.sortOrder));
     return { ...view, submodules };
   }
 

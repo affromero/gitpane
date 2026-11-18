@@ -10,9 +10,11 @@ const Module = require('node:module');
 test('verified submodules follow their immediate visible parent and stale proofs do not hide repositories', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-hierarchy-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const paths = ['parent', 'parent/child', 'parent/child/grand', 'parent/unrelated', 'linked', 'linked/child']
+  const paths = ['parent', 'parent/child', 'parent/child/grand', 'parent/unrelated', 'linked', 'linked/child', 'parent/zulu']
     .map(value => path.join(root, value));
   for (const value of paths) fs.mkdirSync(path.join(value, '.git'), { recursive: true });
+  fs.rmdirSync(path.join(paths[1], '.git'));
+  fs.writeFileSync(path.join(paths[1], '.git'), 'gitdir: ../.git/modules/child\n');
   const uri = value => ({ scheme: 'file', fsPath: value, toString: () => value });
   const canonical = value => {
     const resolved = fs.realpathSync.native(value);
@@ -20,7 +22,7 @@ test('verified submodules follow their immediate visible parent and stale proofs
   };
   const event = () => ({ dispose() {} });
   const repos = paths.map(value => ({ rootUri: uri(value), state: { onDidChange: event, submodules: [] } }));
-  repos[0].state.submodules = [{ path: 'child' }, { path: 'unrelated' }];
+  repos[0].state.submodules = [{ path: 'zulu' }, { path: 'child' }, { path: 'unrelated' }];
   repos[1].state.submodules = [{ path: 'grand' }];
   repos[4].kind = 'worktree';
   repos[4].state.submodules = [{ path: 'child' }];
@@ -46,7 +48,13 @@ test('verified submodules follow their immediate visible parent and stale proofs
   }));
   await tree.submoduleHierarchy.refresh();
   let view = tree.presentationView();
-  assert.deepEqual(view.submodules.get(paths[0]), [paths[1]]);
+  for (const order of ['workspace', 'alphabetical', 'reverse', 'dirty']) {
+    tree.setSortOrder(order);
+    tree.sortRanks = new Map((order === 'reverse' ? [paths[1], paths[6]] : [paths[6], paths[1]])
+      .map((key, rank) => [key, rank]));
+    assert.deepEqual(tree.presentationView().submodules.get(paths[0]),
+      order === 'reverse' ? [paths[6], paths[1]] : [paths[1], paths[6]]);
+  }
   assert.deepEqual(view.submodules.get(paths[1]), [paths[2]]);
   assert.deepEqual(view.submodules.get(paths[4]), [paths[5]]);
   assert.equal(view.nested.has(paths[3]), false, 'a nested repository without a gitlink stays at the root');
