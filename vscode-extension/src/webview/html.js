@@ -25,8 +25,8 @@ function getHtml(webview, extensionUri, mode = 'repositories') {
     <div id="search-box" hidden>
       <label class="search-label" for="file-search">Search changed files</label>
       <input id="file-search" type="search" placeholder="Search changed files" autocomplete="off" spellcheck="false">
-      <button id="search-prev" type="button" aria-label="Previous file match" disabled>↑</button>
-      <button id="search-next" type="button" aria-label="Next file match" disabled>↓</button>
+      <button id="search-prev" type="button" aria-label="Previous file match" title="Previous file match" disabled>↑</button>
+      <button id="search-next" type="button" aria-label="Next file match" title="Next file match" disabled>↓</button>
       <div id="search-status" role="status" aria-live="polite"></div>
     </div>
   </div>

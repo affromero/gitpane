@@ -469,6 +469,11 @@ const scenario = String.raw`
       submoduleFile.querySelector('.submodule-tag').textContent === '[sub: ~dirty @feature/test ↑2 ↛main]' &&
       ['dirty', 'branch feature/test', '2 unpushed commits', 'needs merge to default branch'].every(value => submoduleFile.getAttribute('aria-label').includes(value)) &&
       getComputedStyle(submoduleFile.querySelector('.submodule-branch')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-branch'));
+    check('file status and submodule symbols explain their meanings on hover',
+      nestedFile.querySelector('.modified').title.includes('Modified') &&
+      submoduleFile.querySelector('.submodule-branch').title.includes('feature/test') &&
+      submoduleFile.querySelector('.submodule-unpushed').title.includes('2 commits ahead') &&
+      submoduleFile.querySelector('.submodule-needs-merge').title.includes('default branch'));
     root.parentElement.style.width = '210px';
     const diagnosticRow = submoduleFile.querySelector('.row').getBoundingClientRect();
     const diagnosticPath = submoduleFile.querySelector('.file-path').getBoundingClientRect();
@@ -963,7 +968,8 @@ const scenario = String.raw`
     for (const owner of [attention.repositories[0], attention.repositories[0].worktrees[0]]) {
       owner.changesPage = { state: 'ready', page: 0, previous: false, next: false };
       owner.groups = [{ id: 'attention', label: 'Submodules needing attention',
-        files: [{ id: owner.id + '-module', status: '!', path: 'vendor/module' }] }];
+        files: [{ id: owner.id + '-module', status: '!', path: 'vendor/module', submodule: true,
+          submoduleDetails: { warn: { pointer_unreachable: true } } }] }];
     }
     window.postMessage(attention, '*');
     await tick();
@@ -974,6 +980,15 @@ const scenario = String.raw`
     const warningFile = items().find(item => item.getAttribute('aria-label').startsWith('Submodule needs attention: vendor/module'));
     check('warning has distinct group and symbol', warningFile && warningFile.textContent.includes('!') &&
       items().some(item => item.getAttribute('aria-label').startsWith('Submodules needing attention')));
+    const warningGroup = items().find(item => item.getAttribute('aria-label').startsWith('Submodules needing attention'));
+    check('repository and worktree warning badges point to the submodule diagnostics',
+      [warningParent, warningChild].every(item => item.querySelector('.row .unpushed-submodule').title.includes('unpushed commits')));
+    check('warning group explains when submodules need attention',
+      warningGroup.querySelector('.group-row [title*="unpushed commits"]').title.includes('default branch'));
+    check('warning symbol and submodule path explain the unreachable commit',
+      warningFile.querySelector('.behind').title.includes('parent index') &&
+      warningFile.querySelector('.submodule-unreachable').title.includes('remote-tracking branch') &&
+      warningFile.querySelector('.file-path').title.includes('Other clones may be unable to fetch it'));
     warningFile.querySelector('.row').click();
     check('clicking warning opens the submodule inspector', window.posted.some(message =>
       message.type === 'openChange' && message.id === 'attention-parent-module'));
