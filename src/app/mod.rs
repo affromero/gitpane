@@ -523,6 +523,8 @@ impl App {
         self.repo_list
             .repos
             .sort_by(|a, b| crate::git::repo_sort::compare(&keys[&a.path], &keys[&b.path], order));
+        self.repo_list.reverse_submodules =
+            matches!(order, crate::git::repo_sort::Order::ReverseAlphabetical);
         self.repo_list.resync_rows(keep);
     }
     /// Rebuild the filesystem watcher to match the current `repo_list.repos`

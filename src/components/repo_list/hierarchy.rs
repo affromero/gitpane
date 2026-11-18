@@ -321,84 +321,90 @@ pub(super) fn parent(repos: &[RepoEntry], entry: &RepoEntry) -> Option<Parent> {
     best
 }
 
-pub(super) fn rows(
-    repos: &[RepoEntry],
-    expanded_stashes: &HashSet<RepoId>,
-    worktrees_expanded: impl Fn(&RepoId) -> bool,
-    submodules_expanded: impl Fn(&Path) -> bool,
-) -> Vec<DisplayRow> {
+pub(super) fn rows(list: &RepoList) -> Vec<DisplayRow> {
+    fn append_children(
+        owner: Parent,
+        path: &Path,
+        submodules: &[SubmoduleInfo],
+        list: &RepoList,
+        parents: &[Option<Parent>],
+        rows: &mut Vec<DisplayRow>,
+    ) {
+        if !list.submodules_expanded(path) {
+            return;
+        }
+        let (index, worktree) = match owner {
+            Parent::Repo(index) => (index, None),
+            Parent::Worktree(index, worktree) => (index, Some(worktree)),
+        };
+        let mut pinned = HashSet::new();
+        let mut children = Vec::new();
+        for (child, entry) in list.repos.iter().enumerate() {
+            if parents[child] == Some(owner) {
+                pinned.insert(&entry.path);
+                children.push((entry.path.clone(), DisplayRow::Repo(child)));
+            }
+        }
+        for (sub, info) in submodules.iter().enumerate() {
+            let child_path = path.join(&info.path);
+            if !pinned.contains(&child_path) {
+                children.push((child_path, DisplayRow::Submodule(index, worktree, sub)));
+            }
+        }
+        children
+            .sort_by_cached_key(|(path, _)| (path.to_string_lossy().to_lowercase(), path.clone()));
+        if list.reverse_submodules {
+            children.reverse();
+        }
+        for (_, row) in children {
+            match row {
+                DisplayRow::Repo(child) => append(child, list, parents, rows),
+                _ => rows.push(row),
+            }
+        }
+    }
+
     fn append(
         index: usize,
-        repos: &[RepoEntry],
+        list: &RepoList,
         parents: &[Option<Parent>],
-        stashes: &HashSet<RepoId>,
-        expanded: &impl Fn(&RepoId) -> bool,
-        submodules_expanded: &impl Fn(&Path) -> bool,
         rows: &mut Vec<DisplayRow>,
     ) {
         rows.push(DisplayRow::Repo(index));
-        if submodules_expanded(&repos[index].path) {
-            if let Some(status) = &repos[index].status {
-                for (sub, info) in status.checkout_submodules.iter().enumerate() {
-                    if !repos.iter().enumerate().any(|(child, entry)| {
-                        entry.path == repos[index].path.join(&info.path)
-                            && parents[child] == Some(Parent::Repo(index))
-                    }) {
-                        rows.push(DisplayRow::Submodule(index, None, sub));
-                    }
-                }
-            }
-            for (child, parent) in parents.iter().enumerate() {
-                if *parent == Some(Parent::Repo(index)) {
-                    append(
-                        child,
-                        repos,
-                        parents,
-                        stashes,
-                        expanded,
-                        submodules_expanded,
-                        rows,
-                    );
-                }
-            }
-        }
-        let entry = &repos[index];
+        let entry = &list.repos[index];
+        append_children(
+            Parent::Repo(index),
+            &entry.path,
+            entry
+                .status
+                .as_ref()
+                .map_or(&[], |status| status.checkout_submodules.as_slice()),
+            list,
+            parents,
+            rows,
+        );
         let Some(status) = &entry.status else { return };
         let id = RepoId(entry.path.clone());
-        if expanded(&id) {
+        if list.worktrees_expanded(&id) {
             for (j, worktree) in status.worktree_info.iter().enumerate() {
                 rows.push(DisplayRow::Worktree(index, j));
-                if submodules_expanded(&worktree.path) {
-                    for (sub, info) in worktree.checkout_submodules.iter().enumerate() {
-                        if !repos.iter().enumerate().any(|(child, entry)| {
-                            entry.path == worktree.path.join(&info.path)
-                                && parents[child] == Some(Parent::Worktree(index, j))
-                        }) {
-                            rows.push(DisplayRow::Submodule(index, Some(j), sub));
-                        }
-                    }
-                    for (child, parent) in parents.iter().enumerate() {
-                        if *parent == Some(Parent::Worktree(index, j)) {
-                            append(
-                                child,
-                                repos,
-                                parents,
-                                stashes,
-                                expanded,
-                                submodules_expanded,
-                                rows,
-                            );
-                        }
-                    }
-                }
+                append_children(
+                    Parent::Worktree(index, j),
+                    &worktree.path,
+                    &worktree.checkout_submodules,
+                    list,
+                    parents,
+                    rows,
+                );
             }
         }
-        if stashes.contains(&id) {
+        if list.expanded_stashes.contains(&id) {
             for j in 0..status.stashes.len() {
                 rows.push(DisplayRow::Stash(index, j));
             }
         }
     }
+    let repos = &list.repos;
     let mut parents: Vec<_> = repos.iter().map(|entry| parent(repos, entry)).collect();
     for index in 0..parents.len() {
         let mut seen = HashSet::new();
@@ -416,15 +422,7 @@ pub(super) fn rows(
     let mut result = Vec::new();
     for (index, parent) in parents.iter().enumerate() {
         if parent.is_none() {
-            append(
-                index,
-                repos,
-                &parents,
-                expanded_stashes,
-                &worktrees_expanded,
-                &submodules_expanded,
-                &mut result,
-            );
+            append(index, list, &parents, &mut result);
         }
     }
     result

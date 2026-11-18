@@ -5,6 +5,11 @@ const { relativeFile } = require('./change-pager');
 
 const token = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
+function compareSubmodulePaths(a, b, order) {
+  const direction = order === 'reverse' ? -1 : 1;
+  return direction * (a.localeCompare(b, undefined, { sensitivity: 'accent' }) || a.localeCompare(b));
+}
+
 // External child owners use the same guarded read channel as their worktree.
 function externalSubmodules(provider, vscode, options) {
   const { item, repoKey, repoToken, worktreeId, summary, live, groupsFor, pageFor } = options;
@@ -61,14 +66,16 @@ function externalSubmodules(provider, vscode, options) {
       worktreeCount: 0, worktrees: [], stashes: [], stashCount: 0,
       hasDirtySubmodules: !!status.has_dirty_submodules, hasUnpushedSubmodules: !!status.has_unpushed_submodules,
       changeCountLowerBound: status.file_count_lower_bound || 0, changesPage: pageFor(id),
-      groups: groupsFor(owner.repo, id), submodules: child.submodules.map(build).filter(Boolean) };
+      groups: groupsFor(owner.repo, id), submodules: buildChildren(child.submodules) };
   };
+  const buildChildren = children => [...children]
+    .sort((a, b) => compareSubmodulePaths(a.path, b.path, tree.sortOrder)).map(build).filter(Boolean);
   if (!rootIdentity || !token(anchorIdentity) || !token(item.identity) || !token(summary?.repo_identity) || !Array.isArray(summary?.checkout_submodules)) return [];
   try {
     verify(summary.checkout_submodules, item.path, summary.repo_identity, [], { remaining: 128 });
-    return summary.checkout_submodules.map(build).filter(Boolean);
+    return buildChildren(summary.checkout_submodules);
   }
   catch (error) { options.errors.push(`Could not inspect submodules in ${item.path}: ${error.message}`); return []; }
 }
 
-module.exports = { externalSubmodules };
+module.exports = { compareSubmodulePaths, externalSubmodules };

@@ -55,3 +55,32 @@ test('invalid external hierarchy is reported without creating partial owners', t
   assert.match(options.errors[0], /invalid worktree submodule/i);
   assert.equal(provider.externalOwners.size, 0);
 });
+
+test('external sibling order follows the selected mode at every depth without changing row IDs', t => {
+  const { tree, provider, options, vscode } = fixture(t);
+  const add = (name, parent, parentIdentity, chain) => {
+    const repo = path.join(parent, name);
+    fs.mkdirSync(repo);
+    const identity = 'e'.repeat(64);
+    return { path: name, repo, status: { repo_identity: identity }, submodules: [],
+      chain: [...chain, { path: name, parent_identity: parentIdentity, child_identity: identity }] };
+  };
+  const children = options.summary.checkout_submodules;
+  const child = children[0];
+  children.unshift(add('zulu', options.item.path, options.summary.repo_identity, []));
+  child.submodules.push(...['beta', 'alpha'].map(name => add(name, child.repo, child.status.repo_identity, child.chain)));
+  const ids = new Map();
+  for (const order of ['workspace', 'reverse', 'dirty', 'alphabetical']) {
+    tree.sortOrder = order;
+    const rows = externalSubmodules(provider, vscode, options);
+    const nested = rows.find(row => row.name === 'child').submodules;
+    assert.deepEqual(rows.map(row => row.name), order === 'reverse' ? ['zulu', 'child'] : ['child', 'zulu']);
+    assert.deepEqual(nested.map(row => row.name), order === 'reverse' ? ['beta', 'alpha'] : ['alpha', 'beta']);
+    for (const row of [...rows, ...nested]) {
+      if (!ids.has(row.name)) ids.set(row.name, row.id);
+      assert.equal(row.id, ids.get(row.name));
+    }
+    children.reverse();
+    child.submodules.reverse();
+  }
+});
