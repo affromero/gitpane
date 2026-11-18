@@ -210,6 +210,7 @@ impl Default for UiConfig {
             show_liveness: default_show_liveness(),
             expand_worktrees: default_expand_worktrees(),
             sync_repos: default_sync_repos(),
+            sort: RepoSort::default(),
         }
     }
 }

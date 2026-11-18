@@ -162,6 +162,10 @@ impl App {
                         self.git_graph.graph_options.branch_filter,
                     );
                     let selection = self.repo_list.selected_row_id();
+                    let had_changes = self.repo_list.repos[idx]
+                        .status
+                        .as_ref()
+                        .is_some_and(|s| s.is_dirty);
                     let status_clone = status.clone();
                     self.repo_list.update_status(idx, status_clone);
                     if matches!(
@@ -214,6 +218,8 @@ impl App {
                             }
                         }
                     }
+                    // Last: a re-sort moves rows, so `idx` is stale after it.
+                    self.resort_after_status(had_changes, status.is_dirty);
                 }
                 if is_dirty {
                     self.schedule_refresh(id);

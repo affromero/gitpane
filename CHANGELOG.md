@@ -4,6 +4,12 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Choose the terminal repository list's startup order with `[ui] sort`: `alphabetical`, `reverse`, or `dirty`.
+
+### Fixed
+- Keep dirty repositories at the top of the terminal list in dirty-first order as their status changes, not only when the order is selected.
+
 ## [0.18.13] - 2026-11-18
 
 ### Added
