@@ -242,7 +242,13 @@ pub(super) fn collect_submodule_observations(
                 && (state.is_some() || sub_cfg.warn_unpushed)
                 && let Some(inner) = &inner
             {
-                submodule_head_and_warn(inner, sub.index_oid, sub_cfg.warn_unpushed)
+                submodule_head_and_warn(
+                    repo,
+                    inner,
+                    sub.index_oid,
+                    sub.branch.as_deref(),
+                    sub_cfg.warn_unpushed,
+                )
             } else {
                 (None, SubmoduleWarn::default())
             };

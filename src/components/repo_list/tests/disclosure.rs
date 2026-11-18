@@ -83,6 +83,8 @@ fn repo_and_worktree_submodules_collapse_independently_and_restore_selection() {
 
 #[test]
 fn sorting_interleaves_pinned_and_status_children_and_keeps_selection() {
+    // Pinned paths use forward slashes. Status paths use Path::join and can
+    // contain native separators.
     let mut list = make_list(&["/repo", "/repo/beta", "/wt/feature/beta"]);
     list.repos[1].gitlink = true;
     list.repos[2].gitlink = true;

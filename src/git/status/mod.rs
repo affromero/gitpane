@@ -188,10 +188,10 @@ pub(crate) struct SubmoduleWarn {
     /// `refs/remotes/*` refs — committing the parent would pin a sha nobody
     /// else can fetch.
     pub pointer_unreachable: bool,
-    /// Parent's recorded oid IS on a remote, but not on the submodule's default
-    /// branch (`origin/HEAD`, falling back to `origin/main`/`origin/master`),
-    /// so it still needs a merge/PR there. Stays `false` when no default branch
-    /// resolves, so it never fires on a false positive.
+    /// The recorded oid needs merging to the branch declared in `.gitmodules`
+    /// or, without a declaration, the remote default branch. This is false
+    /// when the target cannot be resolved. The serialized field keeps its
+    /// original name for existing bridge consumers.
     pub needs_merge_to_default: bool,
 }
 

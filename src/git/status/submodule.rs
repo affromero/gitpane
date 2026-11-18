@@ -33,6 +33,7 @@ pub(crate) struct SubmoduleRegistration {
     pub(crate) name: Vec<u8>,
     pub(crate) path: PathBuf,
     pub(crate) ignore: git2::SubmoduleIgnore,
+    pub(super) branch: Option<Vec<u8>>,
     pub(crate) head_oid: Option<git2::Oid>,
     pub(crate) index_oid: Option<git2::Oid>,
     pub(crate) configured_path: bool,
@@ -165,6 +166,7 @@ pub(crate) fn submodule_registrations(
                 name: name.to_vec(),
                 path: candidate_path(name)?,
                 ignore: git2::SubmoduleIgnore::None,
+                branch: None,
                 head_oid: None,
                 index_oid: None,
                 configured_path: false,
@@ -209,6 +211,7 @@ pub(crate) fn submodule_registrations(
                         configured.insert(module.name.clone());
                     }
                 } else if property == b"branch" {
+                    module.branch = Some(value.clone().unwrap_or_default());
                     configured.insert(module.name.clone());
                 } else {
                     let setting = registration_setting(property, value.as_deref())?;
@@ -234,6 +237,7 @@ pub(crate) fn submodule_registrations(
                 name,
                 path: path.clone(),
                 ignore: git2::SubmoduleIgnore::None,
+                branch: None,
                 head_oid: None,
                 index_oid: None,
                 configured_path: false,
@@ -619,13 +623,15 @@ pub(super) fn working_submodule_modified(status: git2::SubmoduleStatus) -> bool 
 /// independent of a libgit2 submodule handle lets callers authorize and open
 /// each checkout before inspecting its state.
 pub(super) fn submodule_head_and_warn(
+    parent: &Repository,
     inner: &Repository,
     recorded: Option<git2::Oid>,
+    branch: Option<&[u8]>,
     warn_enabled: bool,
 ) -> (Option<SubmoduleHead>, SubmoduleWarn) {
     let head = Some(read_submodule_head(inner));
     let warn = if warn_enabled {
-        compute_submodule_warn(recorded, inner)
+        compute_submodule_warn(recorded, parent, inner, branch)
     } else {
         SubmoduleWarn::default()
     };
@@ -648,7 +654,12 @@ fn read_submodule_head(inner: &Repository) -> SubmoduleHead {
 /// open handle to it. Uses `index_id()` (parent's *staged* pointer, not
 /// committed) so the warning fires *before* the parent commit ships, while the
 /// user can still amend or reset.
-fn compute_submodule_warn(recorded: Option<git2::Oid>, inner: &Repository) -> SubmoduleWarn {
+fn compute_submodule_warn(
+    recorded: Option<git2::Oid>,
+    parent: &Repository,
+    inner: &Repository,
+    branch: Option<&[u8]>,
+) -> SubmoduleWarn {
     let recorded = match recorded {
         Some(o) => o,
         None => return SubmoduleWarn::default(),
@@ -674,19 +685,36 @@ fn compute_submodule_warn(recorded: Option<git2::Oid>, inner: &Repository) -> Su
         };
     }
 
-    // Reachable from some remote. If we can resolve the default branch and it
-    // does NOT reach `recorded`, the commit lives on a side branch and still
-    // needs a merge there. When no default branch resolves, stay silent.
-    let needs_merge_to_default = match default_branch_tip(inner) {
-        Some(tip) => !reaches(inner, tip, recorded),
-        None => false,
+    let target_tip = match branch {
+        Some(branch) => declared_branch_tip(parent, inner, branch),
+        None => default_branch_tip(inner),
     };
 
     SubmoduleWarn {
         unpushed_commits,
         pointer_unreachable: false,
-        needs_merge_to_default,
+        needs_merge_to_default: target_tip.is_some_and(|tip| !reaches(inner, tip, recorded)),
     }
+}
+
+fn declared_branch_tip(
+    parent: &Repository,
+    inner: &Repository,
+    branch: &[u8],
+) -> Option<git2::Oid> {
+    let parent_head;
+    let branch = if branch == b"." {
+        parent_head = parent.head().ok()?;
+        parent_head.name_bytes().strip_prefix(b"refs/heads/")?
+    } else {
+        branch
+    };
+    let remote = crate::git::preferred_remote(inner)?;
+    let branch = std::str::from_utf8(branch).ok()?;
+    inner
+        .find_reference(&format!("refs/remotes/{remote}/{branch}"))
+        .ok()?
+        .target()
 }
 
 /// Whether `recorded` is reachable from `tip` (equal, or an ancestor of it).

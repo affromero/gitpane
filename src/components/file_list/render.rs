@@ -236,7 +236,7 @@ fn diff_line_style(line: &str, t: &FileListTheme) -> Style {
 }
 
 /// Build the `[sub: …]` tag spans for a submodule file row. `state`, `head`,
-/// and `warn` are independent and compose, e.g. `[sub: +commit @feature ↑3 ↛main]`.
+/// and `warn` are independent and compose, e.g. `[sub: +commit @feature ↑3 ↛merge]`.
 pub(super) fn submodule_tag_spans(
     state: &Option<SubmoduleState>,
     head: &Option<SubmoduleHead>,
@@ -285,7 +285,7 @@ pub(super) fn submodule_tag_spans(
         }
 
         // Push/merge warnings. `⚠unreach` (on no remote) dominates; otherwise
-        // `↑N` (ahead of upstream) and `↛main` (not on the default branch)
+        // `↑N` (ahead of upstream) and `↛merge` (missing from the target branch)
         // compose additively.
         if warn.pointer_unreachable {
             sep(&mut inner, bracket_style);
@@ -300,7 +300,7 @@ pub(super) fn submodule_tag_spans(
             }
             if warn.needs_merge_to_default {
                 sep(&mut inner, bracket_style);
-                inner.push(Span::styled("\u{219b}main", merge_style));
+                inner.push(Span::styled("\u{219b}merge", merge_style));
             }
         }
     }

@@ -103,7 +103,7 @@ const scenario = String.raw`
     await tick();
     document.querySelector('[role="treeitem"] .repo-row').click();
     const badges = [
-      ['vendor/dirty', '[sub: ~dirty @topic ↑2 ↛main]', ['.submodule-bracket', '.submodule-branch', '.submodule-unpushed', '.submodule-needs-merge']],
+      ['vendor/dirty', '[sub: ~dirty @topic ↑2 ↛merge]', ['.submodule-bracket', '.submodule-branch', '.submodule-unpushed', '.submodule-needs-merge']],
       ['vendor/unreachable', '[sub: +commit @detached ⚠unreach]', ['.submodule-bracket', '.submodule-branch', '.submodule-unreachable']]
     ];
     for (const [path, text, selectors] of badges) {
