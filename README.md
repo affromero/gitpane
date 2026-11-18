@@ -222,6 +222,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 - **Split diff views**: Click a file to see its diff side by side. Click a commit to see its files, with the diff of the highlighted file alongside them. Panes with more rows than fit carry a scrollbar thumb and a `seen/total` counter (`12/340`, ending at `340/340`), so a long diff never hides how much is left.
 - **Full mouse support**: Click to select, drag visible text to copy, right click for context menu, scroll wheel everywhere, and click or drag a scroll indicator to jump through a long pane. Panel borders remain draggable.
 - **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state, plus `p`/`P` pull/push shortcuts. A branch with a configured upstream is pulled/pushed bare so git's own config (including renamed upstream branches) decides the destination; without one, gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit/mirror setups) and passes `<remote> <branch>` explicitly.
+- **Commit**: Press `c` in the Repos or Changes panel to write a summary and an optional description, then commit what is staged. Hooks and signing run as they do on the command line, and a rejected commit keeps your message. With nothing staged, gitpane offers to stage everything first. `Ctrl+G` fills the box from `[commit] draft_command`, such as a command that asks an AI agent.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
 - **Sort repos**: Cycle between alphabetical and dirty first with `s`.
 - **Copy to clipboard**: Drag text and release to copy it to the system clipboard. With a text selection, `y` or `Ctrl+C` copies it again; otherwise `y` copies the selected item.
@@ -274,6 +275,7 @@ Scrollbars and panel borders keep their drag behavior. A new press, scrolling, o
 |-----|--------|
 | `j` / `↓` | Next repo |
 | `k` / `↑` | Previous repo |
+| `c` | Commit the selected repo or worktree |
 
 ### Changes panel
 
@@ -284,6 +286,7 @@ Scrollbars and panel borders keep their drag behavior. A new press, scrolling, o
 | `Enter` | Open split diff view |
 | `Esc` / `h` / `←` | Close diff view |
 | `/` | Search file paths; use arrow keys to move between matches |
+| `c` | Commit the checkout these changes belong to |
 
 While searching files, typed characters update the query, `Enter` opens the
 matching file, and `Esc` clears the query. The file list remains visible with
@@ -355,6 +358,18 @@ Each pull request row shows its rolled-up CI status: a green `✓` when checks p
 | `Ctrl+A` / `Home` | Cursor to start |
 | `Ctrl+E` / `End` | Cursor to end |
 | `Ctrl+U` | Clear line before cursor |
+
+### Commit box (`c`)
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Commit from the summary; new line in the description |
+| `Tab` / `Shift+Tab` | Move between the summary and the description |
+| `Ctrl+S` | Commit from either field |
+| `Ctrl+G` | Fill the box from `[commit] draft_command` |
+| `Esc` | Close; the text comes back the next time you open that checkout's box |
+
+The box commits the checkout the Changes panel shows: the repo, a worktree, or a submodule. gitpane runs `git commit -F <message file>` there, so hooks and `commit.gpgsign` behave as on the command line. Signing needs a pinentry that doesn't read from the terminal. If Git fails, the box shows its output and keeps the message. With nothing staged, gitpane asks before staging every change. A stash preview is read-only, so the box doesn't open over one.
 
 ## Configuration
 
@@ -433,6 +448,11 @@ enabled = true           # Show the GitHub issues/PRs panel (via `gh`); opt-out,
 # Command run by `o` to open the selected repo/worktree. `{path}` is replaced
 # with its directory. Unset: open a new tmux pane when running inside tmux.
 command = "cursor {path}"
+
+[commit]
+# Run by `Ctrl+G` in the commit box with `sh -c` in the checkout. What it
+# prints becomes the draft message. Unset by default.
+draft_command = "git diff --cached | claude -p 'Write a commit message for this diff. Reply with only the message.'"
 ```
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.

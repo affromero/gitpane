@@ -52,6 +52,8 @@ enum MenuAction {
     UnstageFile,
     /// Discard a changed file; `bool` is `is_untracked` (delete vs restore).
     DiscardFile(bool),
+    /// Open the commit box for the checkout the file belongs to.
+    Commit,
 }
 
 struct MenuItem {
@@ -323,8 +325,13 @@ impl ContextMenu {
             }
         }
 
+        let mut commit = Vec::new();
+        if !is_submodule {
+            commit.push(item("Commit…".into(), MenuAction::Commit));
+        }
+
         self.rows.clear();
-        for group in [mutate, inspect, graph, manage] {
+        for group in [mutate, commit, inspect, graph, manage] {
             if group.is_empty() {
                 continue;
             }
@@ -441,6 +448,7 @@ impl ContextMenu {
             MenuAction::DiscardFile(is_untracked) => {
                 Action::DiscardFile(id, self.file_path.clone()?, is_untracked)
             }
+            MenuAction::Commit => Action::OpenCommitBox,
         };
         self.hide();
         Some(action)
@@ -645,6 +653,7 @@ mod file_menu_tests {
         assert!(labels.contains(&"Stage".to_string()));
         assert!(labels.contains(&"Unstage".to_string()));
         assert!(labels.contains(&"Discard changes".to_string()));
+        assert!(labels.contains(&"Commit…".to_string()));
     }
 
     #[test]

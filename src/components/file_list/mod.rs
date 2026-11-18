@@ -292,6 +292,18 @@ impl FileList {
         }
     }
 
+    /// The working tree the rows came from, which staging and committing act on.
+    pub fn working_tree(&self) -> Option<(&RepoId, &str)> {
+        match self.source.as_ref()? {
+            FileSource::WorkingTree { repo_id, name } => Some((repo_id, name)),
+            FileSource::Stash(_) => None,
+        }
+    }
+
+    pub fn staged_count(&self) -> usize {
+        self.files.iter().filter(|file| file.staged).count()
+    }
+
     /// Update the display identity of the current stash preview when the
     /// stash list renumbers it. Content and selection stay bound to the OID.
     pub fn update_stash_identity(

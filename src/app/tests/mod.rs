@@ -1,4 +1,5 @@
 use super::*;
+mod commit;
 mod robustness;
 mod stash;
 mod submodule_disclosure;

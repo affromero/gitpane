@@ -329,6 +329,26 @@ fn test_worktree_config_roundtrip() {
 }
 
 #[test]
+fn test_commit_config_parse_and_roundtrip() {
+    let config: Config = toml::from_str("").unwrap();
+    assert!(config.commit.draft_command.is_none());
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    assert!(!serialized.contains("draft_command"), "{serialized}");
+
+    let config: Config = toml::from_str("[commit]\ndraft_command = \"git-draft-msg\"\n").unwrap();
+    assert_eq!(
+        config.commit.draft_command.as_deref(),
+        Some("git-draft-msg")
+    );
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(
+        loaded.commit.draft_command.as_deref(),
+        Some("git-draft-msg")
+    );
+}
+
+#[test]
 fn test_worktree_path_sibling_when_dir_unset() {
     let cfg = WorktreeConfig::default();
     assert_eq!(

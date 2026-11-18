@@ -114,6 +114,12 @@ enabled = true
 # Unset (default): a worktree is created as a sibling of its repo.
 # dir = "~/worktrees"
 
+[commit]
+# Command `Ctrl+G` runs in the commit box (`c`), with `sh -c` in the checkout.
+# What it prints becomes the draft message, for example from an AI agent.
+# Unset by default.
+# draft_command = "git diff --cached | claude -p 'Write a commit message for this diff. Reply with only the message.'"
+
 [herdr]
 # Legacy herdr CLI only; official herdr-app does not use this routing option.
 # Ask herdr to forward right-click gestures to gitpane's pane at startup ("herdr pane

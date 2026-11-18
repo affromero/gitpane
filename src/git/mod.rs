@@ -1,3 +1,4 @@
+pub(crate) mod commit;
 pub(crate) mod commit_files;
 pub(crate) mod file_ops;
 pub(crate) mod github;

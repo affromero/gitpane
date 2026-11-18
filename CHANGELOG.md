@@ -4,6 +4,10 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+### Added
+- Commit from the terminal UI. `c` in the Repos or Changes panel opens a commit box with a summary and an optional description for the checkout the Changes panel shows. Hooks and signing run as on the command line, a rejected commit keeps the message, and with nothing staged gitpane offers to stage everything first.
+- Fill the commit box from `[commit] draft_command` with `Ctrl+G`, for example a command that asks an AI agent for a message.
+
 ## [0.18.13] - 2026-11-18
 
 ### Added

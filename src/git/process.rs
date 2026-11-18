@@ -216,6 +216,24 @@ pub(crate) fn run_git_op_capturing(
     cmd.output()
 }
 
+/// Non-unix counterpart of the bounded run above. `timeout` is not enforced,
+/// for the same reasons as [`run_git_op_capturing`].
+#[cfg(not(unix))]
+pub(crate) fn run_git_op_noninteractive(
+    path: &Path,
+    args: &[String],
+    _timeout: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    let mut cmd = git_command(path);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd.output()
+}
+
 /// Drain a spawned `child`'s stdout/stderr while waiting at most `timeout`,
 /// killing the whole process group (git + its ssh child) if it does not exit in
 /// time. Split out from [`run_git_op_capturing`] so tests can drive a short

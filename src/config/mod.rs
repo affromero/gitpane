@@ -63,6 +63,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub worktree: WorktreeConfig,
     #[serde(default)]
+    pub commit: CommitConfig,
+    #[serde(default)]
     pub herdr: HerdrConfig,
     #[serde(default)]
     pub goto: GotoConfig,
@@ -289,6 +291,14 @@ pub(crate) struct WorktreeConfig {
     /// When unset, a worktree is created as a sibling of its repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct CommitConfig {
+    /// Command `Ctrl+G` runs with `sh -c` in the checkout from the commit box.
+    /// What it prints becomes the draft message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_command: Option<String>,
 }
 
 /// One user-defined keybinding: press `key` to run `command` against the

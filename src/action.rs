@@ -160,6 +160,27 @@ pub(crate) enum Action {
     DiscardFile(RepoId, std::path::PathBuf, bool),
     /// Run the discard after the confirm dialog accepts.
     DiscardFileConfirmed(RepoId, std::path::PathBuf, bool),
+    /// Open the commit box for the working tree the Changes panel shows.
+    OpenCommitBox,
+    /// Commit `message` in `id`'s checkout, staging every change first when
+    /// `stage_all` is set.
+    Commit {
+        id: RepoId,
+        message: String,
+        stage_all: bool,
+    },
+    /// The new commit as `<short hash> <subject>`, or what Git printed.
+    CommitFinished {
+        id: RepoId,
+        result: Result<String, String>,
+    },
+    /// Run `[commit] draft_command` in `id`'s checkout.
+    DraftCommitMessage(RepoId),
+    /// The draft command's output, or why it failed.
+    CommitDraftReady {
+        id: RepoId,
+        result: Result<String, String>,
+    },
     GitPush(RepoId),
     GitPull(RepoId),
     GitPullRebase(RepoId),
@@ -319,6 +340,9 @@ impl Action {
                 | Self::DiscardFile(..)
                 | Self::DiscardFileConfirmed(..)
                 | Self::ShowFileContextMenu { .. }
+                | Self::OpenCommitBox
+                | Self::Commit { .. }
+                | Self::DraftCommitMessage(..)
         )
     }
 }
