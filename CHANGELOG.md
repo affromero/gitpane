@@ -4,6 +4,15 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.18.13] - 2026-11-18
+
+### Added
+- Explain repository, worktree, file, and submodule status indicators on hover in VS Code. ([#224](https://github.com/affromero/gitpane/pull/224), closes [#222](https://github.com/affromero/gitpane/issues/222))
+
+### Fixed
+- Sort sibling submodules within each checkout in the TUI and VS Code, including worktrees and pinned submodules. ([#221](https://github.com/affromero/gitpane/pull/221), [#225](https://github.com/affromero/gitpane/pull/225), closes [#220](https://github.com/affromero/gitpane/issues/220))
+- Check the branch declared in `.gitmodules` before warning that a submodule pin needs a merge. ([#225](https://github.com/affromero/gitpane/pull/225), closes [#223](https://github.com/affromero/gitpane/issues/223))
+
 ## [0.18.12] - 2026-11-16
 
 ### Fixed
