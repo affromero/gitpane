@@ -893,25 +893,27 @@ fn test_detached_head_at_remote_oid_no_warn() {
 }
 
 #[test]
-fn test_needs_merge_to_default_when_pinned_on_side_branch() {
-    // The parent pins a submodule commit that lives on a remote *side*
-    // branch (origin/feature) but is not reachable from the default branch
-    // (origin/main). The commit is fetchable, so it is not "unreachable",
-    // yet it still needs merging to main → `needs_merge_to_default`.
+fn test_pinned_submodule_merge_warning_uses_declared_branch() {
     let (tmp, _sub_source, _sub_repo) = init_repo_with_submodule();
 
     let sub_dir = tmp.path().join("my-sub");
     let inner = Repository::open(&sub_dir).unwrap();
 
-    // A: the initial cloned commit. Anchor the default branch here.
     let a = inner.head().unwrap().peel_to_commit().unwrap().id();
     inner
         .reference("refs/remotes/origin/main", a, true, "test setup")
         .unwrap();
+    inner
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test setup",
+        )
+        .unwrap();
 
-    // B: a new commit (child of A) now checked out in the submodule,
-    // published only on origin/feature.
     let b = add_commit_on_head(&inner, "feature.rs", "fn f() {}");
+    inner.set_head_detached(b).unwrap();
     inner
         .reference("refs/remotes/origin/feature", b, true, "test setup")
         .unwrap();
@@ -919,25 +921,52 @@ fn test_needs_merge_to_default_when_pinned_on_side_branch() {
     // Stage the parent's pointer at B (the submodule's current HEAD).
     stage_submodule_pointer(tmp.path(), "my-sub");
 
-    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
-    let sub = status
-        .submodules
-        .iter()
-        .find(|s| s.path == Path::new("my-sub"))
-        .expect("submodule entry expected");
+    // A declared target replaces the default even when the target is missing.
+    let mut modules = git2::Config::open(&tmp.path().join(".gitmodules")).unwrap();
+    let parent = Repository::open(tmp.path()).unwrap();
+    parent
+        .reference(
+            "refs/heads/feature",
+            parent.head().unwrap().target().unwrap(),
+            true,
+            "test setup",
+        )
+        .unwrap();
+    parent.set_head("refs/heads/feature").unwrap();
+    for (branch, needs_merge) in [
+        (None, true),
+        (Some("feature"), false),
+        (Some("."), false),
+        (Some("main"), true),
+        (Some("missing"), false),
+    ] {
+        if let Some(branch) = branch {
+            modules.set_str("submodule.my-sub.branch", branch).unwrap();
+        }
+        let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        assert_eq!(
+            status.checkout_submodules[0].warn.needs_merge_to_default, needs_merge,
+            "branch {branch:?}"
+        );
+        assert!(!status.checkout_submodules[0].warn.pointer_unreachable);
+        assert_eq!(
+            status.has_unpushed_submodules, needs_merge,
+            "branch {branch:?}"
+        );
+    }
 
-    assert!(
-        sub.warn.needs_merge_to_default,
-        "pinned commit is on origin/feature, not origin/main: {:?}",
-        sub.warn
-    );
-    assert!(
-        !sub.warn.pointer_unreachable,
-        "commit is on a remote, so it is reachable: {:?}",
-        sub.warn
-    );
-    assert!(!sub.warn.is_clean());
-    assert!(status.has_unpushed_submodules);
+    inner
+        .find_reference("refs/remotes/origin/feature")
+        .unwrap()
+        .delete()
+        .unwrap();
+    modules
+        .set_str("submodule.my-sub.branch", "feature")
+        .unwrap();
+    let status = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+    let sub = &status.checkout_submodules[0];
+    assert!(sub.warn.pointer_unreachable);
+    assert!(!sub.warn.needs_merge_to_default);
 }
 
 /// A pinned commit that IS on the default branch must not warn.

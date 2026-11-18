@@ -466,14 +466,14 @@ const scenario = String.raw`
       getComputedStyle(nestedFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-regular-path') &&
       getComputedStyle(submoduleFile.querySelector('.file-path')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-path'));
     check('submodule diagnostics use native symbols, colors and accessible labels',
-      submoduleFile.querySelector('.submodule-tag').textContent === '[sub: ~dirty @feature/test ↑2 ↛main]' &&
-      ['dirty', 'branch feature/test', '2 unpushed commits', 'needs merge to default branch'].every(value => submoduleFile.getAttribute('aria-label').includes(value)) &&
+      submoduleFile.querySelector('.submodule-tag').textContent === '[sub: ~dirty @feature/test ↑2 ↛merge]' &&
+      ['dirty', 'branch feature/test', '2 unpushed commits', 'needs merge to target branch'].every(value => submoduleFile.getAttribute('aria-label').includes(value)) &&
       getComputedStyle(submoduleFile.querySelector('.submodule-branch')).color === document.documentElement.style.getPropertyValue('--gitpane-file-list-submodule-branch'));
     check('file status and submodule symbols explain their meanings on hover',
       nestedFile.querySelector('.modified').title.includes('Modified') &&
       submoduleFile.querySelector('.submodule-branch').title.includes('feature/test') &&
       submoduleFile.querySelector('.submodule-unpushed').title.includes('2 commits ahead') &&
-      submoduleFile.querySelector('.submodule-needs-merge').title.includes('default branch'));
+      submoduleFile.querySelector('.submodule-needs-merge').title.includes('.gitmodules'));
     root.parentElement.style.width = '210px';
     const diagnosticRow = submoduleFile.querySelector('.row').getBoundingClientRect();
     const diagnosticPath = submoduleFile.querySelector('.file-path').getBoundingClientRect();
@@ -984,7 +984,7 @@ const scenario = String.raw`
     check('repository and worktree warning badges point to the submodule diagnostics',
       [warningParent, warningChild].every(item => item.querySelector('.row .unpushed-submodule').title.includes('unpushed commits')));
     check('warning group explains when submodules need attention',
-      warningGroup.querySelector('.group-row [title*="unpushed commits"]').title.includes('default branch'));
+      warningGroup.querySelector('.group-row [title*="unpushed commits"]').title.includes('merge target'));
     check('warning symbol and submodule path explain the unreachable commit',
       warningFile.querySelector('.behind').title.includes('parent index') &&
       warningFile.querySelector('.submodule-unreachable').title.includes('remote-tracking branch') &&

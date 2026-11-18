@@ -13,7 +13,7 @@ window.GitpaneStatusHelp = status => ({
   '!': 'Submodule needs attention',
 })[status] || 'Changed file';
 
-window.GitpaneAttentionHelp = 'Submodules needing attention. A submodule branch may have unpushed commits, or the commit recorded in the parent index may be missing from known remote branches or from the submodule’s default branch.';
+window.GitpaneAttentionHelp = 'Submodules needing attention. A submodule branch may have unpushed commits, or the commit recorded in the parent index may be missing from known remote branches or from the merge target.';
 
 window.GitpaneGroupHelp = group => ({
   merge: 'Files with unresolved merge conflicts.',
@@ -71,8 +71,8 @@ window.GitpaneSubmoduleParts = file => {
   else {
     if (info.warn.unpushed_commits > 0) parts.push([`↑${info.warn.unpushed_commits}`, 'submodule-unpushed', `${info.warn.unpushed_commits} unpushed commits`,
       upstreamHelp(info.warn.unpushed_commits, 'ahead of') + ' in the submodule.']);
-    if (info.warn.needs_merge_to_default) parts.push(['↛main', 'submodule-needs-merge', 'needs merge to default branch',
-      'A known remote-tracking branch contains the commit recorded in the parent index. That commit still needs to reach the submodule’s default branch.']);
+    if (info.warn.needs_merge_to_default) parts.push(['↛merge', 'submodule-needs-merge', 'needs merge to target branch',
+      'The commit recorded in the parent index needs to reach the branch declared in .gitmodules, or the remote default branch if no branch is declared.']);
   }
   return parts;
 };

@@ -164,7 +164,7 @@ mod tag_tests {
         };
         assert_eq!(
             rendered(Some(SubmoduleState::Modified), None, warn),
-            "[sub: +commit \u{219b}main] "
+            "[sub: +commit \u{219b}merge] "
         );
     }
 
@@ -181,13 +181,13 @@ mod tag_tests {
                 Some(SubmoduleHead::Branch("feature".to_string())),
                 warn,
             ),
-            "[sub: +commit @feature \u{2191}3 \u{219b}main] "
+            "[sub: +commit @feature \u{2191}3 \u{219b}merge] "
         );
     }
 
     #[test]
     fn unreachable_dominates_needs_merge() {
-        // On no remote at all: only `⚠unreach`, never `↛main`.
+        // On no remote at all, only `⚠unreach` is visible.
         let warn = SubmoduleWarn {
             unpushed_commits: 0,
             pointer_unreachable: true,
