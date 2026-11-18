@@ -17,6 +17,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: repository-paths
+        name: check tracked repository paths
+        entry: sh scripts/hooks/check_repository_paths.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: file-line-count
         name: file line count (< 1000)
         entry: scripts/hooks/check_file_line_count.sh
