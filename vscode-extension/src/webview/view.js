@@ -1,5 +1,8 @@
 function mountGitpaneView(document, window, api) {
 'use strict';
+const { GitpaneStatusClass: statusClass, GitpaneSubmoduleParts: submoduleParts,
+  GitpaneStatusHelp: statusHelp, GitpaneGroupHelp: groupHelp,
+  GitpaneAddGitStatus: addGitStatus, GitpaneAttentionHelp: attentionHelp } = window;
 const changesMode = document.body.dataset.view === 'changes';
 const vscode = { getState: () => api.getState(), setState: state => api.setState(state),
   postMessage: message => api.postMessage(changesMode ?
@@ -169,11 +172,11 @@ function reconcilePending(owner) {
 
 function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees) {
   const row = element('div', 'row repo-row');
-  add(row, 'dirty', repo.dirty ? '*' : '\u00a0');
+  add(row, 'dirty', repo.dirty ? '*' : '\u00a0', repo.dirty ? 'Repository has uncommitted changes' : undefined);
   const name = add(row, `name${repo.submodule ? ' submodule-name' : ''}`, '', repo.name);
-  if (repo.pinned) add(name, 'pin', '⌖ ', 'Pinned submodule');
-  if (repo.submodule) add(name, 'submodule', '↳ ', 'Submodule');
-  if (repo.worktree) add(name, 'worktree', '⎇ ');
+  if (repo.pinned) add(name, 'pin', '⌖ ', 'Pinned submodule. This workspace saves the pin so Gitpane can reopen the submodule.');
+  if (repo.submodule) add(name, 'submodule', '↳ ', 'Submodule. A separate Git repository whose commit is recorded by a parent repository.');
+  if (repo.worktree) add(name, 'worktree', '⎇ ', 'Linked worktree. An additional checkout of the same repository.');
   name.appendChild(document.createTextNode(repo.name));
   const branch = repo.branch || '—';
   add(row, `branch${branch === 'main' || branch === 'master' ? ' default' : ''}`, branch, branch);
@@ -187,7 +190,8 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
         const open = expandedStashes.has(key);
         const button = element('button', 'stash stash-action', `${open ? '▾' : '▸'}$${repo.stashCount}`);
         button.type = 'button';
-        button.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} stashes for ${repo.name}`);
+        button.title = `${open ? 'Collapse' : 'Expand'} stashes for ${repo.name}`;
+        button.setAttribute('aria-label', button.title);
         button.setAttribute('aria-expanded', String(open));
         button.addEventListener('click', event => {
           event.stopPropagation();
@@ -204,7 +208,8 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
       if (hasWorktrees) {
         const button = element('button', 'worktree worktree-action', `${showWorktrees ? '▾' : '▸'}⎇${repo.worktreeCount}`);
         button.type = 'button';
-        button.setAttribute('aria-label', `${showWorktrees ? 'Collapse' : 'Expand'} worktrees for ${repo.name}`);
+        button.title = `${showWorktrees ? 'Collapse' : 'Expand'} worktrees for ${repo.name}`;
+        button.setAttribute('aria-label', button.title);
         button.setAttribute('aria-expanded', String(showWorktrees));
         button.addEventListener('click', event => { event.stopPropagation(); toggleWorktrees(repo); });
         tail.appendChild(button);
@@ -215,10 +220,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
     !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (!repo.statusUnavailable) {
-    if (repo.ahead > 0) add(tail, 'ahead', `↑${repo.ahead}`);
-    if (repo.behind > 0) add(tail, 'behind', `↓${repo.behind}`);
-    if (repo.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
-    if (repo.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
+    addGitStatus(add, tail, repo);
     if (info.count || (info.unknown && repo.dirty)) {
       const value = info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`;
       add(tail, 'count', `${snapshot.separateChanges ? '' : isExpanded ? '▾' : '▸'}[${value}]`, countText(info));
@@ -237,24 +239,24 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
   return row;
 }
 
-const statusClass = window.GitpaneStatusClass, submoduleParts = window.GitpaneSubmoduleParts;
-
 function fileRow(file) {
   const row = element('div', `row file-row${file.directory ? ' directory-row' : ''}${file.submodule ? ' submodule-file-row' : ''}`);
-  add(row, statusClass(file.status), file.status || ' ');
+  const parts = submoduleParts(file);
+  const reasons = parts.map(part => part[3]).join('\n');
+  const status = file.status === '!' ? (reasons || attentionHelp) : statusHelp(file.status);
+  add(row, statusClass(file.status), file.status || ' ', status);
   if (file.submodule) {
-    const parts = submoduleParts(file);
     const tag = element('span', 'submodule-tag');
-    tag.title = parts.length ? parts.map(part => part[2]).join(', ') : 'Submodule';
+    tag.title = reasons || 'Submodule';
     add(tag, 'submodule-bracket', parts.length ? '[sub: ' : '[submodule]');
     parts.forEach((part, index) => {
       if (index) add(tag, 'submodule-bracket', ' ');
-      add(tag, part[1], part[0]);
+      add(tag, part[1], part[0], part[3]);
     });
     if (parts.length) add(tag, 'submodule-bracket', ']');
     row.appendChild(tag);
   }
-  add(row, `file-path${file.submodule ? ' submodule-path' : ''}`, file.path || file.name, file.path || file.name);
+  add(row, `file-path${file.submodule ? ' submodule-path' : ''}`, file.path || file.name, [file.path || file.name, status, file.status !== '!' && reasons].filter(Boolean).join('\n'));
   if (file.directory) add(row, 'muted', 'directory', 'Untracked directory');
   else row.appendChild(menuButton(`Actions for ${file.path || file.name}`, 'file', file.id));
   return row;
@@ -263,8 +265,8 @@ function fileRow(file) {
 function worktreeRow(worktree, submodule) {
   const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}${submodule ? ' submodule-worktree-row' : ''}`);
   const markers = element('span', 'worktree-markers');
-  add(markers, 'subtree', '⎇');
-  add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0');
+  add(markers, 'subtree', '⎇', 'Linked worktree. An additional checkout of the same repository.');
+  add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0', worktree.dirty ? 'Worktree has uncommitted changes' : undefined);
   row.appendChild(markers);
   if (worktree.external) {
     add(row, 'name worktree', worktree.branch || worktree.name || 'unknown branch', [worktree.path || worktree.name, worktree.branch].filter(Boolean).join('\n'));
@@ -278,16 +280,13 @@ function worktreeRow(worktree, submodule) {
     !collapsedSubmodules.has(`worktree:${worktree.id}`), () => toggleSubmodules(`worktree:${worktree.id}`)));
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
-  if (worktree.ahead > 0) add(tail, 'ahead', `↑${worktree.ahead}`);
-  if (worktree.behind > 0) add(tail, 'behind', `↓${worktree.behind}`);
-  if (worktree.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'Dirty submodules');
-  if (worktree.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', 'Submodules need attention');
+  addGitStatus(add, tail, worktree);
   if (worktree.changesPage) {
     const info = countInfo(worktree);
     if (info.count || (info.unknown && worktree.dirty)) {
       add(tail, 'count', `[${info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`}]`, countText(info));
     }
-  } else if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`);
+  } else if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`, `${worktree.fileCount} changed ${worktree.fileCount === 1 ? 'file' : 'files'}`);
   if (worktree.available && !worktree.external) {
     const graph = element('button', 'graph-action', '●');
     graph.type = 'button';
@@ -308,8 +307,7 @@ function worktreeRow(worktree, submodule) {
       vscode.postMessage({ type: 'action', action: 'inspectExternalWorktree', id: worktree.id });
     });
     tail.appendChild(button);
-  }
-  else if (!worktree.available) add(tail, 'behind', '!', 'Worktree repository unavailable');
+  } else if (!worktree.available) add(tail, 'behind', '!', 'Worktree repository unavailable');
   row.appendChild(tail);
   return row;
 }
@@ -339,8 +337,8 @@ function renderGroups(parentElement, groups, parentKey, ownerId, partial = false
     }
     const groupExpanded = !collapsedGroups.has(groupKey);
     const row = element('div', 'row group-row');
-    add(row, 'subtree', groupExpanded ? '▾' : '▸');
-    add(row, '', `${group.label} [${files.length}]`);
+    add(row, 'subtree', groupExpanded ? '▾' : '▸', `${groupExpanded ? 'Collapse' : 'Expand'} ${group.label.toLowerCase()}`);
+    add(row, '', `${group.label} [${files.length}]`, groupHelp(group.id));
     const groupItem = createItem(groupKey, `${group.label}, ${files.length} ${files.length === 1 ? 'file' : 'files'}${partial ? ' on this page' : ''}`,
       row, files.length > 0, groupExpanded, parentKey);
     parentElement.appendChild(groupItem.item);
