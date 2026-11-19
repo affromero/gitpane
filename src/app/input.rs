@@ -31,6 +31,14 @@ impl App {
             self.action_tx.send(Action::Quit)?;
             return Ok(());
         }
+        if self.fetch_diagnostics.is_some() {
+            self.fetch_diagnostics_key(key.code)?;
+            return Ok(());
+        }
+        if self.workflow.is_open() {
+            self.workflow_key(key)?;
+            return Ok(());
+        }
         if self.text_selection.origin().is_some() {
             self.text_selection.clear();
             self.action_tx.send(Action::Render)?;
@@ -142,6 +150,12 @@ impl App {
         }
 
         match key.code {
+            KeyCode::F(7) if self.focus == FocusPanel::Repos => {
+                if let Some(repo) = self.repo_list.selected_repo() {
+                    self.start_fetch_diagnostics(RepoId(repo.path.clone()));
+                    self.action_tx.send(Action::Render)?;
+                }
+            }
             KeyCode::Char('q') => {
                 // If viewing a diff or the GitHub detail, close it instead of quitting.
                 if self.focus == FocusPanel::Changes && self.file_list.viewing_diff() {
@@ -373,7 +387,7 @@ impl App {
         Ok(())
     }
     pub(super) fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
-        if self.workflow.is_open() {
+        if self.workflow.is_open() || self.fetch_diagnostics.is_some() {
             return Ok(());
         }
         use crossterm::event::{MouseButton, MouseEventKind};

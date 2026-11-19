@@ -40,6 +40,7 @@ mod actions;
 mod actions_extra;
 mod commit;
 mod config_sync;
+mod fetch_diagnostics;
 mod github;
 mod input;
 mod launch;
@@ -274,6 +275,7 @@ pub(crate) struct App {
     /// Show the keybindings help overlay
     show_help: bool,
     workflow: workflow::Overlay,
+    fetch_diagnostics: Option<fetch_diagnostics::Panel>,
     /// Limits concurrent poll/refresh tasks to avoid CPU spikes
     poll_semaphore: Arc<tokio::sync::Semaphore>,
     /// Repos with an in-flight status query (prevents duplicate spawns)
@@ -472,6 +474,7 @@ impl App {
             update_position,
             show_help: false,
             workflow: workflow::Overlay::default(),
+            fetch_diagnostics: None,
             poll_semaphore,
             pending_status: HashSet::new(),
             dirty_repos: HashSet::new(),
