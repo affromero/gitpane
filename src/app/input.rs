@@ -47,6 +47,14 @@ impl App {
             return Ok(());
         }
 
+        // Below the confirm dialog, which asks whether to stage everything.
+        if self.commit_box.visible {
+            if let Some(action) = self.commit_box.handle_key_event(key)? {
+                self.action_tx.send(action)?;
+            }
+            return Ok(());
+        }
+
         // Path input gets priority
         if self.path_input.visible {
             if let Some(action) = self.path_input.handle_key_event(key)? {
@@ -287,6 +295,16 @@ impl App {
                     self.action_tx.send(Action::RunKeybinding(idx))?;
                     return Ok(());
                 }
+                // Both panels show the working tree `c` commits.
+                if key.code == KeyCode::Char('c')
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && matches!(self.focus, FocusPanel::Repos | FocusPanel::Changes)
+                {
+                    self.action_tx.send(Action::OpenCommitBox)?;
+                    return Ok(());
+                }
                 // Route to focused panel
                 match self.focus {
                     FocusPanel::Repos => {
@@ -323,6 +341,7 @@ impl App {
             || self.graph_context_menu.visible
             || self.picker.visible
             || self.path_input.visible
+            || self.commit_box.visible
             || self.confirm_dialog.visible
             || self.theme_picker.visible
             || self.graph_filter_picker.visible
@@ -374,6 +393,7 @@ impl App {
         if self.picker.visible
             || self.theme_picker.visible
             || self.path_input.visible
+            || self.commit_box.visible
             || self.confirm_dialog.visible
             || self.show_help
         {

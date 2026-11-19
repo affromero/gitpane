@@ -1,3 +1,4 @@
+pub(crate) mod commit_box;
 pub(crate) mod confirm_dialog;
 pub(crate) mod context_menu;
 pub(crate) mod file_list;

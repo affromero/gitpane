@@ -1,4 +1,5 @@
 use super::*;
+mod commit;
 mod robustness;
 mod sort;
 mod stash;
@@ -7,6 +8,11 @@ mod text_selection;
 mod watcher_membership;
 use crate::git::status::StashEntry;
 use std::path::Path;
+
+/// Quit reads a process-wide count of live `GitOpGuard`s, so tests that run
+/// real Git operations take turns with the test that checks the count.
+static GIT_OP_COUNT: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 mod file_search_input {
     use super::*;
@@ -605,6 +611,7 @@ fn doze_to_awake_does_not_replay_or_repaint() {
 
 #[tokio::test]
 async fn quit_waits_for_mutating_git_ops_and_force_quits_on_second_request() {
+    let _count = GIT_OP_COUNT.lock().await;
     let mut app = power_test_app();
     assert!(!app.ready_to_exit());
 

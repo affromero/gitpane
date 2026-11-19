@@ -253,6 +253,7 @@ impl App {
         // Overlays rendered last
         self.context_menu.draw(frame, area)?;
         self.path_input.draw(frame, area);
+        self.commit_box.draw(frame, area);
         self.confirm_dialog.draw(frame, area);
         self.theme_picker.draw(frame, area);
         self.graph_context_menu.draw(frame, area);
@@ -384,6 +385,7 @@ impl App {
                 ]));
                 lines.push(Line::from(vec![key("R"), desc("Rescan repos")]));
                 lines.push(Line::from(vec![key("g"), desc("Open git graph")]));
+                lines.push(Line::from(vec![key("c"), desc("Commit")]));
             }
             FocusPanel::Changes => {
                 lines.push(Line::from(""));
@@ -391,6 +393,7 @@ impl App {
                 lines.push(Line::from(vec![key("j / k"), desc("Move up / down")]));
                 lines.push(Line::from(vec![key("Enter"), desc("Open diff view")]));
                 lines.push(Line::from(vec![key("Esc / h"), desc("Close diff view")]));
+                lines.push(Line::from(vec![key("c"), desc("Commit")]));
             }
             FocusPanel::Graph => {
                 lines.push(Line::from(""));

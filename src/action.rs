@@ -160,6 +160,21 @@ pub(crate) enum Action {
     DiscardFile(RepoId, std::path::PathBuf, bool),
     /// Run the discard after the confirm dialog accepts.
     DiscardFileConfirmed(RepoId, std::path::PathBuf, bool),
+    /// Open the commit box for the working tree the Changes panel shows.
+    OpenCommitBox,
+    /// Commit `message` in `id`'s checkout, staging every change first when
+    /// `stage_all` is set.
+    Commit {
+        id: RepoId,
+        message: String,
+        stage_all: bool,
+    },
+    /// Commit result, including whether the index was empty.
+    CommitFinished {
+        id: RepoId,
+        message: String,
+        result: Result<crate::git::commit::CommitOutcome, String>,
+    },
     GitPush(RepoId),
     GitPull(RepoId),
     GitPullRebase(RepoId),
@@ -319,6 +334,8 @@ impl Action {
                 | Self::DiscardFile(..)
                 | Self::DiscardFileConfirmed(..)
                 | Self::ShowFileContextMenu { .. }
+                | Self::OpenCommitBox
+                | Self::Commit { .. }
         )
     }
 }

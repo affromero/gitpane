@@ -9,6 +9,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::components::commit_box::CommitBox;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::ContextMenu;
 use crate::components::file_list::FileList;
@@ -37,6 +38,7 @@ use crate::watcher::RepoWatcher;
 
 mod actions;
 mod actions_extra;
+mod commit;
 mod config_sync;
 mod github;
 mod input;
@@ -212,6 +214,7 @@ pub(crate) struct App {
     confirm_dialog: ConfirmDialog,
     context_menu: ContextMenu,
     path_input: PathInput,
+    commit_box: CommitBox,
     status_bar: StatusBar,
     theme_picker: ThemePicker,
     picker: Picker,
@@ -436,6 +439,7 @@ impl App {
             confirm_dialog: ConfirmDialog::new(theme.clone()),
             context_menu: ContextMenu::new(theme.clone()),
             path_input: PathInput::new(theme.clone()),
+            commit_box: CommitBox::new(theme.clone()),
             status_bar: StatusBar::new(theme.clone()),
             theme_picker: ThemePicker::new(theme.clone()),
             picker: Picker::new(theme.clone()),
@@ -672,6 +676,7 @@ impl App {
         self.confirm_dialog.set_theme(theme.clone());
         self.context_menu.set_theme(theme.clone());
         self.path_input.set_theme(theme.clone());
+        self.commit_box.set_theme(theme.clone());
         self.status_bar.set_theme(theme.clone());
         self.theme_picker.set_theme(theme.clone());
         self.picker.set_theme(theme);
@@ -840,8 +845,11 @@ impl App {
                 self.handle_mouse_event(mouse)?;
             }
             Event::Paste(ref text) => {
-                // Bracketed paste only targets the text input overlay.
-                if self.path_input.visible {
+                // Bracketed paste only targets the text input overlays.
+                if self.commit_box.visible {
+                    self.commit_box.paste(text);
+                    self.action_tx.send(Action::Render)?;
+                } else if self.path_input.visible {
                     self.path_input.paste(text);
                     self.action_tx.send(Action::Render)?;
                 }
