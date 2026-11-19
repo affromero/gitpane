@@ -19,6 +19,7 @@ pub(crate) struct StatusBar {
     pub sort_order: SortOrder,
     pub error: Option<(String, Instant)>,
     pub success: Option<(String, Instant)>,
+    pub inbox_hint: Option<usize>,
     /// When set (e.g. the graph filter picker is open), the repo-status
     /// legend on the left is replaced by this hint so key help stays visible
     /// in the most overlooked corner of the screen.
@@ -34,6 +35,7 @@ impl StatusBar {
             sort_order: SortOrder::Alphabetical,
             error: None,
             success: None,
+            inbox_hint: None,
             overlay_hint: None,
             theme,
         }
@@ -77,10 +79,29 @@ impl Component for StatusBar {
         let r = &self.theme.repo_list;
         let version_text = format!("v{} ", gitpane::VERSION);
         let version_len = version_text.len() as u16;
-        let chunks =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(version_len)]).split(area);
+        let inbox = self.inbox_hint.map(|count| {
+            let label = match count {
+                0 => "F6 Inbox  ".to_owned(),
+                50.. => "🔔 50+  F6 Inbox  ".to_owned(),
+                count => format!("🔔 {count}  F6 Inbox  "),
+            };
+            Line::styled(
+                label,
+                Style::default().fg(if count > 0 { r.dirty_marker } else { s.version }),
+            )
+        });
+        let inbox_len = inbox.as_ref().map_or(0, |line| line.width() as u16);
+        let chunks = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(inbox_len),
+            Constraint::Length(version_len),
+        ])
+        .split(area);
         let content_area = chunks[0];
-        let version_area = chunks[1];
+        let version_area = chunks[2];
+        if let Some(inbox) = inbox {
+            frame.render_widget(Paragraph::new(inbox).right_aligned(), chunks[1]);
+        }
 
         let version = Paragraph::new(version_text)
             .style(Style::default().fg(s.version))
@@ -139,6 +160,11 @@ impl Component for StatusBar {
             v
         } else if elapsed < 60 {
             let mut v: Vec<Span<'_>> = vec![
+                key_span("p", s),
+                Span::raw(" Pull  "),
+                key_span("P", s),
+                Span::raw(" Push  "),
+                dim_sep(s),
                 Span::styled(" * ", Style::default().fg(r.dirty_marker)),
                 Span::styled("dirty ", Style::default().fg(s.legend_text)),
                 Span::styled("\u{2191}", Style::default().fg(r.ahead)),
@@ -171,16 +197,16 @@ impl Component for StatusBar {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
+                key_span("p", s),
+                Span::raw(" Pull  "),
+                key_span("P", s),
+                Span::raw(" Push  "),
                 key_span("Tab", s),
                 Span::raw(" Switch  "),
                 key_span("Enter", s),
                 Span::raw(" Diff  "),
                 key_span("g", s),
                 Span::raw(" Graph  "),
-                key_span("p", s),
-                Span::raw(" Pull  "),
-                key_span("P", s),
-                Span::raw(" Push  "),
                 key_span("=", s),
                 Span::raw(" GitHub  "),
                 key_span("r", s),
@@ -221,10 +247,6 @@ fn key_hint_spans<'a>(s: &'a StatusBarTheme, sort_label: &'a str) -> Vec<Span<'a
         Span::raw(" diff  "),
         key_span("g", s),
         Span::raw(" reload graph  "),
-        key_span("p", s),
-        Span::raw("/"),
-        key_span("P", s),
-        Span::raw(" pull/push  "),
         key_span("r", s),
         Span::raw(" refresh  "),
         key_span("R", s),
@@ -306,6 +328,48 @@ mod tests {
                     assert!(!cell.modifier.contains(Modifier::BOLD));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn inbox_hint_shows_shortcut_and_caps_review_count() {
+        let mut bar = StatusBar::new(Arc::new(Theme::default()));
+        let mut terminal = Terminal::new(TestBackend::new(140, 1)).unwrap();
+        for (count, expected) in [
+            (0, "F6 Inbox"),
+            (3, "🔔 3  F6 Inbox"),
+            (50, "🔔 50+  F6 Inbox"),
+        ] {
+            bar.inbox_hint = Some(count);
+            terminal
+                .draw(|frame| bar.draw(frame, frame.area()).unwrap())
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let line: String = (0..140)
+                .filter(|&x| x == 0 || buffer[(x - 1, 0)].symbol() != "🔔")
+                .map(|x| buffer[(x, 0)].symbol())
+                .collect();
+            assert!(line.contains(expected), "{line}");
+            assert_eq!(line.contains('🔔'), count > 0);
+        }
+    }
+
+    #[test]
+    fn pull_and_push_hints_fit_beside_inbox_on_narrow_terminals() {
+        let mut bar = StatusBar::new(Arc::new(Theme::default()));
+        bar.inbox_hint = Some(3);
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        for elapsed in [0, 61] {
+            bar.started_at = Instant::now() - Duration::from_secs(elapsed);
+            terminal
+                .draw(|frame| bar.draw(frame, frame.area()).unwrap())
+                .unwrap();
+            let line: String = (0..80)
+                .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+                .collect();
+            assert!(line.contains("p  Pull"), "{line}");
+            assert!(line.contains("P  Push"), "{line}");
+            assert!(line.contains("F6 Inbox"), "{line}");
         }
     }
 

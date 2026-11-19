@@ -825,9 +825,14 @@ impl App {
             Action::UpdateAvailable(ref version) => {
                 self.update_version = Some(version.clone());
             }
+            Action::FetchDiagnosticsLoaded(id, outcome) => {
+                self.fetch_diagnostics_loaded(id, outcome)?
+            }
             Action::GithubSelectionSettled(generation) => {
                 self.github_selection_settled(generation);
             }
+            Action::WorkflowLoaded(generation, page) => self.workflow.complete(generation, page),
+            Action::WorkflowInitialReviews(rows) => self.workflow.initial_reviews(rows),
             Action::GitHubFetched {
                 repo_id,
                 generation,

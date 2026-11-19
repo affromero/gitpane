@@ -2,6 +2,53 @@ use super::indicator_columns;
 use super::*;
 
 #[test]
+fn pr_match_pulses_only_the_matching_worktree_and_preserves_selection() {
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+    let mut list = make_list(&["/repo"]);
+    let mut status = empty_status("main");
+    status.worktree_info = vec![worktree_entry("matching"), worktree_entry("other")];
+    list.repos[0].status = Some(status);
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+
+    for pulse in [true, false] {
+        list.pr_worktree_highlight = Some((PathBuf::from("/wt/matching"), pulse));
+        terminal
+            .draw(|frame| list.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let marker = buffer
+            .content()
+            .iter()
+            .find(|cell| cell.symbol() == "›")
+            .unwrap();
+        assert_eq!(
+            buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol() == "›")
+                .count(),
+            1
+        );
+        assert_eq!(marker.modifier.contains(Modifier::REVERSED), pulse);
+        assert_eq!(list.state.selected(), Some(0));
+    }
+
+    list.pr_worktree_highlight = None;
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    assert!(
+        !terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|cell| cell.symbol() == "›")
+    );
+}
+
+#[test]
 fn indicator_columns_returns_none_when_neither_subtree_present() {
     let mut list = make_list(&["/r"]);
     list.repos[0].status = Some(empty_status("main"));
