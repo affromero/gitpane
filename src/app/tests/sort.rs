@@ -1,30 +1,26 @@
 use super::*;
 use crate::config::RepoSort;
 
-/// Mirrors the `RepoStatusUpdated` handler, which needs a live terminal.
 fn land_status(app: &mut App, name: &str, dirty: bool) {
-    let idx = app
+    let repo = app
         .repo_list
         .repos
         .iter()
-        .position(|r| r.name == name)
+        .find(|repo| repo.name == name)
         .unwrap();
-    let was_dirty = app.repo_list.repos[idx]
-        .status
-        .as_ref()
-        .is_some_and(|s| s.is_dirty);
+    let id = RepoId(repo.path.clone());
     let mut status = test_status("main", None);
     status.is_dirty = dirty;
-    app.repo_list.update_status(idx, status);
-    app.resort_after_status(was_dirty, dirty);
+    app.handle_action_rest(Action::RepoStatusUpdated { id, status })
+        .unwrap();
 }
 
 /// `[ui] sort` picks the startup order. Statuses land after `App::new` sorts,
 /// so a dirty-first startup only shows dirty repos on top if rows move as
 /// statuses arrive, and back down once a repo is clean. Status never moves
 /// rows in the alphabetical orders.
-#[test]
-fn configured_sort_orders_rows_as_statuses_land() {
+#[tokio::test]
+async fn configured_sort_orders_rows_as_statuses_land() {
     for (sort, startup, with_zzz_dirty) in [
         (RepoSort::Alphabetical, ["aaa", "zzz"], ["aaa", "zzz"]),
         (RepoSort::Reverse, ["zzz", "aaa"], ["zzz", "aaa"]),
@@ -42,12 +38,15 @@ fn configured_sort_orders_rows_as_statuses_land() {
         config.ui.sort = sort;
         let mut app = App::new(config).unwrap();
         assert_eq!(displays(&app), startup, "{sort:?} at startup");
+        let selection = app.repo_list.selected_row_id().unwrap();
 
         land_status(&mut app, "aaa", false);
         land_status(&mut app, "zzz", true);
         assert_eq!(displays(&app), with_zzz_dirty, "{sort:?} with zzz dirty");
+        assert_eq!(app.repo_list.selected_row_id(), Some(selection.clone()));
 
         land_status(&mut app, "zzz", false);
         assert_eq!(displays(&app), startup, "{sort:?} with zzz clean again");
+        assert_eq!(app.repo_list.selected_row_id(), Some(selection));
     }
 }
