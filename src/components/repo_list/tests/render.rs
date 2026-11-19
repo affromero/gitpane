@@ -2,6 +2,57 @@ use super::indicator_columns;
 use super::*;
 
 #[test]
+fn submodule_worktree_is_indented_and_uses_the_worktree_palette() {
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+    let mut list = make_list(&["/repo", "/repo/dep", "/repo/other-module"]);
+    list.repos[1].gitlink = true;
+    list.repos[2].gitlink = true;
+    let mut root = empty_status("main");
+    root.worktree_info.push(worktree_entry("root-branch"));
+    list.repos[0].status = Some(root);
+    let mut submodule = empty_status("main");
+    let mut worktree = worktree_entry("dep-branch");
+    worktree.is_dirty = true;
+    worktree.ahead = 2;
+    worktree.file_count = 1;
+    submodule.worktree_info.push(worktree);
+    list.repos[1].status = Some(submodule);
+    list.rebuild_display_rows();
+    list.state.select(Some(2));
+
+    let mut terminal = Terminal::new(TestBackend::new(85, 8)).unwrap();
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let row = |y| (0..85).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    let column = |y, character| {
+        (0..85)
+            .find(|&x| buffer[(x, y)].symbol() == character)
+            .unwrap()
+    };
+    assert!(row(2).contains("dep [sub]"), "{}", row(2));
+    assert!(
+        row(3).contains("dep-branch")
+            && row(3).contains("* ")
+            && row(3).contains("↑2")
+            && row(3).contains("[1]"),
+        "{}",
+        row(3)
+    );
+    assert!(row(4).contains("other-module"), "{}", row(4));
+    assert!(row(5).contains("root-branch"), "{}", row(5));
+    assert!(column(3, "⎇") > column(2, "d"));
+    assert!(column(3, "⎇") > column(5, "⎇"));
+    let branch = &buffer[(column(3, "d"), 3)];
+    assert_eq!(branch.fg, buffer[(column(5, "r"), 5)].fg);
+    assert_eq!(branch.fg, list.theme.repo_list.worktree_subtree_branch);
+    assert_eq!(branch.bg, list.theme.repo_list.selection_bg);
+    assert!(branch.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
 fn pr_match_pulses_only_the_matching_worktree_and_preserves_selection() {
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 
