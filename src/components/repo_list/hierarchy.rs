@@ -39,7 +39,11 @@ impl RepoList {
                 Style::default().fg(t.worktree_subtree_icon),
             )
         };
-        let mut spans = vec![marker];
+        let mut spans = Vec::new();
+        if parent(&self.repos, entry).is_some() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(marker);
         if wt.is_dirty {
             spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
         } else {
