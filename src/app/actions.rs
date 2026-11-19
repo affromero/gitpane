@@ -25,7 +25,7 @@ impl App {
                 }
             }
             Action::Tick => {
-                if self.clear_expired_messages() {
+                if self.clear_expired_messages() || self.workflow.worktree_pulse_active() {
                     self.action_tx.send(Action::Render)?;
                 }
             }

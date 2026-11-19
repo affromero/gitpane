@@ -35,6 +35,10 @@ impl App {
             self.fetch_diagnostics_key(key.code)?;
             return Ok(());
         }
+        if self.workflow.is_open() {
+            self.workflow_key(key)?;
+            return Ok(());
+        }
         if self.text_selection.origin().is_some() {
             self.text_selection.clear();
             self.action_tx.send(Action::Render)?;
@@ -138,6 +142,10 @@ impl App {
             return Ok(());
         } else if self.show_help {
             self.show_help = false;
+            return Ok(());
+        }
+
+        if self.workflow_key(key)? {
             return Ok(());
         }
 
@@ -379,7 +387,7 @@ impl App {
         Ok(())
     }
     pub(super) fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
-        if self.fetch_diagnostics.is_some() {
+        if self.workflow.is_open() || self.fetch_diagnostics.is_some() {
             return Ok(());
         }
         use crossterm::event::{MouseButton, MouseEventKind};

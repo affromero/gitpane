@@ -112,6 +112,7 @@ pub(crate) enum RowId {
 
 pub(crate) struct RepoList {
     pub repos: Vec<RepoEntry>,
+    pub pr_worktree_highlight: Option<(PathBuf, bool)>,
     /// Workspace roots used to compute each repo's relative display path
     /// (`display_path`), canonicalized in `new` to match the form discovery
     /// emits. Needed at rescan time too, for repos added later.
@@ -276,6 +277,7 @@ impl RepoList {
             roots,
             missing_roots,
             state,
+            pr_worktree_highlight: None,
             render_area: Rect::default(),
             focused: true,
             action_tx: None,

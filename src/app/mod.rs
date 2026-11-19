@@ -50,6 +50,7 @@ mod selection;
 mod stash;
 #[cfg(test)]
 mod tests;
+pub(crate) mod workflow;
 
 #[derive(Default)]
 struct WatcherSlot {
@@ -273,6 +274,7 @@ pub(crate) struct App {
     update_position: UpdatePosition,
     /// Show the keybindings help overlay
     show_help: bool,
+    workflow: workflow::Overlay,
     fetch_diagnostics: Option<fetch_diagnostics::Panel>,
     /// Limits concurrent poll/refresh tasks to avoid CPU spikes
     poll_semaphore: Arc<tokio::sync::Semaphore>,
@@ -471,6 +473,7 @@ impl App {
             update_version: None,
             update_position,
             show_help: false,
+            workflow: workflow::Overlay::default(),
             fetch_diagnostics: None,
             poll_semaphore,
             pending_status: HashSet::new(),
@@ -772,6 +775,7 @@ impl App {
 
         // Auto-select the first repo (graph loads once status arrives)
         self.sync_selection();
+        self.load_initial_reviews();
 
         loop {
             // Process events from TUI. While a quit is pending, poll with a

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use super::{DisplayRow, RepoEntry, RepoId, RepoList, RowId};
 use crate::git::status::SubmoduleInfo;
 use ratatui::{
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::ListItem,
 };
@@ -21,10 +21,25 @@ impl RepoList {
     ) -> ListItem<'static> {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
-        let mut spans = vec![Span::styled(
-            "    \u{2387} ",
-            Style::default().fg(t.worktree_subtree_icon),
-        )];
+        let matched = self
+            .pr_worktree_highlight
+            .as_ref()
+            .filter(|(path, _)| *path == wt.path);
+        let marker = if let Some((_, pulse)) = matched {
+            let mut style = Style::default()
+                .fg(self.theme.overlay.help_key)
+                .add_modifier(Modifier::BOLD);
+            if *pulse {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            Span::styled("  › \u{2387} ", style)
+        } else {
+            Span::styled(
+                "    \u{2387} ",
+                Style::default().fg(t.worktree_subtree_icon),
+            )
+        };
+        let mut spans = vec![marker];
         if wt.is_dirty {
             spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
         } else {
@@ -74,7 +89,16 @@ impl RepoList {
         if crate::session::liveness::is_live(&wt.path, &self.live_panes) {
             spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
-        ListItem::new(Line::from(spans))
+        let item = ListItem::new(Line::from(spans));
+        if matched.is_some() {
+            item.style(
+                Style::default()
+                    .bg(self.theme.overlay.help_bg)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            item
+        }
     }
 
     pub(super) fn submodules_expanded(&self, path: &Path) -> bool {
