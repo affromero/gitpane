@@ -20,6 +20,16 @@ jobs:
   vscode-packages:
     uses: ./.github/workflows/vscode.yml
 
+  repository-paths:
+    name: Repository paths
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check tracked repository paths
+        run: sh scripts/hooks/check_repository_paths.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
