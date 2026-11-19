@@ -40,6 +40,11 @@ checks.
 - [ ] Tests were added or updated where behavior changed
 - [ ] Documentation was updated where needed
 
+## Feature demo
+
+Every feature PR must include a GIF demonstrating the new behavior. Embed the
+GIF here before requesting review.
+
 ## Maintainer review
 
 - [ ] Read the linked issue and discussion, then review the complete diff
