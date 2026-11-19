@@ -224,7 +224,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 - **Push / Pull / Rebase**: Right click context menu with git operations that account for ahead and behind state, plus `p`/`P` pull/push shortcuts. A branch with a configured upstream is pulled/pushed bare so git's own config (including renamed upstream branches) decides the destination; without one, gitpane resolves the repo's real remote (`origin` when present, else the workspace's own remote, as in Gerrit/mirror setups) and passes `<remote> <branch>` explicitly.
 - **Commit**: Press `c` in the Repos or Changes panel to write a summary and an optional description, then commit what is staged. Hooks and signing run as they do on the command line, and a rejected commit keeps your message. With nothing staged, gitpane offers to stage everything first.
 - **Add and remove repos**: Press `a` to add any repo with tab completing path input. Press `d` to remove. Press `R` to rescan.
-- **Sort repos**: Cycle between alphabetical and dirty first with `s`.
+- **Sort repos**: Cycle alphabetical, reverse, and dirty first with `s`. Dirty first keeps dirty repos on top as their status changes. Pick the startup order with `[ui] sort`.
 - **Copy to clipboard**: Drag text and release to copy it to the system clipboard. With a text selection, `y` or `Ctrl+C` copies it again; otherwise `y` copies the selected item.
 - **Configurable**: TOML config for root dirs, scan depth, pinned repos, exclusions, frame rate.
 - **Responsive layout**: Three horizontal panels on wide terminals, vertical stack on narrow ones.
@@ -249,7 +249,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 | `=` | Toggle the GitHub panel (issues/PRs) for the selected repo |
 | `a` | Add a repo (opens path input with tab completion) |
 | `d` | Remove selected repo, or worktree if a worktree row is selected (with confirmation) |
-| `s` | Cycle sort order (Alphabetical / Dirty first) |
+| `s` | Cycle sort order (A-Z / Z-A / Dirty first) |
 | `w` | Toggle worktree subtree for the selected repo (shown by default) |
 | `m` | Toggle submodules for the selected repository or worktree |
 | `S` | Toggle stash subtree for the selected repo |
@@ -424,6 +424,7 @@ frame_rate = 10              # Terminal refresh rate (fps)
 check_for_updates = true     # Check for new versions on startup
 update_position = "top-right" # Update notification position ("top-right" or "top-left")
 expand_worktrees = true      # List each repo's worktrees on startup (`w` toggles either way)
+sort = "alphabetical"        # Startup repo order: "alphabetical", "reverse", or "dirty" (`s` cycles)
 
 [graph]
 branches = "all"         # Branch filter: "all", "local", "remote", or "none"
