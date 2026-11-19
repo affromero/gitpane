@@ -52,7 +52,10 @@ fn commits_only_the_staged_changes_with_the_exact_message() {
     let summary = commit(path, message, false).unwrap();
 
     let hash = run(path, &["log", "-1", "--format=%h"]);
-    assert_eq!(summary, format!("{} -v is not a flag", hash.trim()));
+    assert_eq!(
+        summary,
+        CommitOutcome::Committed(format!("{} -v is not a flag", hash.trim()))
+    );
     assert_eq!(
         run(path, &["log", "-1", "--format=%B"]),
         format!("{message}\n\n")
@@ -80,7 +83,7 @@ fn stage_all_commits_modified_and_untracked_files() {
 }
 
 #[test]
-fn nothing_staged_fails_and_leaves_head() {
+fn nothing_staged_requests_confirmation_and_leaves_head() {
     if !crate::git::git_test_available() {
         return;
     }
@@ -89,9 +92,9 @@ fn nothing_staged_fails_and_leaves_head() {
     std::fs::write(path.join("a.txt"), "a changed\n").unwrap();
     let before = head(path);
 
-    let error = commit(path, "Nothing to see", false).unwrap_err();
+    let result = commit(path, "Nothing to see", false).unwrap();
 
-    assert!(!error.is_empty());
+    assert_eq!(result, CommitOutcome::NothingStaged);
     assert_eq!(head(path), before);
 }
 
@@ -120,26 +123,4 @@ fn rejecting_hook_shows_its_output_and_keeps_the_change_staged() {
     assert!(error.contains("lint: trailing space in a.txt"), "{error}");
     assert_eq!(head(path), before);
     assert_eq!(run(path, &["status", "--porcelain"]), "M  a.txt\n");
-}
-
-#[cfg(unix)]
-#[test]
-fn draft_returns_trimmed_output_and_reports_failures() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let path = tmp.path();
-    std::fs::write(path.join("marker"), "").unwrap();
-
-    // Runs in the checkout: the command can see its files.
-    assert_eq!(
-        draft(
-            path,
-            "test -f marker && printf '  Add marker\\n\\nBody.\\n\\n'"
-        ),
-        Ok("Add marker\n\nBody.".to_string())
-    );
-
-    let error = draft(path, "echo 'no agent configured' >&2; exit 3").unwrap_err();
-    assert!(error.contains("no agent configured"), "{error}");
-
-    assert!(draft(path, "true").is_err());
 }

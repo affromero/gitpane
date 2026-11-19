@@ -745,11 +745,9 @@ impl App {
             | Action::CycleSortOrder
             | Action::RescanRepos
             | Action::DiscoverNewRepos => self.handle_repo_admin(action)?,
-            Action::OpenCommitBox
-            | Action::Commit { .. }
-            | Action::CommitFinished { .. }
-            | Action::DraftCommitMessage(_)
-            | Action::CommitDraftReady { .. } => self.handle_commit(action)?,
+            Action::OpenCommitBox | Action::Commit { .. } | Action::CommitFinished { .. } => {
+                self.handle_commit(action)?
+            }
             Action::UpdateAvailable(ref version) => {
                 self.update_version = Some(version.clone());
             }

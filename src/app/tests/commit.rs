@@ -19,7 +19,7 @@ fn run(path: &Path, args: &[&str]) -> String {
 /// A repo with one commit and `a.txt` modified (staged or not), listed in an
 /// app whose Changes panel shows it. The repo has its own identity and hooks
 /// directory, so global Git config can't leak in.
-fn fixture(staged: bool, draft_command: Option<&str>) -> (tempfile::TempDir, App, PathBuf) {
+fn fixture(staged: bool) -> (tempfile::TempDir, App, PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let path = tmp.path().join("repo");
     std::fs::create_dir(&path).unwrap();
@@ -46,7 +46,6 @@ fn fixture(staged: bool, draft_command: Option<&str>) -> (tempfile::TempDir, App
         ..Config::default()
     };
     config.ui.show_liveness = false;
-    config.commit.draft_command = draft_command.map(str::to_string);
     let mut app = App::new(config).unwrap();
     let entry = FileEntry {
         path: "a.txt".into(),
@@ -97,10 +96,7 @@ async fn run_until(app: &mut App, done: impl Fn(&Action) -> bool) {
             let finished = done(&action);
             if matches!(
                 action,
-                Action::Commit { .. }
-                    | Action::CommitFinished { .. }
-                    | Action::DraftCommitMessage(_)
-                    | Action::CommitDraftReady { .. }
+                Action::Commit { .. } | Action::CommitFinished { .. }
             ) {
                 app.handle_action_rest(action).unwrap();
             }
@@ -118,7 +114,7 @@ fn c_opens_the_box_from_the_repo_and_changes_panels_only() {
     if !crate::git::git_test_available() {
         return;
     }
-    let (_tmp, mut app, path) = fixture(true, None);
+    let (_tmp, mut app, path) = fixture(true);
     for focus in [FocusPanel::Repos, FocusPanel::Changes] {
         app.focus = focus;
         press(&mut app, KeyCode::Char('c'), KeyModifiers::NONE);
@@ -142,7 +138,7 @@ async fn nothing_staged_asks_first_then_stages_everything() {
         return;
     }
     let _count = GIT_OP_COUNT.lock().await;
-    let (_tmp, mut app, path) = fixture(false, None);
+    let (_tmp, mut app, path) = fixture(false);
     open_box(&mut app);
     type_text(&mut app, "Change a");
     press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
@@ -153,6 +149,10 @@ async fn nothing_staged_asks_first_then_stages_everything() {
             ..
         }
     ));
+    run_until(&mut app, |action| {
+        matches!(action, Action::CommitFinished { .. })
+    })
+    .await;
     assert!(app.confirm_dialog.visible);
     assert_eq!(run(&path, &["log", "-1", "--format=%s"]), "initial\n");
 
@@ -167,6 +167,83 @@ async fn nothing_staged_asks_first_then_stages_everything() {
     assert_eq!(run(&path, &["status", "--porcelain"]), "");
 }
 
+#[tokio::test]
+async fn commits_only_the_index_when_a_file_was_staged_after_opening() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let _count = GIT_OP_COUNT.lock().await;
+    let (_tmp, mut app, path) = fixture(false);
+    std::fs::write(path.join("extra.txt"), "leave untracked\n").unwrap();
+    open_box(&mut app);
+    run(&path, &["add", "a.txt"]);
+
+    type_text(&mut app, "Only staged");
+    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    run_until(&mut app, |action| {
+        matches!(action, Action::CommitFinished { .. })
+    })
+    .await;
+
+    assert!(!app.confirm_dialog.visible);
+    assert_eq!(run(&path, &["log", "-1", "--format=%s"]), "Only staged\n");
+    assert_eq!(run(&path, &["status", "--short"]), "?? extra.txt\n");
+}
+
+#[tokio::test]
+async fn asks_before_staging_when_external_git_empties_the_index() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let _count = GIT_OP_COUNT.lock().await;
+    let (_tmp, mut app, path) = fixture(true);
+    open_box(&mut app);
+    run(&path, &["reset", "-q", "--", "a.txt"]);
+
+    type_text(&mut app, "Change a");
+    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    run_until(&mut app, |action| {
+        matches!(action, Action::CommitFinished { .. })
+    })
+    .await;
+
+    assert!(app.confirm_dialog.visible);
+    assert_eq!(run(&path, &["log", "-1", "--format=%s"]), "initial\n");
+    assert!(run(&path, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[tokio::test]
+async fn rejects_stage_all_when_the_index_changes_during_confirmation() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let _count = GIT_OP_COUNT.lock().await;
+    let (_tmp, mut app, path) = fixture(false);
+    std::fs::write(path.join("extra.txt"), "leave untracked\n").unwrap();
+    open_box(&mut app);
+    type_text(&mut app, "Change a");
+    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    run_until(&mut app, |action| {
+        matches!(action, Action::CommitFinished { .. })
+    })
+    .await;
+    assert!(app.confirm_dialog.visible);
+
+    run(&path, &["add", "a.txt"]);
+    press(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+    run_until(&mut app, |action| {
+        matches!(action, Action::CommitFinished { .. })
+    })
+    .await;
+
+    assert!(app.commit_box.visible);
+    assert_eq!(run(&path, &["log", "-1", "--format=%s"]), "initial\n");
+    assert_eq!(
+        run(&path, &["status", "--short"]),
+        "M  a.txt\n?? extra.txt\n"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_rejecting_hook_keeps_the_box_and_the_message() {
@@ -175,7 +252,7 @@ async fn a_rejecting_hook_keeps_the_box_and_the_message() {
         return;
     }
     let _count = GIT_OP_COUNT.lock().await;
-    let (_tmp, mut app, path) = fixture(true, None);
+    let (_tmp, mut app, path) = fixture(true);
     let hook = path.join("hooks").join("pre-commit");
     std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").unwrap();
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -202,7 +279,7 @@ fn a_stash_preview_refuses_to_open_the_box() {
     if !crate::git::git_test_available() {
         return;
     }
-    let (_tmp, mut app, path) = fixture(true, None);
+    let (_tmp, mut app, path) = fixture(true);
     app.file_list.show_stash_loading(
         RepoId(path),
         "repo".into(),
@@ -218,27 +295,5 @@ fn a_stash_preview_refuses_to_open_the_box() {
     assert!(matches!(
         app.action_rx.try_recv(),
         Ok(Action::Error(error)) if error.contains("read-only")
-    ));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn ctrl_g_fills_the_box_from_the_draft_command() {
-    if !crate::git::git_test_available() {
-        return;
-    }
-    let (_tmp, mut app, _path) =
-        fixture(true, Some("printf 'Drafted subject\\n\\nDrafted body\\n'"));
-    open_box(&mut app);
-    press(&mut app, KeyCode::Char('g'), KeyModifiers::CONTROL);
-    run_until(&mut app, |action| {
-        matches!(action, Action::CommitDraftReady { .. })
-    })
-    .await;
-
-    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(
-        app.action_rx.try_recv(),
-        Ok(Action::Commit { message, .. }) if message == "Drafted subject\n\nDrafted body"
     ));
 }

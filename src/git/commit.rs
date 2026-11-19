@@ -1,20 +1,31 @@
-//! `git commit` for the Changes panel's checkout, and the `[commit]
-//! draft_command` that suggests a message for it.
+//! Commit changes in the checkout shown in the Changes panel.
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Output, Stdio};
+use std::process::Output;
 use std::time::Duration;
 
 /// Hooks may run linters or tests, so allow as long as other mutating ops.
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Commit what is staged in `path`, staging every change first when
-/// `stage_all` is set. Returns the new commit as `<short hash> <subject>`, or
-/// what Git and its hooks printed when a step fails.
-pub(crate) fn commit(path: &Path, message: &str, stage_all: bool) -> Result<String, String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommitOutcome {
+    Committed(String),
+    NothingStaged,
+}
+
+/// Use the current index to decide whether a commit can proceed.
+pub(crate) fn commit(path: &Path, message: &str, stage_all: bool) -> Result<CommitOutcome, String> {
+    let staged = has_staged_changes(path)?;
     if stage_all {
+        if staged {
+            return Err(
+                "The index changed. Submit again to commit only the staged changes.".into(),
+            );
+        }
         git(path, &["add", "--all"])?;
+    } else if !staged {
+        return Ok(CommitOutcome::NothingStaged);
     }
     // A message may start with `-` or outgrow an argument, so pass a file.
     let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
@@ -23,42 +34,47 @@ pub(crate) fn commit(path: &Path, message: &str, stage_all: bool) -> Result<Stri
         .map_err(|e| e.to_string())?;
     let message_path = file.path().to_string_lossy().into_owned();
     git(path, &["commit", "-F", &message_path])?;
-    Ok(git(path, &["log", "-1", "--format=%h %s"])?
-        .trim()
-        .to_string())
+    let summary = git(path, &["log", "-1", "--format=%h %s"])?;
+    Ok(CommitOutcome::Committed(summary.trim().to_owned()))
 }
 
-/// Run `command` with `sh -c` in `path` and return what it printed: the
-/// message the commit box fills in.
-pub(crate) fn draft(path: &Path, command: &str) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("sh");
-    crate::git::process::clear_inherited_git_env(&mut cmd);
-    let output = cmd
-        .arg("-c")
-        .arg(command)
-        .current_dir(path)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("draft command failed: {e}"))?;
-    if !output.status.success() {
-        return Err(failure_text(&output));
+fn has_staged_changes(path: &Path) -> Result<bool, String> {
+    let output = run_git(
+        path,
+        &[
+            "diff",
+            "--cached",
+            "--quiet",
+            "--no-ext-diff",
+            "--ignore-submodules=none",
+            "--",
+        ],
+    )?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Err(failure_text(&output)),
     }
-    let message = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if message.is_empty() {
-        return Err("draft command printed nothing".to_string());
-    }
-    Ok(message)
 }
 
 fn git(path: &Path, args: &[&str]) -> Result<String, String> {
-    let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-    let output = crate::git::process::run_git_op_noninteractive(path, &args, COMMIT_TIMEOUT)
-        .map_err(|e| format!("git {}: {}", args[0], crate::git::describe_spawn_error(&e)))?;
+    let output = run_git(path, args)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         Err(failure_text(&output))
     }
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Result<Output, String> {
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    crate::git::process::run_git_op_noninteractive(path, &args, COMMIT_TIMEOUT).map_err(|error| {
+        format!(
+            "git {}: {}",
+            args[0],
+            crate::git::describe_spawn_error(&error)
+        )
+    })
 }
 
 /// Git prints `nothing to commit` on stdout and hooks use either stream, so a

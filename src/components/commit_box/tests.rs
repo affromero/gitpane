@@ -6,9 +6,9 @@ fn id(name: &str) -> RepoId {
     RepoId(PathBuf::from(format!("/repos/{name}")))
 }
 
-fn open(staged: usize, can_draft: bool) -> CommitBox {
+fn open(staged: usize) -> CommitBox {
     let mut commit_box = CommitBox::new(Arc::new(Theme::default()));
-    commit_box.show(id("app"), "app", staged, can_draft);
+    commit_box.show(id("app"), "app", staged);
     commit_box
 }
 
@@ -59,7 +59,7 @@ fn screen(commit_box: &CommitBox) -> String {
 
 #[test]
 fn enter_commits_from_the_summary_and_adds_lines_in_the_description() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     type_text(&mut commit_box, "Fix parser");
     press(&mut commit_box, key(KeyCode::Tab));
     type_text(&mut commit_box, "It dropped quotes.");
@@ -75,7 +75,7 @@ fn enter_commits_from_the_summary_and_adds_lines_in_the_description() {
 
 #[test]
 fn ctrl_s_commits_from_the_description() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     type_text(&mut commit_box, "Bump version");
     press(&mut commit_box, key(KeyCode::Tab));
 
@@ -87,7 +87,7 @@ fn ctrl_s_commits_from_the_description() {
 
 #[test]
 fn the_summary_stays_on_one_line() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     type_text(&mut commit_box, "One");
     press(&mut commit_box, ctrl('m'));
     type_text(&mut commit_box, " line");
@@ -97,7 +97,7 @@ fn the_summary_stays_on_one_line() {
 
 #[test]
 fn a_blank_summary_does_not_commit() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     press(&mut commit_box, key(KeyCode::Tab));
     type_text(&mut commit_box, "Only a description");
 
@@ -107,16 +107,16 @@ fn a_blank_summary_does_not_commit() {
 
 #[test]
 fn esc_keeps_the_text_for_that_checkout_only() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     type_text(&mut commit_box, "Half written");
     press(&mut commit_box, key(KeyCode::Esc));
     assert!(!commit_box.visible);
 
-    commit_box.show(id("other"), "other", 1, false);
+    commit_box.show(id("other"), "other", 1);
     assert_eq!(commit_box.summary_text(), "");
     press(&mut commit_box, key(KeyCode::Esc));
 
-    commit_box.show(id("app"), "app", 1, false);
+    commit_box.show(id("app"), "app", 1);
     type_text(&mut commit_box, " message");
     assert_eq!(
         committed_message(press(&mut commit_box, key(KeyCode::Enter))),
@@ -126,7 +126,7 @@ fn esc_keeps_the_text_for_that_checkout_only() {
 
 #[test]
 fn a_failed_commit_keeps_the_text_and_a_landed_one_clears_it() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     type_text(&mut commit_box, "Add feature");
     assert!(press(&mut commit_box, key(KeyCode::Enter)).is_some());
     commit_box.set_committing();
@@ -140,48 +140,13 @@ fn a_failed_commit_keeps_the_text_and_a_landed_one_clears_it() {
     commit_box.set_committing();
     commit_box.committed(&id("app"));
     assert!(!commit_box.visible);
-    commit_box.show(id("app"), "app", 0, false);
+    commit_box.show(id("app"), "app", 0);
     assert_eq!(commit_box.summary_text(), "");
 }
 
 #[test]
-fn ctrl_g_asks_for_a_draft_and_fill_splits_it() {
-    let mut commit_box = open(1, true);
-    assert!(matches!(
-        press(&mut commit_box, ctrl('g')),
-        Some(Action::DraftCommitMessage(target)) if target == id("app")
-    ));
-
-    commit_box.fill(
-        &id("app"),
-        "Add retries\n\nThe API times out under load.\nRetry twice.",
-    );
-    assert_eq!(commit_box.summary_text(), "Add retries");
-    assert_eq!(
-        commit_box.description.lines(),
-        ["The API times out under load.", "Retry twice."]
-    );
-    assert!(commit_box.busy.is_none());
-
-    let mut without = open(1, false);
-    assert!(press(&mut without, ctrl('g')).is_none());
-    assert!(without.error.is_some());
-}
-
-#[test]
-fn a_draft_that_lands_after_closing_waits_for_the_next_open() {
-    let mut commit_box = open(1, true);
-    press(&mut commit_box, ctrl('g'));
-    press(&mut commit_box, key(KeyCode::Esc));
-
-    commit_box.fill(&id("app"), "Drafted later");
-    commit_box.show(id("app"), "app", 1, true);
-    assert_eq!(commit_box.summary_text(), "Drafted later");
-}
-
-#[test]
 fn pasting_a_whole_message_into_the_summary_splits_it() {
-    let mut commit_box = open(1, false);
+    let mut commit_box = open(1);
     commit_box.paste("Fix typo\r\n\r\nIn the README.\r\nAnd the docs.");
 
     assert_eq!(commit_box.summary_text(), "Fix typo");
@@ -193,15 +158,14 @@ fn pasting_a_whole_message_into_the_summary_splits_it() {
 
 #[test]
 fn the_box_shows_what_will_be_committed_and_the_keys() {
-    let text = screen(&open(0, false));
+    let text = screen(&open(0));
     assert!(text.contains("Commit app · nothing staged"), "{text}");
     assert!(text.contains("Enter commit"), "{text}");
     assert!(!text.contains("Ctrl+G"), "{text}");
 
-    let mut commit_box = open(2, true);
+    let mut commit_box = open(2);
     let text = screen(&commit_box);
     assert!(text.contains("2 staged files"), "{text}");
-    assert!(text.contains("Ctrl+G draft"), "{text}");
 
     commit_box.failed(&id("app"), "hook: rejected\nsecond line");
     let text = screen(&commit_box);

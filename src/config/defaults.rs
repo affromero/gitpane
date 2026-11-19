@@ -230,7 +230,6 @@ impl Default for Config {
             open: OpenConfig::default(),
             review: ReviewConfig::default(),
             worktree: WorktreeConfig::default(),
-            commit: CommitConfig::default(),
             herdr: HerdrConfig::default(),
             goto: GotoConfig::default(),
             keybindings: Vec::new(),

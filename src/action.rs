@@ -169,17 +169,11 @@ pub(crate) enum Action {
         message: String,
         stage_all: bool,
     },
-    /// The new commit as `<short hash> <subject>`, or what Git printed.
+    /// Commit result, including whether the index was empty.
     CommitFinished {
         id: RepoId,
-        result: Result<String, String>,
-    },
-    /// Run `[commit] draft_command` in `id`'s checkout.
-    DraftCommitMessage(RepoId),
-    /// The draft command's output, or why it failed.
-    CommitDraftReady {
-        id: RepoId,
-        result: Result<String, String>,
+        message: String,
+        result: Result<crate::git::commit::CommitOutcome, String>,
     },
     GitPush(RepoId),
     GitPull(RepoId),
@@ -342,7 +336,6 @@ impl Action {
                 | Self::ShowFileContextMenu { .. }
                 | Self::OpenCommitBox
                 | Self::Commit { .. }
-                | Self::DraftCommitMessage(..)
         )
     }
 }

@@ -30,12 +30,6 @@ enum Field {
     Description,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Busy {
-    Committing,
-    Drafting,
-}
-
 struct Target {
     id: RepoId,
     name: String,
@@ -54,9 +48,8 @@ pub(crate) struct CommitBox {
     summary: TextArea<'static>,
     description: TextArea<'static>,
     focus: Field,
-    busy: Option<Busy>,
+    busy: bool,
     error: Option<String>,
-    can_draft: bool,
     drafts: HashMap<RepoId, Draft>,
     theme: Arc<Theme>,
 }
@@ -69,9 +62,8 @@ impl CommitBox {
             summary: TextArea::default(),
             description: TextArea::default(),
             focus: Field::Summary,
-            busy: None,
+            busy: false,
             error: None,
-            can_draft: false,
             drafts: HashMap::new(),
             theme,
         };
@@ -85,7 +77,7 @@ impl CommitBox {
     }
 
     /// Open for `id` with the text it had when its box last closed.
-    pub fn show(&mut self, id: RepoId, name: &str, staged: usize, can_draft: bool) {
+    pub fn show(&mut self, id: RepoId, name: &str, staged: usize) {
         let draft = self.drafts.remove(&id);
         let (summary, description) = draft
             .map(|draft| (draft.summary, draft.description))
@@ -97,9 +89,8 @@ impl CommitBox {
             staged,
         });
         self.focus = Field::Summary;
-        self.busy = None;
+        self.finish_operation();
         self.error = None;
-        self.can_draft = can_draft;
         self.visible = true;
         self.restyle();
     }
@@ -120,7 +111,6 @@ impl CommitBox {
             }
         }
         self.visible = false;
-        self.busy = None;
         self.error = None;
     }
 
@@ -130,8 +120,16 @@ impl CommitBox {
 
     /// The commit is running; input waits until it reports back.
     pub fn set_committing(&mut self) {
-        self.busy = Some(Busy::Committing);
+        self.busy = true;
         self.error = None;
+    }
+
+    pub fn finish_operation(&mut self) {
+        self.busy = false;
+    }
+
+    pub fn is_committing(&self) -> bool {
+        self.busy
     }
 
     /// `id`'s commit landed: drop its text and close if it is showing.
@@ -145,46 +143,21 @@ impl CommitBox {
         }
     }
 
-    /// Show why `id`'s commit or draft failed, keeping the text. Returns false
+    /// Show why `id`'s commit failed, keeping the text. Returns false
     /// when the box is not showing `id`, so the caller reports it elsewhere.
     pub fn failed(&mut self, id: &RepoId, error: &str) -> bool {
         if !self.visible || self.target_id() != Some(id) {
             return false;
         }
-        self.busy = None;
+        self.finish_operation();
         self.error = Some(error.trim().to_string());
         true
-    }
-
-    /// Put a drafted message in `id`'s box: the first line is the summary, the
-    /// rest the description. A closed box gets it the next time it opens.
-    pub fn fill(&mut self, id: &RepoId, message: &str) {
-        let mut lines = message.lines();
-        let summary = lines.next().unwrap_or_default().trim().to_string();
-        let description: Vec<String> = lines
-            .skip_while(|line| line.trim().is_empty())
-            .map(str::to_string)
-            .collect();
-        if self.visible && self.target_id() == Some(id) {
-            self.set_text(summary, description);
-            self.busy = None;
-            self.error = None;
-            self.restyle();
-        } else {
-            self.drafts.insert(
-                id.clone(),
-                Draft {
-                    summary,
-                    description,
-                },
-            );
-        }
     }
 
     /// Bracketed paste. In the summary, everything after the first line goes
     /// to the description.
     pub fn paste(&mut self, text: &str) {
-        if self.busy.is_some() {
+        if self.busy {
             return;
         }
         self.error = None;
@@ -211,14 +184,13 @@ impl CommitBox {
             self.hide();
             return Ok(None);
         }
-        if self.busy.is_some() {
+        if self.busy {
             return Ok(None);
         }
         self.error = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('s') if ctrl => return Ok(self.submit()),
-            KeyCode::Char('g') if ctrl => return Ok(self.request_draft()),
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
                     Field::Summary => Field::Description,
@@ -258,16 +230,6 @@ impl CommitBox {
             message,
             stage_all: false,
         })
-    }
-
-    fn request_draft(&mut self) -> Option<Action> {
-        let id = self.target.as_ref()?.id.clone();
-        if !self.can_draft {
-            self.error = Some("Set [commit] draft_command to draft messages".to_string());
-            return None;
-        }
-        self.busy = Some(Busy::Drafting);
-        Some(Action::DraftCommitMessage(id))
     }
 
     fn summary_text(&self) -> String {
@@ -401,12 +363,8 @@ impl CommitBox {
     fn status_lines(&self) -> Vec<Line<'static>> {
         let t = &self.theme.overlay;
         let hint = Style::default().fg(t.path_input_hint);
-        if let Some(busy) = self.busy {
-            let text = match busy {
-                Busy::Committing => "Committing…",
-                Busy::Drafting => "Drafting a message…",
-            };
-            return vec![Line::from(Span::styled(text, hint))];
+        if self.busy {
+            return vec![Line::from(Span::styled("Committing…", hint))];
         }
         if let Some(error) = &self.error {
             let style = Style::default()
@@ -445,9 +403,6 @@ impl CommitBox {
                 desc(" summary · "),
             ],
         };
-        if self.can_draft {
-            spans.extend([key("Ctrl+G"), desc(" draft · ")]);
-        }
         spans.extend([key("Esc"), desc(" close")]);
         vec![Line::from(spans)]
     }
