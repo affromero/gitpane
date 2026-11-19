@@ -161,7 +161,7 @@ On NetBSD, update through pkgsrc instead of `gitpane update`, which shells out t
 
 ## Why gitpane?
 
-If you work across multiple repositories, such as microservices, monorepos with submodules, or a mix of projects, you know the pain of checking status one directory at a time. Existing TUI tools focus on **one repo at a time**:
+If you work across several repositories, a workspace dashboard lets you check branch and working tree status in one view. The table compares tools for both workspace and single-repo workflows.
 
 | Tool | Multi repo | Auto refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull | Issues/PRs |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -175,6 +175,7 @@ If you work across multiple repositories, such as microservices, monorepos with 
 | [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No | No |
 | [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes | No |
 | [gitbatch](https://github.com/isacikgoz/gitbatch) | Yes (TUI) | No | No | No | No | No | Yes (batch) | No |
+| [ManyGit](https://github.com/rabeeh-ta/manygit) | Yes (TUI) | Yes | Discovers worktrees | Yes | Yes | Unified diff | Yes | PR inbox |
 | [gwq](https://github.com/d-kuro/gwq) | Yes (CLI) | No | Yes | No | No | No | No | No |
 | [Canopy](https://github.com/ashmitb95/canopy) | Yes (CLI) | No | Yes | No | No | No | No | No |
 | [ghpeek](https://github.com/kimusan/ghpeek) | GitHub only | No | No | Yes | No | No | No | Yes |
@@ -182,7 +183,14 @@ If you work across multiple repositories, such as microservices, monorepos with 
 
 **lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
 
-**ghpeek** and **gh-dash** live on the other side, they are GitHub dashboards for issues and pull requests with no view of your local working copies. gitpane folds a lightweight version of that in: select a repo and, when it has open issues or PRs on its `github.com` remote (`origin` preferred, else any remote pointing at github.com), a fourth panel appears with the list, a preview (body plus comments), and open-in-browser, fetched on demand through the `gh` CLI. It is the only tool here that pairs the local multi-repo workspace with a GitHub peek.
+**ghpeek** and **gh-dash** are GitHub dashboards for issues and pull requests. In gitpane, selecting a repo with open issues or PRs on GitHub shows a fourth panel with a list, body and comment previews, and a browser link. The panel queries the repo's `github.com` remote through the `gh` CLI.
+
+| Workspace feature | gitpane | ManyGit |
+| --- | --- | --- |
+| GitHub view | Issues and PRs for the selected repo, with body and comment previews | Cross-repo inbox for your PRs and review requests, with PR branch checkout |
+| Linked worktrees | Nested rows with branch and working tree status | Discovers worktree directories within the scan root |
+| Live terminal sessions | Shows live sessions and lets you attach from a repo or worktree | Undocumented |
+| VS Code | Explorer extension with repos, changes, and commit graph | Undocumented |
 
 A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
 
