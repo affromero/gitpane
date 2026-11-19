@@ -187,10 +187,18 @@ If you work across several repositories, a workspace dashboard lets you check br
 
 | Workspace feature | gitpane | ManyGit |
 | --- | --- | --- |
-| GitHub view | Issues and PRs for the selected repo, with body and comment previews | Cross-repo inbox for your PRs and review requests, with PR branch checkout |
-| Linked worktrees | Nested rows with branch and working tree status | Discovers worktree directories within the scan root |
-| Live terminal sessions | Shows live sessions and lets you attach from a repo or worktree | Undocumented |
-| VS Code | Explorer extension with repos, changes, and commit graph | Undocumented |
+| GitHub issues | Per-repo list with body and comment previews | Undocumented |
+| Cross-repo PR inbox | Your PRs and review requests, with a pending review count and PR previews | Your PRs and review requests, with branch checkout into a matching clone |
+| Find a PR's existing checkout | Highlights the matching linked worktree and offers to open it or attach to its live tmux session | Undocumented |
+| Linked worktree status | Nested rows with each worktree's branch, ahead/behind counts, and dirty state | Discovers worktree directories within the scan root |
+| Worktree actions | Create or remove linked worktrees from the dashboard | Undocumented |
+| Submodule status | Nested rows with dirty and unpushed indicators | Discovers submodule directories within the scan root |
+| Stash inspection | Stash count, stash list, and per-file diff | Undocumented |
+| Live terminal sessions | Session indicators and attach actions for tmux and Herdr | Undocumented |
+| VS Code | Explorer views for repos, worktrees, changes, and history, with native editor diffs | Undocumented |
+| Repo commands | Configurable keybindings run commands in the selected repo or worktree | Script runner and repo-scoped shell prompt with an output pane |
+
+The ManyGit entries describe its documented workflows and repository discovery. [ManyGit README](https://github.com/rabeeh-ta/manygit#readme)
 
 A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
 
