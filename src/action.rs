@@ -5,6 +5,7 @@ use crate::repo_id::RepoId;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    FetchDiagnosticsLoaded(RepoId, &'static str),
     Tick,
     Render,
     Quit,

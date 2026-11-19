@@ -825,6 +825,9 @@ impl App {
             Action::UpdateAvailable(ref version) => {
                 self.update_version = Some(version.clone());
             }
+            Action::FetchDiagnosticsLoaded(id, outcome) => {
+                self.fetch_diagnostics_loaded(id, outcome)?
+            }
             Action::GithubSelectionSettled(generation) => {
                 self.github_selection_settled(generation);
             }

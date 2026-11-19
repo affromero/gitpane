@@ -269,7 +269,9 @@ impl App {
         self.draw_text_selection(frame)?;
 
         // Help overlay (rendered last so it's on top of everything)
-        if self.show_help {
+        if let Some(panel) = &self.fetch_diagnostics {
+            panel.draw(frame, main_area, &self.theme);
+        } else if self.show_help {
             self.draw_help(frame, main_area);
         }
 
@@ -345,6 +347,10 @@ impl App {
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
             Line::from(vec![key("Esc"), desc("Clear selection / close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
+            Line::from(vec![
+                key("F7"),
+                desc("Fetch selected repo with diagnostics"),
+            ]),
             Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (new window)")]),
