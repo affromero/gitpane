@@ -321,7 +321,19 @@ impl Component for RepoList {
                 };
                 // Focus mode: dim every repo but the selected one; the
                 // selected repo's worktree/stash rows stay bright too.
-                if self.focus_mode && selected_repo.is_some_and(|s| s != repo_idx) {
+                let highlighted = match row {
+                    DisplayRow::Worktree(ri, wi) => self
+                        .pr_worktree_highlight
+                        .as_ref()
+                        .is_some_and(|(path, _)| {
+                            self.repos[*ri]
+                                .status
+                                .as_ref()
+                                .is_some_and(|status| status.worktree_info[*wi].path == *path)
+                        }),
+                    _ => false,
+                };
+                if !highlighted && self.focus_mode && selected_repo.is_some_and(|s| s != repo_idx) {
                     item.style(Style::default().add_modifier(Modifier::DIM))
                 } else {
                     item

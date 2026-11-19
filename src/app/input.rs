@@ -137,6 +137,10 @@ impl App {
             return Ok(());
         }
 
+        if self.workflow_key(key)? {
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('q') => {
                 // If viewing a diff or the GitHub detail, close it instead of quitting.
@@ -369,6 +373,9 @@ impl App {
         Ok(())
     }
     pub(super) fn handle_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        if self.workflow.is_open() {
+            return Ok(());
+        }
         use crossterm::event::{MouseButton, MouseEventKind};
 
         if self.selection_modal_visible() {

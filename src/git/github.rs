@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+pub(crate) mod inbox;
 mod process;
 
 /// Rolled-up CI/checks result for a pull request, from `gh`'s

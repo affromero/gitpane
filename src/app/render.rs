@@ -162,6 +162,7 @@ impl App {
         // list/detail content must overwrite old longer content deterministically.
         frame.buffer_mut().reset();
 
+        self.repo_list.pr_worktree_highlight = self.workflow.highlighted_worktree();
         self.repo_list.draw(frame, repo_area)?;
         self.file_list.draw(frame, changes_area)?;
         self.git_graph.draw(frame, graph_area)?;
@@ -241,6 +242,11 @@ impl App {
         self.status_bar.sort_order = self.sort_order;
         self.status_bar.error = self.error_message.clone();
         self.status_bar.success = self.success_message.clone();
+        self.status_bar.inbox_hint = self
+            .config
+            .github
+            .enabled
+            .then(|| self.workflow.review_count());
         // Only inside a filter category does the status bar swap its repo
         // legend for the picker hint; the root screen keeps the legend.
         self.status_bar.overlay_hint = if self.graph_filter_picker.is_filtering() {
@@ -269,7 +275,9 @@ impl App {
         self.draw_text_selection(frame)?;
 
         // Help overlay (rendered last so it's on top of everything)
-        if self.show_help {
+        if self.workflow.is_open() {
+            self.draw_workflow(frame, main_area);
+        } else if self.show_help {
             self.draw_help(frame, main_area);
         }
 
@@ -345,6 +353,7 @@ impl App {
             Line::from(vec![key("Shift+Tab"), desc("Cycle focus backward")]),
             Line::from(vec![key("Esc"), desc("Clear selection / close / go back")]),
             Line::from(vec![key("r"), desc("Refresh all repos")]),
+            Line::from(vec![key("F6"), desc("Open PR inbox")]),
             Line::from(vec![key("t"), desc("Theme picker")]),
             Line::from(vec![key("o"), desc("Open repo/worktree")]),
             Line::from(vec![key("v"), desc("Review changes (new window)")]),
