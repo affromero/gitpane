@@ -105,6 +105,16 @@ impl SortOrder {
     }
 }
 
+impl From<crate::config::RepoSort> for SortOrder {
+    fn from(sort: crate::config::RepoSort) -> Self {
+        match sort {
+            crate::config::RepoSort::Alphabetical => Self::Alphabetical,
+            crate::config::RepoSort::Reverse => Self::ReverseAlphabetical,
+            crate::config::RepoSort::Dirty => Self::DirtyFirst,
+        }
+    }
+}
+
 /// RAII guard that sends `StatusQueryDone` if the spawned task exits
 /// without sending a completion message (e.g., on panic). The guard's
 /// `Drop` uses `UnboundedSender::send` which is non-blocking, so it
@@ -403,6 +413,7 @@ impl App {
         };
 
         let update_position = config.ui.update_position;
+        let sort_order = SortOrder::from(config.ui.sort);
         let poll_semaphore = Arc::new(tokio::sync::Semaphore::new(
             config.watch.max_concurrent_polls,
         ));
@@ -431,7 +442,7 @@ impl App {
             pending_pick: None,
             placement_generation: 0,
             focus: FocusPanel::Repos,
-            sort_order: SortOrder::Alphabetical,
+            sort_order,
             mux,
             action_tx,
             action_rx,
@@ -526,6 +537,16 @@ impl App {
         self.repo_list.reverse_submodules =
             matches!(order, crate::git::repo_sort::Order::ReverseAlphabetical);
         self.repo_list.resync_rows(keep);
+    }
+
+    /// Dirty-first order follows status: a repo moves when it turns dirty or
+    /// clean. Statuses land after `App::new` sorts, when every repo still
+    /// counts as clean, so without this a dirty-first startup stays
+    /// alphabetical. The other orders ignore status.
+    fn resort_after_status(&mut self, was_dirty: bool, is_dirty: bool) {
+        if self.sort_order == SortOrder::DirtyFirst && was_dirty != is_dirty {
+            self.sort_repos();
+        }
     }
     /// Rebuild the filesystem watcher to match the current `repo_list.repos`
     /// and `config.root_dirs`. The new watcher is constructed before the old

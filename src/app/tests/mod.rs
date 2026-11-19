@@ -1,5 +1,6 @@
 use super::*;
 mod robustness;
+mod sort;
 mod stash;
 mod submodule_disclosure;
 mod text_selection;

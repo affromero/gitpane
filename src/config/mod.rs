@@ -143,6 +143,17 @@ pub(crate) enum UpdatePosition {
     TopLeft,
 }
 
+/// Repo list order on startup. Same values as the VS Code `gitpane.sortOrder`
+/// setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RepoSort {
+    #[default]
+    Alphabetical,
+    Reverse,
+    Dirty,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct UiConfig {
     #[serde(default = "default_frame_rate")]
@@ -161,6 +172,9 @@ pub(crate) struct UiConfig {
     /// Refresh additions and removals made by other running instances.
     #[serde(default = "default_sync_repos")]
     pub sync_repos: bool,
+    /// Repo list order on startup; `s` still cycles it.
+    #[serde(default)]
+    pub sort: RepoSort,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

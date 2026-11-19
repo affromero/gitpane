@@ -196,6 +196,27 @@ fn test_update_config_roundtrip() {
 }
 
 #[test]
+fn test_sort_parse_and_roundtrip() {
+    for (toml_str, expected) in [
+        ("", RepoSort::Alphabetical),
+        ("[ui]\nsort = \"alphabetical\"\n", RepoSort::Alphabetical),
+        ("[ui]\nsort = \"reverse\"\n", RepoSort::Reverse),
+        ("[ui]\nsort = \"dirty\"\n", RepoSort::Dirty),
+    ] {
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ui.sort, expected, "{toml_str:?}");
+    }
+    assert!(toml::from_str::<Config>("[ui]\nsort = \"newest\"\n").is_err());
+
+    // Saves rewrite the whole file, so the choice must survive one.
+    let mut config = Config::default();
+    config.ui.sort = RepoSort::Dirty;
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(loaded.ui.sort, RepoSort::Dirty);
+}
+
+#[test]
 fn test_submodule_config_defaults() {
     let config: Config = toml::from_str("").unwrap();
     assert!(!config.submodules.ignore_dirty);
