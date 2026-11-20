@@ -169,6 +169,7 @@ fn file(path: &str) -> FileEntry {
         submodule_state: None,
         submodule_warn: SubmoduleWarn::default(),
         submodule_head: None,
+        recorded_commits: None,
     }
 }
 

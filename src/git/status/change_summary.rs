@@ -73,6 +73,7 @@ pub(super) fn file_entry(path: PathBuf, s: Status) -> Option<FileEntry> {
         submodule_state: None,
         submodule_warn: SubmoduleWarn::default(),
         submodule_head: None,
+        recorded_commits: None,
     })
 }
 
@@ -356,7 +357,19 @@ pub(super) fn collect_change_summary(
     // Preserve Git's distinct `child` staged deletion and `child/`
     // untracked-directory entries. Path equality normalizes that separator.
     let mut flags = std::collections::BTreeMap::<std::ffi::OsString, Status>::new();
+    let mut recorded_commits = std::collections::BTreeMap::new();
     for entry in repo.statuses(Some(&mut opts))?.iter() {
+        if let Some(staged) = entry.head_to_index() {
+            let old = staged.old_file();
+            let new = staged.new_file();
+            if old.mode() == git2::FileMode::Commit
+                && new.mode() == git2::FileMode::Commit
+                && old.id() != new.id()
+                && let Some(path) = new.path()
+            {
+                recorded_commits.insert(path.as_os_str().to_owned(), (old.id(), new.id()));
+            }
+        }
         let delta = entry
             .index_to_workdir()
             .or_else(|| entry.head_to_index())
@@ -390,7 +403,13 @@ pub(super) fn collect_change_summary(
     }
     let mut files: Vec<_> = flags
         .into_iter()
-        .filter_map(|(path, flags)| file_entry(path.into(), flags))
+        .filter_map(|(path, flags)| {
+            let commits = recorded_commits.remove(&path);
+            let mut entry = file_entry(path.into(), flags)?;
+            entry.recorded_commits = commits;
+            entry.is_submodule = commits.is_some();
+            Some(entry)
+        })
         .collect();
 
     let is_dirty = !files.is_empty();
@@ -429,6 +448,7 @@ pub(super) fn collect_change_summary(
                 submodule_state: module.state.clone(),
                 submodule_warn: module.warn,
                 submodule_head: module.head.clone(),
+                recorded_commits: None,
             });
             if has_dirty_signal {
                 file_count_lower_bound += 1;

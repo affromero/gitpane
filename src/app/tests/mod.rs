@@ -29,6 +29,7 @@ mod file_search_input {
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
             submodule_head: None,
+            recorded_commits: None,
         }
     }
 
@@ -246,6 +247,7 @@ fn graph_status_changed_ignores_file_only_changes() {
         submodule_state: None,
         submodule_warn: crate::git::status::SubmoduleWarn::default(),
         submodule_head: None,
+        recorded_commits: None,
     });
 
     // Same HEAD and same rendered refs: a working-tree edit must not reload

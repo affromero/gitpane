@@ -102,6 +102,7 @@ impl StashFileEntry {
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
             submodule_head: None,
+            recorded_commits: None,
         }
     }
 }

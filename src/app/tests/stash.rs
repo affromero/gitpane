@@ -101,6 +101,7 @@ fn exit_stash_view_restores_the_selected_repo_working_tree() {
         submodule_state: None,
         submodule_warn: crate::git::status::SubmoduleWarn::default(),
         submodule_head: None,
+        recorded_commits: None,
     }];
     app.repo_list.update_status(idx, status);
     app.file_list.show_stash_loading(

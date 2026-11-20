@@ -151,6 +151,7 @@ pub(crate) struct FileEntry {
     /// Checked-out branch of the submodule (or detached). `None` for non
     /// submodule rows and for submodules that could not be opened.
     pub submodule_head: Option<SubmoduleHead>,
+    pub recorded_commits: Option<(git2::Oid, git2::Oid)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
