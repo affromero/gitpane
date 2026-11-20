@@ -4,6 +4,11 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-20
+
+### Fixed
+- Restore the VS Code commit graph and its diff stats when switching back to a repository whose history and graph options are unchanged. ([#256](https://github.com/affromero/gitpane/pull/256), closes [#255](https://github.com/affromero/gitpane/issues/255))
+
 ## [0.19.0] - 2026-11-19
 
 ### Added
