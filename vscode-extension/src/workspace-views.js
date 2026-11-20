@@ -69,8 +69,14 @@ class WorkspaceViews {
   }
 
   select(id) {
-    if (!this.current(id)) return this.publish();
+    const entry = this.current(id);
+    if (!entry) return this.publish();
     this.setSelection(id, true);
+    if (this.changes?.ready && this.changes.view.visible && !entry.owner.external &&
+        entry.owner.available !== false && !entry.owner.statusUnavailable && entry.owner.changesPage?.state === 'idle') {
+      this.retainChanges('changes', id);
+      return this.provider.loadChanges(id);
+    }
     this.publish();
   }
 

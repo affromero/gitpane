@@ -207,7 +207,6 @@ test('repository and worktree selection update lower sections through collapse a
   const parent = repos.snapshot().repositories.find(item => item.name === 'api-service');
   const worktree = parent.worktrees[0];
   await repos.receive({ type: 'selectOwner', id: worktree.id });
-  await changes.receive(message(changes, 'loadChanges', worktree.id));
   assert.equal(changes.snapshot().selectedOwner.name, 'api-auth');
   assert.deepEqual(changes.snapshot().repositories, []);
   assert.equal(changes.snapshot().selectedKind, 'worktree');

@@ -229,6 +229,11 @@ pub(super) fn guard() -> ! {
 }
 
 fn supervise() -> Result<(), BridgeError> {
+    enum WorkerEvent {
+        Cancelled,
+        Exited,
+    }
+
     let started = Instant::now();
     let request = decode(&read_line(MAX_REQUEST_BYTES)?)?;
     validate(&request)?;
@@ -238,11 +243,12 @@ fn supervise() -> Result<(), BridgeError> {
     }
 
     let (tx, rx) = mpsc::channel();
+    let cancel = tx.clone();
     std::thread::spawn(move || {
         let mut input = io::stdin();
         let mut byte = [0u8; 1];
         let _ = input.read(&mut byte);
-        let _ = tx.send(());
+        let _ = cancel.send(WorkerEvent::Cancelled);
     });
     if rx.try_recv().is_ok() {
         return Err(failure("Worker input closed."));
@@ -290,31 +296,30 @@ fn supervise() -> Result<(), BridgeError> {
     std::thread::spawn(move || {
         let _ = gate.write_all(&payload);
     });
-    loop {
-        if let Some(status) = child.try_wait().map_err(failure)? {
-            #[cfg(windows)]
-            drop(job);
-            #[cfg(unix)]
-            cleanup_guardian(&mut guardian);
-            if status.success() {
-                return Ok(());
-            }
-            std::process::exit(1);
-        }
-        if rx.try_recv().is_ok() || started.elapsed() >= DEADLINE {
-            #[cfg(windows)]
-            drop(job);
-            #[cfg(unix)]
-            cleanup_guardian(&mut guardian);
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(BridgeError::new(
-                "worker_cancelled",
-                "Git content worker was cancelled or timed out.",
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(20));
+    let waiter = std::thread::spawn(move || {
+        let status = child.wait();
+        let _ = tx.send(WorkerEvent::Exited);
+        status
+    });
+    let completed = matches!(
+        rx.recv_timeout(DEADLINE.saturating_sub(started.elapsed())),
+        Ok(WorkerEvent::Exited)
+    );
+    #[cfg(windows)]
+    drop(job);
+    #[cfg(unix)]
+    cleanup_guardian(&mut guardian);
+    let status = waiter.join().map_err(|_| failure("Worker wait failed."))?;
+    if !completed {
+        return Err(BridgeError::new(
+            "worker_cancelled",
+            "Git content worker was cancelled or timed out.",
+        ));
     }
+    if status.map_err(failure)?.success() {
+        return Ok(());
+    }
+    std::process::exit(1);
 }
 
 pub(super) fn main(exec_mode: bool) -> ! {

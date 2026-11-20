@@ -98,6 +98,9 @@ const scenario = String.raw`
   send('repositories', hierarchy); await tick();
   check('removing the setting restores left alignment', aligned('left'));
   send('repositories', snapshot); await tick();
+  document.documentElement.style.setProperty('--vscode-editor-foreground', 'rgb(1, 2, 3)'); await tick();
+  check('live theme colors reach all panes without a repository update', ['repositories','changes','graph'].every(name =>
+    getComputedStyle(doc(name).body).getPropertyValue('--vscode-editor-foreground').trim() === 'rgb(1, 2, 3)'));
   let handles = repoDoc.querySelectorAll('.column-separator');
   check('repository columns have accessible resize controls', handles.length === 2 &&
    [...handles].every(handle => handle.getAttribute('aria-label') && handle.getAttribute('aria-orientation') === 'vertical'));

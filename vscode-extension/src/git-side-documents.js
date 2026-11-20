@@ -48,6 +48,7 @@ async function createLiveGitSide(options) {
   const session = await backend.gitSideSession(repoPath, { literalObjects: options.literalObjects === true });
   const guard = () => current() && backend.gitSideCurrent(session);
   const uri = vscode.Uri.file(path.join(repoPath, ...side.gitPath.split('/')));
+  let initialMode;
   const metadata = async signal => {
     if (!guard() || (verifyAncestors && !await verifyAncestors()) || !guard()) {
       throw new Error('The Gitpane diff is no longer in the workspace.');
@@ -67,6 +68,7 @@ async function createLiveGitSide(options) {
       throw new Error('The Gitpane diff is no longer in the workspace.');
     }
     if (requireRegular && ![0o100644, 0o100664, 0o100755].includes(result.mode)) throw new Error('The Gitpane diff file type changed.');
+    initialMode ??= result.mode;
     return result;
   };
   const group = JSON.stringify([repoPath, repoIdentity, repoToken, side.ref, side.gitPath, ancestorKey, contextKey, session.git.key]);
@@ -97,8 +99,7 @@ async function createLiveGitSide(options) {
   };
   const document = await links.createLiveBinary(uri, metadata, read, guard, group, batch, restoreUri);
   if (restore && links.restoration) {
-    const details = await metadata();
-    await links.restoration.remember(document, repo, repoToken, repoIdentity, restore.record, restore.which, guard, details.mode);
+    await links.restoration.remember(document, repo, repoToken, repoIdentity, restore.record, restore.which, guard, initialMode);
   }
   return document;
 }
