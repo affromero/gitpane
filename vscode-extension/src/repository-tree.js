@@ -264,14 +264,19 @@ class RepositoryTree {
   async refreshRepositories(repos, cycle, visibleOnly) {
     const current = repo => !this.disposed && cycle.generation === this.backendGeneration && (!cycle.guard || cycle.guard()) &&
       (!visibleOnly || this.visible) && this.isCurrentRepository(repo, cycle.tokens.get(repo.rootUri.toString()));
-    // Cached identities select provisional anchors only. New statuses decide
-    // the actual groups before any worktree discovery is allowed.
+    // A cached common directory or an ordinary checkout's .git directory can
+    // suggest an anchor. Only the verified backend groups can open worktrees.
     const cachedGroups = new Map();
+    const provisional = new Map();
     for (const repo of repos) {
       if (!current(repo)) continue;
       const key = repo.rootUri.toString();
       const status = this.backendStatuses.get(key);
-      if (!status) continue;
+      if (!status) {
+        const gitDir = directoryIdentity(path.join(repo.rootUri.fsPath, '.git'));
+        if (gitDir) provisional.set(key, gitDir);
+        continue;
+      }
       const evidence = this.statusEvidence.get(status);
       if (!evidence || evidence.generation !== cycle.generation || evidence.token !== cycle.tokens.get(key)) continue;
       const common = evidence.common;
@@ -280,25 +285,35 @@ class RepositoryTree {
       if (!cachedGroups.has(group)) cachedGroups.set(group, { common, repos: [] });
       cachedGroups.get(group).repos.push(repo);
     }
-    const provisional = new Map();
     for (const { common, repos: group } of cachedGroups.values()) {
       provisional.set(group.sort(compareWorktreeAnchors)[0].rootUri.toString(), common);
     }
     const detailed = new Map();
     await parallel(repos, 4, async repo => {
       if (!current(repo)) return;
-      try {
-        await repo.status();
-        if (current(repo)) this.statusSucceeded(repo);
-      } catch (error) {
-        if (current(repo)) this.statusFailed(repo, error);
+      const key = repo.rootUri.toString();
+      const includeWorktrees = provisional.has(key);
+      // Volatile diff content must be rechecked even with Git autorefresh off.
+      this.contentRevisions.set(key, this.contentRevision(repo) + 1);
+      let status = await this.refreshBackend(repo, cycle, includeWorktrees, true);
+      if (!current(repo) || !status) return;
+      if (status.has_submodules !== false || repo.state.submodules?.length) {
+        try {
+          await repo.status();
+          if (!current(repo)) return;
+          this.statusSucceeded(repo);
+        } catch (error) {
+          if (!current(repo)) return;
+          this.statusFailed(repo, error);
+        }
+        if ((status.incomplete_submodules?.length || status.incomplete_submodules_omitted) &&
+            this.contentRevision(repo) !== status.submoduleWarningRevision) {
+          status = await this.refreshBackend(repo, cycle, includeWorktrees, true);
+        }
+      } else {
+        this.statusSucceeded(repo);
       }
-      if (current(repo)) {
-        const key = repo.rootUri.toString();
-        const includeWorktrees = provisional.has(key);
-        const status = await this.refreshBackend(repo, cycle, includeWorktrees, includeWorktrees);
-        if (includeWorktrees && status) detailed.set(key, status);
-      }
+      if (includeWorktrees && status) detailed.set(key, status);
     });
     if (this.disposed || cycle.generation !== this.backendGeneration || (visibleOnly && !this.visible)) return;
     const commonIdentities = new Map();
@@ -614,7 +629,7 @@ class RepositoryTree {
         const roots = [...this.workspaceIdentities.values()].filter(root => root && inside(root.path, identity.path));
         roots.sort((a, b) => b.path.length - a.path.length);
         const display = roots.length ? path.relative(roots[0].path, identity.path) || path.basename(identity.path) : path.basename(identity.path);
-        return { path: repo.rootUri.fsPath, display, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty };
+        return { path: repo.rootUri.fsPath, display, dirty: !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty };
       });
       const result = await this.backend.sortRepositories(order, repositories);
       if (!current()) return;
@@ -934,7 +949,7 @@ class RepositoryTree {
       const view = workspaceView || this.presentationView();
       if (view.pendingHidden) failures.push({ type: 'error', message: 'Hidden repository identity verification is pending.' });
       let repos = view.records.filter(record => !view.nested.has(record.key)).map(({ repo }) => ({
-        repo, dirty: this.groupsFor(repo).length > 0 || !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty
+        repo, dirty: !!this.backendStatuses.get(repo.rootUri.toString())?.is_dirty
       })).sort((a, b) => Number(b.dirty) - Number(a.dirty) || a.repo.rootUri.fsPath.localeCompare(b.repo.rootUri.fsPath));
       if (this.sortOrder !== 'workspace' && this.sortRanks.size) {
         repos.sort((a, b) => (this.sortRanks.get(a.repo.rootUri.toString()) ?? Number.MAX_SAFE_INTEGER) -

@@ -225,6 +225,8 @@ test('webview shows workspace state and opens only currently visible changes', a
         warn: { unpushed_commits: 2, pointer_unreachable: false, needs_merge_to_default: true } } };
     backend.beginChanges = async () => page([attention]);
     Object.assign(tree.backendStatuses.get(root), { is_dirty: false, has_unpushed_submodules: false, file_count_lower_bound: 0 });
+    current = { uri: uri(path.join(root, 'stale.txt')), status: 5 };
+    assert.equal(provider.snapshot().repositories[0].dirty, false, 'a stale SCM change cannot override clean native status');
     const childStatus = tree.backendStatuses.get(worktreePath);
     Object.assign(childStatus, { has_dirty_submodules: true, has_unpushed_submodules: false, file_count_lower_bound: 0 });
     onChange();

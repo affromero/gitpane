@@ -33,6 +33,7 @@ const { StashView } = require('./stash-view');
 const { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider } = require('./settings');
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
+const { refreshTarget } = require('./target-refresh');
 const { externalSubmodules } = require('./external-submodules');
 
 class GitpaneViewProvider {
@@ -179,7 +180,7 @@ class GitpaneViewProvider {
         name: node.duplicate ? `${path.basename(root)} (${path.dirname(root)})` : path.basename(root),
         branch: (status?.branch === '(no branch)' && !status.head_oid && head?.name) ||
           status?.branch || head?.name || (head?.commit ? head.commit.slice(0, 8) : 'unborn'),
-        dirty: !!status?.is_dirty || this.tree.groupsFor(repo).some(group => group.changes.length),
+        dirty: !!status?.is_dirty,
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
         worktree: repo.kind === 'worktree',
@@ -421,61 +422,8 @@ class GitpaneViewProvider {
     }
   }
 
-  async refreshTarget(id, kind, guard = () => true) {
-    if (!guard()) return [];
-    if (kind === 'repo' && this.externalOwners.get(id)?.submodule) {
-      const repo = this.currentOwner(id);
-      if (!repo) return [];
-      await this.tree.refresh();
-      if (guard() && this.currentOwner(id)) await this.loadChanges(id);
-      return guard() ? [repo.rootUri.toString()] : [];
-    }
-    const selected = kind === 'worktree' ? this.worktrees.get(id) : this.repositories.get(id);
-    const target = kind === 'worktree' ? this.currentWorktreeRepository(id) : this.currentRepository(id);
-    const anchor = kind === 'worktree'
-      ? this.tree.git.repositories.find(repo => repo.rootUri.toString() === selected?.repoKey)
-      : target && this.tree.explicitWorktreeAnchor?.(target)?.anchor;
-    const primary = kind === 'worktree' ? anchor : target;
-    if (!selected || !primary) return [];
-    const primaryToken = this.tree.repositoryToken(primary);
-    const targetToken = target && this.tree.repositoryToken(target);
-    const anchorToken = anchor && this.tree.repositoryToken(anchor);
-    const generation = this.tree.backendGeneration;
-    const anchorKey = anchor?.rootUri.toString();
-    const current = () => {
-      if (this.disposed || generation !== this.tree.backendGeneration ||
-          !this.tree.isCurrentRepository(primary, primaryToken)) return false;
-      if (kind === 'repo') {
-        if (this.currentRepository(id)?.rootUri.toString() !== primary.rootUri.toString()) return false;
-        if (!anchor) return true;
-        const link = this.tree.explicitWorktreeAnchor?.(primary);
-        return !!link && link.anchor.rootUri.toString() === anchorKey &&
-          this.tree.isCurrentRepository(anchor, anchorToken);
-      }
-      const link = this.worktrees.get(id);
-      if (!link || link.repoKey !== selected.repoKey || link.repoToken !== selected.repoToken ||
-          link.path !== selected.path || !this.tree.workspaceWorktrees(primary).some(item => item.path === selected.path)) return false;
-      if (!target) return !link.childRepoId;
-      return link.childToken === targetToken && this.currentWorktreeRepository(id)?.rootUri.toString() === target.rootUri.toString();
-    };
-    const repos = [...new Set([primary, target, anchor].filter(Boolean))];
-    if (!current()) return [];
-    const result = await this.tree.refreshTargets(repos, current);
-    if (result?.scopeChanged) {
-      await this.refresh();
-      return [];
-    }
-    if (!current()) return [];
-    for (const pageId of [...this.pager.entries.keys()]) {
-      const owner = this.currentOwner(pageId);
-      if (!owner || !repos.some(repo => repo.rootUri.toString() === owner.rootUri.toString())) continue;
-      const pending = this.pager.get(pageId)?.pending;
-      if (pending) await pending;
-      if (!current()) return [];
-      if (this.currentOwner(pageId)?.rootUri.toString() === owner.rootUri.toString()) await this.loadChanges(pageId);
-      if (!current()) return [];
-    }
-    return repos.map(repo => repo.rootUri.toString());
+  refreshTarget(id, kind, guard = () => true) {
+    return refreshTarget(this, id, kind, guard);
   }
 
   currentChange(node) {
@@ -1022,7 +970,10 @@ async function activate(context) {
       }
     })
   );
-  try { await tree.refresh(); } finally { links.finishInitialization(); }
+  tree.refresh().catch(error => {
+    tree.fail(`Could not refresh repository status: ${error.message}`);
+    tree.changed();
+  }).finally(() => links.finishInitialization());
 }
 
 module.exports = { activate, GitpaneViewProvider, RepositoryTree };

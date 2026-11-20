@@ -43,13 +43,14 @@ class ComparisonGraph {
   publish() {
     const repo = this.provider.currentRepo?.() || this.repo;
     const head = repo.state?.HEAD;
-    const externalStatus = this.externalStatusUnavailable ? undefined : this.externalStatus || this.context?.status?.();
+    const status = this.externalStatusUnavailable ? undefined : this.externalStatus || this.context?.status?.() ||
+      this.provider.tree.backendStatuses?.get(repo.rootUri.toString());
     const state = repo.state;
     const trackedGroups = [state?.workingTreeChanges, state?.indexChanges, state?.mergeChanges];
-    const dirty = typeof externalStatus?.is_dirty === 'boolean' ? externalStatus.is_dirty :
+    const dirty = typeof status?.is_dirty === 'boolean' ? status.is_dirty :
       trackedGroups.every(Array.isArray) ? groups(state).length > 0 : undefined;
-    const branch = externalStatus?.branch && externalStatus.branch !== 'HEAD' ? externalStatus.branch : head?.name;
-    const commit = externalStatus?.head_oid || head?.commit;
+    const branch = status?.branch ? (status.branch === 'HEAD' ? undefined : status.branch) : head?.name;
+    const commit = status && 'head_oid' in status ? status.head_oid : head?.commit;
     this.provider.post({ type: 'comparisonState', repoName: this.provider.repoName, repoPath: this.repo.rootUri.fsPath,
       head: branch || (commit ? `Detached ${commit.slice(0, 8)}` : undefined), dirty,
       from: this.model.from, to: this.model.to, mode: this.model.mode,
