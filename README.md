@@ -192,10 +192,15 @@ If you work across several repositories, a workspace dashboard lets you check br
 | Find a PR's existing checkout | Highlights the matching linked worktree and offers to open it or attach to its live tmux session | Undocumented |
 | Linked worktree status | Nested rows with each worktree's branch, ahead/behind counts, and dirty state | Discovers worktree directories within the scan root |
 | Worktree actions | Create or remove linked worktrees from the dashboard | Undocumented |
-| Submodule status | Nested rows with dirty and unpushed indicators | Discovers submodule directories within the scan root |
-| Stash inspection | Stash count, stash list, and per-file diff | Undocumented |
-| Live terminal sessions | Session indicators and attach actions for tmux and Herdr | Undocumented |
-| VS Code | Explorer views for repos, worktrees, changes, and history, with native editor diffs | Undocumented |
+| Worktrees outside the editor workspace | Find registered checkouts under their owning repo and inspect them from the same VS Code window | Discovers checkouts within the scan root |
+| Submodule status | Nest submodules under the checkout that owns them and flag dirty state or commits that other clones may be unable to fetch | Discovers submodule directories within the scan root |
+| Historical submodule diffs | In VS Code, inspect a gitlink change and compare files between the two recorded submodule commits | Undocumented |
+| Stash inspection | Browse saved stashes and open per-file diffs pinned to the stash commit | Undocumented |
+| Commit graph and branch review | Filter history by branch, author, or ref, switch to first-parent history, and review a checkout against its base branch | Browse the commit graph and inspect unified diffs |
+| Diff and file actions | Resizable side-by-side TUI diffs and native VS Code diffs for staged and working changes, with editor file actions where supported | Unified file diffs and repository-level discard actions |
+| Live terminal sessions | Show live sessions per checkout and attach via tmux or Herdr | Undocumented |
+| VS Code and remote workspaces | Explorer views for multi-root workspaces with support for Remote SSH, WSL, and Dev Containers through the workspace host | Undocumented |
+| Fetch diagnostics | Fetch the selected repository, see the result, and retry from the diagnostics panel | Shows per-repo network errors and allows interactive fetch retry |
 | Repo commands | Configurable keybindings run commands in the selected repo or worktree | Script runner and repo-scoped shell prompt with an output pane |
 
 The ManyGit entries describe its documented workflows and repository discovery. [ManyGit README](https://github.com/rabeeh-ta/manygit#readme)
