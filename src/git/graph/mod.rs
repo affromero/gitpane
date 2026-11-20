@@ -202,7 +202,13 @@ impl GraphBuilder {
             }
         }
         entries.sort();
-        let input = serde_json::to_vec(&(branch_filter, symbolic, direct, resolved, entries))?;
+        let shallow = match std::fs::read(repo.commondir().join("shallow")) {
+            Ok(boundary) => boundary,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let input =
+            serde_json::to_vec(&(branch_filter, symbolic, direct, resolved, entries, shallow))?;
         Ok(crate::hash::hex(Sha256::digest(input).as_ref()))
     }
 

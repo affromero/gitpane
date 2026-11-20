@@ -46,6 +46,7 @@ class GraphProvider {
     this.validationPending = undefined;
     this.rows = new Map();
     this.displayedRows = [];
+    this.recentGraphs = new Map();
     this.segments = new Set();
     this.collapsedSegments = new Set();
     this.files = new Map();
@@ -149,7 +150,7 @@ class GraphProvider {
       this.panel.title = `${this.sidebar ? 'Git Graph' : 'Gitpane'}: ${path.basename(repo.rootUri.fsPath)}`;
       if (!this.sidebar) this.panel.reveal();
       this.ready = wasReady;
-      if (this.ready) this.loadGraph();
+      if (this.ready) this.loadGraph(true);
       return;
     }
     if (this.sidebar) return;
@@ -369,7 +370,7 @@ class GraphProvider {
       filters: copyFilters(this.filters) });
   }
 
-  async loadGraph() {
+  async loadGraph(revisit = false) {
     if (this.sidebar && !this.repoKey) return this.invalidate(this.emptyMessage, false, !this.emptyError);
     const repo = this.currentRepo();
     if (!repo) {
@@ -399,12 +400,20 @@ class GraphProvider {
       if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
       const before = await this.readRevision(repo);
       if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
-      const result = await this.backend.graph(repo.rootUri.fsPath, this.firstParent, copyFilters(this.filters), [...this.collapsedSegments]);
+      const repoKey = repo.rootUri.toString();
+      const owner = repo.externalToken ?? this.tree.repositoryToken?.(repo);
+      const backendGeneration = this.backend.generation;
+      const options = JSON.stringify([this.firstParent, this.filters, [...this.collapsedSegments]]);
+      const cached = revisit && this.recentGraphs.get(repoKey);
+      const hit = cached && cached.revision === before && cached.options === options &&
+        cached.owner === owner && cached.backendGeneration === backendGeneration;
+      const result = hit ? cached.result :
+        await this.backend.graph(repo.rootUri.fsPath, this.firstParent, copyFilters(this.filters), [...this.collapsedSegments]);
       if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
-      const after = await this.readRevision(repo);
+      const after = hit ? before : await this.readRevision(repo);
       if (generation !== this.graphGeneration || this.panel !== panel || !this.isCurrentRepo(repo) || panel.visible === false) return;
       if (!await this.validateGraph(repo) || generation !== this.graphGeneration) return;
-      if (before !== after) {
+      if (before !== after || backendGeneration !== this.backend.generation) {
         this.revision = undefined;
         this.unstableLoads++;
         this.pollAgain = this.unstableLoads <= 2;
@@ -442,6 +451,9 @@ class GraphProvider {
       this.unstableLoads = 0;
       this.retryBackoff = false;
       this.displayedRows = result.rows;
+      this.recentGraphs.delete(repoKey);
+      this.recentGraphs.set(repoKey, { owner, options, backendGeneration, revision: after, result });
+      if (this.recentGraphs.size > 32) this.recentGraphs.delete(this.recentGraphs.keys().next().value);
       this.selected = previousSelection && this.rows.has(previousSelection) && !this.rows.get(previousSelection).collapsed ? previousSelection : undefined;
       this.interactive = true;
       this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
