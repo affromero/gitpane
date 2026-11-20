@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use color_eyre::Result;
@@ -48,10 +49,6 @@ struct Owner {
 }
 
 pub(crate) fn list(paths: &[PathBuf], reviews: bool) -> Result<Vec<PullRequest>, String> {
-    let repositories: Vec<_> = paths
-        .iter()
-        .filter_map(|path| Repository::open(path).ok())
-        .collect();
     let filter = if reviews {
         "--review-requested=@me"
     } else {
@@ -67,11 +64,31 @@ pub(crate) fn list(paths: &[PathBuf], reviews: bool) -> Result<Vec<PullRequest>,
         "--json=number,title,isDraft,repository",
     ])?;
     let mut rows: Vec<PullRequest> = serde_json::from_slice(&output).map_err(|e| e.to_string())?;
-    for row in &mut rows {
-        row.local_count = repositories
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+    let mut counts = HashMap::new();
+    for repo in paths.iter().filter_map(|path| Repository::open(path).ok()) {
+        let Ok(remotes) = repo.remotes() else {
+            continue;
+        };
+        let unique: HashSet<_> = remotes
             .iter()
-            .filter(|repo| has_remote(repo, row.repository()))
-            .count();
+            .filter_map(|name| {
+                let remote = repo.find_remote(name.ok().flatten()?).ok()?;
+                let (owner, repo) = parse_github_owner_repo(remote.url().ok()?)?;
+                Some(format!("{owner}/{repo}").to_ascii_lowercase())
+            })
+            .collect();
+        for slug in unique {
+            *counts.entry(slug).or_insert(0) += 1;
+        }
+    }
+    for row in &mut rows {
+        row.local_count = counts
+            .get(&row.repository().to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0);
     }
     Ok(rows)
 }

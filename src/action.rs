@@ -6,7 +6,6 @@ use crate::repo_id::RepoId;
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
     WorkflowLoaded(u64, crate::app::workflow::Page),
-    WorkflowInitialReviews(Vec<crate::git::github::inbox::PullRequest>),
     FetchDiagnosticsLoaded(RepoId, &'static str),
     Tick,
     Render,
