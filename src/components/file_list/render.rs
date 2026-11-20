@@ -28,10 +28,29 @@ impl FileList {
             title = format!("{title} /{}▏ ", self.filter.query());
         }
 
-        let block = Block::default()
+        let mut block = Block::default()
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
+
+        let recorded = self
+            .state
+            .selected()
+            .and_then(|i| self.files.get(i))
+            .and_then(|entry| entry.recorded_commits);
+        if let Some((old, new)) = recorded {
+            let (old, new) = (old.to_string(), new.to_string());
+            let length = (7..=old.len())
+                .find(|&n| old[..n] != new[..n])
+                .unwrap_or(old.len());
+            let pair = format!("{} → {}", &old[..length], &new[..length]);
+            let detail = format!(" Recorded commit: {pair} ");
+            block = block.title_bottom(if detail.chars().count() + 2 <= usize::from(area.width) {
+                detail
+            } else {
+                pair
+            });
+        }
 
         if self.files.is_empty() {
             let (msg, style) = match &self.content_state {
@@ -146,7 +165,7 @@ impl FileList {
 
         // Bottom input line: makes the typing mode unmistakable even while the
         // query is still empty (it would otherwise look like nothing happened).
-        if self.searching || self.filter.is_active() {
+        if recorded.is_none() && (self.searching || self.filter.is_active()) {
             let input = format!(" /{}▏ ", self.filter.query());
             let over = Rect::new(
                 area.x + 1,

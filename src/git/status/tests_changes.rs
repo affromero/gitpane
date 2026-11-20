@@ -5,6 +5,68 @@ use super::test_support::{
 use super::*;
 
 #[test]
+fn staged_and_working_gitlink_changes_are_independent() {
+    let (tmp, _source, _child) = init_repo_with_submodule();
+    let repo = Repository::open(tmp.path()).unwrap();
+    let committed = repo
+        .head()
+        .unwrap()
+        .peel_to_tree()
+        .unwrap()
+        .get_name("my-sub")
+        .unwrap()
+        .id();
+    let staged = super::test_support::add_unpushed_commit_in_sub(tmp.path(), "my-sub");
+    assert_ne!(staged, committed);
+    stage_submodule_pointer(tmp.path(), "my-sub");
+    let record_kinds = || {
+        let summary = query_status(tmp.path(), &SubmoduleConfig::default()).unwrap();
+        let pointer = summary
+            .files
+            .iter()
+            .find(|entry| entry.path == Path::new("my-sub"))
+            .unwrap();
+        assert_eq!(pointer.recorded_commits, Some((committed, staged)));
+        let records = collect_changes(&repo, &SubmoduleConfig::default(), 100).unwrap();
+        let records = serde_json::to_value(records).unwrap();
+        records
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["path"] == "my-sub")
+            .map(|record| {
+                (
+                    record["group"].as_str().unwrap().to_owned(),
+                    record["kind"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        record_kinds(),
+        vec![("index".to_owned(), "index_modified".to_owned())]
+    );
+    let child = Repository::open(tmp.path().join("my-sub")).unwrap();
+    let working = add_commit_on_head(&child, "next.rs", "next change");
+    assert_ne!(working, staged);
+    assert_eq!(
+        repo.index()
+            .unwrap()
+            .get_path(Path::new("my-sub"), 0)
+            .unwrap()
+            .id,
+        staged
+    );
+    assert_eq!(
+        record_kinds(),
+        vec![
+            ("index".to_owned(), "index_modified".to_owned()),
+            ("working".to_owned(), "working_modified".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn nested_child_observations_preserve_git_ignore_and_state_rules() {
     use git2::{SubmoduleIgnore, SubmoduleStatus};
     let mask = SubmoduleStatus::WD_ADDED

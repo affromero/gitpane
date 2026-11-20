@@ -232,6 +232,7 @@ mod selected_menu_tests {
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
             submodule_head: None,
+            recorded_commits: None,
         }
     }
 
@@ -288,6 +289,7 @@ mod search_tests {
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
             submodule_head: None,
+            recorded_commits: None,
         }
     }
 
@@ -468,6 +470,35 @@ mod diff_scroll_indicator_tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn recorded_commits_follow_the_selected_file() {
+        let mut list = FileList::new(Arc::new(Theme::default()));
+        let mut pointer = entry("library");
+        pointer.is_submodule = true;
+        pointer.staged = true;
+        pointer.recorded_commits = Some((
+            git2::Oid::from_bytes(&[0xab; 20]).unwrap(),
+            git2::Oid::from_bytes(&[0xcd; 20]).unwrap(),
+        ));
+        list.set_files(
+            vec![pointer, entry("plain")],
+            "parent",
+            RepoId(PathBuf::from("/parent")),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+        list.state.select(Some(0));
+        terminal.draw(|f| list.draw(f, f.area()).unwrap()).unwrap();
+        assert!(
+            rows(&terminal)
+                .join("\n")
+                .contains("Recorded commit: abababa → cdcdcdc")
+        );
+        list.state.select(Some(1));
+        terminal.draw(|f| list.draw(f, f.area()).unwrap()).unwrap();
+        assert!(!rows(&terminal).join("\n").contains("abababa"));
     }
 
     /// The scroll-indicator column inside the diff pane, top row first.
@@ -681,6 +712,7 @@ mod diff_scroll_indicator_tests {
             submodule_state: None,
             submodule_warn: SubmoduleWarn::default(),
             submodule_head: None,
+            recorded_commits: None,
         }
     }
 
