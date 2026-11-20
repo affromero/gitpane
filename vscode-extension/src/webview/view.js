@@ -487,7 +487,7 @@ function render() {
   document.body.dataset.statusAlignment = snapshot.statusAlignment === 'right' ? 'right' : 'left';
   document.body.dataset.separateChanges = String(!changesMode && !!snapshot.separateChanges);
   if (changesMode) renderSelectedChanges(owners);
-  function renderRepository(repo, container, parentKey) {
+  function renderRepository(repo, container, parentKey, depth = 0) {
     owners.add(repo.id);
     reconcilePending(repo);
     const key = `repo:${repo.id}`;
@@ -507,6 +507,7 @@ function render() {
     const item = createItem(key, window.GitpaneRepositoryLabel(repo, countText(info)), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
       fileExpandable || worktrees.length > 0 || stashes.length > 0 || submodules.length > 0, hasChildren, parentKey);
     item.item.classList.add('repository-item');
+    item.item.style.setProperty('--owner-depth', depth);
     item.owner = repo;
     item.filesExpanded = filesExpanded;
     item.fileExpandable = fileExpandable;
@@ -561,7 +562,7 @@ function render() {
         }
       }
     }
-    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key);
+    if (submodulesOpen) for (const child of submodules) renderRepository(child, children, key, depth + 1);
     for (const worktree of showWorktrees ? worktrees : []) {
       owners.add(worktree.id);
       reconcilePending(worktree);
@@ -589,6 +590,7 @@ function render() {
         worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
         worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
       worktreeItem.item.classList.add('worktree-item');
+      worktreeItem.item.style.setProperty('--owner-depth', depth + 1);
       worktreeItem.worktreeId = worktree.id;
       worktreeItem.owner = worktree;
       worktreeItem.filesExpanded = worktreeExpanded;
@@ -607,7 +609,7 @@ function render() {
         const nested = element('div', 'children repository-children');
         nested.setAttribute('role', 'group');
         worktreeItem.item.appendChild(nested);
-        for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey);
+        for (const child of worktree.submodules) renderRepository(child, nested, worktreeKey, depth + 2);
       }
     }
   }

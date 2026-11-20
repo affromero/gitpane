@@ -55,6 +55,14 @@ const scenario = String.raw`
     window.postMessage({ type: 'snapshot', repositories: [root, standalone], errors: [], expandWorktrees: true }, '*');
     await tick();
     const name = key => row(key).querySelector('.name');
+    const left = key => name(key).getBoundingClientRect().left;
+    const rootLeft = left('repo:root');
+    const step = left('repo:module') - rootLeft;
+    check('root names align and children are indented', left('repo:standalone') === rootLeft && step > 0);
+    for (const [key, level] of [['worktree:ordinary', 1], ['repo:nested', 2], ['worktree:internal', 2],
+      ['worktree:outside', 2], ['repo:worktree-child', 2], ['worktree:nested-wt', 3]]) {
+      check('label aligns at ownership level ' + level + ' for ' + key, Math.abs(left(key) - rootLeft - level * step) < 1);
+    }
     const weight = key => Number(getComputedStyle(name(key)).fontWeight);
     for (const key of ['repo:root', 'repo:standalone']) {
       check('top-level repository is bold: ' + key, weight(key) >= 700);
@@ -99,7 +107,7 @@ const scenario = String.raw`
     subControl.focus();
     check('submodule control shows keyboard focus', document.activeElement === subControl && subControl.matches(':focus-visible') && getComputedStyle(subControl).outlineStyle !== 'none');
     for (const key of ['worktree:internal', 'worktree:outside', 'worktree:nested-wt']) {
-      check('submodule worktree name uses submodule color for ' + key, color(row(key).querySelector('.name')) === color(sub));
+      check('submodule worktree name uses worktree branch color for ' + key, color(name(key)) === color(row('worktree:ordinary').querySelector('.branch')));
     }
     if (!highContrast && !matchMedia('(forced-colors: active)').matches) {
       check('ordinary worktree name retains its color', color(row('worktree:ordinary').querySelector('.name')) !== color(sub));
