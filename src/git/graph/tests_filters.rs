@@ -219,6 +219,19 @@ fn graph_revision_follows_refs_catalog_head_and_stashes() {
 }
 
 #[test]
+fn deepening_history_changes_the_revision_with_stationary_refs() {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    let root = create_commit(&repo, "root", &[]);
+    let tip = create_commit(&repo, "tip", &[&repo.find_commit(root).unwrap()]);
+    let shallow = repo.commondir().join("shallow");
+    std::fs::write(&shallow, format!("{tip}\n")).unwrap();
+    let previous = revision(tmp.path(), BranchFilter::All);
+    std::fs::remove_file(shallow).unwrap();
+    assert_ne!(previous, revision(tmp.path(), BranchFilter::All));
+}
+
+#[test]
 fn graph_revision_accepts_noncommit_tags_and_rejects_missing_objects() {
     let tmp = TempDir::new().unwrap();
     let repo = Repository::init(tmp.path()).unwrap();

@@ -526,6 +526,54 @@ test('graph collapses only visible side branches and does not open placeholder c
   }
 });
 
+test('revisiting an unchanged graph restores its stats and reloads changed history or options', async () => {
+  const repositories = ['alpha', 'bravo'].map(name => ({ rootUri: { fsPath: name, toString: () => name } }));
+  const tree = { git: { repositories }, isVisible: () => true, repositoryToken: () => 1,
+    isCurrentRepository: () => true, onDidChangeTreeData: () => ({ dispose() {} }) };
+  let revision = 'a'.repeat(64), additions = 12, unavailable = false;
+  const backend = { generation: 0, async graphRevision() { return { revision }; },
+    async graph(name, firstParent) {
+      if (unavailable) throw Error('Full history unavailable');
+      return { rows: [{ oid: '1'.repeat(40), message: name, diff_stat: { additions }, firstParent }], branches: [] };
+    } };
+  const load = Module._load;
+  delete require.cache[require.resolve('../src/graph-provider')];
+  let provider, resolve;
+  try {
+    Module._load = function(name, ...args) { return name === 'vscode' ? {} : load.call(this, name, ...args); };
+    const { GraphProvider } = require('../src/graph-provider');
+    provider = new GraphProvider(tree, backend, {}, '/extension', undefined, undefined, { sidebar: true });
+    provider.panel = { visible: true, dispose() {}, webview: { postMessage(message) {
+      if (message.type === 'graph' && !message.loading) resolve(message);
+    } } };
+    provider.ready = true;
+    async function visit(index) {
+      const message = new Promise(done => { resolve = done; });
+      provider.open(repositories[index]);
+      return message;
+    }
+    await visit(0);
+    await visit(1);
+    unavailable = true;
+    const restored = await visit(0);
+    assert.equal(restored.rows[0].message, 'alpha');
+    assert.equal(restored.rows[0].diff_stat.additions, 12);
+    unavailable = false;
+    additions = 24;
+    revision = 'b'.repeat(64);
+    assert.equal((await visit(0)).rows[0].diff_stat.additions, 24);
+    provider.defaultFirstParent = true;
+    assert.equal((await visit(0)).rows[0].firstParent, true);
+    backend.generation++;
+    additions = 36;
+    assert.equal((await visit(0)).rows[0].diff_stat.additions, 36);
+  } finally {
+    provider?.dispose();
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
+});
+
 test('changing poll intervals preserves queued HEAD updates and stops while hidden', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const messages = [];
