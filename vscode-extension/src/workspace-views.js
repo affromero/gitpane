@@ -139,11 +139,13 @@ class WorkspaceViews {
     try {
       const snapshot = this.provider.snapshot();
       this.updateOwners(snapshot);
-      const preferred = [...this.owners.keys()].find(id => this.current(id) &&
-        this.provider.currentOwner(id)?.rootUri.fsPath === this.preferredPath);
-      if (!this.current(this.selectedId) || (this.fallbackSelection && preferred)) {
-        this.setSelection(preferred || snapshot.repositories.find(repo => this.current(repo.id))?.id);
-        this.fallbackSelection = !!this.preferredPath && !preferred;
+      if (!this.current(this.selectedId) || this.fallbackSelection) {
+        const preferred = this.preferredPath && [...this.owners.keys()].find(id =>
+          this.provider.currentOwner(id)?.rootUri.fsPath === this.preferredPath);
+        if (preferred || !this.current(this.selectedId)) {
+          this.setSelection(preferred || snapshot.repositories.find(repo => this.current(repo.id))?.id);
+          this.fallbackSelection = !!this.preferredPath && !preferred;
+        }
       }
       const selected = this.current(this.selectedId);
       const ownerPath = selected && (this.provider.currentOwner(this.selectedId)?.rootUri.fsPath ||
@@ -156,7 +158,7 @@ class WorkspaceViews {
       }
       if (this.changes?.ready && this.changes.view.visible !== false) {
         this.changes.view.title = ownerLabel ? `Changes: ${ownerLabel}` : 'Changes';
-        this.changes.view.webview.postMessage({ ...common, selectedOwner: selected?.owner, selectedKind: selected?.kind });
+        this.changes.view.webview.postMessage({ ...common, repositories: [], selectedOwner: selected?.owner, selectedKind: selected?.kind });
       }
       const blocked = !selected || selected.owner.available === false || selected.owner.statusUnavailable;
       const graphOwner = `${this.selectionEpoch}:${blocked}`;
