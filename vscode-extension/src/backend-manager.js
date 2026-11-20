@@ -196,7 +196,8 @@ class BackendManager {
       const { roots, sources } = scope;
       const known = sources.map(source => this.workspaceIdentities.get(source)?.token);
       try {
-        await client.initialize(roots, known.every(token => token !== undefined) ? known : undefined, sources);
+        const handshake = await client.initialize(roots, known.every(token => token !== undefined) ? known : undefined, sources);
+        client.deferredGraphStats = handshake?.capabilities?.deferred_graph_stats === true;
         const result = await client.workspaceRootIdentities();
         if (!result || !Array.isArray(result.roots) || result.roots.length !== roots.length || result.roots.some((item, index) =>
           !item || typeof item.path !== 'string' || normalizeWorkspacePath(item.path) !== roots[index] || item.source !== sources[index] ||
@@ -332,7 +333,7 @@ class BackendManager {
         const parameters = method === 'changes_begin' ? { repo } : method === 'changes_next' ? { repo, snapshot: argument.snapshot, cursor: argument.cursor } :
           method === 'changes_search' ? { repo, snapshot: argument.snapshot, query: argument.query, direction: argument.direction, position: argument.position } :
           method === 'changes_release' ? { repo, snapshot: argument } :
-          method === 'graph' ? { repo, first_parent: argument, ...(filters === undefined ? {} : { filters }),
+          method === 'graph' ? { repo, first_parent: argument, ...(client.deferredGraphStats ? { defer_stats: true } : {}), ...(filters === undefined ? {} : { filters }),
             ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) } :
           method === 'graph_revision' ? { repo } : method === 'commit_files' ? { repo, oid: argument } :
           method === 'repo_identity_validate' ? { repo, expected_repo_identity: argument } : undefined;
@@ -364,7 +365,7 @@ class BackendManager {
       else if (method === 'submodule_historical_content') result = await client.submoduleHistoricalContent(repo, argument.identity, argument.commit, argument.path, argument.oid, argument.mode);
       else if (method === 'stash_files') result = await client.stashFiles(repo, argument.oid);
       else if (method === 'stash_file_content') result = await client.stashFileContent(repo, argument.oid, argument.identity, argument.source, argument.path);
-      else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments);
+      else if (method === 'graph') result = await client.graph(repo, argument, filters, collapsedSegments, client.deferredGraphStats);
       else if (method === 'graph_revision') result = await client.graphRevision(repo);
       else if (method === 'ui_config') result = await client.uiConfig();
       else if (method === 'theme') result = await client.theme();
@@ -843,6 +844,10 @@ class BackendManager {
   }
 
   graph(repo, firstParent = false, filters, collapsedSegments) { return this.request('graph', repo, firstParent, filters, collapsedSegments); }
+  async graphStats(repo, identity, oids, signal) {
+    const session = await this.gitSideSession(repo);
+    return this.gitSideOperation(session, identity, { kind: 'graph_stats', oids }, signal);
+  }
 
   graphRevision(repo) { return this.request('graph_revision', repo); }
 

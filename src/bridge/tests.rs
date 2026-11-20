@@ -313,7 +313,7 @@ fn status_and_graph_use_workspace_repositories_and_canonical_git_logic() {
     ]);
     assert_eq!(
         replies[0],
-        json!({"id": 1, "result": {"version": 1, "capabilities": {"unique_changes_snapshots": true}}})
+        json!({"id": 1, "result": {"version": 1, "capabilities": {"unique_changes_snapshots": true, "deferred_graph_stats": true}}})
     );
     let status = &replies[1]["result"];
     assert_eq!(status["is_dirty"], true);
