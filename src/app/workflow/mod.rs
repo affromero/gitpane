@@ -7,6 +7,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use super::*;
 use crate::git::github::inbox::{self, Preview, PullRequest};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug)]
 pub(crate) enum Page {
     Inbox(bool, Result<Vec<PullRequest>, String>),
@@ -21,6 +24,7 @@ pub(super) struct Overlay {
     selected: usize,
     rows: Option<Result<Vec<PullRequest>, String>>,
     cached_reviews: Option<Vec<PullRequest>>,
+    list_in_flight: bool,
     detail: bool,
     preview: Option<Result<Preview, String>>,
     target_index: Option<usize>,
@@ -36,8 +40,23 @@ impl Overlay {
         self.cached_reviews.as_ref().map_or(0, Vec::len)
     }
 
-    pub(super) fn initial_reviews(&mut self, rows: Vec<PullRequest>) {
-        self.cached_reviews.get_or_insert(rows);
+    fn begin_list(&mut self) -> bool {
+        !std::mem::replace(&mut self.list_in_flight, true)
+    }
+
+    fn finish_list(&mut self, reviews: bool, rows: Result<Vec<PullRequest>, String>) -> bool {
+        self.list_in_flight = false;
+        if reviews && let Ok(rows) = &rows {
+            self.cached_reviews = Some(rows.clone());
+        }
+        if !self.open || self.detail || self.rows.is_some() {
+            return false;
+        }
+        if self.reviews != reviews {
+            return true;
+        }
+        self.rows = Some(rows);
+        false
     }
 
     fn close(&mut self) {
@@ -45,27 +64,17 @@ impl Overlay {
         self.generation += 1;
     }
 
-    pub(super) fn complete(&mut self, generation: u64, page: Page) {
+    fn complete_preview(&mut self, generation: u64, preview: Result<Preview, String>) {
         if generation != self.generation {
             return;
         }
-        match page {
-            Page::Inbox(reviews, rows) => {
-                if reviews && let Ok(rows) = &rows {
-                    self.cached_reviews = Some(rows.clone());
-                }
-                self.rows = Some(rows);
-            }
-            Page::Preview(preview) => {
-                self.target_index = preview
-                    .as_ref()
-                    .ok()
-                    .filter(|preview| preview.targets.len() == 1)
-                    .map(|_| 0);
-                self.target_highlighted_at = self.target_index.map(|_| Instant::now());
-                self.preview = Some(preview);
-            }
-        }
+        self.target_index = preview
+            .as_ref()
+            .ok()
+            .filter(|preview| preview.targets.len() == 1)
+            .map(|_| 0);
+        self.target_highlighted_at = self.target_index.map(|_| Instant::now());
+        self.preview = Some(preview);
     }
 
     fn target(&self) -> Option<&(PathBuf, Vec<String>)> {
@@ -114,19 +123,21 @@ impl Overlay {
 }
 
 impl App {
-    pub(super) fn load_initial_reviews(&self) {
-        if !self.config.github.enabled {
-            return;
+    pub(super) fn load_initial_reviews(&mut self) {
+        if self.config.github.enabled {
+            self.start_inbox_list(true);
         }
-        let paths = self.workflow_paths();
-        let tx = self.action_tx.clone();
-        tokio::task::spawn_blocking(move || {
-            if crate::git::github::gh_available()
-                && let Ok(rows) = inbox::list(&paths, true)
-            {
-                let _ = tx.send(Action::WorkflowInitialReviews(rows));
+    }
+
+    pub(super) fn workflow_loaded(&mut self, generation: u64, page: Page) {
+        match page {
+            Page::Preview(preview) => self.workflow.complete_preview(generation, preview),
+            Page::Inbox(reviews, rows) => {
+                if self.workflow.finish_list(reviews, rows) {
+                    self.load_inbox(false);
+                }
             }
-        });
+        }
     }
 
     pub(super) fn workflow_key(&mut self, key: crossterm::event::KeyEvent) -> Result<bool> {
@@ -232,8 +243,15 @@ impl App {
             self.workflow.rows = Some(Ok(rows.clone()));
             return;
         }
-        let paths = self.workflow_paths();
         self.workflow.rows = None;
+        self.start_inbox_list(reviews);
+    }
+
+    fn start_inbox_list(&mut self, reviews: bool) {
+        if !self.workflow.begin_list() {
+            return;
+        }
+        let paths = self.workflow_paths();
         self.request_workflow(move || Page::Inbox(reviews, inbox::list(&paths, reviews)));
     }
 

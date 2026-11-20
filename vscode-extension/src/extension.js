@@ -166,7 +166,9 @@ class GitpaneViewProvider {
             available: !!active, external: true, dirty: !!summary?.is_dirty,
             inspectable: /^[a-f0-9]{64}$/.test(item.identity || ''),
             statusUnavailable: !summary, ...(item.status_error ? { statusError: item.status_error } : {}),
-            fileCount: summary?.file_count_lower_bound || 0, ahead: summary?.ahead || 0, behind: summary?.behind || 0,
+            fileCount: summary?.file_count_lower_bound || 0,
+            changeCountLowerBound: summary?.file_count_lower_bound,
+            ahead: summary?.ahead || 0, behind: summary?.behind || 0,
             ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [],
             submodules: externalSubmodules(this, vscode, { item, repoKey, repoToken, worktreeId, summary, live, groupsFor, pageFor, errors: externalErrors }) });
         }
