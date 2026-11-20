@@ -116,7 +116,7 @@ async function main() {
   }, onDidChangeVisibility: event, onDidDispose: event };
   const vscode = {
     EventEmitter, CancellationTokenSource: class { constructor() { this.token = {}; } cancel() {} dispose() {} },
-    Uri: { file: uri, joinPath: (...parts) => parts.join('/') }, ProgressLocation: { Notification: 1 },
+    Uri: { file: uri, joinPath: (base, ...parts) => base.with({ path: path.join(base.fsPath, ...parts) }) }, ProgressLocation: { Notification: 1 },
     FileType: { File: 1 }, FileChangeType: { Changed: 1 },
     ConfigurationTarget: { Global: 1, Workspace: 2 },
     FileSystemError: { FileNotFound: () => Object.assign(new Error('File not found'), { code: 'FileNotFound' }) },
@@ -174,7 +174,7 @@ async function main() {
       return load.call(this, name, ...args);
     };
     ({ activate } = require('../../src/extension'));
-    context = { extensionPath: path.resolve(__dirname, '../..'), extensionUri: '/extension', subscriptions: [],
+    context = { extensionPath: path.resolve(__dirname, '../..'), extensionUri: uri(path.resolve(__dirname, '../..')), subscriptions: [],
       workspaceState: { get: key => workspaceState.get(key), async update(key, value) { workspaceState.set(key, structuredClone(value)); } } };
     await activate(context);
   } finally { Module._load = load; }
@@ -535,17 +535,41 @@ async function main() {
   assert.equal(snapshots.at(-1).repositories.find(item => item.id === owner.id).changesPage.page, 0);
   console.log('PASS real snapshot search wraps across pages and opens a native file diff');
 
+  for (const [filename, bytes] of [
+    ['000-image.PNG', fs.readFileSync(path.join(context.extensionPath, 'media', 'gitpane.png'))],
+    ['000-animation.gif', Buffer.from('R0lGODlhAQABAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAACAkQBACH5BAAKAAAALAAAAAABAAEAgAAA/wAAAAICRAEAOw==', 'base64')],
+  ]) {
+    const target = path.join(repoPath, filename);
+    fs.writeFileSync(target, bytes);
+    await commands.get('gitpane.refresh')();
+    const file = snapshots.at(-1).repositories[0].groups.flatMap(group => group.files).find(entry => entry.path === filename);
+    const before = diffs.length;
+    await receive({ type: 'openChange', id: file.id });
+    assert.equal(diffs.length, before + 1, errors.at(-1));
+    const [left, right] = diffs.at(-1);
+    assert.equal(left.scheme, 'file');
+    const png = fs.readFileSync(left.fsPath);
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(png.readUInt32BE(16), 1);
+    assert.equal(png.readUInt32BE(20), 1);
+    assert.equal(right.scheme, 'file');
+    assert.equal(right.fsPath, target);
+    assert.deepEqual(fs.readFileSync(right.fsPath), bytes);
+    fs.unlinkSync(target);
+  }
+
   if (process.platform !== 'win32') {
     const outside = path.join(temporary, 'outside-target');
-    const link = path.join(repoPath, '000-link');
+    const link = path.join(repoPath, '000-link.png');
     fs.writeFileSync(outside, 'outside file contents');
     fs.symlinkSync(outside, link);
     await commands.get('gitpane.refresh')();
     const linkFile = snapshots.at(-1).repositories[0].groups.flatMap(group => group.files)
-      .find(entry => entry.path === '000-link');
+      .find(entry => entry.path === '000-link.png');
     assert.ok(linkFile, 'untracked symlink should appear as a change');
     await receive({ type: 'openChange', id: linkFile.id });
     const document = diffs.at(-1)[1];
+    assert.equal(diffs.at(-1)[0].scheme, 'gitpane-empty');
     assert.equal(document.scheme, 'gitpane-link');
     assert.equal(await documents.get('gitpane-link').provideTextDocumentContent(document), outside);
     await receive({ type: 'changesPage', id: owner.id, direction: 'next' });
@@ -951,7 +975,7 @@ async function main() {
   console.log('PASS hidden submodule changes, second page native diff, and stale child guards');
 
   for (const name of fs.readdirSync(repoPath)) {
-    if (/^file-\d{3}\.txt$/.test(name) || ['nested-repo', 'unrelated.txt', '000-new-after-refresh.txt', '000-link'].includes(name)) {
+    if (/^file-\d{3}\.txt$/.test(name) || ['nested-repo', 'unrelated.txt', '000-new-after-refresh.txt', '000-link.png'].includes(name)) {
       fs.rmSync(path.join(repoPath, name), { recursive: true, force: true });
     }
   }
