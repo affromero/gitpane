@@ -4,12 +4,21 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-19
+
 ### Added
-- Commit from the terminal UI. `c` in the Repos or Changes panel opens a commit box with a summary and an optional description for the checkout the Changes panel shows. Hooks and signing run as on the command line, a rejected commit keeps the message, and with nothing staged gitpane offers to stage everything first.
-- Choose the terminal repository list's startup order with `[ui] sort`: `alphabetical`, `reverse`, or `dirty`.
+- Commit from the terminal UI. `c` in the Repos or Changes panel opens a commit box with a summary and an optional description for the checkout the Changes panel shows. Hooks and signing run as on the command line, a rejected commit keeps the message, and with nothing staged gitpane offers to stage everything first. Thanks to @zigahertz. ([#231](https://github.com/affromero/gitpane/pull/231), closes [#230](https://github.com/affromero/gitpane/issues/230))
+- Choose the terminal repository list's startup order with `[ui] sort`: `alphabetical`, `reverse`, or `dirty`. Thanks to @zigahertz. ([#229](https://github.com/affromero/gitpane/pull/229), closes [#228](https://github.com/affromero/gitpane/issues/228))
+- Inspect fetch diagnostics for the selected repository. ([#237](https://github.com/affromero/gitpane/pull/237), closes [#235](https://github.com/affromero/gitpane/issues/235))
+- Review pull requests in the terminal inbox and identify their worktrees. ([#238](https://github.com/affromero/gitpane/pull/238), closes [#234](https://github.com/affromero/gitpane/issues/234))
+- See the old and new recorded commits when selecting a staged submodule update in the parent repository. ([#252](https://github.com/affromero/gitpane/pull/252), closes [#251](https://github.com/affromero/gitpane/issues/251))
 
 ### Fixed
-- Keep dirty repositories at the top of the terminal list in dirty-first order as their status changes, not only when the order is selected.
+- Keep dirty repositories at the top of the terminal list in dirty-first order as their status changes, not only when the order is selected. ([#229](https://github.com/affromero/gitpane/pull/229), closes [#228](https://github.com/affromero/gitpane/issues/228))
+- Coalesce pull request inbox refreshes. ([#247](https://github.com/affromero/gitpane/pull/247), closes [#245](https://github.com/affromero/gitpane/issues/245))
+- Display nested worktrees with the correct indentation. ([#243](https://github.com/affromero/gitpane/pull/243), closes [#241](https://github.com/affromero/gitpane/issues/241))
+- Show a lower bound for changed files in outside worktrees until the exact count is available. ([#246](https://github.com/affromero/gitpane/pull/246), closes [#244](https://github.com/affromero/gitpane/issues/244))
+- Reduce VS Code dashboard startup, repository switching, diff opening, and manual refresh times. ([#250](https://github.com/affromero/gitpane/pull/250), closes [#249](https://github.com/affromero/gitpane/issues/249))
 
 ## [0.18.13] - 2026-11-18
 
