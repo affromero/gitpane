@@ -121,17 +121,19 @@ function fileCount(repo) {
   return paths.size;
 }
 
-function countInfo(owner) {
+function countInfo(owner, worktree = false) {
   const page = owner.changesPage;
   const loaded = fileCount(owner);
-  const pending = !!page && page.state !== 'ready';
+  const state = page?.state || (worktree && owner.external && !owner.statusUnavailable ? 'idle' : undefined);
+  const pending = !!state && state !== 'ready';
   const lower = Number.isSafeInteger(owner.changeCountLowerBound) && owner.changeCountLowerBound >= 0
     ? owner.changeCountLowerBound : 0;
   const paginated = !!page && (page.previous || page.next || page.page > 0);
+  const hasDirectory = (owner.groups || []).some(group => group.id !== 'attention' &&
+    (group.files || []).some(file => file.directory));
   const count = pending || paginated ? Math.max(loaded, lower) : loaded;
-  return { count, unknown: !!page && page.state !== 'ready' && !count && !!owner.dirty,
-    partial: !!page && ((pending && count > 0) || paginated),
-    hasDirectory: (owner.groups || []).some(group => (group.files || []).some(file => file.directory)) };
+  return { count, unknown: pending && !count && !!owner.dirty, state,
+    partial: (pending && count > 0) || paginated || (worktree && hasDirectory), hasDirectory };
 }
 
 function countText(info) {
@@ -262,7 +264,7 @@ function fileRow(file) {
   return row;
 }
 
-function worktreeRow(worktree, submodule) {
+function worktreeRow(worktree, submodule, info) {
   const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}${submodule ? ' submodule-worktree-row' : ''}`);
   const markers = element('span', 'worktree-markers');
   add(markers, 'subtree', '⎇', 'Linked worktree. An additional checkout of the same repository.');
@@ -281,12 +283,16 @@ function worktreeRow(worktree, submodule) {
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   addGitStatus(add, tail, worktree);
-  if (worktree.changesPage) {
-    const info = countInfo(worktree);
-    if (info.count || (info.unknown && worktree.dirty)) {
-      add(tail, 'count', `[${info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`}]`, countText(info));
-    }
-  } else if (worktree.fileCount > 0) add(tail, 'count', `[${worktree.fileCount}]`, `${worktree.fileCount} changed ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+  if (info.count || info.unknown) {
+    const title = info.unknown ? ({
+      idle: 'Changes have not been loaded',
+      loading: 'Loading worktree changes',
+      error: 'Could not load worktree changes',
+    })[info.state] : countText(info);
+    add(tail, 'count', `[${info.unknown ? '?' : `${info.count}${info.partial ? '+' : ''}`}]`, title);
+  } else if (!worktree.external && !worktree.changesPage && worktree.fileCount > 0) {
+    add(tail, 'count', `[${worktree.fileCount}]`, `${worktree.fileCount} changed ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+  }
   if (worktree.available && !worktree.external) {
     const graph = element('button', 'graph-action', '●');
     graph.type = 'button';
@@ -562,9 +568,11 @@ function render() {
       const worktreeKey = `worktree:${worktree.id}`;
       const worktreeDetails = [worktree.name, 'worktree', worktree.branch, worktree.external ? 'outside workspace' : worktree.dirty ? 'has changes' : 'clean'];
       if (worktree.statusUnavailable) worktreeDetails.push(worktree.statusError || 'status unavailable');
-      const worktreeInfo = countInfo(worktree);
-      if (worktree.changesPage) worktreeDetails.push(countText(worktreeInfo));
-      else if (worktree.fileCount > 0) worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+      const worktreeInfo = countInfo(worktree, true);
+      if (worktreeInfo.count || worktreeInfo.unknown) worktreeDetails.push(countText(worktreeInfo));
+      else if (!worktree.external && !worktree.changesPage && worktree.fileCount > 0) {
+        worktreeDetails.push(`${worktree.fileCount} ${worktree.fileCount === 1 ? 'file' : 'files'}`);
+      }
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
       if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
@@ -577,7 +585,7 @@ function render() {
       const worktreeHasPage = worktree.available && !!worktree.changesPage &&
         (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
           worktree.changesPage.previous || worktree.changesPage.next);
-      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, repo.submodule),
+      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, repo.submodule, worktreeInfo),
         worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
         worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
       worktreeItem.item.classList.add('worktree-item');

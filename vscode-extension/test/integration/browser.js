@@ -909,6 +909,49 @@ const scenario = String.raw`
     items().find(item => item.getAttribute('aria-label').includes('parent')).querySelector('.row').click();
     check('reopening a parent reloads its restored expanded worktree', window.posted.filter(message =>
       message.type === 'loadChanges' && message.id === 'page-child').length === childLoads + 1);
+    const bounds = structuredClone(pagedWorktree);
+    bounds.expandWorktrees = true;
+    const outside = bounds.repositories[0].worktrees[0];
+    Object.assign(outside, { id: 'bounds-outside', external: true, available: false, fileCount: 2, changeCountLowerBound: 2 });
+    delete outside.changesPage;
+    bounds.repositories[0].worktrees.push(
+      { ...outside, id: 'bounds-sibling', changeCountLowerBound: 3 },
+      { ...outside, id: 'bounds-unavailable', statusUnavailable: true, dirty: false, changeCountLowerBound: undefined });
+    const renderBounds = async () => {
+      window.postMessage(bounds, '*');
+      await tick();
+      const badge = id => document.querySelector('[data-key="worktree:' + id + '"] .count');
+      return [badge('bounds-outside'), badge('bounds-sibling'), badge('bounds-unavailable')];
+    };
+    let counts = await renderBounds();
+    check('outside worktrees show independent bounds before inspection', counts[0]?.textContent === '[2+]' &&
+      counts[1]?.textContent === '[3+]' && !counts[2] && counts[0].title === 'at least 2 changes');
+    outside.available = true;
+    const idlePage = { state: 'idle', page: 0, previous: false, next: false };
+    outside.changesPage = { ...idlePage, state: 'ready' };
+    outside.groups = [
+      { id: 'index', files: [{ path: 'repeat.txt' }] },
+      { id: 'working', files: [{ path: 'repeat.txt' }, { path: 'untracked.txt' }] },
+      { id: 'attention', files: [{ path: 'submodule' }] },
+    ];
+    counts = await renderBounds();
+    check('loaded bounds deduplicate index and working paths and omit attention', counts[0]?.textContent === '[2]');
+    outside.groups[1].files[1].directory = true;
+    counts = await renderBounds();
+    check('loaded directory summaries remain bounds', counts[0]?.textContent === '[2+]');
+    outside.groups = [];
+    outside.changesPage = idlePage;
+    counts = await renderBounds();
+    check('releasing an outside page restores its bound', counts[0]?.textContent === '[2+]');
+    outside.changeCountLowerBound = 0;
+    const titles = [];
+    for (const state of ['idle', 'loading', 'error']) {
+      outside.changesPage = { ...idlePage, state };
+      counts = await renderBounds();
+      titles.push(counts[0]?.textContent === '[?]' && counts[0]?.title);
+    }
+    check('unknown worktree counts distinguish idle, loading, and failed scans',
+      titles.join('|') === 'Changes have not been loaded|Loading worktree changes|Could not load worktree changes');
     const attention = { type: 'snapshot', errors: [], expandWorktrees: true,
       theme: { name: 'custom', values: { 'repo-list-dirty-submodule': 'rgb(160, 80, 240)' }, lanes: [], authors: [] },
       repositories: [{
