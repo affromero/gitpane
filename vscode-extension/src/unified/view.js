@@ -34,7 +34,6 @@
         if (Number.isInteger(message.fontSize) && message.fontSize >= 8 && message.fontSize <= 40)
           document.documentElement.style.setProperty('--gitpane-font-size', `${message.fontSize}px`);
         else document.documentElement.style.removeProperty('--gitpane-font-size');
-        for (const frame of Object.values(frames)) syncTheme(frame);
       }
       frames[surface].contentWindow?.postMessage(message, '*');
     }
@@ -56,8 +55,11 @@
     frame.srcdoc = frame.dataset.document;
     delete frame.dataset.document;
   }
-  new MutationObserver(() => { for (const frame of Object.values(frames)) syncTheme(frame); })
-    .observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['class', 'style'] });
+  const themeObserver = new MutationObserver(() => { for (const frame of Object.values(frames)) syncTheme(frame); });
+  const themeAttributes = { attributes: true, attributeFilter: ['class', 'style', 'data-vscode-theme-id', 'data-vscode-theme-kind'] };
+  themeObserver.observe(document.documentElement, themeAttributes);
+  themeObserver.observe(document.body, themeAttributes);
+  themeObserver.observe(document.head, { childList: true, characterData: true, subtree: true });
 
   function render() {
     panes.forEach((pane, index) => { pane.style.flex = `${sizes[index]} 1 0px`; });

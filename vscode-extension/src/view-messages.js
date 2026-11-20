@@ -8,7 +8,7 @@ async function receiveViewMessage(provider, vscode, message, surface = 'reposito
     provider.ready = true;
     provider.publish();
   } else if (message?.type === 'selectOwner' && typeof message.id === 'string') {
-    provider.workspaceViews?.select(message.id);
+    return provider.workspaceViews?.select(message.id);
   } else if (message?.type === 'ackWorktreeReveal' && typeof message.id === 'string') {
     provider.worktreeReveals.delete(message.id);
     if (provider.worktreeRevealError && provider.worktreeReveals.size < 128) {

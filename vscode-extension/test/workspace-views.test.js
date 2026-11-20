@@ -48,7 +48,7 @@ async function settled(predicate) {
   assert.ok(predicate(), 'The view did not reach its expected state');
 }
 
-async function fixture(t, { delayedDiscovery = false, unavailableWorktree = false, emptyWorkspace = false } = {}) {
+async function fixture(t, { delayedDiscovery = false, unavailableWorktree = false, emptyWorkspace = false, initialStatus } = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gitpane-stacked-'));
   const roots = ['api-service', 'web-app', 'api-auth'].map(name => path.join(temporary, name));
   for (const root of roots) {
@@ -74,6 +74,7 @@ async function fixture(t, { delayedDiscovery = false, unavailableWorktree = fals
   class Backend {
     constructor() { this.state = { status: 'ready' }; this.onDidChange = disposable; this.generation = 1; }
     async status(root, worktrees = true) {
+      if (initialStatus) await initialStatus;
       const index = roots.indexOf(root);
       return { repo_identity: ['a', 'b', 'c'][index].repeat(64), common_dir: path.join(index === 2 ? roots[0] : root, '.git'),
         branch: index === 2 ? 'feature/oauth' : 'main', head_oid: '1'.repeat(40), is_dirty: true, ahead: 0, behind: 0,
@@ -165,6 +166,16 @@ function message(view, type, id, extra = {}) {
   return { type, id, ownerId: snapshot.selectedOwnerId, selectionEpoch: snapshot.selectionEpoch, ...extra };
 }
 
+test('the repository view opens while initial native status is pending', { timeout: 3000 }, async t => {
+  const gate = deferred();
+  t.after(() => gate.resolve());
+  const f = await fixture(t, { initialStatus: gate.promise });
+  const repos = await f.resolve('repositories');
+  assert.equal(repos.snapshot().loading, true);
+  gate.resolve();
+  await settled(() => !repos.snapshot().loading && repos.snapshot().repositories.some(repo => repo.dirty));
+});
+
 test('stacked lower views restore selection during discovery without resolving repositories', async t => {
   const f = await fixture(t, { delayedDiscovery: true });
   const changes = await f.resolve('changes');
@@ -207,8 +218,8 @@ test('repository and worktree selection update lower sections through collapse a
   const parent = repos.snapshot().repositories.find(item => item.name === 'api-service');
   const worktree = parent.worktrees[0];
   await repos.receive({ type: 'selectOwner', id: worktree.id });
-  await changes.receive(message(changes, 'loadChanges', worktree.id));
   assert.equal(changes.snapshot().selectedOwner.name, 'api-auth');
+  assert.deepEqual(changes.snapshot().repositories, []);
   assert.equal(changes.snapshot().selectedKind, 'worktree');
   assert.equal(changes.snapshot().selectedOwner.groups[0].files[0].path, 'one.txt');
   await settled(() => graph.messages.some(item => item.type === 'graph' && item.repoName === 'api-auth' && !item.loading));

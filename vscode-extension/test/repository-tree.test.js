@@ -701,7 +701,7 @@ test('real linked worktrees appear once under an in-workspace anchor while expli
   };
   try {
     await tree.refresh();
-    assert.deepEqual(statusRequests.filter(([, include]) => !include).map(([value]) => value).sort(), [root, first, second].sort());
+    assert.deepEqual(statusRequests.filter(([, include]) => !include).map(([value]) => value).sort(), [first, second].sort());
     assert.deepEqual(statusRequests.filter(([, include]) => include).map(([value]) => value), [root]);
     let rows = provider.snapshot().repositories;
     assert.deepEqual(rows.map(row => row.name), ['main']);
@@ -966,6 +966,7 @@ test('worktree graph opens for the linked repository and rejects a removed link'
     await activate(context);
   } finally { Module._load = load; }
   try {
+    await provider.tree.refresh();
     provider.resolveRepositoryView(view);
     await receiveSidebar({ type: 'ready' });
     const worktree = snapshots.at(-1).repositories[0].worktrees[0];

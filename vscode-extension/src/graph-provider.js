@@ -77,7 +77,7 @@ class GraphProvider {
       const repo = this.currentRepo();
       if (!repo) return this.invalidate('Repository is no longer in the workspace.');
       this.comparison?.publish();
-      const head = repo.state?.HEAD?.commit;
+      const head = this.repositoryHead(repo);
       if (head !== this.lastHead) {
         this.lastHead = head;
         if (this.panel.visible === false) this.revision = undefined;
@@ -89,6 +89,11 @@ class GraphProvider {
         else this.schedulePoll(0);
       }
     });
+  }
+
+  repositoryHead(repo) {
+    const status = this.tree.backendStatuses?.get(repo.rootUri.toString());
+    return status && 'head_oid' in status ? status.head_oid : repo.state?.HEAD?.commit;
   }
 
   currentRepo() {
@@ -121,7 +126,7 @@ class GraphProvider {
       (!persistent || persistent.current());
     this.comparison = this.comparisonMode ? new ComparisonGraph(this, vscode, repo, token,
       contentCurrent, persistent) : undefined;
-    this.lastHead = repo.state?.HEAD?.commit;
+    this.lastHead = this.repositoryHead(repo);
     this.stopPolling();
     this.ready = false;
     this.revision = undefined;

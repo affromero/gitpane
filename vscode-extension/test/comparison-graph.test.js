@@ -38,6 +38,10 @@ test('graph comparison selects commits and reports ref movement without changing
   repo.state.untrackedChanges = [];
   graph.publish();
   assert.equal(posted.at(-1).dirty, false);
+  provider.tree.backendStatuses = new Map([[repo.rootUri.toString(), { branch: 'native-branch', is_dirty: true }]]);
+  graph.publish();
+  assert.equal(posted.at(-1).head, 'native-branch');
+  assert.equal(posted.at(-1).dirty, true);
   assert.equal(posted.at(-1).from.oid, first);
   refs.main = replacement;
   await graph.checkRefs();

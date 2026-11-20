@@ -20,6 +20,7 @@ function fixture(t, count = 2) {
     state: { onDidChange: event, HEAD: { name: 'main' } }, async status() {} }));
   const common = new Map(roots.map(root => [root, path.join(root, '.git')]));
   const worktrees = new Map(roots.map(root => [root, []]));
+  const submoduleParents = new Set();
   const calls = [], opens = [], output = [];
   let onStatus;
   const backend = { state: { status: 'ready' }, onDidChange: event,
@@ -28,7 +29,7 @@ function fixture(t, count = 2) {
       if (onStatus) await onStatus(root, includeWorktrees);
       return { common_dir: common.get(root), branch: 'main', is_dirty: false, ahead: 0, behind: 0,
         stashes: [], worktrees: includeWorktrees ? worktrees.get(root) : [],
-        has_dirty_submodules: false, has_unpushed_submodules: false,
+        has_submodules: submoduleParents.has(root), has_dirty_submodules: false, has_unpushed_submodules: false,
         files: [], watched_errors: [], file_count_lower_bound: 0, files_truncated: false };
     } };
   const api = { repositories: repos, onDidOpenRepository: event, onDidCloseRepository: event,
@@ -44,19 +45,26 @@ function fixture(t, count = 2) {
   } finally { Module._load = load; }
   const tree = new RepositoryTree(api, { appendLine(message) { output.push(message); } }, backend);
   t.after(() => { tree.dispose(); fs.rmSync(workspace, { recursive: true, force: true }); });
-  return { workspace, roots, repos, common, worktrees, calls, opens, output, tree,
+  return { workspace, roots, repos, common, worktrees, submoduleParents, calls, opens, output, tree,
     onStatus(callback) { onStatus = callback; } };
 }
 
-test('warmed independent repositories need one backend scan each', async t => {
+test('independent repositories need one native scan each at startup and on refresh', async t => {
   const f = fixture(t, 20);
+  const scmScans = [];
+  for (const repo of f.repos) repo.status = async () => { scmScans.push(repo.rootUri.fsPath); };
   await f.tree.refresh();
-  assert.equal(f.calls.length, 40, 'unknown repositories require a grouping scan and an anchor scan');
+  assert.equal(f.calls.length, 20);
   f.calls.length = 0;
   await f.tree.refresh();
   assert.equal(f.calls.length, 20, 'each independent repository is scanned once after grouping');
   assert.ok(f.calls.every(call => call.includeWorktrees));
   assert.equal(f.tree.backendStatuses.size, 20);
+  assert.deepEqual(scmScans, []);
+  f.repos[0].state.submodules = [{ path: 'removed-child' }];
+  f.submoduleParents.add(f.roots[1]);
+  await f.tree.refresh();
+  assert.deepEqual(scmScans.sort(), f.roots.slice(0, 2));
 });
 
 test('worktree discovery waits for regrouping and follows a merged or split group', async t => {
@@ -161,5 +169,5 @@ test('a replaced repository cannot reuse a held status or its group', async t =>
   f.onStatus(undefined);
   f.calls.length = 0;
   await f.tree.refresh();
-  assert.deepEqual(f.calls.map(call => call.includeWorktrees), [false, true]);
+  assert.deepEqual(f.calls.map(call => call.includeWorktrees), [true]);
 });

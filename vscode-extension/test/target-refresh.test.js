@@ -22,15 +22,16 @@ async function fixture(t) {
   const repos = [parent, child, other].map(root => ({ rootUri: uri(root),
     kind: root === child ? 'worktree' : 'repository',
     state: { onDidChange: event, HEAD: { name: 'main' }, indexChanges: [], workingTreeChanges: [], untrackedChanges: [] },
-    async status() { statusCalls.push(root); } }));
+    async status() {} }));
   let childBranch = 'topic', onStatus, onPage;
   const backend = { state: { status: 'ready' }, onDidChange: event,
     async status(root, includeWorktrees) {
+      statusCalls.push(root);
       if (onStatus) await onStatus(root, includeWorktrees);
       return { common_dir: path.join(root === child ? parent : root, '.git'), branch: root === child ? childBranch : 'main',
         is_dirty: false, ahead: 0, behind: 0, stashes: [],
         worktrees: root === parent && includeWorktrees ? [{ path: child, branch: childBranch, is_dirty: false, file_count: 0 }] : [],
-        has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [],
+        has_submodules: false, has_dirty_submodules: false, has_unpushed_submodules: false, files: [], watched_errors: [],
         file_count_lower_bound: 0, files_truncated: false };
     },
     async beginChanges(root) {
@@ -137,5 +138,7 @@ test('a stale queued refresh does not block a later current repository', async t
       timeout = setTimeout(() => reject(new Error('A current refresh remained queued behind a stale target.')), 5000);
     })]);
   } finally { clearTimeout(timeout); }
-  assert.deepEqual(f.statusCalls, [f.other]);
+  assert.deepEqual(await selected, []);
+  assert.deepEqual(await later, [f.other]);
+  assert.ok(!f.statusCalls.includes(f.parent));
 });
