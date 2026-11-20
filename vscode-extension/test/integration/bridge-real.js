@@ -87,7 +87,7 @@ async function waitForFile(file) {
     const root = fs.realpathSync.native(workspace);
     const repoPath = fs.realpathSync.native(repo);
     const outsidePath = fs.realpathSync.native(outside);
-    assert.deepEqual(await client.initialize([root]), { version: 1, capabilities: { unique_changes_snapshots: true } });
+    assert.deepEqual(await client.initialize([root]), { version: 1, capabilities: { unique_changes_snapshots: true, deferred_graph_stats: true } });
 
     if (process.platform !== 'win32') {
       const alias = path.join(temporary, 'workspace-alias');
@@ -186,6 +186,9 @@ async function waitForFile(file) {
     console.log(`PASS 75 simultaneously open real snapshots (one workspace root, ${openMs.toFixed(0)} ms)`);
 
     const graph = await client.graph(repoPath, false);
+    const preview = await client.graph(repoPath, false, undefined, undefined, true);
+    assert.match(preview.stats_repo_identity, /^[a-f0-9]{64}$/);
+    assert.deepEqual(preview.rows, graph.rows.map(row => ({ ...row, diff_stat: null })));
     const merge = graph.rows.find(row => row.oid === mergeOid);
     assert.ok(merge && merge.is_merge && merge.parent_oids.length === 2, 'merge commit and parents must appear');
     assert.ok(graph.rows.some(row => row.oid === rootOid), 'root commit must appear');
@@ -221,7 +224,8 @@ async function waitForFile(file) {
       }
     });
     await configuredClient.initialize([root]);
-    const configuredGraph = await configuredClient.graph(repoPath);
+    const configuredGraph = await configuredClient.graph(repoPath, false, undefined, undefined, true);
+    assert.equal(configuredGraph.stats_repo_identity, undefined);
     assert.equal(configuredGraph.label_max_len, 5);
     assert.ok(configuredGraph.branches.includes('origin/config-check'));
     assert.ok(!configuredGraph.branches.includes('topic'));

@@ -574,6 +574,43 @@ test('revisiting an unchanged graph restores its stats and reloads changed histo
   }
 });
 
+test('history stays interactive while counts load and switching owners cancels stale counts', async () => {
+  const repositories = ['alpha', 'bravo'].map(name => ({ rootUri: { fsPath: name, toString: () => name } }));
+  const tree = { git: { repositories }, isVisible: () => true, repositoryToken: () => 1,
+    isCurrentRepository: () => true, onDidChangeTreeData: () => ({ dispose() {} }) };
+  const oid = 'a'.repeat(40), requests = [], messages = [];
+  const backend = { graphRevision: async () => ({ revision: '1'.repeat(64) }),
+    graph: async () => ({ rows: [{ oid }], branches: [], stats_repo_identity: '2'.repeat(64) }),
+    graphStats: (repo, identity, oids, signal) => new Promise(resolve => requests.push({ signal, resolve })),
+    commitFiles: async () => ({ files: [] }) };
+  const load = Module._load;
+  let provider;
+  try {
+    delete require.cache[require.resolve('../src/graph-provider')];
+    Module._load = function(name, ...args) { return name === 'vscode' ? {} : load.call(this, name, ...args); };
+    const { GraphProvider } = require('../src/graph-provider');
+    provider = new GraphProvider(tree, backend, {}, '/extension', undefined, undefined, { sidebar: true });
+    provider.panel = { visible: true, dispose() {}, webview: { postMessage: message => messages.push(message) } };
+    provider.ready = true;
+    const tick = () => new Promise(resolve => setImmediate(resolve));
+    provider.open(repositories[0]);
+    await tick();
+    await provider.receive({ type: 'selectCommit', oid });
+    assert.ok(messages.some(m => m.type === 'commitFiles' && m.oid === oid && !m.loading && !m.error));
+    provider.open(repositories[1]);
+    await tick();
+    assert.ok(requests[0].signal.aborted);
+    requests[0].resolve({ [oid]: { additions: 17, deletions: 0 } });
+    requests[1].resolve({ [oid]: { additions: 5, deletions: 2 } });
+    await tick();
+    assert.deepEqual(messages.filter(m => m.type === 'graphStats').map(m => m.stats[oid]), [{ additions: 5, deletions: 2 }]);
+  } finally {
+    provider?.dispose();
+    Module._load = load;
+    delete require.cache[require.resolve('../src/graph-provider')];
+  }
+});
+
 test('changing poll intervals preserves queued HEAD updates and stops while hidden', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const messages = [];

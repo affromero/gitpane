@@ -120,6 +120,24 @@ impl Fixture {
 }
 
 #[test]
+fn graph_statistics_report_changed_lines_by_commit() {
+    let Some(fixture) = Fixture::new(b"first\nsecond\n") else {
+        return;
+    };
+    let mut request = fixture.request();
+    request["operation"] = json!({"kind": "graph_stats", "oids": [fixture.oid]});
+    let (child, _stdin) = fixture.start(&request);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stats[&fixture.oid], json!({"additions": 2, "deletions": 0}));
+}
+
+#[test]
 fn content_worker_returns_binary_from_scoped_repository() {
     let bytes = vec![0, 255, 10, 42, 0];
     let Some(fixture) = Fixture::new(&bytes) else {

@@ -336,8 +336,8 @@ class BridgeClient {
     }
   }
 
-  graph(repo, firstParent = false, filters, collapsedSegments) {
-    return this.request('graph', { repo, first_parent: firstParent, ...(filters === undefined ? {} : { filters }),
+  graph(repo, firstParent = false, filters, collapsedSegments, deferStats = false) {
+    return this.request('graph', { repo, first_parent: firstParent, ...(deferStats ? { defer_stats: true } : {}), ...(filters === undefined ? {} : { filters }),
       ...(collapsedSegments === undefined ? {} : { collapsed_segments: collapsedSegments }) });
   }
 

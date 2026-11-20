@@ -275,6 +275,7 @@ pub(super) fn query(
     first_parent: bool,
     filters: FilterRequest,
     collapsed_segments: BTreeSet<String>,
+    defer_stats: bool,
 ) -> Result<Value, BridgeError> {
     let options = GraphOptions {
         branch_filter: config.branches,
@@ -303,7 +304,7 @@ pub(super) fn query(
         branches.map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let rows = rows.map_err(|error| BridgeError::new("repository_error", error.to_string()))?;
     let oids: Vec<_> = rows.iter().map(|row| row.oid).collect();
-    let stats: HashMap<_, _> = if options.show_stats {
+    let stats: HashMap<_, _> = if options.show_stats && !defer_stats {
         batch_diff_stats(repo, &oids)
             .map_err(|error| BridgeError::new("repository_error", error.to_string()))?
             .into_iter()
@@ -370,8 +371,10 @@ pub(super) fn query(
     // Larger values cannot truncate a JavaScript string and are not exactly
     // representable by the extension host's number type.
     let max_safe = usize::try_from(9_007_199_254_740_991_u64).unwrap_or(usize::MAX);
-    Ok(
-        json!({ "rows": rows, "limit": MAX_COMMITS, "branches": branches,
-        "label_max_len": config.label_max_len.min(max_safe) }),
-    )
+    let mut result = json!({ "rows": rows, "limit": MAX_COMMITS, "branches": branches,
+        "label_max_len": config.label_max_len.min(max_safe) });
+    if defer_stats && options.show_stats {
+        result["stats_repo_identity"] = RepositoryIdentity::read(repo)?.fingerprint()?.into();
+    }
+    Ok(result)
 }

@@ -240,6 +240,7 @@ class GraphProvider {
   }
 
   stopPolling() {
+    this.statsController?.abort();
     this.pollEpoch++;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
@@ -350,6 +351,7 @@ class GraphProvider {
   }
 
   invalidate(message, preserve = false, empty = false) {
+    this.statsController?.abort();
     this.comparison?.suspend();
     this.comparison?.publish();
     const previousRows = preserve ? this.displayedRows : [];
@@ -370,7 +372,30 @@ class GraphProvider {
       filters: copyFilters(this.filters) });
   }
 
+  async loadStats(repo, result, generation, backendGeneration) {
+    const oids = result.rows.filter(row => !row.collapsed).map(row => row.oid);
+    if (!oids.length) return;
+    const controller = this.statsController = new AbortController();
+    const current = () => !controller.signal.aborted && generation === this.graphGeneration &&
+      backendGeneration === this.backend.generation && this.panel?.visible !== false && this.isCurrentRepo(repo);
+    try {
+      const stats = await this.backend.graphStats(repo.rootUri.fsPath, result.stats_repo_identity, oids, controller.signal);
+      if (!current() || !await this.validateGraph(repo) || !current()) return;
+      if (!stats || typeof stats !== 'object' || Array.isArray(stats) || Object.entries(stats).some(([oid, value]) =>
+        !oids.includes(oid) || !Number.isSafeInteger(value?.additions) || value.additions < 0 ||
+        !Number.isSafeInteger(value?.deletions) || value.deletions < 0)) throw new Error('Invalid commit statistics.');
+      for (const row of result.rows) if (stats[row.oid]) row.diff_stat = stats[row.oid];
+      delete result.stats_repo_identity;
+      this.post({ type: 'graphStats', generation, stats });
+    } catch (error) {
+      if (current()) this.post({ type: 'graphStats', generation, error: error.message });
+    } finally {
+      if (this.statsController === controller) this.statsController = undefined;
+    }
+  }
+
   async loadGraph(revisit = false) {
+    this.statsController?.abort();
     if (this.sidebar && !this.repoKey) return this.invalidate(this.emptyMessage, false, !this.emptyError);
     const repo = this.currentRepo();
     if (!repo) {
@@ -456,9 +481,10 @@ class GraphProvider {
       if (this.recentGraphs.size > 32) this.recentGraphs.delete(this.recentGraphs.keys().next().value);
       this.selected = previousSelection && this.rows.has(previousSelection) && !this.rows.get(previousSelection).collapsed ? previousSelection : undefined;
       this.interactive = true;
-      this.post({ type: 'graph', repoName, rows: result.rows, limit: result.limit, loading: false,
+      this.post({ type: 'graph', generation, repoName, rows: result.rows, limit: result.limit, loading: false,
         labelMaxLen, firstParent: this.firstParent, filters: copyFilters(this.filters), collapsedCount: collapsed.size });
       this.comparison?.checkRefs();
+      if (result.stats_repo_identity) void this.loadStats(repo, result, generation, backendGeneration);
       if (this.selected) await this.loadCommit(this.selected);
     } catch (error) {
       if (generation !== this.graphGeneration || this.panel !== panel || panel.visible === false || !this.isCurrentRepo(repo)) return;
