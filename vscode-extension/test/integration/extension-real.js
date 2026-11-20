@@ -1166,7 +1166,8 @@ async function main() {
   repo.state.untrackedChanges = [];
   provider.tree.changed();
   const refreshedComparison = graphMessages.findLast(message => message.type === 'comparisonState');
-  assert.equal(refreshedComparison.dirty, false);
+  assert.ok(git('status', '--porcelain'), 'the comparison fixture has local changes');
+  assert.equal(refreshedComparison.dirty, true, 'clearing stale SCM state must preserve the native dirty indicator');
   assert.equal(refreshedComparison.to.oid, pointerCommit);
   const beforeComparisonDiff = diffs.length;
   await graphReceive({ type: 'openComparisonFile', id: comparisonPointer.id });
