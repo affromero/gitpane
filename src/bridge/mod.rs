@@ -120,6 +120,8 @@ struct CommitFilesRequest {
 struct GraphRequest {
     repo: PathBuf,
     #[serde(default)]
+    defer_stats: bool,
+    #[serde(default)]
     first_parent: bool,
     #[serde(default)]
     filters: graph::FilterRequest,
@@ -242,7 +244,7 @@ fn process(
         snapshots.clear();
         *scope = Some(updated);
         return Ok(
-            json!({ "version": PROTOCOL_VERSION, "capabilities": { "unique_changes_snapshots": true } }),
+            json!({ "version": PROTOCOL_VERSION, "capabilities": { "unique_changes_snapshots": true, "deferred_graph_stats": true } }),
         );
     }
     let scope = scope.as_ref().ok_or_else(|| {
@@ -561,6 +563,7 @@ fn process(
                 input.first_parent,
                 input.filters,
                 input.collapsed_segments,
+                input.defer_stats,
             )?;
             scope.repository(&repo)?;
             Ok(result)

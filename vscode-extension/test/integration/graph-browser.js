@@ -16,7 +16,7 @@ const fileMenuClient = fs.readFileSync(path.join(extension, 'src/webview/file-me
 const comparisonClient = fs.readFileSync(path.join(extension, 'src/graph/comparison.js'), 'utf8');
 const themeClient = fs.readFileSync(path.join(extension, 'src/theme-webview.js'), 'utf8');
 const snapshot = {
-  type: 'graph', loading: false, firstParent: false, limit: 2,
+  type: 'graph', generation: 7, loading: false, firstParent: false, limit: 2,
   filters: { branches: [], authors: null, refs: { local: true, remote: false, tags: true, stashes: true } },
   rows: [
     { oid: 'abcdef1234', short_id: 'abcdef1', message: 'Merge changes', author: 'Andres',
@@ -162,6 +162,12 @@ const scenario = String.raw`
     check('next commit match wraps', options()[0].getAttribute('aria-selected') === 'true');
     search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
     check('previous commit match wraps', options()[1].getAttribute('aria-selected') === 'true');
+    const selectedOption = options()[1];
+    window.postMessage({ type: 'graphStats', generation: 7, stats: { [snapshot.rows[1].oid]: { additions: 15, deletions: 3 } } }, '*');
+    await tick();
+    check('statistics arrive without disturbing selected commit or search focus', options()[1] === selectedOption &&
+      selectedOption.getAttribute('aria-selected') === 'true' && selectedOption.querySelector('.addition')?.textContent === '+15' &&
+      document.activeElement === search && options()[0].querySelector('.addition')?.textContent === '+4');
     search.value = 'not-found';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     check('zero matches disable navigation', document.getElementById('search-next').disabled && document.getElementById('search-prev').disabled);

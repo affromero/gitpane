@@ -35,6 +35,9 @@ struct Request {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
+    GraphStats {
+        oids: Vec<String>,
+    },
     WorkingMetadata {
         path: String,
     },
@@ -97,6 +100,16 @@ fn validate(request: &Request) -> Result<(), BridgeError> {
         return Err(invalid("Invalid repository identity."));
     }
     match &request.operation {
+        Operation::GraphStats { oids } => {
+            if oids.is_empty()
+                || oids.len() > crate::git::graph::MAX_COMMITS
+                || !oids
+                    .iter()
+                    .all(|oid| oid.len() == 40 && changes::blob::commit_oid(oid))
+            {
+                return Err(invalid("Invalid graph statistics commit IDs."));
+            }
+        }
         Operation::WorkingMetadata { path } | Operation::WorkingContent { path } => {
             if request.external_worktree.is_none() || !changes::blob::valid_path(path) {
                 return Err(invalid("Invalid external working file path."));
@@ -166,6 +179,19 @@ fn exec() -> Result<(), BridgeError> {
     let request = decode(payload)?;
     validate(&request)?;
     match &request.operation {
+        Operation::GraphStats { oids } => {
+            let oids = oids
+                .iter()
+                .map(|oid| git2::Oid::from_str(oid))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(failure)?;
+            let stats = crate::git::commit_files::batch_diff_stats(&request.repo, &oids)
+                .map_err(failure)?;
+            let result: serde_json::Map<_, _> = stats.into_iter().map(|(oid, stat)| (oid.to_string(),
+                serde_json::json!({"additions": stat.additions, "deletions": stat.deletions}))).collect();
+            check_scope(&request)?;
+            serde_json::to_writer(io::stdout(), &result).map_err(failure)?;
+        }
         Operation::WorkingMetadata { path } | Operation::WorkingContent { path } => {
             let repo = request.repo.canonicalize().map_err(failure)?;
             let (bytes, fingerprint) =

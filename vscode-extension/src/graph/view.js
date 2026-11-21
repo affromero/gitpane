@@ -25,6 +25,7 @@ let pendingSegment;
 let pendingCommitAction;
 let labelMaxLen = 24;
 let graphInteractive = false;
+let graphGeneration;
 let menuEpoch = 0;
 const commitMenu = window.GitpaneFileMenu({ document, window, postMessage: message => vscode.postMessage(message),
   selection: () => JSON.stringify([selected, graphInteractive, menuEpoch]) });
@@ -132,6 +133,14 @@ function updateTimes() {
 
 window.setInterval(updateTimes, 1000);
 
+function appendStats(item, value) {
+  const stats = element('span', 'stats');
+  add(stats, 'addition', `+${value.additions}`);
+  stats.appendChild(document.createTextNode(' '));
+  add(stats, 'deletion', `−${value.deletions}`);
+  item.appendChild(stats);
+}
+
 function renderGraph() {
   const query = search.value.trim().toLocaleLowerCase();
   const matchCount = rows.filter(row => !row.collapsed && matchRow(row, query)).length;
@@ -168,13 +177,7 @@ function renderGraph() {
         item.setAttribute('aria-label', `${item.dataset.rowLabel}, ${time.toLocaleDateString()}, ${age}`);
       }
     }
-    if (row.diff_stat) {
-      const stats = element('span', 'stats');
-      add(stats, 'addition', `+${row.diff_stat.additions}`);
-      stats.appendChild(document.createTextNode(' '));
-      add(stats, 'deletion', `−${row.diff_stat.deletions}`);
-      item.appendChild(stats);
-    }
+    if (row.diff_stat) appendStats(item, row.diff_stat);
     comparison?.decorate(item, row);
     item.addEventListener('click', event => {
       if (comparison?.enabled() && (event.ctrlKey || event.metaKey) && !row.collapsed) {
@@ -370,6 +373,7 @@ window.addEventListener('message', event => {
     return;
   }
   if (message?.type === 'graph') {
+    graphGeneration = message.generation;
     menuEpoch++; commitMenu.close();
     graphInteractive = !message.loading && !message.error && !message.emptyMessage;
     if (message.loading || message.error) { detail = undefined; pendingCommitAction = undefined; }
@@ -407,6 +411,20 @@ window.addEventListener('message', event => {
       renderFiles();
       vscode.postMessage({ type: 'selectCommit', oid: selected });
     }
+  } else if (message?.type === 'graphStats' && graphInteractive && graphGeneration === message.generation) {
+    if (message.error) {
+      graphStatus.className = 'message error';
+      graphStatus.textContent = `Could not load commit statistics: ${message.error}`;
+      return;
+    }
+    rows.forEach((row, index) => {
+      const stats = message.stats[row.oid];
+      if (!stats) return;
+      row.diff_stat = stats;
+      const item = graph.children[index];
+      item.querySelector('.stats')?.remove();
+      appendStats(item, stats);
+    });
   } else if (message?.type === 'commitFiles' && message.oid === selected) {
     detail = message;
     renderGraph();
