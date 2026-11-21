@@ -4,6 +4,16 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-11-21
+
+### Fixed
+- Show worktrees under their owning repository in the VS Code repository tree. ([#260](https://github.com/affromero/gitpane/pull/260), closes [#259](https://github.com/affromero/gitpane/issues/259))
+- Open untracked PNG and GIF files as image diffs in VS Code. ([#262](https://github.com/affromero/gitpane/pull/262), closes [#261](https://github.com/affromero/gitpane/issues/261))
+- Show VS Code commit graph history before commit statistics finish loading. ([#264](https://github.com/affromero/gitpane/pull/264), closes [#263](https://github.com/affromero/gitpane/issues/263))
+
+### Changed
+- Explain gitpane's workspace workflow and related tools in the README. ([`cf64886`](https://github.com/affromero/gitpane/commit/cf64886))
+
 ## [0.19.1] - 2026-11-20
 
 ### Fixed

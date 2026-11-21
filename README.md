@@ -161,51 +161,11 @@ On NetBSD, update through pkgsrc instead of `gitpane update`, which shells out t
 
 ## Why gitpane?
 
-If you work across several repositories, a workspace dashboard lets you check branch and working tree status in one view. The table compares tools for both workspace and single-repo workflows.
+Gitpane brings your repositories and worktrees into one view, so you can quickly see branches, local changes, and commit history across your workspace. Expand a repository to inspect a worktree, review a diff, or check what needs attention.
 
-| Tool | Multi repo | Auto refresh | Worktrees | Mouse | Commit graph | Split diffs | Push/Pull | Issues/PRs |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **gitpane** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
-| [lazygit](https://github.com/jesseduffield/lazygit) | No | No | No | Yes | Yes | Yes | Yes | No |
-| [gitui](https://github.com/extrawurst/gitui) | No | No | No | Yes | Yes | Yes | Yes | No |
-| [tig](https://github.com/jonas/tig) | No | No | No | No | Yes | No | No | No |
-| [git-delta](https://github.com/dandavison/delta) | No | No | No | No | No | Yes (pager) | No | No |
-| [grv](https://github.com/rgburke/grv) | No | No | No | Yes | Yes | No | No | No |
-| [git-summary](https://github.com/MircoT/git-summary) | Yes (list only) | No | No | No | No | No | No | No |
-| [mgitstatus](https://github.com/fboender/multi-git-status) | Yes (list only) | No | No | No | No | No | No | No |
-| [gita](https://github.com/nosarthur/gita) | Yes (CLI only) | No | No | No | No | No | Yes | No |
-| [gitbatch](https://github.com/isacikgoz/gitbatch) | Yes (TUI) | No | No | No | No | No | Yes (batch) | No |
-| [ManyGit](https://github.com/rabeeh-ta/manygit) | Yes (TUI) | Yes | Discovers worktrees | Yes | Yes | Unified diff | Yes | PR inbox |
-| [gwq](https://github.com/d-kuro/gwq) | Yes (CLI) | No | Yes | No | No | No | No | No |
-| [Canopy](https://github.com/ashmitb95/canopy) | Yes (CLI) | No | Yes | No | No | No | No | No |
-| [ghpeek](https://github.com/kimusan/ghpeek) | GitHub only | No | No | Yes | No | No | No | Yes |
-| [gh-dash](https://github.com/dlvhdr/gh-dash) | GitHub only | Yes | No | No | No | No | Partial | Yes |
+Use it in the terminal or VS Code, then open a repository or worktree in your preferred editor or Git client with a configurable [open command](#opening-a-repo-or-worktree).
 
-**lazygit** and **gitui** are excellent for deep single repo work like staging hunks, interactive rebase, and conflict resolution. gitpane is the **workspace level dashboard**. It shows every repo at once, lets you drill into anything, and keeps you in the terminal. They complement each other.
-
-**ghpeek** and **gh-dash** are GitHub dashboards for issues and pull requests. In gitpane, selecting a repo with open issues or PRs on GitHub shows a fourth panel with a list, body and comment previews, and a browser link. The panel queries the repo's `github.com` remote through the `gh` CLI.
-
-| Workspace feature | gitpane | ManyGit |
-| --- | --- | --- |
-| GitHub issues | Per-repo list with body and comment previews | Undocumented |
-| Cross-repo PR inbox | Your PRs and review requests, with a pending review count and PR previews | Your PRs and review requests, with branch checkout into a matching clone |
-| Find a PR's existing checkout | Highlights the matching linked worktree and offers to open it or attach to its live tmux session | Undocumented |
-| Linked worktree status | Nested rows with each worktree's branch, ahead/behind counts, and dirty state | Discovers worktree directories within the scan root |
-| Worktree actions | Create or remove linked worktrees from the dashboard | Undocumented |
-| Worktrees outside the editor workspace | Find registered checkouts under their owning repo and inspect them from the same VS Code window | Discovers checkouts within the scan root |
-| Submodule status | Nest submodules under the checkout that owns them and flag dirty state or commits that other clones may be unable to fetch | Discovers submodule directories within the scan root |
-| Historical submodule diffs | In VS Code, inspect a gitlink change and compare files between the two recorded submodule commits | Undocumented |
-| Stash inspection | Browse saved stashes and open per-file diffs pinned to the stash commit | Undocumented |
-| Commit graph and branch review | Filter history by branch, author, or ref, switch to first-parent history, and review a checkout against its base branch | Browse the commit graph and inspect unified diffs |
-| Diff and file actions | Resizable side-by-side TUI diffs and native VS Code diffs for staged and working changes, with editor file actions where supported | Unified file diffs and repository-level discard actions |
-| Live terminal sessions | Show live sessions per checkout and attach via tmux or Herdr | Undocumented |
-| VS Code and remote workspaces | Explorer views for multi-root workspaces with support for Remote SSH, WSL, and Dev Containers through the workspace host | Undocumented |
-| Fetch diagnostics | Fetch the selected repository, see the result, and retry from the diagnostics panel | Shows per-repo network errors and allows interactive fetch retry |
-| Repo commands | Configurable keybindings run commands in the selected repo or worktree | Script runner and repo-scoped shell prompt with an output pane |
-
-The ManyGit entries describe its documented workflows and repository discovery. [ManyGit README](https://github.com/rabeeh-ta/manygit#readme)
-
-A newer category of **worktree dashboards** has grown up around parallel AI agents, such as [gwq](https://github.com/d-kuro/gwq) (worktree status list with tmux integration), Canopy, and [git-worktree-manager](https://github.com/nanasess/git-worktree-manager). gitpane overlaps here, it expands each repo into its per worktree branch, ahead/behind, dirty, and submodule state, but pairs that with a full commit graph, split diffs, and remote ops the dashboard-only tools lack. With `o` to open any repo or worktree in a new tmux pane (or your editor), it is both the **overview** and the **launchpad**.
+Gitpane sits among tools with different focuses. [lazygit](https://github.com/jesseduffield/lazygit) and [gitui](https://github.com/extrawurst/gitui) offer interactive Git workflows, [ManyGit](https://github.com/rabeeh-ta/manygit) provides a multi-repository dashboard, and [gwq](https://github.com/d-kuro/gwq) focuses on worktrees. For GitHub issues and pull requests, there are tools such as [gh-dash](https://github.com/dlvhdr/gh-dash). Gitpane combines a workspace overview with repository inspection and works alongside the tools you prefer.
 
 ## Screenshots
 
