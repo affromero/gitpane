@@ -138,7 +138,7 @@ body[data-view="changes"] #column-layout { display: block; }
 }
 
 .name, .branch, .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repo-row .name, .worktree-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
+.repo-row .name { color: var(--gitpane-repo-list-repo-name, inherit); }
 #repositories > .repository-item > .repo-row > .name { font-weight: bold; }
 #repositories > .repository-item > .repo-row > .name > * { font-weight: normal; }
 .repo-row .submodule-name { color: var(--submodule); }
@@ -158,7 +158,7 @@ body[data-view="changes"] #column-layout { display: block; }
 .conflicted { color: var(--gitpane-file-list-status-conflicted, var(--behind)); }
 .renamed { color: var(--gitpane-file-list-status-renamed, var(--vscode-terminal-ansiBlue, var(--branch))); }
 .worktree { color: var(--gitpane-repo-list-worktree-count, var(--worktree)); }
-.worktree-row .worktree, .worktree-row.submodule-worktree-row > .name { color: var(--gitpane-repo-list-worktree-subtree-branch, var(--worktree)); }
+.worktree-row .worktree, .worktree-row > .name { color: var(--gitpane-repo-list-worktree-subtree-branch, var(--worktree)); }
 .repo-row .submodule-action, .worktree-row .submodule-action { color: color-mix(in srgb, var(--submodule) 60%, currentColor); }
 .treeitem[aria-selected="true"] > .row .submodule-action { color: var(--gitpane-submodule-inactive-selection, inherit); }
 .treeitem:focus > .row .submodule-action { color: var(--gitpane-submodule-active-selection, inherit); }
@@ -233,6 +233,6 @@ body.vscode-high-contrast-light .treeitem[aria-selected="true"] > .row button { 
   .dirty, .count, .branch, .ahead, .behind, .worktree, .modified,
   .added, .deleted, .renamed, .untracked, .conflicted, .stash, .dirty-submodule, .unpushed-submodule, .live, .pin,
   .graph-action, .menu-action, .worktree-action, .repo-row .submodule-action,
-  .worktree-row .submodule-action, .worktree-row.submodule-worktree-row > .name { color: CanvasText; }
+  .worktree-row .submodule-action, .worktree-row > .name { color: CanvasText; }
   .treeitem:focus > .row { outline: 1px solid Highlight; }
 }
