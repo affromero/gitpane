@@ -167,7 +167,11 @@ impl Component for RepoList {
                                 let wt = &self.repos[*i].status.as_ref().unwrap().worktree_info[*w];
                                 let count =
                                     self.submodule_counts.get(&wt.path).copied().unwrap_or(0);
-                                let start = base_x + 8;
+                                let start = base_x
+                                    + hierarchy::worktree_disclosure_offset(
+                                        &self.repos,
+                                        &self.repos[*i],
+                                    );
                                 (count > 0
                                     && mouse.column >= start
                                     && mouse.column

@@ -43,7 +43,7 @@ fn submodule_worktree_is_indented_and_uses_the_worktree_palette() {
     );
     assert!(row(4).contains("other-module"), "{}", row(4));
     assert!(row(5).contains("root-branch"), "{}", row(5));
-    assert!(column(3, "⎇") > column(2, "d"));
+    assert_eq!(column(3, "⎇"), column(2, "└") + 2);
     assert!(column(3, "⎇") > column(5, "⎇"));
     let branch = &buffer[(column(3, "d"), 3)];
     assert_eq!(branch.fg, buffer[(column(5, "r"), 5)].fg);
@@ -791,6 +791,11 @@ fn renders_submodules_beneath_their_own_checkout() {
     assert!(line(2).contains("main-child [sub]"));
     assert!(line(3).contains("feature"));
     assert!(line(4).contains("* worktree-child [sub]"));
+    let main = line(2).chars().position(|ch| ch == '└').unwrap();
+    let linked = line(3).chars().position(|ch| ch == '⎇').unwrap();
+    let linked_child = line(4).chars().position(|ch| ch == '└').unwrap();
+    assert_eq!(main, linked);
+    assert_eq!(linked_child, linked + 2);
     for (y, name) in [(2, "main-child"), (4, "worktree-child")] {
         let x = line(y).split_once(name).unwrap().0.chars().count() as u16;
         assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Magenta);

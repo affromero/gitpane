@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{DisplayRow, RepoEntry, RepoId, RepoList, RowId};
+use super::{DisplayRow, NESTED_CONNECTOR, RepoEntry, RepoId, RepoList, RowId};
 use crate::git::status::SubmoduleInfo;
 use ratatui::{
     style::{Modifier, Style},
@@ -8,6 +8,23 @@ use ratatui::{
     widgets::ListItem,
 };
 use std::path::{Path, PathBuf};
+
+const CHILD_INDENT: &str = "  ";
+const WORKTREE_PREFIX: &str = "  ⎇ ";
+const WORKTREE_MATCH_PREFIX: &str = "› ⎇ ";
+
+fn checkout_indent(repos: &[RepoEntry], entry: &RepoEntry) -> &'static str {
+    if parent(repos, entry).is_some() {
+        CHILD_INDENT
+    } else {
+        ""
+    }
+}
+
+pub(super) fn worktree_disclosure_offset(repos: &[RepoEntry], entry: &RepoEntry) -> u16 {
+    // Both worktree prefixes occupy the same width, followed by the dirty flag.
+    (checkout_indent(repos, entry).len() + WORKTREE_PREFIX.chars().count() + 2) as u16
+}
 
 impl RepoList {
     pub(crate) fn forget_submodule_disclosures(&mut self, repo: &Path) {
@@ -32,18 +49,14 @@ impl RepoList {
             if *pulse {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            Span::styled("  › \u{2387} ", style)
+            Span::styled(WORKTREE_MATCH_PREFIX, style)
         } else {
             Span::styled(
-                "    \u{2387} ",
+                WORKTREE_PREFIX,
                 Style::default().fg(t.worktree_subtree_icon),
             )
         };
-        let mut spans = Vec::new();
-        if parent(&self.repos, entry).is_some() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(marker);
+        let mut spans = vec![Span::raw(checkout_indent(&self.repos, entry)), marker];
         if wt.is_dirty {
             spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
         } else {
@@ -247,7 +260,8 @@ impl RepoList {
             return ListItem::new("");
         };
         let theme = &self.theme.repo_list;
-        let indent = if worktree.is_some() { "      " } else { "  " };
+        let indent = checkout_indent(&self.repos, &self.repos[repo]);
+        let depth = 1 + usize::from(worktree.is_some());
         let marker = if submodule.state.is_some() {
             "* "
         } else {
@@ -255,7 +269,7 @@ impl RepoList {
         };
         ListItem::new(Line::from(vec![
             Span::styled(
-                format!("{indent}└ "),
+                format!("{indent}{}{NESTED_CONNECTOR}", CHILD_INDENT.repeat(depth)),
                 Style::default().fg(theme.worktree_subtree_icon),
             ),
             Span::styled(marker, Style::default().fg(theme.dirty_marker)),
