@@ -156,12 +156,22 @@ fn worktree_disclosure_click_only_hides_its_own_submodules() {
     let mut list = make_list(&["/repo"]);
     let mut status = empty_status("main");
     status.checkout_submodules.push(submodule("repo-child"));
-    let mut wt = worktree_entry("feature");
+    let mut wt = worktree_entry("feature/界-very-long-branch-name");
     wt.checkout_submodules.push(submodule("worktree-child"));
     status.worktree_info.push(wt);
     list.update_status(0, status);
-    let rows = text_rows(&mut list);
-    let column = rows[3].split_once("▾◈1").unwrap().0.chars().count() as u16;
+    let mut terminal = Terminal::new(TestBackend::new(26, 8)).unwrap();
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let column = (0..26)
+        .find(|&x| buffer[(x, 3)].symbol() == "▾")
+        .expect("visible worktree disclosure");
+    let branch_start = (0..26)
+        .find(|&x| buffer[(x, 3)].symbol() == "f")
+        .expect("visible worktree branch");
+    assert!(branch_start < column);
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column,
