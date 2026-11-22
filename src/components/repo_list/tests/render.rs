@@ -48,6 +48,7 @@ fn submodule_worktree_is_indented_and_uses_the_worktree_palette() {
     let branch = &buffer[(column(3, "d"), 3)];
     assert_eq!(branch.fg, buffer[(column(5, "r"), 5)].fg);
     assert_eq!(branch.fg, list.theme.repo_list.worktree_subtree_branch);
+    assert_eq!(buffer[(column(3, "⎇"), 3)].fg, branch.fg);
     assert_eq!(branch.bg, list.theme.repo_list.selection_bg);
     assert!(branch.modifier.contains(Modifier::BOLD));
 }

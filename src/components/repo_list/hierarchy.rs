@@ -53,7 +53,7 @@ impl RepoList {
         } else {
             Span::styled(
                 WORKTREE_PREFIX,
-                Style::default().fg(t.worktree_subtree_icon),
+                Style::default().fg(t.worktree_subtree_branch),
             )
         };
         let mut spans = vec![Span::raw(checkout_indent(&self.repos, entry)), marker];
