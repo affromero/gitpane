@@ -1,13 +1,28 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{DisplayRow, RepoEntry, RepoId, RepoList, RowId};
+use super::{DisplayRow, NESTED_CONNECTOR, RepoEntry, RepoId, RepoList, RowId, middle_ellipsize};
 use crate::git::status::SubmoduleInfo;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::ListItem,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
+
+const CHILD_INDENT: &str = "  ";
+const WORKTREE_PREFIX: &str = "  ⎇ ";
+const WORKTREE_MATCH_PREFIX: &str = "› ⎇ ";
+
+fn checkout_indent(repos: &[RepoEntry], entry: &RepoEntry) -> &'static str {
+    if parent(repos, entry).is_some() {
+        CHILD_INDENT
+    } else {
+        ""
+    }
+}
 
 impl RepoList {
     pub(crate) fn forget_submodule_disclosures(&mut self, repo: &Path) {
@@ -18,7 +33,8 @@ impl RepoList {
         &self,
         entry: &RepoEntry,
         wt_idx: usize,
-    ) -> ListItem<'static> {
+        width: u16,
+    ) -> (ListItem<'static>, Option<Range<u16>>) {
         let t = &self.theme.repo_list;
         let wt = &entry.status.as_ref().unwrap().worktree_info[wt_idx];
         let matched = self
@@ -32,34 +48,51 @@ impl RepoList {
             if *pulse {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            Span::styled("  › \u{2387} ", style)
+            Span::styled(WORKTREE_MATCH_PREFIX, style)
         } else {
             Span::styled(
-                "    \u{2387} ",
-                Style::default().fg(t.worktree_subtree_icon),
+                WORKTREE_PREFIX,
+                Style::default().fg(t.worktree_subtree_branch),
             )
         };
-        let mut spans = Vec::new();
-        if parent(&self.repos, entry).is_some() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(marker);
+        let mut spans = vec![Span::raw(checkout_indent(&self.repos, entry)), marker];
         if wt.is_dirty {
             spans.push(Span::styled("* ", Style::default().fg(t.dirty_marker)));
         } else {
             spans.push(Span::raw("  "));
         }
         let count = self.submodule_counts.get(&wt.path).copied().unwrap_or(0);
-        if count > 0 {
-            spans.push(Span::styled(
-                format!("{} ", disclosure(count, self.submodules_expanded(&wt.path))),
+        let control = (count > 0).then(|| {
+            Span::styled(
+                disclosure(count, self.submodules_expanded(&wt.path)),
                 Style::default().fg(t.dirty_submodule),
-            ));
+            )
+        });
+        let branch_budget = control.as_ref().map_or(usize::MAX, |control| {
+            let prefix_width: usize = spans.iter().map(Span::width).sum();
+            usize::from(width).saturating_sub(prefix_width + control.width() + 1)
+        });
+        let mut branch = middle_ellipsize(&wt.branch, branch_budget);
+        let mut chars = branch.chars().count();
+        while Span::raw(branch.as_str()).width() > branch_budget {
+            chars -= 1;
+            branch = middle_ellipsize(&wt.branch, chars);
         }
+        let padding = 12_usize
+            .min(branch_budget)
+            .saturating_sub(Span::raw(branch.as_str()).width())
+            + 1;
         spans.push(Span::styled(
-            format!("{:<12} ", wt.branch),
+            format!("{branch}{:padding$}", ""),
             Style::default().fg(t.worktree_subtree_branch),
         ));
+        let disclosure_columns = control.map(|control| {
+            let start = spans.iter().map(Span::width).sum::<usize>() as u16;
+            let end = start + control.width() as u16;
+            spans.push(control);
+            spans.push(Span::raw(" "));
+            start..end
+        });
         if wt.ahead > 0 {
             spans.push(Span::styled(
                 format!("\u{2191}{} ", wt.ahead),
@@ -94,7 +127,7 @@ impl RepoList {
             spans.push(Span::styled("\u{25c9} ", Style::default().fg(t.live)));
         }
         let item = ListItem::new(Line::from(spans));
-        if matched.is_some() {
+        let item = if matched.is_some() {
             item.style(
                 Style::default()
                     .bg(self.theme.overlay.help_bg)
@@ -102,7 +135,8 @@ impl RepoList {
             )
         } else {
             item
-        }
+        };
+        (item, disclosure_columns)
     }
 
     pub(super) fn submodules_expanded(&self, path: &Path) -> bool {
@@ -247,7 +281,8 @@ impl RepoList {
             return ListItem::new("");
         };
         let theme = &self.theme.repo_list;
-        let indent = if worktree.is_some() { "      " } else { "  " };
+        let indent = checkout_indent(&self.repos, &self.repos[repo]);
+        let depth = 1 + usize::from(worktree.is_some());
         let marker = if submodule.state.is_some() {
             "* "
         } else {
@@ -255,7 +290,7 @@ impl RepoList {
         };
         ListItem::new(Line::from(vec![
             Span::styled(
-                format!("{indent}└ "),
+                format!("{indent}{}{NESTED_CONNECTOR}", CHILD_INDENT.repeat(depth)),
                 Style::default().fg(theme.worktree_subtree_icon),
             ),
             Span::styled(marker, Style::default().fg(theme.dirty_marker)),

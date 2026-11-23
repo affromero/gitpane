@@ -106,11 +106,10 @@ const scenario = String.raw`
     check('submodule control is keyboard accessible and labeled', subControl.tabIndex === 0 && /submodules/i.test(subControl.getAttribute('aria-label')) && subControl.getAttribute('aria-expanded') === 'true');
     subControl.focus();
     check('submodule control shows keyboard focus', document.activeElement === subControl && subControl.matches(':focus-visible') && getComputedStyle(subControl).outlineStyle !== 'none');
-    for (const key of ['worktree:internal', 'worktree:outside', 'worktree:nested-wt']) {
-      check('submodule worktree name uses worktree branch color for ' + key, color(name(key)) === color(row('worktree:ordinary').querySelector('.branch')));
+    for (const key of ['worktree:ordinary', 'worktree:internal', 'worktree:outside', 'worktree:nested-wt']) {
+      check('worktree name uses worktree branch color for ' + key, color(name(key)) === color(row('worktree:ordinary').querySelector('.branch')));
     }
     if (!highContrast && !matchMedia('(forced-colors: active)').matches) {
-      check('ordinary worktree name retains its color', color(row('worktree:ordinary').querySelector('.name')) !== color(sub));
       check('worktree marker retains its color', color(row('worktree:internal').querySelector('.subtree')) !== color(sub));
       check('worktree branch retains its color', color(row('worktree:internal').querySelector('.branch')) !== color(sub));
       check('repository disclosures use distinct colors', color(row('repo:root').querySelector('.submodule-action')) !== color(row('repo:root').querySelector('.worktree-action')));
@@ -143,8 +142,10 @@ const scenario = String.raw`
     const outside = row('worktree:outside').querySelector('.name');
     check('outside worktree tooltip includes path and full branch', outside.title.includes('/some/outside/worktree') && outside.title.includes('a-very-long-outside-branch-name'));
     if (highContrast || matchMedia('(forced-colors: active)').matches) {
-      item('worktree:internal').focus();
-      check('selected submodule worktree name uses selection foreground', color(row('worktree:internal').querySelector('.name')) === color(row('worktree:internal')));
+      for (const key of ['worktree:ordinary', 'worktree:internal']) {
+        item(key).focus();
+        check('selected worktree name uses selection foreground for ' + key, color(name(key)) === color(row(key)));
+      }
     }
     row('repo:root').querySelector('.submodule-action').click();
     check('submodule disclosure collapses independently', !item('repo:module') && !!item('worktree:ordinary') && !!item('stash-group:root'));

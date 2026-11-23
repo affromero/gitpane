@@ -163,18 +163,14 @@ impl Component for RepoList {
                                     .then_some(owner)
                             }
                             Some(DisplayRow::Worktree(i, w)) => {
-                                let owner = hierarchy::Parent::Worktree(*i, *w);
-                                let wt = &self.repos[*i].status.as_ref().unwrap().worktree_info[*w];
-                                let count =
-                                    self.submodule_counts.get(&wt.path).copied().unwrap_or(0);
-                                let start = base_x + 8;
-                                (count > 0
-                                    && mouse.column >= start
-                                    && mouse.column
-                                        < start
-                                            + hierarchy::disclosure(count, true).chars().count()
-                                                as u16)
-                                    .then_some(owner)
+                                let (_, columns) =
+                                    self.render_worktree_item(&self.repos[*i], *w, inner_width);
+                                columns
+                                    .filter(|columns| {
+                                        mouse.column >= base_x
+                                            && columns.contains(&(mouse.column - base_x))
+                                    })
+                                    .map(|_| hierarchy::Parent::Worktree(*i, *w))
                             }
                             _ => None,
                         };
@@ -309,9 +305,11 @@ impl Component for RepoList {
             .map(|row| {
                 let (item, repo_idx) = match row {
                     DisplayRow::Repo(i) => (self.render_repo_item(&self.repos[*i], &layout), *i),
-                    DisplayRow::Worktree(ri, wi) => {
-                        (self.render_worktree_item(&self.repos[*ri], *wi), *ri)
-                    }
+                    DisplayRow::Worktree(ri, wi) => (
+                        self.render_worktree_item(&self.repos[*ri], *wi, inner_width)
+                            .0,
+                        *ri,
+                    ),
                     DisplayRow::Submodule(ri, wi, si) => {
                         (self.render_submodule_item(*ri, *wi, *si), *ri)
                     }

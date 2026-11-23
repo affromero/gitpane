@@ -264,8 +264,8 @@ function fileRow(file) {
   return row;
 }
 
-function worktreeRow(worktree, submodule, info) {
-  const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}${submodule ? ' submodule-worktree-row' : ''}`);
+function worktreeRow(worktree, info) {
+  const row = element('div', `row worktree-row${worktree.external ? ' external-worktree-row' : ''}`);
   const markers = element('span', 'worktree-markers');
   add(markers, 'subtree', '⎇', 'Linked worktree. An additional checkout of the same repository.');
   add(markers, 'dirty', worktree.dirty ? '*' : '\u00a0', worktree.dirty ? 'Worktree has uncommitted changes' : undefined);
@@ -586,7 +586,7 @@ function render() {
       const worktreeHasPage = worktree.available && !!worktree.changesPage &&
         (worktree.dirty || worktree.hasUnpushedSubmodules || worktree.changesPage.state === 'loading' || worktree.changesPage.state === 'error' ||
           worktree.changesPage.previous || worktree.changesPage.next);
-      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, repo.submodule, worktreeInfo),
+      const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, worktreeInfo),
         worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
         worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
       worktreeItem.item.classList.add('worktree-item');
