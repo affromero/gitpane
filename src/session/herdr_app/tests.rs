@@ -34,17 +34,26 @@ fn desktop_context_retries_after_failure_and_does_not_cache_hidden_workers() {
         "desktop offline"
     );
     assert_eq!(
-        pin_context(&cache, "t99", || Ok(fixture().0)).unwrap(),
+        pin_context(&cache, "t1", || Ok(LayoutProbe::Unavailable(
+            "no desktop".into()
+        )))
+        .unwrap(),
         None
     );
-    let context = pin_context(&cache, "t1", || Ok(fixture().0))
+    assert_eq!(
+        pin_context(&cache, "t99", || Ok(LayoutProbe::Available(fixture().0))).unwrap(),
+        None
+    );
+    let context = pin_context(&cache, "t1", || Ok(LayoutProbe::Available(fixture().0)))
         .unwrap()
         .unwrap();
     assert_eq!(context.pane, "p-source");
-    assert_eq!(
-        pin_context(&cache, "t1", || panic!("context should be pinned")).unwrap(),
-        Some(context)
-    );
+    for terminal in ["t1", "t2", ""] {
+        assert_eq!(
+            pin_context(&cache, terminal, || panic!("context should be pinned")).unwrap(),
+            Some(context)
+        );
+    }
 }
 
 #[test]
@@ -333,6 +342,88 @@ fn launch_json_errors_and_malformed_success_responses_remain_visible() {
 
 #[cfg(unix)]
 #[test]
+fn desktop_probe_only_falls_back_for_missing_cli_or_unreachable_desktop() {
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::process::ExitStatusExt;
+
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::PermissionDenied,
+        ErrorKind::TimedOut,
+        ErrorKind::Other,
+    ] {
+        match classify_layout(Err(Error::new(kind, "probe failed"))) {
+            Ok(LayoutProbe::Unavailable(message)) => {
+                assert_eq!(kind, ErrorKind::NotFound);
+                assert!(message.contains("probe failed"));
+            }
+            Err(message) => {
+                assert_ne!(kind, ErrorKind::NotFound);
+                assert!(message.contains("probe failed"));
+            }
+            _ => panic!("unexpected desktop layout"),
+        }
+    }
+    let missing = format!(
+        "herdr-app: no Herdr window at /test/herdr-app.sock: {}",
+        Error::from_raw_os_error(libc::ENOENT)
+    );
+    let refused = format!(
+        "herdr-app: no Herdr window at /test/herdr-app.sock: {}",
+        Error::from_raw_os_error(libc::ECONNREFUSED)
+    );
+    for (status, stdout, stderr, absent) in [
+        (2, "", missing.as_str(), true),
+        (2, "", refused.as_str(), true),
+        (1, "", missing.as_str(), false),
+        (2, "{}", missing.as_str(), false),
+        (
+            2,
+            "",
+            "herdr-app: no Herdr window at /test/herdr-app.sock: Permission denied (os error 13)",
+            false,
+        ),
+        (
+            2,
+            "",
+            "herdr-app: no Herdr window at /test/herdr-app.sock: path must be shorter than SUN_LEN",
+            false,
+        ),
+        (
+            2,
+            "",
+            "herdr-app: no Herdr window at /test/herdr-app.sock: unknown (os error 2)",
+            false,
+        ),
+        (2, "", "herdr-app: layout request failed", false),
+        (
+            2,
+            r#"{"error":{"reason":"layout request failed"}}"#,
+            "",
+            false,
+        ),
+    ] {
+        let result = classify_layout(Ok(std::process::Output {
+            status: std::process::ExitStatus::from_raw(status << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }));
+        match result {
+            Ok(LayoutProbe::Unavailable(message)) => {
+                assert!(absent, "{message}");
+                assert!(message.contains(stderr));
+            }
+            Err(message) => {
+                assert!(!absent, "{message}");
+                assert!(!message.is_empty());
+            }
+            _ => panic!("unexpected desktop layout"),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn rejected_desktop_commands_keep_structured_stdout_error_reasons() {
     use std::os::unix::process::ExitStatusExt;
     for (stdout, stderr, expected) in [
@@ -400,8 +491,25 @@ fn official_backend_uses_displayed_membership_and_explicit_targets() {
     use std::os::unix::fs::PermissionsExt;
     const CHILD: &str = "GITPANE_DESKTOP_TEST_CHILD";
     if let Ok(mode) = std::env::var(CHILD) {
-        if mode == "hidden" {
-            assert_eq!(Multiplexer::detect().unwrap(), Multiplexer::None);
+        if mode != "visible" {
+            let detected = Multiplexer::detect();
+            match mode.as_str() {
+                "hidden" | "missing-cli" | "no-desktop" | "desktop-stopped" => {
+                    assert_eq!(detected.unwrap(), Multiplexer::None);
+                }
+                "missing-cli-tmux" | "no-desktop-tmux" | "hidden-tmux" => {
+                    assert_eq!(detected.unwrap(), Multiplexer::Tmux);
+                }
+                "no-desktop-legacy" => {
+                    assert_eq!(detected.unwrap(), Multiplexer::Herdr);
+                }
+                "bad-json" => assert!(detected.unwrap_err().contains("invalid herdr-app layout")),
+                "permission" => assert!(detected.unwrap_err().contains("Permission denied")),
+                "cli-failure" => assert!(detected.unwrap_err().contains("layout request failed")),
+                _ => panic!("unknown desktop test mode: {mode}"),
+            }
+            assert!(current_context().is_err());
+            assert!(launcher_choices("new-window").is_err());
             return;
         }
         assert_eq!(Multiplexer::detect().unwrap(), Multiplexer::HerdrApp);
@@ -438,15 +546,62 @@ fn official_backend_uses_displayed_membership_and_explicit_targets() {
         assert!(calls.ends_with("do\nagent.focus\n{\"terminal\":\"t2\"}\n"));
         let probes = std::fs::read_to_string(directory.join("probes")).unwrap();
         assert_eq!(probes.lines().collect::<Vec<_>>(), ["t1", "t2", "t3", "t4"]);
+        std::fs::write(directory.join("offline"), "").unwrap();
+        assert_eq!(detected_context().unwrap(), Some(source));
+        assert_eq!(Multiplexer::detect().unwrap(), Multiplexer::HerdrApp);
+        let error = prepare_launch("new-window", &["sh".into()], &directory, source).unwrap_err();
+        assert!(error.contains("no Herdr window at"));
+        std::fs::remove_file(directory.join("offline")).unwrap();
+        let mut moved = layout_value();
+        moved["spaces"][0]["tabs"][0]["terminals"][0]["pane"] = json!("p-moved");
+        std::fs::write(directory.join("layout.json"), moved.to_string()).unwrap();
+        assert_eq!(detected_context().unwrap(), Some(source));
+        let error = prepare_launch("new-window", &["sh".into()], &directory, source).unwrap_err();
+        assert!(error.contains("source pane changed"));
+        assert_eq!(
+            std::fs::read_to_string(directory.join("calls")).unwrap(),
+            calls
+        );
         return;
     }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
+    let empty_path = root.join("empty-path");
+    std::fs::create_dir(&empty_path).unwrap();
     std::fs::write(root.join("layout.json"), layout_value().to_string()).unwrap();
     for (name, script) in [
         (
             "herdr-app",
-            "#!/bin/sh\ncase \"$1\" in\nls) IFS= read -r data < \"$GITPANE_DESKTOP_TEST_ROOT/layout.json\"; printf '%s' \"$data\";;\ndo) printf '%s\\n' \"$@\" >> \"$GITPANE_DESKTOP_TEST_ROOT/calls\"; printf '%s' '{\"pane\":\"p-created\",\"terminal\":\"t9\"}';;\n*) exit 3;;\nesac\n",
+            r#"#!/bin/sh
+case "$1" in
+ls)
+    if [ -f "$GITPANE_DESKTOP_TEST_ROOT/offline" ]; then
+        printf '%s\n' 'herdr-app: no Herdr window at /test/herdr-app.sock: No such file or directory (os error 2)' >&2
+        exit 2
+    fi
+    case "$GITPANE_DESKTOP_TEST_CHILD" in
+        no-desktop*)
+            printf '%s\n' 'herdr-app: no Herdr window at /test/herdr-app.sock: No such file or directory (os error 2)' >&2
+            exit 2;;
+        permission)
+            printf '%s\n' 'herdr-app: no Herdr window at /test/herdr-app.sock: Permission denied (os error 13)' >&2
+            exit 2;;
+        desktop-stopped)
+            printf 'herdr-app: no Herdr window at /test/herdr-app.sock: %s\n' "$GITPANE_DESKTOP_TEST_REFUSED" >&2
+            exit 2;;
+        cli-failure)
+            printf '%s\n' 'herdr-app: layout request failed' >&2
+            exit 2;;
+        bad-json) printf '%s' 'not-json'; exit 0;;
+    esac
+    IFS= read -r data < "$GITPANE_DESKTOP_TEST_ROOT/layout.json"
+    printf '%s' "$data";;
+do)
+    printf '%s\n' "$@" >> "$GITPANE_DESKTOP_TEST_ROOT/calls"
+    printf '%s' '{"pane":"p-created","terminal":"t9"}';;
+*) exit 3;;
+esac
+"#,
         ),
         (
             "hc",
@@ -457,19 +612,36 @@ fn official_backend_uses_displayed_membership_and_explicit_targets() {
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let path = std::env::join_paths(std::iter::once(root.to_path_buf()).chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))
-    .unwrap();
-    for (mode, address) in [("visible", "t1"), ("hidden", "t99")] {
-        let output = Command::new(std::env::current_exe().unwrap())
+    for (mode, address) in [
+        ("no-desktop", "t1"),
+        ("desktop-stopped", "t1"),
+        ("missing-cli", "t1"),
+        ("missing-cli-tmux", "t1"),
+        ("no-desktop-tmux", "t1"),
+        ("no-desktop-legacy", "t1"),
+        ("permission", "t1"),
+        ("cli-failure", "t1"),
+        ("bad-json", "t1"),
+        ("hidden", "t99"),
+        ("hidden-tmux", "t99"),
+        ("visible", "t1"),
+    ] {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--exact", "session::herdr_app::tests::official_backend_uses_displayed_membership_and_explicit_targets", "--nocapture"])
             .env(CHILD, mode).env("HC_TERMINAL_ID", address)
-            .env("GITPANE_DESKTOP_TEST_ROOT", root).env("PATH", &path)
+            .env("GITPANE_DESKTOP_TEST_ROOT", root)
+            .env("GITPANE_DESKTOP_TEST_REFUSED", std::io::Error::from_raw_os_error(libc::ECONNREFUSED).to_string())
+            .env("PATH", if mode.starts_with("missing-cli") { &empty_path } else { root })
             .env_remove("HERDR_ENV").env_remove("HERDR_PANE_ID")
             .env_remove("HERDR_TAB_ID").env_remove("HERDR_WORKSPACE_ID")
-            .env_remove("TMUX").env_remove("TMUX_PANE")
-            .output().unwrap();
+            .env_remove("TMUX").env_remove("TMUX_PANE");
+        if mode.ends_with("-tmux") {
+            command.env("TMUX", "/test/tmux,1,0").env("TMUX_PANE", "%1");
+        } else if mode.ends_with("-legacy") {
+            command.env("HERDR_ENV", "1");
+        }
+        let output = command.output().unwrap();
         assert!(
             output.status.success(),
             "{mode}: {}\n{}",

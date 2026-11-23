@@ -138,18 +138,79 @@ pub(crate) fn error_detail(output: &std::process::Output) -> String {
         .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_string())
 }
 
-fn layout() -> Result<Layout, String> {
+enum LayoutProbe {
+    Available(Layout),
+    Unavailable(String),
+}
+
+// The CLI reports desktop socket connection failures as exit 2 and plain text.
+// Permission errors share the prefix, so also check the underlying OS reason.
+fn no_desktop(output: &std::process::Output) -> bool {
+    if output.status.code() != Some(2) || !output.stdout.is_empty() {
+        return false;
+    }
+    let Ok(message) = std::str::from_utf8(&output.stderr) else {
+        return false;
+    };
+    let Some(detail) = message
+        .trim()
+        .strip_prefix("herdr-app: no Herdr window at ")
+    else {
+        return false;
+    };
+    let Some((path, cause)) = detail.rsplit_once(": ") else {
+        return false;
+    };
+    let code = cause
+        .rsplit_once(" (os error ")
+        .and_then(|(_, code)| code.strip_suffix(')'))
+        .and_then(|code| code.parse::<i32>().ok());
+    code.is_some_and(|code| {
+        let error = std::io::Error::from_raw_os_error(code);
+        !path.is_empty()
+            && !detail.contains(['\r', '\n'])
+            && matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            )
+            && cause == error.to_string()
+    })
+}
+
+fn probe_layout() -> Result<LayoutProbe, String> {
     let mut command = Command::new("herdr-app");
     command.arg("ls");
-    let output = bounded_output(&mut command)
-        .map_err(|error| format!("could not inspect herdr-app: {error}"))?;
+    classify_layout(bounded_output(&mut command))
+}
+
+fn classify_layout(output: std::io::Result<std::process::Output>) -> Result<LayoutProbe, String> {
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("could not inspect herdr-app: {error}");
+            return if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(LayoutProbe::Unavailable(message))
+            } else {
+                Err(message)
+            };
+        }
+    };
     if !output.status.success() {
-        return Err(format!(
-            "herdr-app ls failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        let message = format!("herdr-app ls failed: {}", error_detail(&output));
+        return if no_desktop(&output) {
+            Ok(LayoutProbe::Unavailable(message))
+        } else {
+            Err(message)
+        };
     }
-    parse_layout(&output.stdout)
+    parse_layout(&output.stdout).map(LayoutProbe::Available)
+}
+
+fn layout() -> Result<Layout, String> {
+    match probe_layout()? {
+        LayoutProbe::Available(layout) => Ok(layout),
+        LayoutProbe::Unavailable(message) => Err(message),
+    }
 }
 
 type DisplayedPane<'a> = (&'a Space, &'a Tab, &'a Pane);
@@ -200,18 +261,18 @@ pub(crate) fn current_context() -> Result<&'static Context, String> {
     detected_context()?.ok_or_else(|| "terminal is not displayed in the local Herdr app".into())
 }
 
-/// A valid layout can show that an HC worker is hidden. Backend failures are
-/// different: callers must surface them instead of choosing another backend.
+/// Before pinning a source pane, skip missing CLIs, unavailable desktops, and
+/// hidden workers. Preserve other probe errors and any already pinned source.
 pub(crate) fn detected_context() -> Result<Option<&'static Context>, String> {
     static CONTEXT: OnceLock<Context> = OnceLock::new();
     let terminal = std::env::var("HC_TERMINAL_ID").unwrap_or_default();
-    pin_context(&CONTEXT, &terminal, layout)
+    pin_context(&CONTEXT, &terminal, probe_layout)
 }
 
 fn pin_context<'a>(
     cache: &'a OnceLock<Context>,
     terminal: &str,
-    inspect: impl FnOnce() -> Result<Layout, String>,
+    inspect: impl FnOnce() -> Result<LayoutProbe, String>,
 ) -> Result<Option<&'a Context>, String> {
     if let Some(context) = cache.get() {
         return Ok(Some(context));
@@ -219,7 +280,9 @@ fn pin_context<'a>(
     if !local_terminal(terminal) {
         return Ok(None);
     }
-    let current_layout = inspect()?;
+    let LayoutProbe::Available(current_layout) = inspect()? else {
+        return Ok(None);
+    };
     let Ok(context) = current_layout.context(terminal) else {
         return Ok(None);
     };
