@@ -4,6 +4,12 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-11-22
+
+### Fixed
+- Align linked worktrees with main checkout submodules in the TUI and put the submodule control after the branch on both rows. ([#268](https://github.com/affromero/gitpane/pull/268), closes [#267](https://github.com/affromero/gitpane/issues/267))
+- Match worktree names to their branch color in the VS Code sidebar. ([#268](https://github.com/affromero/gitpane/pull/268))
+
 ## [0.19.2] - 2026-11-21
 
 ### Fixed
