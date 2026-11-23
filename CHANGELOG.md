@@ -4,6 +4,12 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.19.4] - 2026-11-23
+
+### Fixed
+- Start gitpane in remote and standalone Herdr Core terminals when the local desktop CLI or socket is unavailable. ([#274](https://github.com/affromero/gitpane/pull/274), closes [#273](https://github.com/affromero/gitpane/issues/273)) Thanks @expoli for reporting and fixing this.
+- Preserve repository selection during refresh and keep submodules accessible when using `--cwd`. ([#272](https://github.com/affromero/gitpane/pull/272), closes [#271](https://github.com/affromero/gitpane/issues/271))
+
 ## [0.19.3] - 2026-11-22
 
 ### Fixed
