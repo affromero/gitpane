@@ -134,6 +134,10 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release
 
+      - name: Test TUI startup against release binary
+        if: runner.os != 'Windows'
+        run: python3 scripts/check_tui_startup.py target/release/gitpane
+
       - name: Test VS Code bridge and comparisons against release binary
         env:
           GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane${{ runner.os == 'Windows' && '.exe' || '' }}
