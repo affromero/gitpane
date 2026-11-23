@@ -329,6 +329,9 @@ impl App {
                         if let Some(action) = self.repo_list.handle_key_event(key)? {
                             self.action_tx.send(action)?;
                         }
+                        if key.code == KeyCode::Char('m') {
+                            self.save_submodule_disclosures();
+                        }
                     }
                     FocusPanel::Changes => {
                         if let Some(action) = self.file_list.handle_key_event(key)? {

@@ -67,7 +67,14 @@ impl App {
     pub(in crate::app) fn route_panel_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
         let pos = Position::new(mouse.column, mouse.row);
         let action = if self.repo_area.contains(pos) {
-            self.repo_list.handle_mouse_event(mouse)?
+            let action = self.repo_list.handle_mouse_event(mouse)?;
+            if matches!(
+                mouse.kind,
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+            ) {
+                self.save_submodule_disclosures();
+            }
+            action
         } else if self.changes_area.contains(pos) {
             self.file_list.handle_mouse_event(mouse)?
         } else if self.graph_area.contains(pos) {

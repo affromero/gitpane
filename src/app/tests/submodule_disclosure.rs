@@ -28,6 +28,7 @@ async fn removing_and_adding_a_repo_resets_its_submodule_disclosures() {
         write_target_override: Some(dir.path().join("config.toml")),
         ..Config::default()
     };
+    let config_path = config.write_target_override.clone().unwrap();
     let mut app = App::new(config).unwrap();
     let sub = |name: &str| SubmoduleInfo {
         name: name.into(),
@@ -53,17 +54,30 @@ async fn removing_and_adding_a_repo_resets_its_submodule_disclosures() {
         checkout_submodules: vec![sub("worktree-child")],
     });
     app.repo_list.update_status(0, status.clone());
-    app.repo_list
-        .handle_key_event(KeyCode::Char('m').into())
-        .unwrap();
+    app.handle_key_event(KeyCode::Char('m').into()).unwrap();
     app.repo_list
         .handle_key_event(KeyCode::Down.into())
         .unwrap();
-    app.repo_list
-        .handle_key_event(KeyCode::Char('m').into())
-        .unwrap();
+    app.handle_key_event(KeyCode::Char('m').into()).unwrap();
     assert!(!rows(&mut app).contains("main-child"));
     assert!(!rows(&mut app).contains("worktree-child"));
+    let restart = || {
+        let mut config: Config =
+            toml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        config.write_target_override = Some(config_path.clone());
+        let mut app = App::new(config).unwrap();
+        app.repo_list.update_status(0, status.clone());
+        app
+    };
+    let mut app = restart();
+    let rendered = rows(&mut app);
+    assert!(!rendered.contains("main-child"));
+    assert!(!rendered.contains("worktree-child"));
+    app.handle_key_event(KeyCode::Char('m').into()).unwrap();
+    let mut app = restart();
+    let rendered = rows(&mut app);
+    assert!(rendered.contains("main-child"));
+    assert!(!rendered.contains("worktree-child"));
     app.handle_repo_admin(Action::RemoveRepo(RepoId(path.clone())))
         .unwrap();
     app.handle_repo_admin(Action::AddRepo(path)).unwrap();

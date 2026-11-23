@@ -34,7 +34,7 @@ const { DEFAULT_REFRESH_INTERVAL, ViewSettings, configureViewProvider } = requir
 const { receiveViewMessage } = require('./view-messages');
 const { WorkspaceViews } = require('./workspace-views');
 const { refreshTarget } = require('./target-refresh');
-const { externalSubmodules } = require('./external-submodules');
+const { externalSubmodules, submoduleStateKey } = require('./external-submodules');
 
 class GitpaneViewProvider {
   constructor(tree, extensionUri, theme, worktreeDisplay, options = {}) {
@@ -142,7 +142,7 @@ class GitpaneViewProvider {
         const childRepoId = childRepoKey && this.idFor(JSON.stringify(['repo', childRepoKey, childToken]), live);
         if (childRepoId) repositoriesById.set(childRepoId, { repoKey: childRepoKey, repoToken: childToken });
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
-        return { id: worktreeId, name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
+        return { id: worktreeId, submoduleStateKey: submoduleStateKey(item.path), name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
           available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
@@ -162,7 +162,7 @@ class GitpaneViewProvider {
           const summary = item.status || inspected?.status;
           if (summary?.checkout_submodule_error) externalErrors.push(`Could not inspect submodules in ${item.path}: ${summary.checkout_submodule_error}`);
           else if (summary && !Array.isArray(summary.checkout_submodules)) externalErrors.push('The Gitpane backend does not support worktree submodule discovery. Update the configured backend.');
-          worktreeData.push({ id: worktreeId, name: path.basename(item.path), path: item.path,
+          worktreeData.push({ id: worktreeId, submoduleStateKey: submoduleStateKey(item.path), name: path.basename(item.path), path: item.path,
             branch: typeof item.branch === 'string' ? item.branch : 'branch unavailable',
             available: !!active, external: true, dirty: !!summary?.is_dirty,
             inspectable: /^[a-f0-9]{64}$/.test(item.identity || ''),
@@ -177,6 +177,7 @@ class GitpaneViewProvider {
       const groupData = groupsFor(repo, id);
       return {
         id,
+        submoduleStateKey: submoduleStateKey(root),
         name: node.duplicate ? `${path.basename(root)} (${path.dirname(root)})` : path.basename(root),
         branch: (status?.branch === '(no branch)' && !status.head_oid && head?.name) ||
           status?.branch || head?.name || (head?.commit ? head.commit.slice(0, 8) : 'unborn'),

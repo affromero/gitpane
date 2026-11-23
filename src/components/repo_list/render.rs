@@ -91,10 +91,12 @@ impl Component for RepoList {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
+                self.manual_viewport = false;
                 self.select_next();
                 Ok(self.emit_selection_action())
             }
             KeyCode::Char('k') | KeyCode::Up => {
+                self.manual_viewport = false;
                 self.select_prev();
                 Ok(self.emit_selection_action())
             }
@@ -211,6 +213,7 @@ impl Component for RepoList {
                                 return Ok(self.emit_selection_action());
                             }
                         }
+                        self.manual_viewport = false;
                         self.state.select(Some(idx));
                         return Ok(self.emit_selection_action());
                     }
@@ -226,6 +229,7 @@ impl Component for RepoList {
                     let visual_row = (mouse.row - content_y) as usize;
                     let idx = visual_row + self.state.offset();
                     if idx < self.display_rows.len() {
+                        self.manual_viewport = false;
                         self.state.select(Some(idx));
                         // Repo and worktree rows get a context menu. A worktree
                         // menu targets the worktree's own path so pull/push act
@@ -253,13 +257,16 @@ impl Component for RepoList {
                 }
                 Ok(None)
             }
-            MouseEventKind::ScrollUp => {
-                self.select_prev();
-                Ok(self.emit_selection_action())
-            }
-            MouseEventKind::ScrollDown => {
-                self.select_next();
-                Ok(self.emit_selection_action())
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let offset = self.state.offset();
+                let next = if mouse.kind == MouseEventKind::ScrollUp {
+                    offset.saturating_sub(1)
+                } else {
+                    (offset + 1).min(self.max_viewport_offset())
+                };
+                self.manual_viewport = true;
+                *self.state.offset_mut() = next;
+                Ok(Some(Action::Render))
             }
             _ => Ok(None),
         }
@@ -403,7 +410,31 @@ impl Component for RepoList {
                     .add_modifier(Modifier::BOLD),
             );
 
-        frame.render_stateful_widget(list, list_area, &mut self.state);
+        if self.manual_viewport {
+            let offset = self.state.offset().min(self.max_viewport_offset());
+            let end = offset + usize::from(list_area.height.saturating_sub(2));
+            let selected = self
+                .state
+                .selected()
+                .filter(|index| (offset..end).contains(index));
+            let mut viewport = ratatui::widgets::ListState::default()
+                .with_offset(offset)
+                .with_selected(selected);
+            frame.render_stateful_widget(list, list_area, &mut viewport);
+            *self.state.offset_mut() = viewport.offset();
+        } else {
+            frame.render_stateful_widget(list, list_area, &mut self.state);
+        }
         Ok(())
+    }
+}
+
+impl RepoList {
+    fn max_viewport_offset(&self) -> usize {
+        let height = self
+            .render_area
+            .height
+            .saturating_sub(2 + u16::from(!self.missing_roots.is_empty()));
+        self.display_rows.len().saturating_sub(usize::from(height))
     }
 }

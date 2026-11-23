@@ -39,9 +39,9 @@ const scenario = String.raw`
     const a = luminance(first), b = luminance(second);
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
   };
-  const root = { id: 'root', name: 'root', branch: 'main', stashCount: 1, worktreeCount: 1, live: true,
+  const root = { id: 'root', submoduleStateKey: 'root-checkout', name: 'root', branch: 'main', stashCount: 1, worktreeCount: 1, live: true,
     groups: [], stashes: [{ id: 'stash', index: 0, message: 'saved' }],
-    worktrees: [{ id: 'ordinary', name: 'ordinary', branch: 'ordinary-branch', available: true,
+    worktrees: [{ id: 'ordinary', submoduleStateKey: 'ordinary-checkout', name: 'ordinary', branch: 'ordinary-branch', available: true,
       groups: [], submodules: [{ id: 'worktree-child', name: 'worktree-child', branch: 'main', submodule: true, groups: [] }] }],
     submodules: [{ id: 'module', name: 'module', branch: 'main', submodule: true, groups: [], worktreeCount: 2,
       worktrees: [{ id: 'internal', name: 'internal', branch: 'internal-branch', available: true, groups: [] },
@@ -169,6 +169,36 @@ const scenario = String.raw`
       item('repo:root').focus();
       check('selected submodule control uses selection foreground', color(row('repo:root').querySelector('.submodule-action')) === color(row('repo:root')));
     }
+    delete root.statusUnavailable;
+    window.postMessage({ type: 'snapshot', repositories: [root], errors: [], expandWorktrees: true }, '*');
+    await tick();
+    if (!item('worktree:ordinary')) row('repo:root').querySelector('.worktree-action').click();
+    row('worktree:ordinary').querySelector('.submodule-action').click();
+    row('repo:root').querySelector('.submodule-action').click();
+    const saved = structuredClone(window.savedGitpaneState);
+    // Restart the webview with a new document and fresh host action IDs.
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const reopened = frame.contentDocument;
+    for (const id of ['messages', 'start-search', 'search-box', 'repositories']) {
+      const original = document.getElementById(id);
+      reopened.body.appendChild(original.cloneNode(id === 'search-box'));
+    }
+    frame.contentWindow.acquireVsCodeApi = () => ({ postMessage() {}, getState: () => saved, setState() {} });
+    for (const original of Array.from(document.scripts).slice(1, -1)) {
+      const script = reopened.createElement('script');
+      script.textContent = original.textContent;
+      reopened.body.appendChild(script);
+    }
+    const restarted = structuredClone(root);
+    restarted.id = 'restarted-root';
+    restarted.worktrees[0].id = 'restarted-worktree';
+    frame.contentWindow.postMessage({ type: 'snapshot', repositories: [restarted], errors: [], expandWorktrees: true }, '*');
+    await tick();
+    const reopenedItem = key => reopened.querySelector('[data-key="' + key + '"]');
+    check('repository submodules stay collapsed after restart', reopenedItem('repo:restarted-root') && !reopenedItem('repo:module'));
+    check('worktree submodules stay collapsed after restart', reopenedItem('worktree:restarted-worktree') && !reopenedItem('repo:worktree-child'));
+    reopenedItem('repo:restarted-root').querySelector(':scope > .row .submodule-action').click();
+    check('reopening the repository group preserves the worktree group', reopenedItem('repo:module') && !reopenedItem('repo:worktree-child'));
     document.body.dataset.result = btoa(JSON.stringify({ ok: true, checks }));
   } catch (error) { document.body.dataset.result = btoa(JSON.stringify({ ok: false, checks, error: String(error.stack || error) })); }
 })();`;
@@ -180,7 +210,7 @@ try {
     const light = mode === 'light' || mode === 'high-contrast-light';
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>:root{${colors}--vscode-sideBar-background:${light ? '#fff' : '#1e1e1e'};--vscode-sideBar-foreground:${light ? '#222' : '#ddd'};--vscode-list-activeSelectionBackground:#315e8a;--vscode-list-activeSelectionForeground:#fff;--vscode-list-inactiveSelectionBackground:#394252;--vscode-list-inactiveSelectionForeground:#fff;--vscode-focusBorder:#fff;}${stylesheet}</style></head>
       <body class="${bodyClass}"><div id="messages"></div><button id="start-search"></button><div id="search-box" hidden><input id="file-search"><button id="search-prev"></button><button id="search-next"></button><div id="search-status"></div></div><div id="repositories" role="tree" style="width:210px"></div>
-      <script>window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(){}});</script>${scripts.map(script => `<script>${script}</script>`).join('')}<script>${scenario.replace('EXPECT_FORCED', String(mode === 'forced')).replaceAll('MODE', JSON.stringify(mode))}</script></body></html>`;
+      <script>window.acquireVsCodeApi=()=>({postMessage(){},getState(){return {}},setState(state){window.savedGitpaneState=state}});</script>${scripts.map(script => `<script>${script}</script>`).join('')}<script>${scenario.replace('EXPECT_FORCED', String(mode === 'forced')).replaceAll('MODE', JSON.stringify(mode))}</script></body></html>`;
     const fixture = path.join(temporary, `${mode}.html`);
     fs.writeFileSync(fixture, html);
     const args = ['--headless', '--disable-gpu', '--disable-background-networking', '--no-first-run', '--disable-extensions',
