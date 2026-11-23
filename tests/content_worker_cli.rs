@@ -206,7 +206,8 @@ fn cancelled_worker_kills_converter_that_ignores_termination() {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\ntrap '' TERM\necho $$ > '{}'\nwhile :; do sleep 1; done\n",
+            "#!/bin/sh\ntrap '' TERM\n: > '{}'\nsleep 0.1\necho $$ > '{}'\nwhile :; do sleep 1; done\n",
+            pid_file.display(),
             pid_file.display()
         ),
     )
@@ -223,17 +224,11 @@ fn cancelled_worker_kills_converter_that_ignores_termination() {
         .unwrap()
         .set_str("diff.slow.textconv", script.to_str().unwrap())
         .unwrap();
-    let (child, stdin) = fixture.start(&fixture.request());
-    let started = Instant::now();
-    while !pid_file.exists() && started.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(pid_file.exists(), "converter did not start");
-    let pid: i32 = std::fs::read_to_string(pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let (mut child, stdin) = fixture.start(&fixture.request());
+    let pid = wait_for_fixture(&mut child, || {
+        let contents = std::fs::read_to_string(&pid_file).ok()?;
+        contents.trim().parse::<i32>().ok().filter(|pid| *pid > 0)
+    });
     drop(stdin);
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
@@ -351,9 +346,12 @@ fn update_fixture(fixture: &Fixture, commit: bool) {
     }
 }
 
-fn wait_for_file(path: &Path, child: &mut Child) {
+fn wait_for_fixture<T>(child: &mut Child, mut ready: impl FnMut() -> Option<T>) -> T {
     let started = Instant::now();
-    while !path.exists() {
+    loop {
+        if let Some(value) = ready() {
+            return value;
+        }
         assert!(
             child.try_wait().unwrap().is_none(),
             "worker exited before the fixture was ready"
@@ -395,7 +393,7 @@ fn verified_content_rejects_index_and_head_changes_during_conversion() {
         let mut request = fixture.request();
         request["operation"] = json!({"kind":"verified_content","ref":reference,"path":"data"});
         let (mut child, stdin) = fixture.start(&request);
-        wait_for_file(&ready, &mut child);
+        wait_for_fixture(&mut child, || ready.exists().then_some(()));
         update_fixture(&fixture, reference == "HEAD");
         std::fs::write(&release, "release").unwrap();
         let output = child.wait_with_output().unwrap();
@@ -423,7 +421,7 @@ fn verified_content_waits_for_inherited_stdout_before_post_validation() {
     request["git_executable"] = json!(script);
     request["operation"] = json!({"kind":"verified_content","ref":":0","path":"data"});
     let (mut child, stdin) = fixture.start(&request);
-    wait_for_file(&ready, &mut child);
+    wait_for_fixture(&mut child, || ready.exists().then_some(()));
     assert!(
         child.try_wait().unwrap().is_none(),
         "worker accepted content before stdout EOF"
