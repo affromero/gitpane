@@ -480,7 +480,11 @@ Gitpane supports both the official desktop client and the legacy Herdr CLI.
 
 #### Official desktop (`herdr-app` and `hc`)
 
-Run gitpane inside a local terminal displayed by the official desktop client. Gitpane resolves `$HC_TERMINAL_ID` through `herdr-app ls` to find the calling terminal's pane, tab, and space. Hidden core workers and remote terminals do not select this backend. Both `herdr-app` and `hc` must be on `PATH`.
+For desktop integration, run gitpane inside a local terminal displayed by the official desktop client. Gitpane resolves `$HC_TERMINAL_ID` through `herdr-app ls` to find the calling terminal's pane, tab, and space. Hidden core workers and remote terminals do not select this backend. Both `herdr-app` and `hc` must be on `PATH`.
+
+In a remote terminal opened through **Add Machine**, or a headless herdr-core worker, run `gitpane --cwd` in the repository as usual. Keep `$HC_TERMINAL_ID` set. If the local `herdr-app` CLI is missing or its desktop socket is missing or no longer accepting connections, automatic detection continues with the normal terminal, tmux, or legacy Herdr backend. Desktop splits, tab creation, liveness markers, and focus require a displayed local desktop terminal; gitpane does not route these operations to the desktop on another machine.
+
+Invalid layout JSON, permission errors, timeouts, and other backend failures still report errors. Explicitly choosing `herdr-app` also reports errors when the local desktop is unavailable. Once gitpane has verified its source pane, it keeps that identity; launch and placement operations reject a missing or changed source pane instead of choosing a different target.
 
 - **Open / review:** `o` with no configured command opens a shell to the right at the selected repository or worktree directory. `v` runs the configured review command in a new tab. `split-window -h` / `split-window -v` map to right / down splits, and `new-window` creates a tab in the calling terminal's space.
 - **Explicit placement:** `split-window -t <pane-id>` targets that pane; `new-window -t <space-id|tab-id|pane-id>` creates a tab in its containing space. Unsupported tmux flags report an error. The current GUI focus does not determine the target.
