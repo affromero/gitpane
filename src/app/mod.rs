@@ -497,6 +497,7 @@ impl App {
         // `sort_repos` preserves the selection `RepoList::new` put on the
         // pre-sort first repo; at startup the user has selected nothing yet,
         // so land on the first *sorted* row instead.
+        app.repo_list.collapsed_submodules = app.config.ui.collapsed_submodules.clone();
         app.sort_repos();
         app.repo_list.select_repo_row(0);
         Ok(app)

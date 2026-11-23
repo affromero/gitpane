@@ -209,6 +209,7 @@ impl Default for UiConfig {
             update_position: UpdatePosition::default(),
             show_liveness: default_show_liveness(),
             expand_worktrees: default_expand_worktrees(),
+            collapsed_submodules: Default::default(),
             sync_repos: default_sync_repos(),
             sort: RepoSort::default(),
         }

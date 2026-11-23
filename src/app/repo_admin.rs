@@ -1,6 +1,18 @@
 use super::*;
 
 impl App {
+    pub(in crate::app) fn save_submodule_disclosures(&mut self) {
+        if self.config.ui.collapsed_submodules == self.repo_list.collapsed_submodules {
+            return;
+        }
+        let mut config = self.config.clone();
+        config.ui.collapsed_submodules = self.repo_list.collapsed_submodules.clone();
+        match config.save() {
+            Ok(()) => self.config = config,
+            Err(err) => self.error_message = Some((format!("save failed: {err}"), Instant::now())),
+        }
+    }
+
     /// Repo-list administration: pinning and removing repos, sort order,
     /// and filesystem-driven rescans. Split from `handle_action_rest` so
     /// each dispatch file stays under the line cap.
@@ -83,6 +95,10 @@ impl App {
                 if let Some(idx) = self.repo_list.resolve_index(id) {
                     let mut config = self.config.clone();
                     let entry = &self.repo_list.repos[idx];
+                    config
+                        .ui
+                        .collapsed_submodules
+                        .retain(|_, owner| owner != &entry.path);
                     // Remove from pinned if it was pinned
                     config
                         .pinned_repos
@@ -179,6 +195,7 @@ impl App {
                     self.config.ui.expand_worktrees,
                     self.theme.clone(),
                 );
+                self.repo_list.collapsed_submodules = self.config.ui.collapsed_submodules.clone();
                 self.repo_list
                     .register_action_handler(self.action_tx.clone())?;
                 self.repo_list.init()?;

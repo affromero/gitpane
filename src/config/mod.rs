@@ -169,6 +169,8 @@ pub(crate) struct UiConfig {
     /// many worktrees make the list too tall; `w` still toggles either way.
     #[serde(default = "default_expand_worktrees")]
     pub expand_worktrees: bool,
+    #[serde(default)]
+    pub collapsed_submodules: std::collections::BTreeMap<PathBuf, PathBuf>,
     /// Refresh additions and removals made by other running instances.
     #[serde(default = "default_sync_repos")]
     pub sync_repos: bool,

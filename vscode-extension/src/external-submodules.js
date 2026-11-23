@@ -1,9 +1,14 @@
 'use strict';
 
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { relativeFile } = require('./change-pager');
 
 const token = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+function submoduleStateKey(checkoutPath) {
+  return createHash('sha256').update(checkoutPath).digest('hex');
+}
 
 function compareSubmodulePaths(a, b, order) {
   const direction = order === 'reverse' ? -1 : 1;
@@ -61,7 +66,7 @@ function externalSubmodules(provider, vscode, options) {
       owner.status = child.status;
     }
     const status = child.status;
-    return { id, name: path.basename(child.repo), branch: status.branch || 'unborn', submodule: true,
+    return { id, submoduleStateKey: submoduleStateKey(child.repo), name: path.basename(child.repo), branch: status.branch || 'unborn', submodule: true,
       dirty: !!status.is_dirty, ahead: status.ahead || 0, behind: status.behind || 0,
       worktreeCount: 0, worktrees: [], stashes: [], stashCount: 0,
       hasDirtySubmodules: !!status.has_dirty_submodules, hasUnpushedSubmodules: !!status.has_unpushed_submodules,
@@ -78,4 +83,4 @@ function externalSubmodules(provider, vscode, options) {
   catch (error) { options.errors.push(`Could not inspect submodules in ${item.path}: ${error.message}`); return []; }
 }
 
-module.exports = { compareSubmodulePaths, externalSubmodules };
+module.exports = { compareSubmodulePaths, externalSubmodules, submoduleStateKey };

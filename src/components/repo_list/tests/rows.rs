@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn wheel_moves_viewport_and_keyboard_reveals_selection() {
+    use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/first", "/second", "/third", "/fourth", "/fifth"]);
+    let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+    let mut draw = |list: &mut RepoList| {
+        terminal.draw(|f| list.draw(f, f.area()).unwrap()).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    };
+    assert!(draw(&mut list).contains("first"));
+    for _ in 0..10 {
+        let action = list
+            .handle_mouse_event(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 2,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            })
+            .unwrap();
+        assert!(matches!(action, Some(Action::Render)));
+        draw(&mut list);
+    }
+    let scrolled = draw(&mut list);
+    assert!(scrolled.contains("fifth"));
+    assert!(!scrolled.contains("first"));
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/first"));
+    list.handle_key_event(KeyCode::Down.into()).unwrap();
+    assert!(draw(&mut list).contains("second"));
+    assert_eq!(list.selected_repo().unwrap().path, PathBuf::from("/second"));
+}
+
+#[test]
 fn pinned_submodules_follow_their_own_repo_or_worktree() {
     let mut list = make_list(&["/repo", "/repo/module", "/linked/module", "/other"]);
     list.repos[1].gitlink = true;

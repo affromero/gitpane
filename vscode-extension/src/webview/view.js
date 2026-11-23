@@ -78,11 +78,16 @@ function toggleWorktrees(repo) {
   render();
 }
 
-function toggleSubmodules(key) {
-  if (collapsedSubmodules.has(key)) collapsedSubmodules.delete(key);
+function submodulesExpanded(owner) {
+  return !collapsedSubmodules.has(owner.submoduleStateKey || owner.id);
+}
+
+function toggleSubmodules(key, owner) {
+  const stateKey = owner.submoduleStateKey || owner.id;
+  if (collapsedSubmodules.has(stateKey)) collapsedSubmodules.delete(stateKey);
   else {
     for (const child of visible.filter(item => item.parent === key && item.owner?.submodule)) releaseDescendants(child);
-    collapsedSubmodules.add(key);
+    collapsedSubmodules.add(stateKey);
   }
   save();
   render();
@@ -205,7 +210,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
       } else add(tail, 'stash', `$${repo.stashCount}`, `${repo.stashCount} stashes`);
     }
     if (repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
-      !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
+      submodulesExpanded(repo), () => toggleSubmodules(`repo:${repo.id}`, repo)));
     if (repo.worktreeCount > 0) {
       if (hasWorktrees) {
         const button = element('button', 'worktree worktree-action', `${showWorktrees ? '▾' : '▸'}⎇${repo.worktreeCount}`);
@@ -219,7 +224,7 @@ function repoRow(repo, info, isExpanded, hasWorktrees, hasStashes, showWorktrees
     }
   }
   if (repo.statusUnavailable && repo.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, repo,
-    !collapsedSubmodules.has(`repo:${repo.id}`), () => toggleSubmodules(`repo:${repo.id}`)));
+    submodulesExpanded(repo), () => toggleSubmodules(`repo:${repo.id}`, repo)));
   if (repo.live) add(tail, 'live', '◉', 'Live session');
   if (!repo.statusUnavailable) {
     addGitStatus(add, tail, repo);
@@ -279,7 +284,7 @@ function worktreeRow(worktree, info) {
   const tail = element('span', 'tail');
   tail.tabIndex = 0; tail.setAttribute('aria-label', 'Status indicators and actions');
   if (worktree.submodules?.length) tail.appendChild(window.GitpaneSubmoduleToggle(document, worktree,
-    !collapsedSubmodules.has(`worktree:${worktree.id}`), () => toggleSubmodules(`worktree:${worktree.id}`)));
+    submodulesExpanded(worktree), () => toggleSubmodules(`worktree:${worktree.id}`, worktree)));
   if (worktree.statusUnavailable) add(tail, 'behind', '!', worktree.statusError || 'Worktree status unavailable');
   if (worktree.live) add(tail, 'live', '◉', 'Live session');
   addGitStatus(add, tail, worktree);
@@ -502,7 +507,7 @@ function render() {
       repo.changesPage.state === 'error' || repo.changesPage.previous || repo.changesPage.next);
     const fileExpandable = groups.length > 0 || hasPage;
     const submodules = repo.submodules || [];
-    const submodulesOpen = submodules.length > 0 && !collapsedSubmodules.has(key);
+    const submodulesOpen = submodules.length > 0 && submodulesExpanded(repo);
     const hasChildren = (filesExpanded && (fileExpandable || stashes.length > 0)) || showWorktrees || stashOpen || submodulesOpen;
     const item = createItem(key, window.GitpaneRepositoryLabel(repo, countText(info)), repoRow(repo, info, filesExpanded, worktrees.length > 0, stashes.length > 0, showWorktrees),
       fileExpandable || worktrees.length > 0 || stashes.length > 0 || submodules.length > 0, hasChildren, parentKey);
@@ -588,14 +593,14 @@ function render() {
           worktree.changesPage.previous || worktree.changesPage.next);
       const worktreeItem = createItem(worktreeKey, worktreeLabel, worktreeRow(worktree, worktreeInfo),
         worktreeGroups.length > 0 || worktreeHasPage || !!worktree.submodules?.length,
-        worktreeExpanded || (!!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey)), key);
+        worktreeExpanded || (!!worktree.submodules?.length && submodulesExpanded(worktree)), key);
       worktreeItem.item.classList.add('worktree-item');
       worktreeItem.item.style.setProperty('--owner-depth', depth + 1);
       worktreeItem.worktreeId = worktree.id;
       worktreeItem.owner = worktree;
       worktreeItem.filesExpanded = worktreeExpanded;
       worktreeItem.fileExpandable = worktreeGroups.length > 0 || worktreeHasPage;
-      worktreeItem.submodulesOpen = !!worktree.submodules?.length && !collapsedSubmodules.has(worktreeKey);
+      worktreeItem.submodulesOpen = !!worktree.submodules?.length && submodulesExpanded(worktree);
       children.appendChild(worktreeItem.item);
       if (worktreeExpanded && (worktreeGroups.length || worktreeHasPage)) {
         requestChanges(worktree);
@@ -929,7 +934,7 @@ tree.addEventListener('keydown', event => {
     case 'End': select(visible[visible.length - 1]); break;
     case 'l':
     case 'ArrowRight':
-      if (current.owner?.submodules?.length && !current.submodulesOpen) toggleSubmodules(current.key);
+      if (current.owner?.submodules?.length && !current.submodulesOpen) toggleSubmodules(current.key, current.owner);
       else if ((current.key.startsWith('repo:') || current.key.startsWith('worktree:')) && current.fileExpandable && !current.filesExpanded) toggle(current);
       else if (current.expandable && !current.isExpanded) toggle(current);
       else if (visible[index + 1]?.parent === current.key) select(visible[index + 1]);
@@ -942,7 +947,7 @@ tree.addEventListener('keydown', event => {
         expandedStashes.delete(`stash-group:${current.owner.id}`);
         render();
       }
-      else if (current.submodulesOpen) toggleSubmodules(current.key);
+      else if (current.submodulesOpen) toggleSubmodules(current.key, current.owner);
       else if (current.expandable && current.isExpanded) toggle(current);
       else select(visible.find(item => item.key === current.parent));
       break;

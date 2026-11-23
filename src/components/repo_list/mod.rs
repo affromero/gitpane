@@ -123,6 +123,7 @@ pub(crate) struct RepoList {
     /// can shrink (or vanish) with no explanation.
     missing_roots: Vec<PathBuf>,
     pub state: ListState,
+    manual_viewport: bool,
     pub render_area: Rect,
     pub focused: bool,
     action_tx: Option<UnboundedSender<Action>>,
@@ -130,7 +131,7 @@ pub(crate) struct RepoList {
     /// Storing the delta rather than the state means a repo discovered later
     /// picks up the configured default with no bookkeeping.
     worktrees_toggled: HashSet<RepoId>,
-    collapsed_submodules: HashMap<PathBuf, PathBuf>,
+    pub(crate) collapsed_submodules: std::collections::BTreeMap<PathBuf, PathBuf>,
     submodule_counts: HashMap<PathBuf, usize>,
     /// `ui.expand_worktrees`: whether worktrees show without pressing `w`.
     expand_worktrees: bool,
@@ -277,12 +278,13 @@ impl RepoList {
             roots,
             missing_roots,
             state,
+            manual_viewport: false,
             pr_worktree_highlight: None,
             render_area: Rect::default(),
             focused: true,
             action_tx: None,
             worktrees_toggled: HashSet::new(),
-            collapsed_submodules: HashMap::new(),
+            collapsed_submodules: Default::default(),
             submodule_counts: HashMap::new(),
             expand_worktrees,
             expanded_stashes: HashSet::new(),
@@ -549,6 +551,7 @@ impl RepoList {
     /// Select the display row corresponding to a repo index.
     /// Used by app.rs when it needs to programmatically select a repo.
     pub fn select_repo_row(&mut self, repo_idx: usize) {
+        self.manual_viewport = false;
         for (di, row) in self.display_rows.iter().enumerate() {
             if matches!(row, DisplayRow::Repo(i) if *i == repo_idx) {
                 self.state.select(Some(di));
