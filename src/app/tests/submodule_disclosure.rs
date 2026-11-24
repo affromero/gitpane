@@ -47,6 +47,7 @@ async fn removing_and_adding_a_repo_resets_its_submodule_disclosures() {
         branch: "linked".into(),
         ahead: 0,
         behind: 0,
+        default_branch_lag: None,
         is_dirty: false,
         file_count: 0,
         has_dirty_submodules: false,

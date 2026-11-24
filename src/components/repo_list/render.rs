@@ -40,7 +40,7 @@ pub(super) fn indicator_columns(
     };
     let mut x = base_x.saturating_add(layout.attention_x());
     for (text, kind) in attention_cells(status, false, false) {
-        let width = text.chars().count() as u16;
+        let width = ratatui::text::Span::raw(text).width() as u16;
         match kind {
             AttentionCell::Stash => out.stash = Some((x, x + width)),
             AttentionCell::Worktree => out.worktree = Some((x, x + width)),

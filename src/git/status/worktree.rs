@@ -3,8 +3,8 @@ use crate::git::process::{kill_process_group, spawn_killable, unregister_killabl
 use git2::Repository;
 use std::path::Path;
 
-use super::WorktreeEntry;
 use super::change_summary::{ChangeSummary, collect_change_summary};
+use super::{DefaultBranchLag, WorktreeEntry, default_branch_names};
 
 /// Collect details for each linked worktree using the git2 API.
 /// Mirrors the pattern in `git/graph.rs::collect_worktree_branches`.
@@ -74,6 +74,7 @@ pub(super) fn collect_worktree_info(
             branch,
             ahead,
             behind,
+            default_branch_lag: default_branch_lag(&wt_repo),
             is_dirty: summary.is_dirty,
             file_count: summary.files.len(),
             has_dirty_submodules: summary.has_dirty_submodules,
@@ -137,6 +138,39 @@ pub(super) fn fetch_remote_silent(path: &Path) -> bool {
 
     unregister_killable_pid(pid);
     result
+}
+
+pub(super) fn default_branch_lag(repo: &Repository) -> Option<DefaultBranchLag> {
+    let head = repo.head().ok()?;
+    if !head.is_branch() {
+        return None;
+    }
+    let (branch, short_branch) = default_branch_names(repo)?;
+    let base = repo
+        .find_reference(&format!("refs/remotes/{branch}"))
+        .ok()?
+        .resolve()
+        .ok()?;
+    let local = repo
+        .find_branch(head.shorthand().ok()?, git2::BranchType::Local)
+        .ok()?;
+    if let Ok(upstream) = local.upstream()
+        && upstream
+            .get()
+            .resolve()
+            .ok()
+            .is_some_and(|upstream| upstream.name_bytes() == base.name_bytes())
+    {
+        return None;
+    }
+    let (_, behind) = repo
+        .graph_ahead_behind(head.target()?, base.target()?)
+        .ok()?;
+    (behind > 0).then_some(DefaultBranchLag {
+        branch,
+        short_branch,
+        behind,
+    })
 }
 
 /// Returns (ahead, behind) for HEAD relative to its publishing target.
