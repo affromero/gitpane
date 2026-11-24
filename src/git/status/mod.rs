@@ -22,7 +22,9 @@ pub(crate) use changes::{ChangeError, collect_changes};
 pub(crate) use submodule::{
     regular_submodule_blocker, submodule_candidate_paths, submodule_registrations,
 };
-use worktree::{collect_worktree_info, compute_ahead_behind, fetch_remote_silent};
+use worktree::{
+    collect_worktree_info, compute_ahead_behind, default_branch_lag, fetch_remote_silent,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct RepoStatus {
@@ -33,6 +35,7 @@ pub(crate) struct RepoStatus {
     pub file_count_lower_bound: usize,
     pub ahead: usize,
     pub behind: usize,
+    pub default_branch_lag: Option<DefaultBranchLag>,
     pub is_dirty: bool,
     /// Linked worktrees (excludes the main working tree)
     pub worktree_info: Vec<WorktreeEntry>,
@@ -196,6 +199,13 @@ pub(crate) struct SubmoduleWarn {
     pub needs_merge_to_default: bool,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct DefaultBranchLag {
+    pub branch: String,
+    pub short_branch: String,
+    pub behind: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct WorktreeEntry {
     #[allow(
@@ -207,6 +217,7 @@ pub(crate) struct WorktreeEntry {
     pub branch: String,
     pub ahead: usize,
     pub behind: usize,
+    pub default_branch_lag: Option<DefaultBranchLag>,
     pub is_dirty: bool,
     pub file_count: usize,
     pub has_dirty_submodules: bool,
@@ -412,6 +423,11 @@ fn query_status_inner(
 
     // Ahead/behind
     let (ahead, behind) = compute_ahead_behind(&repo);
+    let default_branch_lag = if repo.is_worktree() {
+        default_branch_lag(&repo)
+    } else {
+        None
+    };
 
     let ChangeSummary {
         files,
@@ -441,6 +457,7 @@ fn query_status_inner(
         file_count_lower_bound,
         ahead,
         behind,
+        default_branch_lag,
         is_dirty,
         worktree_info,
         has_submodules,
@@ -462,20 +479,28 @@ fn query_status_inner(
 /// workspaces without an `origin` still get a review base; repos with
 /// remote-tracking refs but no configured remotes fall back to `origin`.
 pub(crate) fn default_branch_name(repo: &Repository) -> Option<String> {
+    default_branch_names(repo).map(|(branch, _)| branch)
+}
+
+fn default_branch_names(repo: &Repository) -> Option<(String, String)> {
     let remote = crate::git::preferred_remote(repo).unwrap_or_else(|| "origin".to_string());
-    if let Ok(head_ref) = repo.find_reference(&format!("refs/remotes/{remote}/HEAD"))
+    let prefix = format!("{remote}/");
+    if let Ok(head_ref) = repo.find_reference(&format!("refs/remotes/{prefix}HEAD"))
         && let Ok(Some(target_name)) = head_ref.symbolic_target()
         && repo.find_reference(target_name).is_ok()
         && let Some(short) = target_name.strip_prefix("refs/remotes/")
     {
-        return Some(short.to_string());
+        return Some((
+            short.to_string(),
+            short.strip_prefix(&prefix).unwrap_or(short).to_string(),
+        ));
     }
     for branch in ["main", "master"] {
         if repo
             .find_reference(&format!("refs/remotes/{remote}/{branch}"))
             .is_ok()
         {
-            return Some(format!("{remote}/{branch}"));
+            return Some((format!("{prefix}{branch}"), branch.to_string()));
         }
     }
     None

@@ -2,6 +2,33 @@ use super::indicator_columns;
 use super::*;
 
 #[test]
+fn worktree_row_keeps_default_branch_lag_visible_beside_the_upstream_count() {
+    use crate::git::status::DefaultBranchLag;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut list = make_list(&["/repo"]);
+    let mut status = empty_status("main");
+    let mut worktree = worktree_entry("feature/a-branch-name-too-long-to-fit");
+    worktree.behind = 2;
+    worktree.default_branch_lag = Some(DefaultBranchLag {
+        branch: "origin/main".into(),
+        short_branch: "main".into(),
+        behind: 6,
+    });
+    status.worktree_info.push(worktree);
+    list.repos[0].status = Some(status);
+    list.rebuild_display_rows();
+
+    let mut terminal = Terminal::new(TestBackend::new(35, 6)).unwrap();
+    terminal
+        .draw(|frame| list.draw(frame, frame.area()).unwrap())
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let row = (0..35).map(|x| buffer[(x, 2)].symbol()).collect::<String>();
+    assert!(row.contains("↓2 ↓6 main"), "{row}");
+}
+
+#[test]
 fn submodule_worktree_is_indented_and_uses_the_worktree_palette() {
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 

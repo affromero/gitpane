@@ -338,6 +338,7 @@ fn test_status(branch: &str, head_oid: Option<&str>) -> RepoStatus {
         file_count_lower_bound: 0,
         ahead: 0,
         behind: 0,
+        default_branch_lag: None,
         is_dirty: false,
         worktree_info: Vec::new(),
         has_submodules: false,

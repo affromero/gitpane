@@ -893,7 +893,7 @@ impl RepoList {
                     AttentionCell::Stash => t.stash,
                     AttentionCell::Worktree => t.worktree_count,
                     AttentionCell::Ahead => t.ahead,
-                    AttentionCell::Behind => t.behind,
+                    AttentionCell::Behind | AttentionCell::DefaultBranchLag => t.behind,
                     AttentionCell::DirtySub => t.dirty_submodule,
                     AttentionCell::UnpushedSub => t.unpushed_submodule,
                     AttentionCell::FetchWarn => t.fetch_failed,

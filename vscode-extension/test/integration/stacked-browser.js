@@ -37,7 +37,8 @@ const apiRepo = owner('api','api-service','main',true,[
   group('index','Staged',[file('api-staged','src/routes/users.ts','M')]),
   group('working','Unstaged',[file('api-working','src/services/auth.ts','M')]),
   group('untracked','Untracked',[file('api-new','tests/auth.test.ts','?')])]);
-const linked = { ...owner('auth','api-auth','feature/oauth',true,[group('working','Unstaged',[file('auth-file','src/oauth.ts','M')])]), available:true };
+const linked = { ...owner('auth','api-auth','feature/oauth',true,[group('working','Unstaged',[file('auth-file','src/oauth.ts','M')])]),
+ available:true,behind:2,defaultBranchLag:{branch:'origin/main',short_branch:'main',behind:6} };
 apiRepo.worktrees=[linked];apiRepo.worktreeCount=1;
 const webRepo = owner('web','web-app','feature/dashboard',true,[group('working','Unstaged',[file('web-file','src/dashboard.ts','M')])]);
 const cleanRepo = owner('lib','shared-lib','main',false);
@@ -92,6 +93,11 @@ window.addEventListener('DOMContentLoaded',()=>{(async()=>{
   await wait(()=>ready.size===3&&doc('graph').querySelectorAll('.commit').length===40);await tick();
   check('Changes are a separate section',doc('changes').body.dataset.view==='changes'&&doc('changes').querySelector('.file-row'));
   check('Repo list stays free of duplicate file rows',!doc('repos').querySelector('.file-row'));
+  const linkedRow=doc('repos').querySelector('[data-key="worktree:auth"]');
+  const baseLag=linkedRow.querySelector('[title="6 commits behind origin/main (remote default branch)"]');
+  check('Worktrees distinguish upstream and default branch lag',
+    linkedRow.textContent.includes('↓2')&&baseLag?.textContent==='↓6 main'&&
+    linkedRow.getAttribute('aria-label').includes('6 commits behind origin/main'));
   check('Repo search toolbar is reserved for Changes',getComputedStyle(doc('repos').querySelector('.search-toolbar')).display==='none');
   check('Graph uses compact sidebar presentation',doc('graph').body.classList.contains('sidebar'));
   check('Graph accepts its native theme',!doc('graph').getElementById('theme-status').textContent);
