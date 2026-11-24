@@ -6,7 +6,7 @@ human-facing overview, see [README.md](README.md).
 
 ## Setup
 
-- Rust edition 2024, MSRV **1.88.0**. Install a matching toolchain (rustup recommended).
+- Rust edition 2024, MSRV **1.91.0**. Install a matching toolchain (rustup recommended).
 - No services or network access are needed to build, run, or test.
 - Full integration coverage requires `git` on PATH, plus `sh` and `sleep` on
   Unix. CLI tests use `crate::git::git_test_available()` to skip only missing
@@ -165,6 +165,10 @@ Linux or Windows behavior.
   steps before and after for changes to existing behavior, or show a new
   feature in use. If a GIF does not apply, briefly explain why in the Demo
   section.
+- For changes likely to affect TUI runtime, compare the base and proposed
+  binaries with `scripts/benchmark_runtime.py` and include the report in the
+  PR. Build both with the same toolchain and profile, and describe any
+  regressions alongside improvements.
 
 ## Releasing
 

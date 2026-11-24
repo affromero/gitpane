@@ -14,7 +14,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  MSRV: 1.88.0
+  MSRV: 1.91.0
 
 jobs:
   vscode-packages:
@@ -95,8 +95,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+          # Keep the existing required check name on the Intel runner.
+          - os: macos-latest
+            runner: macos-26-intel
+          - os: macos-arm64
+            runner: macos-latest
+          - os: windows-latest
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -137,6 +146,12 @@ jobs:
       - name: Test TUI startup against release binary
         if: runner.os != 'Windows'
         run: python3 scripts/check_tui_startup.py target/release/gitpane
+
+      - name: Smoke test the TUI runtime benchmark
+        if: runner.os != 'Windows'
+        run: >-
+          python3 scripts/benchmark_runtime.py target/release/gitpane target/release/gitpane
+          --repos 2 --modules-per-repo 1 --runs 1 --settle-seconds 2 --idle-seconds 1
 
       - name: Test VS Code bridge and comparisons against release binary
         env:

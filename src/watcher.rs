@@ -1,8 +1,6 @@
 use ignore::WalkBuilder;
-use notify_debouncer_full::{
-    DebounceEventResult, Debouncer, NoCache, new_debouncer_opt,
-    notify::{Config, RecommendedWatcher, RecursiveMode},
-};
+use notify::{Config, PathOp, RecommendedWatcher};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -208,50 +206,40 @@ fn watch_dirs(root: &Path, exclude_set: &HashSet<String>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Install a non-recursive notify watch on each gitignore-aware working-tree
-/// directory. Git metadata is watched separately at its resolved location.
-/// We do the walk ourselves (rather than asking notify for
-/// `RecursiveMode::Recursive`) so we never descend into symlinks that point at
-/// restricted system paths, and so ignored / build dirs never hit inotify.
-fn install_filtered_watches(
+/// Keep the successful prefix of a failed batch and resume after the bad path.
+/// An error without a path means the watcher itself may be unusable.
+fn install_watches(
     debouncer: &mut Debouncer<RecommendedWatcher, NoCache>,
-    root: &Path,
-    exclude_set: &HashSet<String>,
-    watch_worktree_dirs: bool,
-) {
-    if watch_worktree_dirs {
-        let mut watched_root = false;
-        for dir in watch_dirs(root, exclude_set) {
-            let is_root = dir.as_path() == root;
-            match debouncer.watch(&dir, RecursiveMode::NonRecursive) {
-                Ok(()) => {
-                    if is_root {
-                        watched_root = true;
-                    }
-                }
-                Err(e) => {
-                    if is_root {
-                        tracing::warn!("Failed to watch repo {}: {}", dir.display(), e);
-                    } else {
-                        tracing::debug!("skip watch on {}: {}", dir.display(), e);
-                    }
-                }
-            }
+    mut pending: Vec<PathOp>,
+    roots: &HashSet<&Path>,
+) -> color_eyre::Result<()> {
+    let mut installed = false;
+    let mut last_error = None;
+    while !pending.is_empty() {
+        let attempted = pending.len();
+        let Err(error) = debouncer.update_paths(pending) else {
+            return Ok(());
+        };
+        let Some(failed) = error.origin else {
+            return Err(error.source.into());
+        };
+        let path = failed.as_path();
+        if roots.contains(path) {
+            tracing::warn!("Failed to watch root {}: {}", path.display(), error.source);
+        } else {
+            tracing::debug!("skip watch on {}: {}", path.display(), error.source);
         }
-        if !watched_root {
-            tracing::debug!("no usable watch installed for repo {}", root.display());
-        }
-    } else {
-        match debouncer.watch(root, RecursiveMode::NonRecursive) {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::warn!("Failed to watch repo {}: {}", root.display(), e);
-            }
-        }
+        installed |= attempted > error.remaining.len() + 1;
+        last_error = Some(error.source);
+        pending = error.remaining;
+    }
+    match last_error {
+        Some(error) if !installed => Err(error.into()),
+        _ => Ok(()),
     }
 }
 
-/// Re-install the small set of `.git` watches the change classifier depends on.
+/// Collect the small set of `.git` watches the change classifier depends on.
 /// `classify` treats `.git/HEAD`, `index`, `packed-refs`, `MERGE_HEAD`,
 /// `REBASE_HEAD`, `COMMIT_EDITMSG`, and anything under `.git/refs/` as
 /// meaningful — that is how commits, checkouts, merges, and branch updates
@@ -259,27 +247,72 @@ fn install_filtered_watches(
 /// directory under `.git/refs`, and deliberately skip `.git/objects` (huge and
 /// never classified as meaningful). `git_dir` is a resolved private or shared
 /// metadata directory, including the target of a worktree's gitdir file.
-fn watch_git_metadata(debouncer: &mut Debouncer<RecommendedWatcher, NoCache>, git_dir: &Path) {
+fn collect_git_metadata_dirs(dirs: &mut Vec<PathBuf>, git_dir: &Path) {
     if !git_dir.is_dir() {
         return;
     }
-    if let Err(e) = debouncer.watch(git_dir, RecursiveMode::NonRecursive) {
-        tracing::debug!("skip watch on {}: {}", git_dir.display(), e);
-    }
+    dirs.push(git_dir.to_path_buf());
     let refs_dir = git_dir.join("refs");
     if !refs_dir.is_dir() {
         return;
     }
-    for entry in WalkDir::new(&refs_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if entry.file_type().is_dir()
-            && let Err(e) = debouncer.watch(entry.path(), RecursiveMode::NonRecursive)
-        {
-            tracing::debug!("skip watch on {}: {}", entry.path().display(), e);
-        }
+    dirs.extend(
+        WalkDir::new(refs_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_dir())
+            .map(walkdir::DirEntry::into_path),
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn watcher_nofile_target(
+    soft: libc::rlim_t,
+    hard: libc::rlim_t,
+    paths: usize,
+) -> Option<libc::rlim_t> {
+    // Notify 9 derives its FSEvents root budget from one twelfth of the soft
+    // limit. Allow room for the current and replacement watchers to overlap.
+    const DESCRIPTORS_PER_PATH: usize = 12 * 2;
+    const MAX_AUTOMATIC_LIMIT: usize = 16_384;
+    let needed = paths
+        .saturating_mul(DESCRIPTORS_PER_PATH)
+        .min(MAX_AUTOMATIC_LIMIT) as libc::rlim_t;
+    let target = needed.min(hard);
+    (target > soft).then_some(target)
+}
+
+#[cfg(target_os = "macos")]
+fn reserve_fsevents_budget(paths: usize) {
+    static LIMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LIMIT_LOCK.lock().unwrap();
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: getrlimit writes a valid rlimit on success.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) } != 0 {
+        tracing::warn!(
+            "Could not read the open-file limit: {}",
+            std::io::Error::last_os_error()
+        );
+        return;
+    }
+    // SAFETY: getrlimit succeeded above.
+    let mut limit = unsafe { limit.assume_init() };
+    let Some(target) = watcher_nofile_target(limit.rlim_cur, limit.rlim_max, paths) else {
+        return;
+    };
+    let previous = limit.rlim_cur;
+    limit.rlim_cur = target;
+    // SAFETY: limit is initialized and the inherited hard limit is unchanged.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        tracing::warn!(
+            "Could not raise the open-file limit to {target}: {}",
+            std::io::Error::last_os_error()
+        );
+    } else {
+        tracing::debug!(
+            "Raised the process open-file limit from {previous} to {target} for filesystem watches"
+        );
     }
 }
 
@@ -348,11 +381,12 @@ impl RepoWatcher {
             }
         });
 
-        let config = Config::default().with_poll_interval(Duration::from_secs(2));
+        let config = notify_debouncer_full::Config::default()
+            .with_timeout(Duration::from_millis(debounce_ms))
+            .with_notify_config(Config::default().with_poll_interval(Duration::from_secs(2)));
 
         let mut debouncer = new_debouncer_opt::<_, RecommendedWatcher, NoCache>(
-            Duration::from_millis(debounce_ms),
-            None,
+            config,
             move |result: DebounceEventResult| {
                 if let Ok(events) = result {
                     let paths: Vec<PathBuf> =
@@ -363,7 +397,6 @@ impl RepoWatcher {
                 }
             },
             NoCache,
-            config,
         )?;
 
         // Walk each repo ourselves and install a non-recursive watch per
@@ -372,27 +405,36 @@ impl RepoWatcher {
         // `dosdevices/z:` -> `/` link (which would attempt to watch
         // root-owned dirs like `/tmp/systemd-private-*` and emit permission
         // errors). It also keeps inotify off vendored / build dirs.
-        for path in &owned_repo_paths {
-            if !path.exists() {
-                continue;
-            }
-            install_filtered_watches(&mut debouncer, path, &exclude_set, watch_worktree_dirs);
-        }
+        let roots: HashSet<_> = owned_repo_paths
+            .iter()
+            .chain(&owned_root_dirs)
+            .map(PathBuf::as_path)
+            .collect();
+        // Reserve watches for discovery and Git metadata before optional
+        // nested worktree paths, which can otherwise fill the OS watch budget.
+        let mut dirs: Vec<_> = owned_root_dirs
+            .iter()
+            .chain(&owned_repo_paths)
+            .filter(|path| path.exists())
+            .cloned()
+            .collect();
         for git_dir in metadata_dirs {
-            watch_git_metadata(&mut debouncer, &git_dir);
+            collect_git_metadata_dirs(&mut dirs, &git_dir);
         }
-
-        // Watch each configured root non-recursively so we notice top-level
-        // children appearing or disappearing (new clones, deleted repos).
-        // FSEvents on macOS may still deliver events for deeper paths; the
-        // routing classifier above filters those out.
-        for root in &owned_root_dirs {
-            if root.exists()
-                && let Err(e) = debouncer.watch(root, RecursiveMode::NonRecursive)
-            {
-                tracing::warn!("Failed to watch root dir {}: {}", root.display(), e);
+        if watch_worktree_dirs {
+            for path in owned_repo_paths.iter().filter(|path| path.exists()) {
+                dirs.extend(watch_dirs(path, &exclude_set));
             }
         }
+        let mut seen = HashSet::new();
+        let ops: Vec<_> = dirs
+            .into_iter()
+            .filter(|path| seen.insert(path.clone()))
+            .map(PathOp::watch_non_recursive)
+            .collect();
+        #[cfg(target_os = "macos")]
+        reserve_fsevents_budget(ops.len());
+        install_watches(&mut debouncer, ops, &roots)?;
 
         Ok(Self {
             _debouncer: debouncer,
@@ -403,6 +445,75 @@ impl RepoWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn watcher_open_file_allowance_respects_current_hard_and_automatic_limits() {
+        assert_eq!(watcher_nofile_target(256, 20_000, 10), None);
+        assert_eq!(watcher_nofile_target(256, 20_000, 20), Some(480));
+        assert_eq!(watcher_nofile_target(256, 512, 100), Some(512));
+        assert_eq!(
+            watcher_nofile_target(256, libc::RLIM_INFINITY, usize::MAX),
+            Some(16_384)
+        );
+        assert_eq!(
+            watcher_nofile_target(20_000, libc::RLIM_INFINITY, usize::MAX),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_batch_path_does_not_drop_valid_watches_on_either_side() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let first = root.join("first");
+        let missing = root.join("missing");
+        let last = root.join("last");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&last).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let config =
+            notify_debouncer_full::Config::default().with_timeout(Duration::from_millis(20));
+        let mut debouncer = new_debouncer_opt::<_, RecommendedWatcher, NoCache>(
+            config,
+            move |events: DebounceEventResult| {
+                if let Ok(events) = events {
+                    for path in events.into_iter().flat_map(|event| event.event.paths) {
+                        let _ = tx.send(path);
+                    }
+                }
+            },
+            NoCache,
+        )
+        .unwrap();
+        let ops = [&first, &missing, &last]
+            .into_iter()
+            .map(PathOp::watch_non_recursive)
+            .collect();
+        install_watches(&mut debouncer, ops, &HashSet::new()).unwrap();
+
+        let mut pending = HashSet::from([first.as_path(), last.as_path()]);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut writes = tokio::time::interval(Duration::from_millis(100));
+            let mut generation = 0;
+            while !pending.is_empty() {
+                tokio::select! {
+                    _ = writes.tick() => {
+                        generation += 1;
+                        for dir in &pending {
+                            std::fs::write(dir.join("changed"), generation.to_string()).unwrap();
+                        }
+                    }
+                    Some(path) = rx.recv() => {
+                        // Some backends also emit directory-level events.
+                        pending.retain(|dir| !path.starts_with(dir));
+                    }
+                }
+            }
+        })
+        .await
+        .expect("both valid registrations must emit filesystem changes");
+    }
 
     #[cfg(windows)]
     #[test]

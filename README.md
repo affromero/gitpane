@@ -14,7 +14,7 @@
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square&color=blue" alt="crates.io"></a>
     <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane?logo=rust&style=flat-square" alt="docs.rs"></a>
     <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg?style=flat-square" alt="Dependency status"></a>
-    <a href="https://github.com/affromero/gitpane/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-dea584?style=flat-square&logo=rust" alt="MSRV 1.88.0"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.91.0-dea584?style=flat-square&logo=rust" alt="MSRV 1.91.0"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads&style=flat-square&color=blue" alt="Downloads"></a>
     <br>
     <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release&style=flat-square&color=blue" alt="GitHub Release"></a>
@@ -435,6 +435,12 @@ command = "cursor {path}"
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.
 
+On macOS, GitPane can raise its own soft open-file limit when its filesystem
+watches need more capacity. The increase stays within the inherited hard limit
+and tops out at 16,384. Repository discovery, repository roots, and Git metadata
+get watch slots before optional nested worktree directories. Local polling
+continues to refresh known repositories when a watch cannot be installed.
+
 ### Opening a repo or worktree
 
 Press `o` (or pick `Open` from the right click menu) to launch the highlighted repo, or worktree if a worktree row is selected, in its own directory.
@@ -808,6 +814,27 @@ Optional tooling for the full local suite:
 ```bash
 cargo install cargo-audit cargo-llvm-cov
 ```
+
+### Runtime benchmarks
+
+For changes likely to affect TUI performance, build the base and proposed
+commits with the same toolchain and Cargo profile, then compare the binaries
+on the same macOS or Linux machine with Python 3.10+ and Git on PATH.
+
+```bash
+python3 scripts/benchmark_runtime.py /tmp/gitpane-base /tmp/gitpane-pr
+```
+
+The script uses an isolated workspace and alternates the binaries after one
+warmup each. It reports first render, watcher setup, file-change visibility,
+idle CPU and resident memory, peak memory, and total CPU. Paste the Markdown
+report into the PR. Use `--format json` for individual measurements.
+The idle and edit measurements start at fixed offsets from launch. Increase
+`--settle-seconds` for workspaces that take longer to start.
+For watcher stress tests, use `--nested-watches --open-file-limit 16384`.
+To help isolate event-driven refresh from polling and throttling in that test,
+add `--poll-local-secs 60 --refresh-cooldown-ms 0`.
+Use `--help` to adjust workspace size or the number of runs.
 
 ### Project structure
 
