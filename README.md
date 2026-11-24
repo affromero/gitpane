@@ -86,9 +86,9 @@ in an editor tab; selecting a repository keeps the graph in the sidebar.
 The view follows VS Code's Git repository discovery within the current workspace,
 including multi-root workspaces. It updates when workspace folders or detected
 repositories change and refreshes local status while visible. Linked worktrees
-inside the workspace have their own rows and actions. Gitpane does not fetch
-remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
-macOS or Linux. VS Code's own Git auto-fetch setting works independently.
+inside the workspace have their own rows and actions. On macOS and Linux,
+Gitpane fetches remotes every 30 seconds while visible. Use **Gitpane: Fetch
+Workspace** to fetch immediately.
 
 Install [Gitpane for VS Code from the Marketplace](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode),
 or run:
@@ -129,6 +129,7 @@ VS Code Settings for **Gitpane**:
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace, or select workspace, alphabetical, reverse or dirty order. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Use native `expand_worktrees`, or start expanded or collapsed. Saved choices for individual repositories take precedence. |
 | `gitpane.refreshInterval` | `5` | Seconds between visible repository status, expanded-file and graph refreshes, from 1 to 300. |
+| `gitpane.fetchInterval` | `30` | Seconds between automatic workspace fetches while Gitpane is visible on macOS or Linux. Set to `0` to turn it off. |
 | `gitpane.showSessionLiveness` | `true` | Show live session indicators and monitor sessions while the view is visible. |
 | `gitpane.graph.firstParent` | `false` | Start newly opened graphs in first-parent mode. |
 | `gitpane.graph.labelMaxLength` | `-1` | Inherit native label length, or set 0 to 120 characters. Zero displays an ellipsis. |

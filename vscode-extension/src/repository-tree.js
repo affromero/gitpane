@@ -730,7 +730,8 @@ class RepositoryTree {
     this.groupCache.delete(key);
   }
 
-  configureView({ refreshInterval, showSessionLiveness, showOutsideWorktrees, autoDiscoverSubmodules }) {
+  configureView({ refreshInterval, showSessionLiveness, showOutsideWorktrees, autoDiscoverSubmodules, fetchInterval }) {
+    this.workspaceFetch?.configureView({ fetchInterval });
     const intervalChanged = this.refreshInterval !== refreshInterval;
     const livenessChanged = this.showSessionLiveness !== showSessionLiveness;
     const outsideChanged = this.showOutsideWorktrees !== !!showOutsideWorktrees;
@@ -750,6 +751,7 @@ class RepositoryTree {
 
   setVisible(visible) {
     this.visible = visible;
+    this.workspaceFetch?.setVisible(visible);
     this.liveness?.setVisible(visible && this.showSessionLiveness);
     this.pins?.setVisible(visible);
     this.workspaceRepositories?.setVisible(visible);
@@ -973,6 +975,7 @@ class RepositoryTree {
   }
 
   dispose() {
+    this.workspaceFetch?.dispose();
     this.disposed = true;
     this.submoduleHierarchy.dispose();
     this.liveness?.dispose();

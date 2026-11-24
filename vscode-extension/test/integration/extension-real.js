@@ -712,6 +712,7 @@ async function main() {
   }
   const oldMain = git('rev-parse', 'refs/remotes/origin/main');
   const oldLinked = git('rev-parse', 'refs/remotes/review/main');
+  await vscode.workspace.getConfiguration('gitpane').update('fetchInterval', 0);
   await commands.get('gitpane.refresh')();
   assert.equal(git('rev-parse', 'refs/remotes/origin/main'), oldMain, 'ordinary refresh must not fetch');
   assert.equal(git('rev-parse', 'refs/remotes/review/main'), oldLinked, 'ordinary refresh must not fetch linked worktree remote');
@@ -730,6 +731,7 @@ async function main() {
     assert.equal(git('rev-parse', 'refs/remotes/origin/main'), gitAt(mainWriter, 'rev-parse', 'HEAD'));
     assert.equal(git('rev-parse', 'refs/remotes/review/main'), gitAt(linkedWriter, 'rev-parse', 'HEAD'));
     console.log('PASS explicit workspace fetch respects different worktree remotes');
+    await require('./workspace-fetch-real')({ vscode, git, gitAt, mainWriter, snapshots });
   }
 
   vscode.workspace.workspaceFolders = [{ uri: uri(path.dirname(repoPath)) }, { uri: uri(worktreePath) }];
