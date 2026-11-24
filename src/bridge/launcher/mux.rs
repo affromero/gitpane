@@ -356,18 +356,29 @@ fn core_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeEr
             "Run gitpane inside a herdr-core terminal to use this launcher.",
         )
     })?;
-    let space = crate::session::herdr_core::source_space()
+    let source = crate::session::herdr_core::source()
         .map_err(|message| error("unsupported_placement", message))?;
+    // Bind the space and the tab into the token, so a terminal that moved
+    // between choosing and executing is stale rather than opening elsewhere.
+    let context = match &source.tab {
+        Some(tab) => format!("{terminal}\0{}\0{tab}", source.space),
+        None => format!("{terminal}\0{}", source.space),
+    };
+    let beside = source.tab.is_some();
     let mut result = Vec::new();
     add_choice(
         &mut result,
         identity,
         action,
         "herdr-core",
-        &format!("{terminal}\0{space}"),
+        &context,
         (
             "configured".into(),
-            format!("New tab in this space (from {terminal})"),
+            if beside {
+                format!("Beside gitpane (from {terminal})")
+            } else {
+                format!("New tab in this space (from {terminal})")
+            },
             action.placement.clone(),
         ),
     );
@@ -820,10 +831,13 @@ pub(in crate::bridge) fn execute(
         // A core launch is one `hc run`, and its reply names the terminal it
         // created. Read the space again here: the token above proves it has not
         // moved since the choice was made, so this is the value to use.
-        LaunchPlan::HerdrCore { dir, command } => {
-            let space = crate::session::herdr_core::source_space()
+        LaunchPlan::HerdrCore { dir, command, tab } => {
+            let mut source = crate::session::herdr_core::source()
                 .map_err(|message| error("session_error", message))?;
-            let argv = crate::session::herdr_core::run_argv(&dir, command.as_deref(), &space);
+            if !tab {
+                source.tab = None;
+            }
+            let argv = crate::session::herdr_core::run_argv(&dir, command.as_deref(), &source);
             match crate::session::herdr_core::launch(&argv, &repo) {
                 crate::session::herdr_core::Created::Terminal(_) => {}
                 crate::session::herdr_core::Created::Refused(message) => {

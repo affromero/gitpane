@@ -53,14 +53,26 @@ pub(crate) fn terminal_id() -> Option<String> {
         .filter(|value| valid_address(value))
 }
 
-/// The space this process's terminal belongs to, read from its own labels.
+/// Where the calling terminal sits: the labels a new terminal must carry to
+/// appear beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Source {
+    /// The space to open in. Carrying it is what makes a terminal visible.
+    pub(crate) space: String,
+    /// The tab to open in, when the calling terminal has one. Placing the new
+    /// terminal in the same tab splits it beside gitpane; without it the window
+    /// starts a new tab in the space.
+    pub(crate) tab: Option<String>,
+}
+
+/// Read the calling terminal's own labels.
 ///
 /// Fails rather than guessing: a caller with no terminal, a terminal that has
 /// finished, and a terminal that never opted into the window are all reported,
 /// because each needs the person to do something different. Only a query that
 /// could not run at all leaves the space unknown — that is an error too, never
 /// a silent "no space".
-pub(crate) fn source_space() -> Result<String, String> {
+pub(crate) fn source() -> Result<Source, String> {
     let terminal = terminal_id().ok_or_else(|| {
         "no Herdr terminal here: run gitpane inside a Herdr-managed terminal, \
          or set [open] placement = \"inline\""
@@ -76,10 +88,10 @@ pub(crate) fn source_space() -> Result<String, String> {
             error_detail(&output)
         ));
     }
-    parse_source_space(&output.stdout, &terminal)
+    parse_source(&output.stdout, &terminal)
 }
 
-fn parse_source_space(output: &[u8], terminal: &str) -> Result<String, String> {
+fn parse_source(output: &[u8], terminal: &str) -> Result<Source, String> {
     let value: Value = serde_json::from_slice(output)
         .map_err(|error| format!("invalid hc terminal response: {error}"))?;
     if value.get("address").and_then(Value::as_str) != Some(terminal) {
@@ -95,32 +107,47 @@ fn parse_source_space(output: &[u8], terminal: &str) -> Result<String, String> {
         }
         None => return Err("invalid hc terminal response: missing state".into()),
     }
-    let space = value
-        .get("labels")
-        .and_then(Value::as_object)
+    let labels = value.get("labels").and_then(Value::as_object);
+    let space = labels
         .and_then(|labels| labels.get("herdr.space"))
         .and_then(Value::as_str);
-    match space {
-        Some(space) if valid_label_value(space) => Ok(space.to_string()),
-        Some(_) => Err("this terminal's herdr.space label is not a usable id".into()),
-        None => Err(
-            "this terminal is not displayed in the Herdr window, so there is no space to \
-             open a tab in; run gitpane in a Herdr-managed terminal, or set \
-             [open] placement = \"inline\""
-                .into(),
-        ),
-    }
+    let space = match space {
+        Some(space) if valid_label_value(space) => space.to_string(),
+        Some(_) => return Err("this terminal's herdr.space label is not a usable id".into()),
+        None => {
+            return Err(
+                "this terminal is not displayed in the Herdr window, so there is no space to \
+                 open a terminal in; run gitpane in a Herdr-managed terminal, or set \
+                 [open] placement = \"inline\""
+                    .into(),
+            );
+        }
+    };
+    // A tab is optional: a terminal can be in a space without being in a tab
+    // the window names, and an unusable id simply means "let the window pick".
+    let tab = labels
+        .and_then(|labels| labels.get("herdr.tab"))
+        .and_then(Value::as_str)
+        .filter(|tab| valid_label_value(tab))
+        .map(str::to_string);
+    Ok(Source { space, tab })
 }
 
-/// `hc run --bg --outlive-parent --no-notify --cwd <dir> --label
-/// herdr.space=<space> [-- sh -c <command>]` as separate argv.
+/// `hc run --bg --outlive-parent --no-notify --cwd <dir> --label …` as separate
+/// argv.
 ///
 /// The new terminal keeps its parent link (the window shows it under the
 /// terminal it came from) but survives gitpane quitting, and nothing is typed
-/// into the parent. The label is what makes it visible at all; it precedes the
-/// `--` so it stays an option, while the command after `--` stays program data
-/// even when it starts with a dash. No command opens the machine's own shell.
-pub(crate) fn run_argv(dir: &str, command: Option<&str>, space: &str) -> Vec<String> {
+/// into the parent. The labels are what make it visible at all, and they
+/// precede the `--` so they stay options, while the command after `--` stays
+/// program data even when it starts with a dash. No command opens the machine's
+/// own shell.
+///
+/// `herdr.space` alone puts the terminal in that space as a new tab.
+/// `herdr.tab` as well puts it in the calling tab, which the window shows as a
+/// split beside gitpane. The direction is the window's choice: a core has no
+/// pane geometry to express right or down.
+pub(crate) fn run_argv(dir: &str, command: Option<&str>, source: &Source) -> Vec<String> {
     let mut argv: Vec<String> = [
         "hc",
         "run",
@@ -135,7 +162,11 @@ pub(crate) fn run_argv(dir: &str, command: Option<&str>, space: &str) -> Vec<Str
     .collect();
     argv.push(dir.to_string());
     argv.push("--label".to_string());
-    argv.push(format!("herdr.space={space}"));
+    argv.push(format!("herdr.space={}", source.space));
+    if let Some(tab) = &source.tab {
+        argv.push("--label".to_string());
+        argv.push(format!("herdr.tab={tab}"));
+    }
     if let Some(command) = command {
         argv.extend(
             ["--", "sh", "-c", command]
@@ -295,10 +326,18 @@ mod tests {
             .into_bytes()
     }
 
+    fn at(space: &str, tab: Option<&str>) -> Source {
+        Source {
+            space: space.into(),
+            tab: tab.map(str::to_string),
+        }
+    }
+
     #[test]
     fn run_argv_opens_a_visible_terminal_at_the_directory() {
+        // A space alone puts the terminal in that space as a new tab.
         assert_eq!(
-            run_argv("/code/app", None, "spc1"),
+            run_argv("/code/app", None, &at("spc1", None)),
             vec![
                 "hc",
                 "run",
@@ -312,10 +351,13 @@ mod tests {
                 "herdr.space=spc1",
             ]
         );
-        // The label must stay an option and the command must stay data: it sits
-        // after `--`, so a command starting with a dash is not read as a flag.
+    }
+
+    #[test]
+    fn run_argv_places_the_terminal_beside_gitpane_when_the_tab_is_known() {
+        // Space plus tab is what the window reads as "beside this terminal".
         assert_eq!(
-            run_argv("/code/app", Some("git diff -U5 HEAD"), "spc1"),
+            run_argv("/code/app", None, &at("spc1", Some("tab9"))),
             vec![
                 "hc",
                 "run",
@@ -327,6 +369,31 @@ mod tests {
                 "/code/app",
                 "--label",
                 "herdr.space=spc1",
+                "--label",
+                "herdr.tab=tab9",
+            ]
+        );
+        // Labels precede `--` so they stay options, and the command after it
+        // stays program data even when it starts with a dash.
+        assert_eq!(
+            run_argv(
+                "/code/app",
+                Some("git diff -U5 HEAD"),
+                &at("spc1", Some("tab9"))
+            ),
+            vec![
+                "hc",
+                "run",
+                "--json",
+                "--bg",
+                "--outlive-parent",
+                "--no-notify",
+                "--cwd",
+                "/code/app",
+                "--label",
+                "herdr.space=spc1",
+                "--label",
+                "herdr.tab=tab9",
                 "--",
                 "sh",
                 "-c",
@@ -336,54 +403,74 @@ mod tests {
     }
 
     #[test]
-    fn source_space_reads_the_live_terminals_own_label() {
+    fn source_reads_the_live_terminals_own_labels() {
         let out = terminal(
             "live",
-            "\"herdr.space\":\"spc104fd\",\"where\":\"repo / tab\"",
+            "\"herdr.space\":\"spc104fd\",\"herdr.tab\":\"tab9\",\"where\":\"repo / tab\"",
         );
-        assert_eq!(parse_source_space(&out, "t17").unwrap(), "spc104fd");
+        assert_eq!(
+            parse_source(&out, "t17").unwrap(),
+            at("spc104fd", Some("tab9"))
+        );
+        // A terminal can be in a space without a usable tab: the window then
+        // picks, and the space alone still makes the launch visible.
+        assert_eq!(
+            parse_source(&terminal("live", "\"herdr.space\":\"spc104fd\""), "t17").unwrap(),
+            at("spc104fd", None)
+        );
+        assert_eq!(
+            parse_source(
+                &terminal(
+                    "live",
+                    "\"herdr.space\":\"spc104fd\",\"herdr.tab\":\"tab 9\""
+                ),
+                "t17"
+            )
+            .unwrap(),
+            at("spc104fd", None)
+        );
     }
 
     #[test]
-    fn source_space_refuses_a_terminal_that_already_finished() {
+    fn source_refuses_a_terminal_that_already_finished() {
         // The environment outlives the terminal, so a valid id and a leftover
         // label prove nothing: only a live terminal can place a new tab.
         let out = terminal("finished", "\"herdr.space\":\"spc104fd\"");
-        let error = parse_source_space(&out, "t17").unwrap_err();
+        let error = parse_source(&out, "t17").unwrap_err();
         assert!(error.contains("finished"), "{error}");
         assert!(error.contains("restart gitpane"), "{error}");
     }
 
     #[test]
-    fn source_space_separates_a_missing_label_from_a_broken_reply() {
+    fn source_separates_a_missing_label_from_a_broken_reply() {
         let hidden = terminal("live", "\"where\":\"repo / tab\"");
-        let error = parse_source_space(&hidden, "t17").unwrap_err();
-        assert!(error.contains("no space to open a tab in"), "{error}");
+        let error = parse_source(&hidden, "t17").unwrap_err();
+        assert!(error.contains("no space to open a terminal in"), "{error}");
         assert!(error.contains("inline"), "{error}");
 
         // A reply about another terminal, a missing state and bad JSON are
         // backend failures, never "this terminal has no space".
         let other = terminal("live", "\"herdr.space\":\"spc1\"");
         assert!(
-            parse_source_space(&other, "t99")
+            parse_source(&other, "t99")
                 .unwrap_err()
                 .contains("different terminal")
         );
         let stateless = br#"{"address":"t17","labels":{"herdr.space":"spc1"}}"#;
         assert!(
-            parse_source_space(stateless, "t17")
+            parse_source(stateless, "t17")
                 .unwrap_err()
                 .contains("missing state")
         );
         assert!(
-            parse_source_space(b"not json", "t17")
+            parse_source(b"not json", "t17")
                 .unwrap_err()
                 .contains("invalid hc")
         );
         // A label the window could not accept is not usable either.
         let padded = br#"{"address":"t17","state":"live","labels":{"herdr.space":"spc 1"}}"#;
         assert!(
-            parse_source_space(padded, "t17")
+            parse_source(padded, "t17")
                 .unwrap_err()
                 .contains("not a usable id")
         );

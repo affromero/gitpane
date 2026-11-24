@@ -265,18 +265,24 @@ impl App {
             LaunchPlan::HerdrCore {
                 dir: target,
                 command,
+                tab,
             } => {
                 let tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let space = match crate::session::herdr_core::source_space() {
-                        Ok(space) => space,
+                    let mut source = match crate::session::herdr_core::source() {
+                        Ok(source) => source,
                         Err(error) => {
                             let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
                             return;
                         }
                     };
+                    // A new tab is a space-only placement; beside gitpane is
+                    // the calling terminal's own tab.
+                    if !tab {
+                        source.tab = None;
+                    }
                     let argv =
-                        crate::session::herdr_core::run_argv(&target, command.as_deref(), &space);
+                        crate::session::herdr_core::run_argv(&target, command.as_deref(), &source);
                     match crate::session::herdr_core::launch(&argv, std::path::Path::new(&target)) {
                         crate::session::herdr_core::Created::Terminal(_) => {}
                         created => {

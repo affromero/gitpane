@@ -49,13 +49,18 @@ pub(crate) enum LaunchPlan {
         create: Vec<String>,
         command: Option<String>,
     },
-    /// Herdr core: open a terminal at `dir` in the calling terminal's space,
-    /// running `command` in it when set. The argv depends on that space, which
-    /// only the executor can read, so this stays an intent: a core has no pane
-    /// geometry, so it always opens a new terminal, never a split.
+    /// Herdr core: open a terminal at `dir`, running `command` in it when set.
+    /// The argv depends on the calling terminal's labels, which only the
+    /// executor can read, so this stays an intent.
+    ///
+    /// A core has no pane geometry, so this never expresses a direction: `tab`
+    /// asks the window to place the terminal in the calling tab (a split beside
+    /// gitpane) and a new tab in the space otherwise. Which side, or whether it
+    /// is a split at all, is the window's decision.
     HerdrCore {
         dir: String,
         command: Option<String>,
+        tab: bool,
     },
     /// Official desktop: run this program in a verified pane or space. The
     /// executor resolves and pins the source terminal independently of focus.
@@ -251,9 +256,11 @@ fn plan_with_target_inner(
                     create: herdr_split_argv("right", dir, None),
                     command: None,
                 },
+                // The bare `o`: a terminal beside gitpane, like a tmux pane.
                 Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
                     dir: dir.to_string(),
                     command: None,
+                    tab: true,
                 },
                 Multiplexer::HerdrApp => desktop_plan("split-window -h", dir, None),
                 Multiplexer::None => LaunchPlan::Error(
@@ -296,6 +303,7 @@ fn plan_with_target_inner(
             Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
                 dir: dir.to_string(),
                 command: shell,
+                tab: true,
             },
             Multiplexer::Tmux | Multiplexer::Herdr | Multiplexer::HerdrApp => LaunchPlan::Ask,
             Multiplexer::None => {
@@ -311,14 +319,17 @@ fn plan_with_target_inner(
     }
 }
 
-/// A core can only open a new tab, so a bare placement is served and an
-/// explicit split is refused. Losing `-h`/`-v` or a `-t` target would hand the
-/// person a window somewhere other than where they asked for it.
+/// A core can place a terminal in the calling tab or in a new one, but it
+/// cannot honour a direction or a target pane. Losing `-h`/`-v` or a `-t`
+/// would hand the person a window somewhere other than where they asked for it,
+/// so an explicit split is refused rather than approximated.
 fn core_placement_plan(flags: &[String], dir: &str, command: Option<&str>) -> LaunchPlan {
     match flags.first().map(String::as_str) {
+        // `new-window` asks for its own tab, so the space label alone.
         Some("new-window") if flags.len() == 1 => LaunchPlan::HerdrCore {
             dir: dir.to_string(),
             command: command.map(str::to_string),
+            tab: false,
         },
         _ => LaunchPlan::Error(
             "Herdr core has no panes to split; use new-window to open a tab in this space".into(),
