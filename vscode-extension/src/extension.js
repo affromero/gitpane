@@ -15,7 +15,7 @@ const { RepoTerminalProvider } = require('./repo-terminal-provider');
 const { LauncherProvider } = require('./launcher-provider');
 const { MutationManager } = require('./mutation-manager');
 const { SidebarActions } = require('./sidebar-actions');
-const { RICH_STATUS, isSubmodule, richComparison, statusLabel } = require('./model');
+const { RICH_STATUS, isSubmodule, richComparison, richDiffTitle, statusLabel } = require('./model');
 const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
@@ -963,7 +963,7 @@ async function activate(context) {
         const imageAddition = node.group === 'untracked' && plan.left.empty &&
           (right.scheme === 'file' || right.scheme === 'gitpane-blob') && /\.(png|gif)$/i.test(node.record.path);
         const left = imageAddition ? vscode.Uri.joinPath(context.extensionUri, 'media', 'empty.png') : leftSide;
-        const title = `${node.change.uri.fsPath} (${node.group})`;
+        const title = richDiffTitle(node.change.uri.fsPath, node.group, plan);
         if (!await provider.withCurrentChange(node, () => selectedGuard() && vscode.commands.executeCommand('vscode.diff', left, right, title))) {
           throw new Error('The change is no longer in the workspace.');
         }

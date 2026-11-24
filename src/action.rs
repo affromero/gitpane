@@ -149,9 +149,11 @@ pub(crate) enum Action {
         unstaged: bool,
         is_untracked: bool,
         is_submodule: bool,
+        conflicted: bool,
     },
     /// Open a file in the configured `[open]` command, or the OS default app.
     OpenFile(RepoId, std::path::PathBuf),
+    OpenMergeTool(RepoId, std::path::PathBuf),
     /// Reveal a file in the OS file manager (Finder on macOS).
     RevealFile(RepoId, std::path::PathBuf),
     /// Copy a changed file's absolute path to the clipboard.
@@ -330,6 +332,7 @@ impl Action {
         matches!(
             self,
             Self::OpenFile(..)
+                | Self::OpenMergeTool(..)
                 | Self::RevealFile(..)
                 | Self::StageFile(..)
                 | Self::UnstageFile(..)

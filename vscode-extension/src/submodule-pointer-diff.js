@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { relativeFile, scopedFile, validRecord } = require('./change-pager');
+const { changeDiffTitle } = require('./model');
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value);
 const identity = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -115,7 +116,7 @@ async function openPointerDiff(node, provider, tree, backend, links, vscode, opt
     throw new Error('The selected submodule pointer changed. Refresh and try again.');
   }
   const opened = await provider.withCurrentChange(node, () => canOpen() && current() &&
-    vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (${record.group})`));
+    vscode.commands.executeCommand('vscode.diff', left, right, changeDiffTitle(uri.fsPath, record.group, leftName, rightName)));
   if (!opened) throw new Error('The selected submodule pointer changed. Refresh and try again.');
 }
 

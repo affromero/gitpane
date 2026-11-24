@@ -398,6 +398,9 @@ impl App {
                 // the Tui to suspend/restore for an inline editor.
                 self.open_file_external(id, path, tui)?;
             }
+            Action::OpenMergeTool(ref id, ref path) => {
+                self.open_merge_tool(id, path, tui)?;
+            }
             other => self.handle_action_rest(other)?,
         }
         Ok(())

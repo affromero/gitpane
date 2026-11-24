@@ -4,7 +4,7 @@ const { statusRevision } = require('./link-documents');
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { isSubmodule, richComparison } = require('./model');
+const { isSubmodule, richComparison, richDiffTitle } = require('./model');
 const { relativeFile: safeRelative, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { isPointerComparison, openPointerDiff } = require('./submodule-pointer-diff');
 const { openGitlinkDiff } = require('./gitlink-diff');
@@ -337,7 +337,7 @@ class SubmoduleProvider {
         if (!validRecord(finalRecord?.change) || JSON.stringify(finalRecord.change) !== JSON.stringify(record) || !currentChild()) {
           throw new Error('The submodule changed; refresh and try again.');
         }
-        await this.vscode.commands.executeCommand('vscode.diff', left, right, `${uri.fsPath} (${record.group})`);
+        await this.vscode.commands.executeCommand('vscode.diff', left, right, richDiffTitle(uri.fsPath, record.group, plan));
       } finally { if (!sessionClosed) session.close(); }
   }
 
