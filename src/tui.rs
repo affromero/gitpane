@@ -34,6 +34,12 @@ const VISIBILITY_PROBE_INTERVAL: Duration = Duration::from_secs(3);
 /// noise power-wise; deep sleep has no tick at all.
 const DOZE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The event sender a terminating signal forwards to. A signal handler cannot
+/// capture, so this is the one place it can reach; it is set once when the
+/// handler is installed.
+#[cfg(unix)]
+static TERMINATE_TX: std::sync::OnceLock<UnboundedSender<Event>> = std::sync::OnceLock::new();
+
 pub(crate) struct Tui {
     pub terminal: Terminal,
     pub event_tx: UnboundedSender<Event>,
@@ -131,6 +137,7 @@ impl Tui {
         }
 
         self.install_panic_hook();
+        self.install_signal_handler();
         self.start_event_loop();
         Ok(())
     }
@@ -168,6 +175,46 @@ impl Tui {
             None => Ok(()),
         }
     }
+
+    /// Route terminating signals into the ordinary quit path.
+    ///
+    /// A signal-caused death skips `exit()`, leaving the terminal in raw mode
+    /// with mouse reporting still enabled: every mouse move then arrives as an
+    /// escape sequence the shell echoes as garbage. Handling the signal lets the
+    /// run loop close down through `exit()` instead.
+    ///
+    /// The handler only forwards an event — `send` on an unbounded channel takes
+    /// no lock and allocates nothing after the first send — so it stays async
+    /// signal safe. It installs once; `enter()` re-runs on every inline
+    /// suspend/resume.
+    #[cfg(unix)]
+    fn install_signal_handler(&self) {
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        let event_tx = self.event_tx.clone();
+        HOOK.call_once(move || {
+            extern "C" fn terminate(_signal: libc::c_int) {
+                // A closed or full channel just drops the event, which is fine
+                // for a process that is exiting anyway. `send` on an unbounded
+                // channel takes no lock and allocates nothing after the first
+                // send, so it stays async-signal-safe.
+                if let Some(tx) = TERMINATE_TX.get() {
+                    let _ = tx.send(Event::Terminate);
+                }
+            }
+            // The handler cannot capture, so the sender lives where it can be
+            // read without a lock.
+            let _ = TERMINATE_TX.set(event_tx);
+            for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+                let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+                action.sa_sigaction = terminate as *const () as usize;
+                unsafe { libc::sigemptyset(&mut action.sa_mask) };
+                unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
+            }
+        });
+    }
+
+    #[cfg(not(unix))]
+    fn install_signal_handler(&self) {}
 
     fn install_panic_hook(&self) {
         // Install exactly once per process: `enter()` runs on every inline

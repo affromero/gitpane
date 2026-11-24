@@ -28,4 +28,8 @@ pub(crate) enum Event {
     /// event loop already gates its own timers; the app additionally gates
     /// watcher-driven work and refreshes once on wake.
     Power(crate::session::visibility::PowerState),
+    /// A terminating signal arrived. The app quits through the ordinary path so
+    /// the terminal is restored; dying from the signal would strand it in raw
+    /// mode with mouse reporting on, spilling escape sequences into the shell.
+    Terminate,
 }
