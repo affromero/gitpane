@@ -261,6 +261,7 @@ mod selected_menu_tests {
                 unstaged: true,
                 is_untracked: true,
                 is_submodule: false,
+                conflicted: false,
             } if id.0.as_path() == std::path::Path::new("/repo")
                 && path.as_path() == std::path::Path::new("b.rs")
         ));

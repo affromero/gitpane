@@ -507,6 +507,7 @@ impl FileList {
             unstaged: entry.unstaged || conflicted,
             is_untracked: entry.status == FileStatus::Untracked,
             is_submodule: entry.is_submodule,
+            conflicted,
         })
     }
     pub fn diff_generation(&self) -> u64 {
@@ -794,6 +795,7 @@ impl Component for FileList {
                                 unstaged: entry.unstaged || conflicted,
                                 is_untracked: entry.status == FileStatus::Untracked,
                                 is_submodule: entry.is_submodule,
+                                conflicted,
                             }));
                         }
                     }

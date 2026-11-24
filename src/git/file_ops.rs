@@ -82,6 +82,9 @@ pub(crate) fn arguments(
 
 pub(crate) fn diff(repo_path: &Path, selected: &Path) -> color_eyre::Result<String> {
     let repo = git2::Repository::open(repo_path)?;
+    if let Some(text) = conflict_diff(&repo, selected)? {
+        return Ok(text);
+    }
     let untracked = repo_path.join(selected).is_dir() || repo.status_file(selected)?.is_wt_new();
     if untracked {
         let mut options = git2::DiffOptions::new();
@@ -125,6 +128,96 @@ pub(crate) fn diff(repo_path: &Path, selected: &Path) -> color_eyre::Result<Stri
     } else {
         text
     })
+}
+
+pub(crate) fn conflict_diff(
+    repo: &git2::Repository,
+    selected: &Path,
+) -> color_eyre::Result<Option<String>> {
+    let index = repo.index()?;
+    let base = index.get_path(selected, 1);
+    let ours = index.get_path(selected, 2);
+    let theirs = index.get_path(selected, 3);
+    if base.is_none() && ours.is_none() && theirs.is_none() {
+        return Ok(None);
+    }
+
+    let missing = if base.is_some() { "deleted" } else { "absent" };
+    let describe = |entry: Option<&git2::IndexEntry>| match entry {
+        Some(entry) if entry.mode == 0o100644 => entry.id.to_string()[..7].to_owned(),
+        Some(entry) => format!("{} (mode {:06o})", &entry.id.to_string()[..7], entry.mode),
+        None => missing.to_owned(),
+    };
+    let mut text = format!(
+        "Merge conflict\n- Ours (Current): {}\n+ Theirs (Incoming): {}\n  Base: {}\n\n",
+        describe(ours.as_ref()),
+        describe(theirs.as_ref()),
+        base.as_ref()
+            .map_or_else(|| "absent".into(), |entry| describe(Some(entry))),
+    );
+    let content = |entry: Option<&git2::IndexEntry>| -> color_eyre::Result<Vec<u8>> {
+        let Some(entry) = entry else {
+            return Ok(Vec::new());
+        };
+        if entry.mode == 0o160000 {
+            return Ok(format!("Subproject commit {}\n", entry.id).into_bytes());
+        }
+        Ok(repo.find_blob(entry.id)?.content().to_vec())
+    };
+    let old = content(ours.as_ref())?;
+    let new = content(theirs.as_ref())?;
+    let mut options = git2::DiffOptions::new();
+    options.old_prefix("ours/").new_prefix("theirs/");
+    let mut patch = git2::Patch::from_buffers(
+        &old,
+        Some(selected),
+        &new,
+        Some(selected),
+        Some(&mut options),
+    )?;
+    let patch = patch.to_buf()?;
+    if patch.is_empty() {
+        text.push_str("(no content differences)");
+    } else {
+        text.push_str(&String::from_utf8_lossy(&patch));
+    }
+    Ok(Some(text))
+}
+
+pub(crate) fn merge_tool(
+    repo_path: &Path,
+    selected: &Path,
+) -> color_eyre::Result<std::process::Command> {
+    // Git's mergetool script expands its unquoted file list after selecting
+    // paths. Literal pathspecs alone cannot prevent a second expansion.
+    if !selected.to_str().is_some_and(|path| {
+        !path
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '*' | '?' | '[' | '"' | '\\'))
+    }) {
+        return Err(color_eyre::eyre::eyre!(
+            "Git mergetool cannot safely open this filename"
+        ));
+    }
+    let repo = git2::Repository::open(repo_path)?;
+    let index = repo.index()?;
+    let mut stages = (1..=3)
+        .filter_map(|stage| index.get_path(selected, stage))
+        .peekable();
+    if stages.peek().is_none() || stages.any(|entry| entry.mode == 0o160000) {
+        return Err(color_eyre::eyre::eyre!(
+            "The selected file has no supported merge conflict"
+        ));
+    }
+    let mut command = super::process::git_command(repo_path);
+    command
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args(["mergetool", "--"])
+        .arg(selected);
+    Ok(command)
 }
 
 #[cfg(test)]

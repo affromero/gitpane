@@ -31,6 +31,7 @@ function fixture() {
   let failure;
   let refreshFailure;
   const vscode = {
+    FileType: { File: 1, SymbolicLink: 64 },
     window: {
       showQuickPick: async choices => quickPick(choices),
       showWarningMessage: async (message, options, button) => { calls.push(['confirm', message, options]); return warning(button); },
@@ -266,6 +267,26 @@ test('submodule rows offer inspection but no file mutations', async () => {
     for (const name of ['stage', 'unstage', 'discard']) await f.actions.handle(action(name, 'file'));
   }
   assert.deepEqual(f.calls.map(call => call.slice(0, 2)), Array.from({ length: 5 }, () => ['gitpane.openChange', f.node]));
+});
+
+test('a local file conflict can open the native Merge Editor or compare sides', async () => {
+  const f = fixture();
+  f.setFile({ ...f.getFile(), group: 'merge' });
+  f.setStat(async () => ({ type: 1 }));
+  const menu = await f.actions.fileMenu('file');
+  assert.deepEqual(menu.choices.slice(0, 2), [
+    { label: 'Resolve Conflict', action: 'resolveConflict' },
+    { label: 'Compare Sides', action: 'open' }
+  ]);
+  await f.actions.fileMenuAction('file', menu.token, 'resolveConflict');
+  assert.deepEqual(f.calls, [['git.openMergeEditor', f.getFile().uri]]);
+
+  f.setStat(async () => ({ type: 65 }));
+  await f.actions.handle(action('resolveConflict', 'file'));
+  assert.match(f.errors.at(-1), /regular working file/);
+  f.setFile({ ...f.getFile(), external: true });
+  await f.actions.handle(action('resolveConflict', 'file'));
+  assert.equal(f.calls.length, 1);
 });
 
 test('submodule file and pinned repository menus expose scoped pin actions', async () => {
