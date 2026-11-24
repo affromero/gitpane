@@ -506,24 +506,35 @@ When nested inside tmux, official desktop detection follows a bounded process-an
 
 #### Herdr Core (`hc`)
 
-A headless `herdr-core` terminal has no window to display a layout in. When
-`$HC_TERMINAL_ID` names a terminal that the local `herdr-app` does not display
-— a terminal on another machine, a hidden worker, or a machine with no desktop
+When `$HC_TERMINAL_ID` names a terminal that no displayed `herdr-app` claims — a
+terminal on another machine, a hidden worker, or a machine with no desktop
 client at all — gitpane uses the core backend, which only needs `hc` on `PATH`.
 
-- **Open / review:** `o` and `v` open a new terminal at the selected repository
-  or worktree through `hc run --bg --outlive-parent`, so the terminal survives
-  gitpane quitting. There is no pane geometry to honor: a `split-window` or
-  `new-window` placement still runs its command, but always in a new terminal.
-  `ask` launches directly, because there is nothing to ask about.
-  `inline` is unaffected and still runs in the current terminal.
-- **Liveness and `G`:** `hc ls` reports live terminals by foreground directory.
-  The `◉` marker works as usual. `G` cannot switch windows — attaching would
-  take over the terminal you are already in — so it reports the
-  `hc attach <terminal>` command instead of moving focus.
+The window shows terminals it was told to arrange, so a terminal `hc` creates
+stays hidden until it carries `herdr.space`. Gitpane reads that label from the
+terminal it is running in and opens the new one in the same space, as a new tab.
+The label alone is not taken as proof: the environment outlives its terminal, so
+`hc get` must confirm the calling terminal is still live before anything is
+created.
+
+- **Open / review:** `o` and `v` open a tab in the calling terminal's space
+  through `hc run --bg --outlive-parent`, so the terminal survives gitpane
+  quitting. A core has no pane geometry, so `new-window` is what it honours; an
+  explicit `split-window` — with a direction, or with `-t` — is refused rather
+  than quietly turned into a tab somewhere else. `ask` has one answer and
+  launches it. `inline` is unaffected and still runs in the current terminal.
+- **No usable space:** if the calling terminal is missing, finished, or was
+  never displayed, gitpane reports what to do and creates nothing. A create
+  request whose reply cannot be read is reported as an unknown outcome to check
+  with `hc ls`, never retried, because a retry could open a second terminal.
+- **Liveness and `G`:** `hc ls` reports live terminals by foreground directory,
+  so the `◉` marker means the terminal exists — a core cannot prove a tab is
+  currently on screen. `G` cannot switch windows — attaching would take over the
+  terminal you are already in — so it reports the `hc attach <terminal>` command
+  instead of moving focus.
 - **VS Code:** select `herdr-core` for `gitpane.sessionBackend`.
 
-Verified with `hc 0.1.22` on Linux.
+Verified with `hc 0.1.22` and `herdr-app 0.1.17` on Linux.
 
 #### Legacy CLI (`herdr`)
 

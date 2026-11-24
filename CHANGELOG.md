@@ -6,9 +6,9 @@ All notable changes to gitpane are documented here.
 
 ### Added
 - Open repositories and worktrees from a headless Herdr Core terminal. `o` and
-  `v` open a new `hc` terminal at the selected directory, `hc ls` drives the
-  liveness markers, and `herdr-core` is available as a session backend. Before
-  this, a machine with `herdr-core` but no desktop client reported "set a
+  `v` open a tab in the calling terminal's space through `hc`, `hc ls` drives
+  the liveness markers, and `herdr-core` is available as a session backend.
+  Before this, a machine with `herdr-core` but no desktop client reported "set a
   command or run gitpane inside tmux or herdr" and could not launch at all.
   ([#273](https://github.com/affromero/gitpane/issues/273))
 

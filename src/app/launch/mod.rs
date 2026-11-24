@@ -257,11 +257,34 @@ impl App {
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);
             }
-            // `hc run --bg` reports the new terminal and exits at once, so the
-            // detached launcher path handles it: like tmux, it comes back promptly
-            // and a failure's stderr reaches the user.
-            LaunchPlan::HerdrCore { argv } => {
-                spawn_detached(argv, dir, self.action_tx.clone(), label);
+            // Core launches are the one path that must both read the calling
+            // space and verify the create reply, so they get their own runner
+            // instead of `spawn_detached`, which discards stdout and has no
+            // deadline. Creating a terminal is a short request; the program it
+            // then runs keeps going on its own.
+            LaunchPlan::HerdrCore {
+                dir: target,
+                command,
+            } => {
+                let tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let space = match crate::session::herdr_core::source_space() {
+                        Ok(space) => space,
+                        Err(error) => {
+                            let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
+                            return;
+                        }
+                    };
+                    let argv =
+                        crate::session::herdr_core::run_argv(&target, command.as_deref(), &space);
+                    match crate::session::herdr_core::launch(&argv, std::path::Path::new(&target)) {
+                        crate::session::herdr_core::Created::Terminal(_) => {}
+                        created => {
+                            let (message, _) = created.into_message();
+                            let _ = tx.send(Action::Error(format!("{label} failed: {message}")));
+                        }
+                    }
+                });
             }
             LaunchPlan::HerdrApp { placement, argv } => {
                 let tx = self.action_tx.clone();

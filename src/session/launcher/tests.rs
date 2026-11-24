@@ -554,63 +554,65 @@ fn parse_herdr_pane_id_reads_split_and_tab_responses() {
 }
 
 #[test]
-fn core_placements_open_a_terminal_instead_of_a_pane() {
+fn core_placements_open_a_tab_and_refuse_a_split() {
     let path = "/work/app";
-    // The default `o` (no command, `command` placement) opens a shell there.
+    // The default `o` (no command, `command` placement) opens a shell in a new
+    // tab of the calling space. No argv yet: the space is only known at launch.
     assert_eq!(
         plan(None, "command", path, None, Multiplexer::HerdrCore),
         LaunchPlan::HerdrCore {
-            argv: vec![
-                "hc",
-                "run",
-                "--bg",
-                "--outlive-parent",
-                "--no-notify",
-                "--cwd",
-                path,
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
+            dir: path.to_string(),
+            command: None,
         }
     );
-    // A tmux-shaped placement still runs its command, because a core has no
-    // panes to split: the placement degrades to a new terminal.
-    // A tmux-shaped placement still runs its command, because a core has no
-    // panes to split: the placement degrades to a new terminal. The command
-    // reaches `sh -c` as one opaque argument after `--`, so whatever it
-    // contains — including a leading dash — stays program data.
-    let LaunchPlan::HerdrCore { argv } = plan(
+    // `new-window` is exactly what a core can do, so it carries its command
+    // through instead of dropping it. The command is wrapped for `sh -c`, so
+    // assert what has to hold — the directory and the program — rather than the
+    // wrapper's exact text.
+    let LaunchPlan::HerdrCore {
+        dir,
+        command: Some(command),
+    } = plan(
         Some("lazygit {path}"),
-        "split-window -h",
+        "new-window",
         path,
         None,
         Multiplexer::HerdrCore,
-    ) else {
-        panic!("a core placement did not produce a terminal launch");
+    )
+    else {
+        panic!("new-window did not carry its command into the core plan");
     };
-    let (flags, tail) = argv.split_at(7);
+    assert_eq!(dir, path);
+    assert!(command.contains("lazygit"), "{command}");
+    // A split names a direction and often a target pane. A core can honour
+    // neither, and opening a tab somewhere else instead would hand the person
+    // a window they did not ask for, so the plan refuses and says what works.
+    for placement in [
+        "split-window -h",
+        "split-window -v -t p12",
+        "new-window -t spc1",
+    ] {
+        let plan = plan(
+            Some("lazygit"),
+            placement,
+            path,
+            None,
+            Multiplexer::HerdrCore,
+        );
+        let LaunchPlan::Error(message) = plan else {
+            panic!("{placement} was accepted by a core: {plan:?}");
+        };
+        assert!(message.contains("no panes to split"), "{message}");
+        assert!(message.contains("new-window"), "{message}");
+    }
+    // `ask` has one answer in a core: a tab in this space.
     assert_eq!(
-        flags,
-        [
-            "hc",
-            "run",
-            "--bg",
-            "--outlive-parent",
-            "--no-notify",
-            "--cwd",
-            path
-        ]
-    );
-    assert_eq!(&tail[..3], ["--", "sh", "-c"]);
-    assert!(tail.len() == 4, "the command is one argv element: {tail:?}");
-    // The path reaches the command as data, not as shell syntax.
-    assert!(tail[3].contains("/work/app"), "{tail:?}");
-    // `ask` has nothing to ask about in a core, so it launches directly.
-    assert!(matches!(
         plan(None, "ask", path, None, Multiplexer::HerdrCore),
-        LaunchPlan::HerdrCore { .. }
-    ));
+        LaunchPlan::HerdrCore {
+            dir: path.to_string(),
+            command: None,
+        }
+    );
     // `inline` stays inline: it never needed a multiplexer, so a core runs it in
     // the current terminal exactly as any other backend does.
     assert_eq!(

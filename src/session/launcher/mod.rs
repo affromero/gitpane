@@ -11,7 +11,6 @@
 //! targets and program argv; herdr-core terminal IDs are never pane IDs.
 
 use crate::session::env::Multiplexer;
-use crate::session::herdr_core;
 
 mod shell;
 
@@ -50,9 +49,14 @@ pub(crate) enum LaunchPlan {
         create: Vec<String>,
         command: Option<String>,
     },
-    /// Herdr core: spawn `argv` (`hc run --bg …`). A core has no window
-    /// manager, so this always opens a new terminal, never a split.
-    HerdrCore { argv: Vec<String> },
+    /// Herdr core: open a terminal at `dir` in the calling terminal's space,
+    /// running `command` in it when set. The argv depends on that space, which
+    /// only the executor can read, so this stays an intent: a core has no pane
+    /// geometry, so it always opens a new terminal, never a split.
+    HerdrCore {
+        dir: String,
+        command: Option<String>,
+    },
     /// Official desktop: run this program in a verified pane or space. The
     /// executor resolves and pins the source terminal independently of focus.
     HerdrApp {
@@ -248,7 +252,8 @@ fn plan_with_target_inner(
                     command: None,
                 },
                 Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
-                    argv: herdr_core::run_argv(dir, None),
+                    dir: dir.to_string(),
+                    command: None,
                 },
                 Multiplexer::HerdrApp => desktop_plan("split-window -h", dir, None),
                 Multiplexer::None => LaunchPlan::Error(
@@ -265,10 +270,11 @@ fn plan_with_target_inner(
                 },
                 Err(e) => LaunchPlan::Error(e),
             },
-            // A core has no pane layout: every placement opens a terminal.
-            Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
-                argv: herdr_core::run_argv(dir, shell.as_deref()),
-            },
+            // A core has no pane geometry: a new tab is the only thing it can
+            // do. An explicit split would silently lose the direction and the
+            // target the person asked for, so refuse it and name the working
+            // placement instead.
+            Multiplexer::HerdrCore => core_placement_plan(&flags, dir, shell.as_deref()),
             Multiplexer::HerdrApp => desktop_plan(&flags.join(" "), dir, shell.as_deref()),
             Multiplexer::None => {
                 if let Some(s) = shell {
@@ -285,8 +291,11 @@ fn plan_with_target_inner(
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
         Placement::Ask => match mux {
+            // The only placement a core offers is a new tab in the calling
+            // space, so the picker has nothing to choose between.
             Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
-                argv: herdr_core::run_argv(dir, shell.as_deref()),
+                dir: dir.to_string(),
+                command: shell,
             },
             Multiplexer::Tmux | Multiplexer::Herdr | Multiplexer::HerdrApp => LaunchPlan::Ask,
             Multiplexer::None => {
@@ -299,6 +308,21 @@ fn plan_with_target_inner(
                 }
             }
         },
+    }
+}
+
+/// A core can only open a new tab, so a bare placement is served and an
+/// explicit split is refused. Losing `-h`/`-v` or a `-t` target would hand the
+/// person a window somewhere other than where they asked for it.
+fn core_placement_plan(flags: &[String], dir: &str, command: Option<&str>) -> LaunchPlan {
+    match flags.first().map(String::as_str) {
+        Some("new-window") if flags.len() == 1 => LaunchPlan::HerdrCore {
+            dir: dir.to_string(),
+            command: command.map(str::to_string),
+        },
+        _ => LaunchPlan::Error(
+            "Herdr core has no panes to split; use new-window to open a tab in this space".into(),
+        ),
     }
 }
 
