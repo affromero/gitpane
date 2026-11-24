@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 
-const FILE_ACTIONS = new Set(['open', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
+const FILE_ACTIONS = new Set(['open', 'resolveConflict', 'openFile', 'reveal', 'copy', 'stage', 'unstage', 'discard', 'pinSubmodule', 'inspectSubmodule']);
 const REPO_ACTIONS = new Set(['refreshRepo', 'createWorktree', 'removeWorkspaceWorktree', 'browseSubmodules', 'hideRepository', 'removeWorkspaceRepository', 'unpinSubmodule', 'reviewBranch', 'compareRepository', 'github', 'session', 'openTerminal', 'openLauncher', 'syncSubmodules', 'updateSubmodules', 'pullSubmodules', 'pullWithSubmodules', 'revealRepo', 'copyRepo', 'push', 'pull', 'pull_rebase']);
 const WORKTREE_ACTIONS = new Set(['refreshWorktree', 'removeWorktree', 'openWorktreeGraph', 'compareWorktree', 'reviewWorktree', 'worktreeRepositoryActions', 'browseWorktreeSubmodules', 'hideWorktree', 'openExternalWorktree', 'inspectExternalWorktree']);
 
@@ -23,9 +23,11 @@ function validFile(item) {
 
 function fileOptions(item) {
   if (!validFile(item)) return [];
-  if (item.external) return [{ label: 'Open Changes', action: 'open' }, { label: 'Copy Path', action: 'copy' }];
+  const compare = { label: item.group === 'merge' ? 'Compare Sides' : 'Open Changes', action: 'open' };
+  if (item.external) return [compare, { label: 'Copy Path', action: 'copy' }];
   const choices = [
-    { label: 'Open Changes', action: 'open' },
+    ...(item.group === 'merge' && !item.isSubmodule ? [{ label: 'Resolve Conflict', action: 'resolveConflict' }] : []),
+    compare,
     { label: 'Open File', action: 'openFile' },
     { label: 'Reveal in Explorer', action: 'reveal' },
     { label: 'Copy Path', action: 'copy' }
@@ -267,6 +269,13 @@ class SidebarActions {
       }
       if (action === 'open') {
         await this.vscode.commands.executeCommand('gitpane.openChange', item.node, current);
+        return;
+      }
+      if (action === 'resolveConflict') {
+        const stat = await this.vscode.workspace.fs.stat(item.uri);
+        if (!current()) return;
+        if (stat.type !== this.vscode.FileType.File) throw new Error('The Merge Editor requires a regular working file.');
+        await this.vscode.commands.executeCommand('git.openMergeEditor', item.uri);
         return;
       }
       if (action === 'pinSubmodule') {

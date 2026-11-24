@@ -184,5 +184,41 @@ pub(crate) fn conflict_diff(
     Ok(Some(text))
 }
 
+pub(crate) fn merge_tool(
+    repo_path: &Path,
+    selected: &Path,
+) -> color_eyre::Result<std::process::Command> {
+    // Git's mergetool script expands its unquoted file list after selecting
+    // paths. Literal pathspecs alone cannot prevent a second expansion.
+    if !selected.to_str().is_some_and(|path| {
+        !path
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '*' | '?' | '[' | '"' | '\\'))
+    }) {
+        return Err(color_eyre::eyre::eyre!(
+            "Git mergetool cannot safely open this filename"
+        ));
+    }
+    let repo = git2::Repository::open(repo_path)?;
+    let index = repo.index()?;
+    let mut stages = (1..=3)
+        .filter_map(|stage| index.get_path(selected, stage))
+        .peekable();
+    if stages.peek().is_none() || stages.any(|entry| entry.mode == 0o160000) {
+        return Err(color_eyre::eyre::eyre!(
+            "The selected file has no supported merge conflict"
+        ));
+    }
+    let mut command = super::process::git_command(repo_path);
+    command
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args(["mergetool", "--"])
+        .arg(selected);
+    Ok(command)
+}
+
 #[cfg(test)]
 mod tests;

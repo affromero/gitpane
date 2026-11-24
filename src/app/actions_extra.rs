@@ -251,6 +251,7 @@ impl App {
                 unstaged,
                 is_untracked,
                 is_submodule,
+                conflicted,
             } => {
                 // Resolve only for submodule rows: every other right-click
                 // skips the canonicalize syscall and the repo-list scan.
@@ -279,6 +280,7 @@ impl App {
                         unstaged,
                         is_untracked,
                         is_submodule,
+                        conflicted,
                         submodule_repo,
                     },
                 );
