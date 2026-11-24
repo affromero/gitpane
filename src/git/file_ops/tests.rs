@@ -49,6 +49,39 @@ fn apply(path: &Path, name: &str, operation: FileOperation) {
     );
 }
 
+#[test]
+fn conflict_diff_labels_index_sides_even_when_the_working_file_is_missing() {
+    let (tmp, repo) = fixture(&["conflict.txt"]);
+    let path = Path::new("conflict.txt");
+    let mut index = repo.index().unwrap();
+    let mut entry = index.get_path(path, 0).unwrap();
+    index.remove_path(path).unwrap();
+    for (stage, content) in [
+        (1, b"base version\n".as_slice()),
+        (2, b"current version\n".as_slice()),
+        (3, b"incoming version\n".as_slice()),
+    ] {
+        entry.flags = (entry.flags & !0x3000) | (stage << 12);
+        entry.id = repo.blob(content).unwrap();
+        index.add(&entry).unwrap();
+    }
+    index.write().unwrap();
+    std::fs::remove_file(tmp.path().join(path)).unwrap();
+
+    let preview = diff(tmp.path(), path).unwrap();
+    assert!(preview.contains("- Ours (Current): "), "{preview}");
+    assert!(preview.contains("+ Theirs (Incoming): "), "{preview}");
+    assert!(preview.contains("Base: "), "{preview}");
+    assert!(preview.contains("\n-current version\n"), "{preview}");
+    assert!(preview.contains("\n+incoming version\n"), "{preview}");
+
+    index.remove(path, 2).unwrap();
+    index.write().unwrap();
+    let preview = diff(tmp.path(), path).unwrap();
+    assert!(preview.contains("Ours (Current): deleted"), "{preview}");
+    assert!(preview.contains("\n+incoming version\n"), "{preview}");
+}
+
 #[cfg(unix)]
 #[test]
 fn selected_pattern_filename_does_not_change_other_files_or_index_entries() {
