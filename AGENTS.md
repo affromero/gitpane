@@ -157,10 +157,14 @@ Linux or Windows behavior.
 - Open an issue first (bug report or feature request) and reference it with
   `Closes #<n>` in the PR body. Skip the issue only for trivial fixes (typos,
   doc tweaks).
-- The web UI pre-fills `.github/PULL_REQUEST_TEMPLATE.md`, but `gh pr create`
-  does not — structure the PR body yourself with the template's sections:
-  `Closes #<n>`, `## In simple terms` (one or two sentences a user
-  would understand), `## Problem`, `## Fix`, `## Test`.
+- Follow `.github/PULL_REQUEST_TEMPLATE.md` when writing the PR body. Pass the
+  completed body explicitly when using `gh pr create`.
+- Embed GIFs in the Demo section before requesting review whenever a PR
+  changes behavior that can be demonstrated visually, including bug fixes.
+  Cover each affected interface, such as the TUI and VS Code. Show the same
+  steps before and after for changes to existing behavior, or show a new
+  feature in use. If a GIF does not apply, briefly explain why in the Demo
+  section.
 
 ## Releasing
 

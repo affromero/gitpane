@@ -40,10 +40,12 @@ checks.
 - [ ] Tests were added or updated where behavior changed
 - [ ] Documentation was updated where needed
 
-## Feature demo
+## Demo
 
-Every feature PR must include a GIF demonstrating the new behavior. Embed the
-GIF here before requesting review.
+Embed GIFs for every change that can be demonstrated visually, including bug
+fixes. Show each affected interface, such as the TUI and VS Code. If existing
+behavior changes, show the same steps before and after the change. For new
+behavior, show it in use. If a GIF does not apply, briefly explain why.
 
 ## Maintainer review
 
@@ -53,6 +55,8 @@ GIF here before requesting review.
       environment and verify the proposed fix at the commit being merged.
 - [ ] Confirm the required checks passed for that commit. Repeat affected
       verification after conflict resolution or other changes.
+- [ ] Confirm the GIFs demonstrate the change in each affected interface, or
+      that the PR explains why a GIF does not apply.
 
 ## Review assistance
 
