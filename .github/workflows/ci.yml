@@ -138,6 +138,12 @@ jobs:
         if: runner.os != 'Windows'
         run: python3 scripts/check_tui_startup.py target/release/gitpane
 
+      - name: Smoke test the TUI runtime benchmark
+        if: runner.os != 'Windows'
+        run: >-
+          python3 scripts/benchmark_runtime.py target/release/gitpane target/release/gitpane
+          --repos 2 --modules-per-repo 1 --runs 1 --settle-seconds 2 --idle-seconds 1
+
       - name: Test VS Code bridge and comparisons against release binary
         env:
           GITPANE_TEST_BINARY: ${{ github.workspace }}/target/release/gitpane${{ runner.os == 'Windows' && '.exe' || '' }}

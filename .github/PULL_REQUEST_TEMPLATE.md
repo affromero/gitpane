@@ -35,6 +35,8 @@ What the change does and why this approach.
 
 How the change was verified, including new or updated tests and relevant CI
 checks.
+For changes likely to affect TUI runtime, include the before-and-after
+benchmark report and note any regressions.
 
 - [ ] `just ci` passes
 - [ ] Tests were added or updated where behavior changed

@@ -165,6 +165,10 @@ Linux or Windows behavior.
   steps before and after for changes to existing behavior, or show a new
   feature in use. If a GIF does not apply, briefly explain why in the Demo
   section.
+- For changes likely to affect TUI runtime, compare the base and proposed
+  binaries with `scripts/benchmark_runtime.py` and include the report in the
+  PR. Build both with the same toolchain and profile, and describe any
+  regressions alongside improvements.
 
 ## Releasing
 

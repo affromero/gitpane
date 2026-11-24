@@ -813,6 +813,27 @@ Optional tooling for the full local suite:
 cargo install cargo-audit cargo-llvm-cov
 ```
 
+### Runtime benchmarks
+
+For changes likely to affect TUI performance, build the base and proposed
+commits with the same toolchain and Cargo profile, then compare the binaries
+on the same macOS or Linux machine with Python 3.10+ and Git on PATH.
+
+```bash
+python3 scripts/benchmark_runtime.py /tmp/gitpane-base /tmp/gitpane-pr
+```
+
+The script uses an isolated workspace and alternates the binaries after one
+warmup each. It reports first render, watcher setup, file-change visibility,
+idle CPU and resident memory, peak memory, and total CPU. Paste the Markdown
+report into the PR. Use `--format json` for individual measurements.
+The idle and edit measurements start at fixed offsets from launch. Increase
+`--settle-seconds` for workspaces that take longer to start.
+For watcher stress tests, use `--nested-watches --open-file-limit 16384`.
+To help isolate event-driven refresh from polling and throttling in that test,
+add `--poll-local-secs 60 --refresh-cooldown-ms 0`.
+Use `--help` to adjust workspace size or the number of runs.
+
 ### Project structure
 
 ```
