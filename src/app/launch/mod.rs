@@ -257,6 +257,12 @@ impl App {
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);
             }
+            // `hc run --bg` reports the new terminal and exits at once, so the
+            // detached launcher path handles it: like tmux, it comes back promptly
+            // and a failure's stderr reaches the user.
+            LaunchPlan::HerdrCore { argv } => {
+                spawn_detached(argv, dir, self.action_tx.clone(), label);
+            }
             LaunchPlan::HerdrApp { placement, argv } => {
                 let tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
@@ -637,6 +643,15 @@ impl App {
                     }
                 }
             });
+            return;
+        }
+        // herdr-core: no window focus exists, so report the attach command
+        // instead of quietly running the generic [goto] command.
+        if self.mux == crate::session::env::Multiplexer::HerdrCore {
+            let _ = self.action_tx.send(Action::Error(format!(
+                "goto failed: {}",
+                crate::session::herdr_core::focus_error(session)
+            )));
             return;
         }
         // tmux / plain terminal: the `[goto] command` opens a terminal tab/window.

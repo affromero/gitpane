@@ -49,6 +49,18 @@ mod worker_tests;
 
 /// Probe the selected host multiplexer without hiding process or parse errors.
 pub(crate) fn checked_pane_sessions(kind: &str) -> color_eyre::Result<Vec<(String, PathBuf)>> {
+    if kind == "herdr-core" {
+        return super::herdr_core::pane_sessions()
+            .map_err(|message| color_eyre::eyre::eyre!(message))?
+            .into_iter()
+            .map(|(terminal, cwd)| {
+                let cwd = cwd
+                    .canonicalize()
+                    .map_err(|_| color_eyre::eyre::eyre!("Cannot resolve a session directory"))?;
+                Ok((terminal, cwd))
+            })
+            .collect();
+    }
     if kind == "herdr-app" {
         return super::herdr_app::pane_sessions()
             .map_err(|message| color_eyre::eyre::eyre!(message))?

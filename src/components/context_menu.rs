@@ -172,12 +172,15 @@ impl ContextMenu {
         // herdr tabs focus in place.
         let (live_kind, live_plural) = match mux {
             crate::session::env::Multiplexer::Herdr => ("herdr tab", "herdr tabs"),
+            crate::session::env::Multiplexer::HerdrCore => ("Herdr terminal", "Herdr terminals"),
             crate::session::env::Multiplexer::HerdrApp => ("Herdr terminal", "Herdr terminals"),
             _ => ("tmux", "tmux sessions"),
         };
         let where_suffix = match mux {
             crate::session::env::Multiplexer::Herdr => " (focus tab)".to_string(),
             crate::session::env::Multiplexer::HerdrApp => " (focus terminal)".to_string(),
+            // A core has no window focus: attaching takes over this terminal.
+            crate::session::env::Multiplexer::HerdrCore => " (attach)".to_string(),
             _ => match crate::session::launcher::goto_placement(&goto_command) {
                 Some(p) => format!(" ({p})"),
                 None => String::new(),

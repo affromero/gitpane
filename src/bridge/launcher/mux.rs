@@ -345,6 +345,31 @@ fn tmux_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeEr
     );
     Ok(result)
 }
+/// A core has no panes to target, so every placement offers the same single
+/// choice: a new terminal at the repository. The identity is the calling
+/// terminal, which the token binds so a launch from another terminal is stale.
+fn core_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
+    let terminal = crate::session::herdr_core::terminal_id().ok_or_else(|| {
+        error(
+            "unsupported_placement",
+            "Run gitpane inside a herdr-core terminal to use this launcher.",
+        )
+    })?;
+    let mut result = Vec::new();
+    add_choice(
+        &mut result,
+        identity,
+        action,
+        "herdr-core",
+        &terminal,
+        (
+            "configured".into(),
+            format!("New terminal from {terminal}"),
+            action.placement.clone(),
+        ),
+    );
+    Ok(result)
+}
 
 fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
     let socket_path = std::env::var("HERDR_SOCKET_PATH").map_err(|_| {
@@ -555,6 +580,7 @@ fn collect(action: &Action, identity: &str, backend: &str) -> Result<Vec<Choice>
     match backend {
         "tmux" => tmux_choices(action, identity),
         "herdr" => herdr_choices(action, identity),
+        "herdr-core" => core_choices(action, identity),
         "herdr-app" => desktop_choices(action, identity),
         _ => Err(error("invalid_request", "Unknown multiplexer backend.")),
     }
@@ -741,6 +767,7 @@ pub(in crate::bridge) fn execute(
     let mux = match input.backend.as_str() {
         "tmux" => Multiplexer::Tmux,
         "herdr" => Multiplexer::Herdr,
+        "herdr-core" => Multiplexer::HerdrCore,
         "herdr-app" => Multiplexer::HerdrApp,
         _ => return Err(error("invalid_request", "Unknown multiplexer backend.")),
     };
@@ -786,6 +813,11 @@ pub(in crate::bridge) fn execute(
             let output = launch(&create, &repo, false)?;
             crate::session::herdr_app::validate_launch_response(&output.stdout)
                 .map_err(|message| error("outcome_unknown", message))?;
+        }
+        // A core launch is one `hc run` that has already returned the new
+        // terminal, so there is nothing further to verify or run.
+        LaunchPlan::HerdrCore { argv } => {
+            launch(&argv, &repo, false)?;
         }
         LaunchPlan::Herdr { create, command } => {
             let output = launch(&create, &repo, false)?;

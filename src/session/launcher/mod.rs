@@ -11,6 +11,7 @@
 //! targets and program argv; herdr-core terminal IDs are never pane IDs.
 
 use crate::session::env::Multiplexer;
+use crate::session::herdr_core;
 
 mod shell;
 
@@ -49,6 +50,9 @@ pub(crate) enum LaunchPlan {
         create: Vec<String>,
         command: Option<String>,
     },
+    /// Herdr core: spawn `argv` (`hc run --bg …`). A core has no window
+    /// manager, so this always opens a new terminal, never a split.
+    HerdrCore { argv: Vec<String> },
     /// Official desktop: run this program in a verified pane or space. The
     /// executor resolves and pins the source terminal independently of focus.
     HerdrApp {
@@ -243,10 +247,13 @@ fn plan_with_target_inner(
                     create: herdr_split_argv("right", dir, None),
                     command: None,
                 },
+                Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
+                    argv: herdr_core::run_argv(dir, None),
+                },
                 Multiplexer::HerdrApp => desktop_plan("split-window -h", dir, None),
-                Multiplexer::None => {
-                    LaunchPlan::Error("set a command or run gitpane inside tmux or herdr".into())
-                }
+                Multiplexer::None => LaunchPlan::Error(
+                    "set a command or run gitpane inside tmux, herdr or herdr-core".into(),
+                ),
             },
         },
         Placement::Tmux(flags) => match mux {
@@ -258,12 +265,18 @@ fn plan_with_target_inner(
                 },
                 Err(e) => LaunchPlan::Error(e),
             },
+            // A core has no pane layout: every placement opens a terminal.
+            Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
+                argv: herdr_core::run_argv(dir, shell.as_deref()),
+            },
             Multiplexer::HerdrApp => desktop_plan(&flags.join(" "), dir, shell.as_deref()),
             Multiplexer::None => {
                 if let Some(s) = shell {
                     LaunchPlan::Inline(s)
                 } else {
-                    LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
+                    LaunchPlan::Error(
+                        "run gitpane inside tmux, herdr or herdr-core for this placement".into(),
+                    )
                 }
             }
         },
@@ -272,12 +285,17 @@ fn plan_with_target_inner(
             None => LaunchPlan::Error("inline placement needs a command".to_string()),
         },
         Placement::Ask => match mux {
+            Multiplexer::HerdrCore => LaunchPlan::HerdrCore {
+                argv: herdr_core::run_argv(dir, shell.as_deref()),
+            },
             Multiplexer::Tmux | Multiplexer::Herdr | Multiplexer::HerdrApp => LaunchPlan::Ask,
             Multiplexer::None => {
                 if let Some(command) = shell {
                     LaunchPlan::Inline(command)
                 } else {
-                    LaunchPlan::Error("run gitpane inside tmux or herdr for this placement".into())
+                    LaunchPlan::Error(
+                        "run gitpane inside tmux, herdr or herdr-core for this placement".into(),
+                    )
                 }
             }
         },

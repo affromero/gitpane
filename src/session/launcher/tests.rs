@@ -552,3 +552,81 @@ fn parse_herdr_pane_id_reads_split_and_tab_responses() {
     assert_eq!(parse_herdr_pane_id(tab), Some("w1:p7".to_string()));
     assert_eq!(parse_herdr_pane_id("not json"), None);
 }
+
+#[test]
+fn core_placements_open_a_terminal_instead_of_a_pane() {
+    let path = "/work/app";
+    // The default `o` (no command, `command` placement) opens a shell there.
+    assert_eq!(
+        plan(None, "command", path, None, Multiplexer::HerdrCore),
+        LaunchPlan::HerdrCore {
+            argv: vec![
+                "hc",
+                "run",
+                "--bg",
+                "--outlive-parent",
+                "--no-notify",
+                "--cwd",
+                path,
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        }
+    );
+    // A tmux-shaped placement still runs its command, because a core has no
+    // panes to split: the placement degrades to a new terminal.
+    // A tmux-shaped placement still runs its command, because a core has no
+    // panes to split: the placement degrades to a new terminal. The command
+    // reaches `sh -c` as one opaque argument after `--`, so whatever it
+    // contains — including a leading dash — stays program data.
+    let LaunchPlan::HerdrCore { argv } = plan(
+        Some("lazygit {path}"),
+        "split-window -h",
+        path,
+        None,
+        Multiplexer::HerdrCore,
+    ) else {
+        panic!("a core placement did not produce a terminal launch");
+    };
+    let (flags, tail) = argv.split_at(7);
+    assert_eq!(
+        flags,
+        [
+            "hc",
+            "run",
+            "--bg",
+            "--outlive-parent",
+            "--no-notify",
+            "--cwd",
+            path
+        ]
+    );
+    assert_eq!(&tail[..3], ["--", "sh", "-c"]);
+    assert!(tail.len() == 4, "the command is one argv element: {tail:?}");
+    // The path reaches the command as data, not as shell syntax.
+    assert!(tail[3].contains("/work/app"), "{tail:?}");
+    // `ask` has nothing to ask about in a core, so it launches directly.
+    assert!(matches!(
+        plan(None, "ask", path, None, Multiplexer::HerdrCore),
+        LaunchPlan::HerdrCore { .. }
+    ));
+    // `inline` stays inline: it never needed a multiplexer, so a core runs it in
+    // the current terminal exactly as any other backend does.
+    assert_eq!(
+        plan(
+            Some("git diff {base}...HEAD"),
+            "inline",
+            path,
+            Some("main"),
+            Multiplexer::HerdrCore
+        ),
+        plan(
+            Some("git diff {base}...HEAD"),
+            "inline",
+            path,
+            Some("main"),
+            Multiplexer::None
+        ),
+    );
+}

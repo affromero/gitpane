@@ -32,6 +32,8 @@ pub(crate) enum Multiplexer {
     Tmux,
     /// herdr: `$HERDR_*` is set and we are in a herdr pane.
     Herdr,
+    /// Herdr core: a headless `herdr-core` terminal driven through `hc`.
+    HerdrCore,
     /// Official herdr-app: the HC terminal is displayed in its local layout.
     HerdrApp,
     /// A plain terminal, or a multiplexer gitpane does not know.
@@ -52,7 +54,9 @@ impl Multiplexer {
 
     /// Detect from `present`, which answers whether an env var is set. Pure env
     /// signal only: `HERDR_*` present means a herdr pane (a tmux pane inside
-    /// herdr inherits them too), else `TMUX` means a tmux pane.
+    /// herdr inherits them too), `HC_TERMINAL_ID` names a herdr-core terminal,
+    /// else `TMUX` means a tmux pane. Desktop display is resolved separately,
+    /// because only a live layout can show whether a terminal is displayed.
     pub(crate) fn detect_from(present: impl Fn(&str) -> bool) -> Self {
         if present("HERDR_ENV")
             || present("HERDR_PANE_ID")
@@ -60,10 +64,23 @@ impl Multiplexer {
             || present("HERDR_WORKSPACE_ID")
         {
             Self::Herdr
+        } else if present("HC_TERMINAL_ID") {
+            Self::HerdrCore
         } else if present("TMUX") || present("TMUX_PANE") {
             Self::Tmux
         } else {
             Self::None
+        }
+    }
+
+    /// Backend name used by the bridge and the VS Code extension.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Tmux => "tmux",
+            Self::Herdr => "herdr",
+            Self::HerdrCore => "herdr-core",
+            Self::HerdrApp => "herdr-app",
+            Self::None => "none",
         }
     }
 }
@@ -76,8 +93,13 @@ fn detect_uncached() -> Result<Multiplexer, String> {
     } else {
         mux
     };
-    let nested = matches!(host, Multiplexer::Herdr | Multiplexer::HerdrApp)
-        && (std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some());
+    // A tmux pane nested in any Herdr host inherits that host's variables, so
+    // ask tmux whether it owns the process before trusting the inherited host.
+    let nested = matches!(
+        host,
+        Multiplexer::Herdr | Multiplexer::HerdrCore | Multiplexer::HerdrApp
+    ) && (std::env::var_os("TMUX").is_some()
+        || std::env::var_os("TMUX_PANE").is_some());
     Ok(if nested && host == Multiplexer::HerdrApp {
         desktop_owner(
             &tmux_pane_pids(),
@@ -240,13 +262,18 @@ mod tests {
             Multiplexer::detect_from(present(&["WEZTERM_PANE"])),
             Multiplexer::None
         );
+        // An HC terminal alone is a herdr-core terminal; the desktop display
+        // check happens separately, once a live layout can confirm it.
         assert_eq!(
             Multiplexer::detect_from(present(&["HC_TERMINAL_ID"])),
-            Multiplexer::None,
+            Multiplexer::HerdrCore
         );
+        // A tmux pane inside a core inherits both, so `detect_from` reports the
+        // outer host; `detect_uncached` then asks tmux whether it owns the
+        // process, the same way it resolves herdr-inside-tmux.
         assert_eq!(
             Multiplexer::detect_from(present(&["HC_TERMINAL_ID", "TMUX"])),
-            Multiplexer::Tmux,
+            Multiplexer::HerdrCore,
         );
     }
 
@@ -275,6 +302,26 @@ mod tests {
         );
         // Unreachable tmux (no pane pids) also falls back to herdr.
         assert_eq!(disambiguate_nested(&[], 500, 600), Multiplexer::Herdr);
+    }
+
+    #[test]
+    fn core_terminal_is_detected_from_its_environment() {
+        // A headless core terminal has no desktop layout and no HERDR_* vars.
+        assert_eq!(
+            Multiplexer::detect_from(present(&["HC_TERMINAL_ID"])),
+            Multiplexer::HerdrCore
+        );
+        assert_eq!(Multiplexer::HerdrCore.name(), "herdr-core");
+        // A tmux pane inside a core still resolves through tmux ownership.
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrCore, &[100, 200], 200, 300),
+            Multiplexer::Tmux,
+        );
+        // Unreachable tmux leaves the calling core terminal in charge.
+        assert_eq!(
+            resolve_host(Multiplexer::HerdrCore, &[], 500, 600),
+            Multiplexer::HerdrCore,
+        );
     }
 
     #[test]

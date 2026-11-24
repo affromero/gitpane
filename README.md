@@ -476,13 +476,21 @@ The selection drives the target: highlight a repo row and `o` opens the repo roo
 
 ### herdr
 
-Gitpane supports both the official desktop client and the legacy Herdr CLI.
+Gitpane supports the official desktop client, a headless Herdr Core, and the
+legacy Herdr CLI.
 
 #### Official desktop (`herdr-app` and `hc`)
 
 For desktop integration, run gitpane inside a local terminal displayed by the official desktop client. Gitpane resolves `$HC_TERMINAL_ID` through `herdr-app ls` to find the calling terminal's pane, tab, and space. Hidden core workers and remote terminals do not select this backend. Both `herdr-app` and `hc` must be on `PATH`.
 
-In a remote terminal opened through **Add Machine**, or a headless herdr-core worker, run `gitpane --cwd` in the repository as usual. Keep `$HC_TERMINAL_ID` set. If the local `herdr-app` CLI is missing or its desktop socket is missing or no longer accepting connections, automatic detection continues with the normal terminal, tmux, or legacy Herdr backend. Desktop splits, tab creation, liveness markers, and focus require a displayed local desktop terminal; gitpane does not route these operations to the desktop on another machine.
+In a remote terminal opened through **Add Machine**, or a headless herdr-core
+worker, run `gitpane --cwd` in the repository as usual; that terminal uses the
+[herdr-core backend](#herdr-core-hc). Keep `$HC_TERMINAL_ID` set. If the local
+`herdr-app` CLI is missing or its desktop socket is missing or no longer
+accepting connections, automatic detection continues with the herdr-core,
+tmux, or legacy Herdr backend. Desktop splits, tab creation, liveness markers,
+and focus require a displayed local desktop terminal; gitpane does not route
+these operations to the desktop on another machine.
 
 Invalid layout JSON, permission errors, timeouts, and other backend failures still report errors. Explicitly choosing `herdr-app` also reports errors when the local desktop is unavailable. Once gitpane has verified its source pane, it keeps that identity; launch and placement operations reject a missing or changed source pane instead of choosing a different target.
 
@@ -495,6 +503,27 @@ Invalid layout JSON, permission errors, timeouts, and other backend failures sti
 Verified with `herdr-app 0.1.11` and `hc 0.1.16` on Linux. The legacy `[herdr] forward_right_click` option applies only to the old CLI. Use the `Menu` key when the desktop client consumes right-clicks.
 
 When nested inside tmux, official desktop detection follows a bounded process-ancestor chain so shell wrappers and VS Code backend workers keep the inner tmux backend. It stops at the HC terminal's root process before considering an inherited outer tmux pane. This probe uses `ps`; unavailable process information falls back to the verified desktop context. Select `tmux` explicitly in VS Code if the host prevents the probe.
+
+#### Herdr Core (`hc`)
+
+A headless `herdr-core` terminal has no window to display a layout in. When
+`$HC_TERMINAL_ID` names a terminal that the local `herdr-app` does not display
+— a terminal on another machine, a hidden worker, or a machine with no desktop
+client at all — gitpane uses the core backend, which only needs `hc` on `PATH`.
+
+- **Open / review:** `o` and `v` open a new terminal at the selected repository
+  or worktree through `hc run --bg --outlive-parent`, so the terminal survives
+  gitpane quitting. There is no pane geometry to honor: a `split-window` or
+  `new-window` placement still runs its command, but always in a new terminal.
+  `ask` launches directly, because there is nothing to ask about.
+  `inline` is unaffected and still runs in the current terminal.
+- **Liveness and `G`:** `hc ls` reports live terminals by foreground directory.
+  The `◉` marker works as usual. `G` cannot switch windows — attaching would
+  take over the terminal you are already in — so it reports the
+  `hc attach <terminal>` command instead of moving focus.
+- **VS Code:** select `herdr-core` for `gitpane.sessionBackend`.
+
+Verified with `hc 0.1.22` on Linux.
 
 #### Legacy CLI (`herdr`)
 

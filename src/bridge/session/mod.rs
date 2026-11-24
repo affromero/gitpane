@@ -28,6 +28,8 @@ enum LivenessBackend {
     Auto,
     Tmux,
     Herdr,
+    #[serde(rename = "herdr-core")]
+    HerdrCore,
     #[serde(rename = "herdr-app")]
     HerdrApp,
 }
@@ -86,21 +88,21 @@ fn liveness_with(
     }
     let backend = if enabled {
         match input.backend {
-            LivenessBackend::Tmux => Some("tmux"),
-            LivenessBackend::Herdr => Some("herdr"),
-            LivenessBackend::HerdrApp => Some("herdr-app"),
+            LivenessBackend::Tmux => Some(Multiplexer::Tmux),
+            LivenessBackend::Herdr => Some(Multiplexer::Herdr),
+            LivenessBackend::HerdrCore => Some(Multiplexer::HerdrCore),
+            LivenessBackend::HerdrApp => Some(Multiplexer::HerdrApp),
             LivenessBackend::Auto => match detect().map_err(|error| {
                 BridgeError::new(
                     "session_error",
                     format!("Could not detect Herdr desktop session: {error}"),
                 )
             })? {
-                Multiplexer::Tmux => Some("tmux"),
-                Multiplexer::Herdr => Some("herdr"),
-                Multiplexer::HerdrApp => Some("herdr-app"),
                 Multiplexer::None => None,
+                mux => Some(mux),
             },
         }
+        .map(Multiplexer::name)
     } else {
         None
     };
@@ -176,6 +178,14 @@ pub(super) fn goto(scope: &Scope, input: GotoRequest) -> Result<Value, BridgeErr
             "focus".to_owned(),
             input.session.clone(),
         ],
+        // A core cannot be focused from another terminal: attaching moves the
+        // terminal you are already in. Say so instead of switching nowhere.
+        "herdr-core" => {
+            return Err(BridgeError::new(
+                "unsupported_placement",
+                crate::session::herdr_core::focus_error(&input.session),
+            ));
+        }
         "herdr-app" => vec![
             "herdr-app".to_owned(),
             "do".to_owned(),
