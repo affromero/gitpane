@@ -192,7 +192,7 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 
 ## Features
 
-On a linked worktree, `base −6` means the checkout is missing six commits from the remote default branch. The `↑` and `↓` counts track the current branch's upstream. When that upstream is also the remote default branch, only the usual arrows appear.
+On a linked worktree, `↓6 main` means the checkout is missing six commits from the remote default branch `main`. An arrow without a branch name tracks the current branch's upstream. When the upstream is also the remote default branch, only the usual upstream arrow appears.
 
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows dirty indicator (`*`), branch (dimmed on the default branch), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`) and lists them under it. In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work. Worktrees show on startup; press `w` to collapse a repo you want quiet, or set `[ui] expand_worktrees = false` to start every repo collapsed.

@@ -70,7 +70,7 @@ impl RepoList {
         });
         let base_lag = wt.default_branch_lag.as_ref().map(|lag| {
             Span::styled(
-                format!("base −{} ", lag.behind),
+                format!("{} ", super::layout::default_branch_lag_label(lag)),
                 Style::default().fg(t.behind),
             )
         });

@@ -19,7 +19,12 @@
 use std::path::PathBuf;
 
 use super::RepoEntry;
-use crate::git::status::RepoStatus;
+use crate::git::status::{DefaultBranchLag, RepoStatus};
+use ratatui::text::Span;
+
+pub(super) fn default_branch_lag_label(lag: &DefaultBranchLag) -> String {
+    format!("↓{} {}", lag.behind, lag.short_branch)
+}
 
 /// Which indicator an attention-cell segment renders; the renderer maps this
 /// to a theme color and the hit-test picks out the clickable toggles.
@@ -75,7 +80,7 @@ pub(super) fn attention_cells(
     }
     if let Some(lag) = &status.default_branch_lag {
         cells.push((
-            format!("base −{}", lag.behind),
+            default_branch_lag_label(lag),
             AttentionCell::DefaultBranchLag,
         ));
     }
@@ -95,7 +100,7 @@ pub(super) fn attention_cells(
 pub(super) fn packed_width(cells: &[(String, AttentionCell)]) -> u16 {
     let glyphs: u16 = cells
         .iter()
-        .map(|(text, _)| text.chars().count() as u16)
+        .map(|(text, _)| Span::raw(text.as_str()).width() as u16)
         .sum();
     glyphs + cells.len().saturating_sub(1) as u16
 }

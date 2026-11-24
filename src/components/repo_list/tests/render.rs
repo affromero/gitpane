@@ -12,6 +12,7 @@ fn worktree_row_keeps_default_branch_lag_visible_beside_the_upstream_count() {
     worktree.behind = 2;
     worktree.default_branch_lag = Some(DefaultBranchLag {
         branch: "origin/main".into(),
+        short_branch: "main".into(),
         behind: 6,
     });
     status.worktree_info.push(worktree);
@@ -24,7 +25,7 @@ fn worktree_row_keeps_default_branch_lag_visible_beside_the_upstream_count() {
         .unwrap();
     let buffer = terminal.backend().buffer();
     let row = (0..35).map(|x| buffer[(x, 2)].symbol()).collect::<String>();
-    assert!(row.contains("↓2 base −6"), "{row}");
+    assert!(row.contains("↓2 ↓6 main"), "{row}");
 }
 
 #[test]

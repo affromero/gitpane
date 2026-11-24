@@ -4,7 +4,7 @@ use git2::Repository;
 use std::path::Path;
 
 use super::change_summary::{ChangeSummary, collect_change_summary};
-use super::{DefaultBranchLag, WorktreeEntry, default_branch_name};
+use super::{DefaultBranchLag, WorktreeEntry, default_branch_names};
 
 /// Collect details for each linked worktree using the git2 API.
 /// Mirrors the pattern in `git/graph.rs::collect_worktree_branches`.
@@ -145,7 +145,7 @@ pub(super) fn default_branch_lag(repo: &Repository) -> Option<DefaultBranchLag> 
     if !head.is_branch() {
         return None;
     }
-    let branch = default_branch_name(repo)?;
+    let (branch, short_branch) = default_branch_names(repo)?;
     let base = repo
         .find_reference(&format!("refs/remotes/{branch}"))
         .ok()?
@@ -166,7 +166,11 @@ pub(super) fn default_branch_lag(repo: &Repository) -> Option<DefaultBranchLag> 
     let (_, behind) = repo
         .graph_ahead_behind(head.target()?, base.target()?)
         .ok()?;
-    (behind > 0).then_some(DefaultBranchLag { branch, behind })
+    (behind > 0).then_some(DefaultBranchLag {
+        branch,
+        short_branch,
+        behind,
+    })
 }
 
 /// Returns (ahead, behind) for HEAD relative to its publishing target.

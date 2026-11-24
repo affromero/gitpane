@@ -34,7 +34,10 @@ window.GitpaneAddGitStatus = (add, tail, owner) => {
   if (owner.ahead > 0) add(tail, 'ahead', `↑${owner.ahead}`, upstreamHelp(owner.ahead, 'ahead of'));
   if (owner.behind > 0) add(tail, 'behind', `↓${owner.behind}`, upstreamHelp(owner.behind, 'behind'));
   const lagLabel = window.GitpaneDefaultBranchLagLabel(owner.defaultBranchLag);
-  if (lagLabel) add(tail, 'behind', `base −${owner.defaultBranchLag.behind}`, lagLabel);
+  if (lagLabel) {
+    const { behind, short_branch, branch } = owner.defaultBranchLag;
+    add(tail, 'behind', `↓${behind} ${short_branch || branch}`, lagLabel);
+  }
   if (owner.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'One or more submodules are uninitialized, have local changes, or are checked out at a different commit.');
   if (owner.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', window.GitpaneAttentionHelp + '\nSee Submodules needing attention in the change list for details.');
 };

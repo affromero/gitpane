@@ -202,6 +202,7 @@ pub(crate) struct SubmoduleWarn {
 #[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct DefaultBranchLag {
     pub branch: String,
+    pub short_branch: String,
     pub behind: usize,
 }
 
@@ -478,20 +479,28 @@ fn query_status_inner(
 /// workspaces without an `origin` still get a review base; repos with
 /// remote-tracking refs but no configured remotes fall back to `origin`.
 pub(crate) fn default_branch_name(repo: &Repository) -> Option<String> {
+    default_branch_names(repo).map(|(branch, _)| branch)
+}
+
+fn default_branch_names(repo: &Repository) -> Option<(String, String)> {
     let remote = crate::git::preferred_remote(repo).unwrap_or_else(|| "origin".to_string());
-    if let Ok(head_ref) = repo.find_reference(&format!("refs/remotes/{remote}/HEAD"))
+    let prefix = format!("{remote}/");
+    if let Ok(head_ref) = repo.find_reference(&format!("refs/remotes/{prefix}HEAD"))
         && let Ok(Some(target_name)) = head_ref.symbolic_target()
         && repo.find_reference(target_name).is_ok()
         && let Some(short) = target_name.strip_prefix("refs/remotes/")
     {
-        return Some(short.to_string());
+        return Some((
+            short.to_string(),
+            short.strip_prefix(&prefix).unwrap_or(short).to_string(),
+        ));
     }
     for branch in ["main", "master"] {
         if repo
             .find_reference(&format!("refs/remotes/{remote}/{branch}"))
             .is_ok()
         {
-            return Some(format!("{remote}/{branch}"));
+            return Some((format!("{prefix}{branch}"), branch.to_string()));
         }
     }
     None
