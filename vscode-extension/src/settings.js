@@ -2,7 +2,7 @@
 
 const DEFAULT_REFRESH_INTERVAL = 5000;
 const KEYS = ['fontSize', 'statusAlignment', 'sortOrder', 'worktrees.defaultVisibility', 'worktrees.showOutsideWorkspace', 'refreshInterval', 'showSessionLiveness',
-  'submodules.autoDiscover', 'graph.firstParent', 'graph.labelMaxLength'];
+  'submodules.autoDiscover', 'graph.firstParent', 'graph.labelMaxLength', 'fetchInterval'];
 
 function configureViewProvider(provider, { refreshInterval, worktreeExpansion, showOutsideWorktrees, fontSize, statusAlignment }) {
   const intervalChanged = provider.refreshInterval !== refreshInterval;
@@ -35,6 +35,7 @@ function readPreferences(configuration, rememberedOrder) {
     statusAlignment: read('statusAlignment', 'left', value => ['left', 'right'].includes(value)),
     sortOrder: order === 'remember' ? (orders.includes(rememberedOrder) ? rememberedOrder : 'workspace') : order,
     refreshInterval: seconds * 1000,
+    fetchInterval: read('fetchInterval', 30, value => Number.isSafeInteger(value) && value >= 0 && value <= 3600) * 1000,
     worktreeExpansion: visibility === 'native' ? undefined : visibility === 'expanded',
     showOutsideWorktrees: read('worktrees.showOutsideWorkspace', true, value => typeof value === 'boolean'),
     autoDiscoverSubmodules: read('submodules.autoDiscover', true, value => typeof value === 'boolean'),

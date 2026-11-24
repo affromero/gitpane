@@ -725,6 +725,7 @@ async function activate(context) {
   });
   const workspaceFetch = new WorkspaceFetch({ tree, backend, mutations, vscode, output,
     refresh: async () => { await provider.refresh(); await Promise.all([graph.pollRevision(), sidebarGraph.pollRevision()]); } });
+  tree.workspaceFetch = workspaceFetch;
   const worktreeContext = (id, repo) => {
     const link = provider.worktrees.get(id);
     const parent = api.repositories.find(item => item.rootUri.toString() === link?.repoKey);
