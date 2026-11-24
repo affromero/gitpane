@@ -26,9 +26,15 @@ window.GitpaneGroupHelp = group => ({
 const upstreamHelp = (count, direction) =>
   `${count} ${count === 1 ? 'commit' : 'commits'} ${direction} the configured upstream branch`;
 
+window.GitpaneDefaultBranchLagLabel = lag => lag?.behind > 0
+  ? `${lag.behind} ${lag.behind === 1 ? 'commit' : 'commits'} behind ${lag.branch} (remote default branch)`
+  : '';
+
 window.GitpaneAddGitStatus = (add, tail, owner) => {
   if (owner.ahead > 0) add(tail, 'ahead', `↑${owner.ahead}`, upstreamHelp(owner.ahead, 'ahead of'));
   if (owner.behind > 0) add(tail, 'behind', `↓${owner.behind}`, upstreamHelp(owner.behind, 'behind'));
+  const lagLabel = window.GitpaneDefaultBranchLagLabel(owner.defaultBranchLag);
+  if (lagLabel) add(tail, 'behind', `base −${owner.defaultBranchLag.behind}`, lagLabel);
   if (owner.hasDirtySubmodules) add(tail, 'dirty-submodule', '◈', 'One or more submodules are uninitialized, have local changes, or are checked out at a different commit.');
   if (owner.hasUnpushedSubmodules) add(tail, 'unpushed-submodule', '⇡', window.GitpaneAttentionHelp + '\nSee Submodules needing attention in the change list for details.');
 };
@@ -42,6 +48,7 @@ window.GitpaneRepositoryLabel = (repo, count) => {
     if (repo.worktreeCount > 0) details.push(`${repo.worktreeCount} ${repo.worktreeCount === 1 ? 'worktree' : 'worktrees'}`);
     if (repo.ahead > 0) details.push(`${repo.ahead} ahead`);
     if (repo.behind > 0) details.push(`${repo.behind} behind`);
+    details.push(window.GitpaneDefaultBranchLagLabel(repo.defaultBranchLag));
     if (repo.hasDirtySubmodules) details.push('dirty submodules');
     if (repo.hasUnpushedSubmodules) details.push('submodules need attention');
   }

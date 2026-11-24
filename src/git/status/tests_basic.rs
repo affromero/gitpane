@@ -135,6 +135,86 @@ fn test_worktree_info_reflects_linked_worktrees() {
 }
 
 #[test]
+fn linked_worktree_reports_default_branch_lag_separately_from_upstream() {
+    let (tmp, repo) = init_temp_repo();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.remote("origin", "unused").unwrap();
+    for name in ["main", "topic"] {
+        repo.reference(
+            &format!("refs/remotes/origin/{name}"),
+            head.id(),
+            false,
+            "base",
+        )
+        .unwrap();
+    }
+    let wt_tmp = TempDir::new().unwrap();
+    for (name, upstream) in [
+        ("topic", Some("origin/topic")),
+        ("untracked", None),
+        ("tracks-main", Some("origin/main")),
+        ("detached", None),
+    ] {
+        let mut branch = repo.branch(name, &head, false).unwrap();
+        if let Some(upstream) = upstream {
+            branch.set_upstream(Some(upstream)).unwrap();
+        }
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(branch.get()));
+        let path = wt_tmp.path().join(name);
+        repo.worktree(name, &path, Some(&opts)).unwrap();
+        if name == "detached" {
+            Repository::open(path)
+                .unwrap()
+                .set_head_detached(head.id())
+                .unwrap();
+        }
+    }
+    let cfg = SubmoduleConfig::default();
+    assert!(
+        query_status(tmp.path(), &cfg)
+            .unwrap()
+            .worktree_info
+            .iter()
+            .all(|worktree| worktree.default_branch_lag.is_none())
+    );
+
+    let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+    let advanced = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "merged work",
+            &head.tree().unwrap(),
+            &[&head],
+        )
+        .unwrap();
+    repo.reference("refs/remotes/origin/main", advanced, true, "push")
+        .unwrap();
+
+    let status = query_status(tmp.path(), &cfg).unwrap();
+    assert!(status.default_branch_lag.is_none());
+    for worktree in status.worktree_info {
+        let (behind, lag) = match worktree.name.as_str() {
+            "topic" | "untracked" => (0, Some(("origin/main", 1))),
+            "tracks-main" => (1, None),
+            "detached" => (0, None),
+            name => panic!("Unexpected worktree {name}"),
+        };
+        let pinned = query_status(&worktree.path, &cfg).unwrap();
+        assert_eq!(worktree.behind, behind);
+        assert_eq!(pinned.behind, behind);
+        for actual in [&worktree.default_branch_lag, &pinned.default_branch_lag] {
+            assert_eq!(
+                actual.as_ref().map(|lag| (lag.branch.as_str(), lag.behind)),
+                lag
+            );
+        }
+    }
+}
+
+#[test]
 fn test_worktree_info_reflects_dirty_linked_worktree() {
     let (tmp, repo) = init_temp_repo();
     let head = repo.head().unwrap().peel_to_commit().unwrap();

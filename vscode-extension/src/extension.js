@@ -144,6 +144,7 @@ class GitpaneViewProvider {
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
         return { id: worktreeId, submoduleStateKey: submoduleStateKey(item.path), name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
+          defaultBranchLag: item.default_branch_lag,
           available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
           ...incomplete(childStatus, child),
@@ -170,6 +171,7 @@ class GitpaneViewProvider {
             fileCount: summary?.file_count_lower_bound || 0,
             changeCountLowerBound: summary?.file_count_lower_bound,
             ahead: summary?.ahead || 0, behind: summary?.behind || 0,
+            defaultBranchLag: summary?.default_branch_lag,
             ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [],
             submodules: externalSubmodules(this, vscode, { item, repoKey, repoToken, worktreeId, summary, live, groupsFor, pageFor, errors: externalErrors }) });
         }
@@ -184,6 +186,7 @@ class GitpaneViewProvider {
         dirty: !!status?.is_dirty,
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
+        defaultBranchLag: status?.default_branch_lag,
         worktree: repo.kind === 'worktree',
         submodule: !!node.submodule,
         pinned: this.pins?.isPinned(repo) || false,

@@ -68,10 +68,32 @@ impl RepoList {
                 Style::default().fg(t.dirty_submodule),
             )
         });
-        let branch_budget = control.as_ref().map_or(usize::MAX, |control| {
-            let prefix_width: usize = spans.iter().map(Span::width).sum();
-            usize::from(width).saturating_sub(prefix_width + control.width() + 1)
+        let base_lag = wt.default_branch_lag.as_ref().map(|lag| {
+            Span::styled(
+                format!("base −{} ", lag.behind),
+                Style::default().fg(t.behind),
+            )
         });
+        let branch_budget = if control.is_some() || base_lag.is_some() {
+            let prefix_width: usize = spans.iter().map(Span::width).sum();
+            let control_width = control.as_ref().map_or(0, |control| control.width() + 1);
+            let status_width = base_lag.as_ref().map_or(0, |lag| {
+                lag.width()
+                    + if wt.ahead > 0 {
+                        format!("↑{} ", wt.ahead).chars().count()
+                    } else {
+                        0
+                    }
+                    + if wt.behind > 0 {
+                        format!("↓{} ", wt.behind).chars().count()
+                    } else {
+                        0
+                    }
+            });
+            usize::from(width).saturating_sub(prefix_width + control_width + status_width + 1)
+        } else {
+            usize::MAX
+        };
         let mut branch = middle_ellipsize(&wt.branch, branch_budget);
         let mut chars = branch.chars().count();
         while Span::raw(branch.as_str()).width() > branch_budget {
@@ -104,6 +126,9 @@ impl RepoList {
                 format!("\u{2193}{} ", wt.behind),
                 Style::default().fg(t.behind),
             ));
+        }
+        if let Some(lag) = base_lag {
+            spans.push(lag);
         }
         if wt.has_dirty_submodules {
             spans.push(Span::styled(

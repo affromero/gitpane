@@ -29,6 +29,7 @@ pub(super) enum AttentionCell {
     Worktree,
     Ahead,
     Behind,
+    DefaultBranchLag,
     DirtySub,
     UnpushedSub,
     FetchWarn,
@@ -71,6 +72,12 @@ pub(super) fn attention_cells(
     }
     if status.behind > 0 {
         cells.push((format!("\u{2193}{}", status.behind), AttentionCell::Behind));
+    }
+    if let Some(lag) = &status.default_branch_lag {
+        cells.push((
+            format!("base −{}", lag.behind),
+            AttentionCell::DefaultBranchLag,
+        ));
     }
     if status.has_dirty_submodules {
         cells.push(("\u{25c8}".to_string(), AttentionCell::DirtySub));

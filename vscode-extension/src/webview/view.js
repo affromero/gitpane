@@ -581,6 +581,7 @@ function render() {
       }
       if (worktree.ahead > 0) worktreeDetails.push(`${worktree.ahead} ahead`);
       if (worktree.behind > 0) worktreeDetails.push(`${worktree.behind} behind`);
+      worktreeDetails.push(window.GitpaneDefaultBranchLagLabel(worktree.defaultBranchLag));
       if (worktree.hasDirtySubmodules) worktreeDetails.push('dirty submodules');
       if (worktree.hasUnpushedSubmodules) worktreeDetails.push('submodules need attention');
       if (worktree.live) worktreeDetails.push('live session');
