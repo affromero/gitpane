@@ -6,7 +6,7 @@ human-facing overview, see [README.md](README.md).
 
 ## Setup
 
-- Rust edition 2024, MSRV **1.88.0**. Install a matching toolchain (rustup recommended).
+- Rust edition 2024, MSRV **1.91.0**. Install a matching toolchain (rustup recommended).
 - No services or network access are needed to build, run, or test.
 - Full integration coverage requires `git` on PATH, plus `sh` and `sleep` on
   Unix. CLI tests use `crate::git::git_test_available()` to skip only missing
