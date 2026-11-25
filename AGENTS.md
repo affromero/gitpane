@@ -165,6 +165,12 @@ Linux or Windows behavior.
   steps before and after for changes to existing behavior, or show a new
   feature in use. If a GIF does not apply, briefly explain why in the Demo
   section.
+- PR-only screenshots and GIFs may live in a temporary commit. Pin their PR
+  embeds to the commit containing them, remove the files in a cleanup commit
+  before merging, and verify the embeds still load. Merge with a merge commit
+  to preserve the pinned commit. If review-only media already landed on the
+  base branch, remove it in a follow-up change. Keep assets used by the product
+  or maintained documentation.
 - For changes likely to affect TUI runtime, compare the base and proposed
   binaries with `scripts/benchmark_runtime.py` and include the report in the
   PR. Build both with the same toolchain and profile, and describe any

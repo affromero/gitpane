@@ -49,6 +49,12 @@ fixes. Show each affected interface, such as the TUI and VS Code. If existing
 behavior changes, show the same steps before and after the change. For new
 behavior, show it in use. If a GIF does not apply, briefly explain why.
 
+Attach review-only media to the PR or commit it temporarily and embed it using
+a URL pinned to the commit containing the file. Before merging, remove
+review-only files in a follow-up commit on the PR branch and verify that the
+embeds still load. Use a merge commit to preserve the media commit in history.
+Keep media used by the product or maintained documentation.
+
 ## Maintainer review
 
 - [ ] Read the linked issue and discussion, then review the complete diff
@@ -59,6 +65,9 @@ behavior, show it in use. If a GIF does not apply, briefly explain why.
       verification after conflict resolution or other changes.
 - [ ] Confirm the GIFs demonstrate the change in each affected interface, or
       that the PR explains why a GIF does not apply.
+- [ ] Confirm review-only media is absent from the final diff and still loads
+      in the PR. If it already landed on the base branch, remove it in a
+      follow-up change.
 
 ## Review assistance
 
