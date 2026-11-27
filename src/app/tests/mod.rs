@@ -4,6 +4,7 @@ mod robustness;
 mod sort;
 mod stash;
 mod submodule_disclosure;
+mod terminate;
 mod text_selection;
 mod watcher_membership;
 use crate::git::status::StashEntry;
@@ -610,28 +611,6 @@ fn doze_to_awake_does_not_replay_or_repaint() {
     app.handle_event(Event::Power(PowerState::Doze)).unwrap();
     app.handle_event(Event::Power(PowerState::Awake)).unwrap();
     assert!(drain_actions(&mut app).is_empty());
-}
-
-/// A terminating signal must quit through the ordinary path, so `exit()`
-/// restores the terminal. Waiting for in-flight git operations would delay that
-/// restore, and the person has usually already given up on the process.
-#[tokio::test]
-async fn terminate_forces_the_ordinary_quit_path() {
-    let _count = GIT_OP_COUNT.lock().await;
-    let mut app = power_test_app();
-    let (tx, _rx) = mpsc::unbounded_channel();
-    let guard = GitOpGuard::new(RepoId(std::path::PathBuf::from("/tmp/repo")), tx);
-    // An in-flight operation would otherwise hold the exit open.
-    assert!(!app.ready_to_exit());
-
-    app.handle_event(Event::Terminate).unwrap();
-
-    assert!(app.should_quit);
-    assert!(app.force_quit);
-    // No second press to ask for and no in-flight operation left to drain, so
-    // the loop restores the terminal on its very next pass.
-    assert!(app.ready_to_exit());
-    guard.complete();
 }
 
 #[tokio::test]
