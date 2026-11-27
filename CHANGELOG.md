@@ -4,7 +4,7 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
-## [0.20.1] - 2026-11-27
+## [0.20.2] - 2026-11-27
 
 ### Added
 - Fetch remote updates in VS Code every 30 seconds by default while Gitpane is visible on macOS or Linux. Set `gitpane.fetchInterval` to change the interval or set it to zero to disable fetching. ([#286](https://github.com/affromero/gitpane/pull/286), closes [#285](https://github.com/affromero/gitpane/issues/285))
@@ -15,6 +15,10 @@ All notable changes to gitpane are documented here.
 
 ### Changed
 - Update Clap to 4.6.8 and ureq to 3.5.2. ([#288](https://github.com/affromero/gitpane/pull/288))
+
+## [0.20.1] - 2026-11-27 (unpublished)
+
+Publication stopped when Intel macOS CI timed out. The changes are included in v0.20.2. ([Release run](https://github.com/affromero/gitpane/actions/runs/46075869054))
 
 ## [0.20.0] - 2026-11-24
 
