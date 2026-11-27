@@ -552,3 +552,89 @@ fn parse_herdr_pane_id_reads_split_and_tab_responses() {
     assert_eq!(parse_herdr_pane_id(tab), Some("w1:p7".to_string()));
     assert_eq!(parse_herdr_pane_id("not json"), None);
 }
+
+#[test]
+fn core_placements_open_a_tab_and_refuse_a_split() {
+    let path = "/work/app";
+    // The default `o` (no command, `command` placement) opens a shell beside
+    // gitpane, so it asks for the calling tab. No argv yet: the labels are only
+    // known at launch.
+    assert_eq!(
+        plan(None, "command", path, None, Multiplexer::HerdrCore),
+        LaunchPlan::HerdrCore {
+            dir: path.to_string(),
+            command: None,
+            tab: true,
+        }
+    );
+    // `new-window` is exactly what a core can do, so it carries its command
+    // through instead of dropping it. The command is wrapped for `sh -c`, so
+    // assert what has to hold — the directory and the program — rather than the
+    // wrapper's exact text.
+    let LaunchPlan::HerdrCore {
+        dir,
+        command: Some(command),
+        tab,
+    } = plan(
+        Some("lazygit {path}"),
+        "new-window",
+        path,
+        None,
+        Multiplexer::HerdrCore,
+    )
+    else {
+        panic!("new-window did not carry its command into the core plan");
+    };
+    assert_eq!(dir, path);
+    assert!(command.contains("lazygit"), "{command}");
+    // `new-window` asks for its own tab, so it does not claim gitpane's.
+    assert!(!tab, "new-window must open its own tab");
+    // A split names a direction and often a target pane. A core can honour
+    // neither, and opening a tab somewhere else instead would hand the person
+    // a window they did not ask for, so the plan refuses and says what works.
+    for placement in [
+        "split-window -h",
+        "split-window -v -t p12",
+        "new-window -t spc1",
+    ] {
+        let plan = plan(
+            Some("lazygit"),
+            placement,
+            path,
+            None,
+            Multiplexer::HerdrCore,
+        );
+        let LaunchPlan::Error(message) = plan else {
+            panic!("{placement} was accepted by a core: {plan:?}");
+        };
+        assert!(message.contains("no panes to split"), "{message}");
+        assert!(message.contains("new-window"), "{message}");
+    }
+    // `ask` has one answer in a core: beside gitpane.
+    assert_eq!(
+        plan(None, "ask", path, None, Multiplexer::HerdrCore),
+        LaunchPlan::HerdrCore {
+            dir: path.to_string(),
+            command: None,
+            tab: true,
+        }
+    );
+    // `inline` stays inline: it never needed a multiplexer, so a core runs it in
+    // the current terminal exactly as any other backend does.
+    assert_eq!(
+        plan(
+            Some("git diff {base}...HEAD"),
+            "inline",
+            path,
+            Some("main"),
+            Multiplexer::HerdrCore
+        ),
+        plan(
+            Some("git diff {base}...HEAD"),
+            "inline",
+            path,
+            Some("main"),
+            Multiplexer::None
+        ),
+    );
+}

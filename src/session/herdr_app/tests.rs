@@ -494,11 +494,17 @@ fn official_backend_uses_displayed_membership_and_explicit_targets() {
         if mode != "visible" {
             let detected = Multiplexer::detect();
             match mode.as_str() {
+                // No displayed desktop: an HC terminal is a herdr-core terminal,
+                // which is exactly how a hidden worker or remote terminal runs.
                 "hidden" | "missing-cli" | "no-desktop" | "desktop-stopped" => {
-                    assert_eq!(detected.unwrap(), Multiplexer::None);
+                    assert_eq!(detected.unwrap(), Multiplexer::HerdrCore);
                 }
+                // These carry `$TMUX`, but the stub PATH has no reachable tmux
+                // server to confirm ownership, so the nested case falls back to
+                // the calling core terminal. A reachable tmux keeps Tmux — see
+                // `resolve_host` in `session::env`.
                 "missing-cli-tmux" | "no-desktop-tmux" | "hidden-tmux" => {
-                    assert_eq!(detected.unwrap(), Multiplexer::Tmux);
+                    assert_eq!(detected.unwrap(), Multiplexer::HerdrCore);
                 }
                 "no-desktop-legacy" => {
                     assert_eq!(detected.unwrap(), Multiplexer::Herdr);

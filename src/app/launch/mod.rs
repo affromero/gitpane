@@ -284,6 +284,41 @@ impl App {
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);
             }
+            // Core launches are the one path that must both read the calling
+            // space and verify the create reply, so they get their own runner
+            // instead of `spawn_detached`, which discards stdout and has no
+            // deadline. Creating a terminal is a short request; the program it
+            // then runs keeps going on its own.
+            LaunchPlan::HerdrCore {
+                dir: target,
+                command,
+                tab,
+            } => {
+                let tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut source = match crate::session::herdr_core::source() {
+                        Ok(source) => source,
+                        Err(error) => {
+                            let _ = tx.send(Action::Error(format!("{label} failed: {error}")));
+                            return;
+                        }
+                    };
+                    // A new tab is a space-only placement; beside gitpane is
+                    // the calling terminal's own tab.
+                    if !tab {
+                        source.tab = None;
+                    }
+                    let argv =
+                        crate::session::herdr_core::run_argv(&target, command.as_deref(), &source);
+                    match crate::session::herdr_core::launch(&argv, std::path::Path::new(&target)) {
+                        crate::session::herdr_core::Created::Terminal(_) => {}
+                        created => {
+                            let (message, _) = created.into_message();
+                            let _ = tx.send(Action::Error(format!("{label} failed: {message}")));
+                        }
+                    }
+                });
+            }
             LaunchPlan::HerdrApp { placement, argv } => {
                 let tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
@@ -664,6 +699,15 @@ impl App {
                     }
                 }
             });
+            return;
+        }
+        // herdr-core: no window focus exists, so report the attach command
+        // instead of quietly running the generic [goto] command.
+        if self.mux == crate::session::env::Multiplexer::HerdrCore {
+            let _ = self.action_tx.send(Action::Error(format!(
+                "goto failed: {}",
+                crate::session::herdr_core::focus_error(session)
+            )));
             return;
         }
         // tmux / plain terminal: the `[goto] command` opens a terminal tab/window.

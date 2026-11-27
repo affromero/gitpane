@@ -780,7 +780,7 @@ class BackendManager {
     }
     const epoch = this.livenessEpoch;
     const selection = this.vscode.workspace.getConfiguration('gitpane').get('sessionBackend', 'auto');
-    if (!['auto', 'tmux', 'herdr', 'herdr-app'].includes(selection)) throw new BridgeError('invalid_request', 'Choose auto, tmux, herdr, or herdr-app for gitpane.sessionBackend.');
+    if (!['auto', 'tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(selection)) throw new BridgeError('invalid_request', 'Choose auto, tmux, herdr, herdr-core, or herdr-app for gitpane.sessionBackend.');
     const snapshot = await this.mutationSnapshot();
     if (epoch !== this.livenessEpoch || this.disposed) throw new BridgeError('workspace_changed', 'Session liveness check was cancelled.');
     if (this.livenessClient) throw new BridgeError('busy', 'A session liveness check is already running.');
@@ -817,7 +817,7 @@ class BackendManager {
   }
 
   async listSessions(repo, backend) {
-    if (!['tmux', 'herdr', 'herdr-app'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
+    if (!['tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
     const snapshot = await this.mutationSnapshot();
     const repoPath = await this.realpath(repo);
     if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding sessions.');
@@ -834,7 +834,7 @@ class BackendManager {
   }
 
   async gotoSession(repo, backend, session, validateTarget) {
-    if (!['tmux', 'herdr', 'herdr-app'].includes(backend) || typeof session !== 'string' || !session || typeof validateTarget !== 'function') {
+    if (!['tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(backend) || typeof session !== 'string' || !session || typeof validateTarget !== 'function') {
       throw new BridgeError('invalid_request', 'A current session and repository are required.');
     }
     const status = await this.status(repo, undefined, { summaryOnly: true, watchedPaths: [] });
@@ -876,7 +876,7 @@ class BackendManager {
   }
 
   async launcherChoices(repo, id, fingerprint, backend, expectedBaseRef) {
-    if (!['tmux', 'herdr', 'herdr-app'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
+    if (!['tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(backend)) throw new BridgeError('invalid_request', 'Unknown session backend.');
     const snapshot = await this.mutationSnapshot();
     const repoPath = await this.realpath(repo);
     if (!this.isCurrentMutation(snapshot, repoPath)) throw new BridgeError('workspace_changed', 'Workspace changed before finding launcher placements.');
@@ -915,7 +915,7 @@ class BackendManager {
   }
 
   async executeLauncher(repo, id, fingerprint, expectedRepoIdentity, backend, choice, contextToken, validateTarget, expectedBaseRef) {
-    if (!['tmux', 'herdr', 'herdr-app'].includes(backend) || typeof validateTarget !== 'function') {
+    if (!['tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(backend) || typeof validateTarget !== 'function') {
       throw new BridgeError('invalid_request', 'A current launcher and repository are required.');
     }
     const status = await this.status(repo, undefined, { summaryOnly: true, watchedPaths: [] });

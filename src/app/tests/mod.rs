@@ -4,6 +4,7 @@ mod robustness;
 mod sort;
 mod stash;
 mod submodule_disclosure;
+mod terminate;
 mod text_selection;
 mod watcher_membership;
 use crate::git::status::StashEntry;

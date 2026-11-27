@@ -78,10 +78,11 @@ class LauncherProvider {
       throw new Error('Launcher configuration or repository changed. Choose it again.');
     }
     const configured = this.vscode.workspace?.getConfiguration('gitpane').get('sessionBackend', 'auto') ?? 'auto';
-    if (!['auto', 'tmux', 'herdr', 'herdr-app'].includes(configured)) throw new Error('Choose auto, tmux, herdr, or herdr-app for gitpane.sessionBackend.');
+    if (!['auto', 'tmux', 'herdr', 'herdr-core', 'herdr-app'].includes(configured)) throw new Error('Choose auto, tmux, herdr, herdr-core, or herdr-app for gitpane.sessionBackend.');
     let backend = configured;
     if (backend === 'auto') {
       const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr (legacy)', kind: 'herdr' },
+        { label: 'Herdr core', kind: 'herdr-core' },
         { label: 'Herdr desktop', kind: 'herdr-app' }];
       const selected = await this.vscode.window.showQuickPick(backends, { placeHolder: 'Choose a session type' });
       this.requireCurrent(repo, generation, guard);

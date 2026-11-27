@@ -39,6 +39,8 @@ pub(crate) struct Tui {
     pub event_tx: UnboundedSender<Event>,
     pub event_rx: UnboundedReceiver<Event>,
     task: Option<JoinHandle<()>>,
+    #[cfg(unix)]
+    signal_task: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
     tick_rate: Duration,
     poll_local_interval: Duration,
@@ -62,6 +64,8 @@ impl Tui {
             event_tx,
             event_rx,
             task: None,
+            #[cfg(unix)]
+            signal_task: None,
             cancellation_token: CancellationToken::new(),
             tick_rate: Duration::from_millis(250),
             poll_local_interval: Duration::from_secs(5),
@@ -98,6 +102,8 @@ impl Tui {
     }
 
     pub fn enter(&mut self) -> Result<()> {
+        #[cfg(unix)]
+        self.listen_for_termination()?;
         // Fresh token so `enter()` after `exit()` (inline-command suspend)
         // restarts a live event loop rather than one that sees the previous
         // `exit()`'s cancellation and stops immediately.
@@ -167,6 +173,30 @@ impl Tui {
             Some(e) => Err(e.into()),
             None => Ok(()),
         }
+    }
+
+    /// Forward termination from a Tokio task so the app can restore the terminal.
+    /// Keep listening while an inline command has temporarily suspended the TUI.
+    #[cfg(unix)]
+    fn listen_for_termination(&mut self) -> io::Result<()> {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        if self.signal_task.is_some() {
+            return Ok(());
+        }
+        let mut terminate = signal(SignalKind::terminate())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut hangup = signal(SignalKind::hangup())?;
+        let event_tx = self.event_tx.clone();
+        self.signal_task = Some(tokio::spawn(async move {
+            tokio::select! {
+                _ = terminate.recv() => {}
+                _ = interrupt.recv() => {}
+                _ = hangup.recv() => {}
+            }
+            let _ = event_tx.send(Event::Terminate);
+        }));
+        Ok(())
     }
 
     fn install_panic_hook(&self) {
@@ -340,6 +370,10 @@ impl Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.exit();
+        #[cfg(unix)]
+        if let Some(task) = self.signal_task.take() {
+            task.abort();
+        }
     }
 }
 

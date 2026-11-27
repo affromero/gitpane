@@ -841,6 +841,15 @@ impl App {
             Event::Quit => {
                 self.action_tx.send(Action::Quit)?;
             }
+            // A terminal signal quits at once rather than through
+            // `Action::Quit`, which waits for in-flight git operations and
+            // invites a second press. Nobody is going to press it: the process
+            // is being shut down, and leaving the terminal in raw mode with
+            // mouse reporting on is worse than a truncated child write.
+            Event::Terminate => {
+                self.should_quit = true;
+                self.force_quit = true;
+            }
             Event::Tick => {
                 if self
                     .last_config_check

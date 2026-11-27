@@ -345,6 +345,45 @@ fn tmux_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeEr
     );
     Ok(result)
 }
+/// A core offers one placement: a new tab in the space the calling terminal
+/// sits in. The token binds both the terminal and that space, so choosing in a
+/// space and executing after the terminal moved elsewhere is stale rather than
+/// silently opening the tab in the wrong place.
+fn core_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
+    let terminal = crate::session::herdr_core::terminal_id().ok_or_else(|| {
+        error(
+            "unsupported_placement",
+            "Run gitpane inside a herdr-core terminal to use this launcher.",
+        )
+    })?;
+    let source = crate::session::herdr_core::source()
+        .map_err(|message| error("unsupported_placement", message))?;
+    // Bind the space and the tab into the token, so a terminal that moved
+    // between choosing and executing is stale rather than opening elsewhere.
+    let context = match &source.tab {
+        Some(tab) => format!("{terminal}\0{}\0{tab}", source.space),
+        None => format!("{terminal}\0{}", source.space),
+    };
+    let beside = source.tab.is_some();
+    let mut result = Vec::new();
+    add_choice(
+        &mut result,
+        identity,
+        action,
+        "herdr-core",
+        &context,
+        (
+            "configured".into(),
+            if beside {
+                format!("Beside gitpane (from {terminal})")
+            } else {
+                format!("New tab in this space (from {terminal})")
+            },
+            action.placement.clone(),
+        ),
+    );
+    Ok(result)
+}
 
 fn herdr_choices(action: &Action, identity: &str) -> Result<Vec<Choice>, BridgeError> {
     let socket_path = std::env::var("HERDR_SOCKET_PATH").map_err(|_| {
@@ -555,6 +594,7 @@ fn collect(action: &Action, identity: &str, backend: &str) -> Result<Vec<Choice>
     match backend {
         "tmux" => tmux_choices(action, identity),
         "herdr" => herdr_choices(action, identity),
+        "herdr-core" => core_choices(action, identity),
         "herdr-app" => desktop_choices(action, identity),
         _ => Err(error("invalid_request", "Unknown multiplexer backend.")),
     }
@@ -741,6 +781,7 @@ pub(in crate::bridge) fn execute(
     let mux = match input.backend.as_str() {
         "tmux" => Multiplexer::Tmux,
         "herdr" => Multiplexer::Herdr,
+        "herdr-core" => Multiplexer::HerdrCore,
         "herdr-app" => Multiplexer::HerdrApp,
         _ => return Err(error("invalid_request", "Unknown multiplexer backend.")),
     };
@@ -786,6 +827,29 @@ pub(in crate::bridge) fn execute(
             let output = launch(&create, &repo, false)?;
             crate::session::herdr_app::validate_launch_response(&output.stdout)
                 .map_err(|message| error("outcome_unknown", message))?;
+        }
+        // A core launch is one `hc run`, and its reply names the terminal it
+        // created. Read the space again here: the token above proves it has not
+        // moved since the choice was made, so this is the value to use.
+        LaunchPlan::HerdrCore { dir, command, tab } => {
+            let mut source = crate::session::herdr_core::source()
+                .map_err(|message| error("session_error", message))?;
+            if !tab {
+                source.tab = None;
+            }
+            let argv = crate::session::herdr_core::run_argv(&dir, command.as_deref(), &source);
+            match crate::session::herdr_core::launch(&argv, &repo) {
+                crate::session::herdr_core::Created::Terminal(_) => {}
+                crate::session::herdr_core::Created::Refused(message) => {
+                    return Err(error("session_error", message));
+                }
+                // The create request was sent but its result is unreadable.
+                // Reporting this as unknown keeps a caller from retrying into
+                // a second terminal.
+                crate::session::herdr_core::Created::Unknown(message) => {
+                    return Err(error("outcome_unknown", message));
+                }
+            }
         }
         LaunchPlan::Herdr { create, command } => {
             let output = launch(&create, &repo, false)?;

@@ -33,6 +33,7 @@ class SessionProvider {
     try {
       this.requireCurrent(repo, generation, currentGuard);
       const backends = [{ label: 'tmux', kind: 'tmux' }, { label: 'herdr (legacy)', kind: 'herdr' },
+        { label: 'Herdr core', kind: 'herdr-core' },
         { label: 'Herdr desktop', kind: 'herdr-app' }];
       const selectedBackend = await this.vscode.window.showQuickPick(backends, { placeHolder: 'Choose a session type' });
       this.requireCurrent(repo, generation, currentGuard);

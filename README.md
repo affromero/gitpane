@@ -485,13 +485,21 @@ The selection drives the target: highlight a repo row and `o` opens the repo roo
 
 ### herdr
 
-Gitpane supports both the official desktop client and the legacy Herdr CLI.
+Gitpane supports the official desktop client, a headless Herdr Core, and the
+legacy Herdr CLI.
 
 #### Official desktop (`herdr-app` and `hc`)
 
 For desktop integration, run gitpane inside a local terminal displayed by the official desktop client. Gitpane resolves `$HC_TERMINAL_ID` through `herdr-app ls` to find the calling terminal's pane, tab, and space. Hidden core workers and remote terminals do not select this backend. Both `herdr-app` and `hc` must be on `PATH`.
 
-In a remote terminal opened through **Add Machine**, or a headless herdr-core worker, run `gitpane --cwd` in the repository as usual. Keep `$HC_TERMINAL_ID` set. If the local `herdr-app` CLI is missing or its desktop socket is missing or no longer accepting connections, automatic detection continues with the normal terminal, tmux, or legacy Herdr backend. Desktop splits, tab creation, liveness markers, and focus require a displayed local desktop terminal; gitpane does not route these operations to the desktop on another machine.
+In a remote terminal opened through **Add Machine**, or a headless herdr-core
+worker, run `gitpane --cwd` in the repository as usual; that terminal uses the
+[herdr-core backend](#herdr-core-hc). Keep `$HC_TERMINAL_ID` set. If the local
+`herdr-app` CLI is missing or its desktop socket is missing or no longer
+accepting connections, automatic detection continues with the herdr-core,
+tmux, or legacy Herdr backend. Desktop splits, tab creation, liveness markers,
+and focus require a displayed local desktop terminal; gitpane does not route
+these operations to the desktop on another machine.
 
 Invalid layout JSON, permission errors, timeouts, and other backend failures still report errors. Explicitly choosing `herdr-app` also reports errors when the local desktop is unavailable. Once gitpane has verified its source pane, it keeps that identity; launch and placement operations reject a missing or changed source pane instead of choosing a different target.
 
@@ -504,6 +512,40 @@ Invalid layout JSON, permission errors, timeouts, and other backend failures sti
 Verified with `herdr-app 0.1.11` and `hc 0.1.16` on Linux. The legacy `[herdr] forward_right_click` option applies only to the old CLI. Use the `Menu` key when the desktop client consumes right-clicks.
 
 When nested inside tmux, official desktop detection follows a bounded process-ancestor chain so shell wrappers and VS Code backend workers keep the inner tmux backend. It stops at the HC terminal's root process before considering an inherited outer tmux pane. This probe uses `ps`; unavailable process information falls back to the verified desktop context. Select `tmux` explicitly in VS Code if the host prevents the probe.
+
+#### Herdr Core (`hc`)
+
+When `$HC_TERMINAL_ID` names a terminal that no displayed `herdr-app` claims — a
+terminal on another machine, a hidden worker, or a machine with no desktop
+client at all — gitpane uses the core backend, which only needs `hc` on `PATH`.
+
+The window shows terminals it was told to arrange, so a terminal `hc` creates
+stays hidden until it carries `herdr.space`, and a `herdr.tab` label places it in
+a specific tab of that space. Gitpane reads both from the terminal it is running
+in, so the new terminal lands beside it. The labels alone are not taken as
+proof: the environment outlives its terminal, so `hc get` must confirm the
+calling terminal is still live before anything is created.
+
+- **Open / review:** `o` and `v` open a terminal beside gitpane — in the
+  calling terminal's own tab, through `hc run --bg --outlive-parent`. Both
+  labels (`herdr.space` and `herdr.tab`) are read from the terminal gitpane runs
+  in. A core has no pane geometry, so the window picks the side and whether to
+  split at all. `new-window` asks for its own tab in the same space instead; an
+  explicit `split-window` — with a direction, or with `-t` — is refused rather
+  than quietly approximated. `ask` has one answer and launches it. `inline` is
+  unaffected and still runs in the current terminal.
+- **No usable space:** if the calling terminal is missing, finished, or was
+  never displayed, gitpane reports what to do and creates nothing. A create
+  request whose reply cannot be read is reported as an unknown outcome to check
+  with `hc ls`, never retried, because a retry could open a second terminal.
+- **Liveness and `G`:** `hc ls` reports live terminals by foreground directory,
+  so the `◉` marker means the terminal exists — a core cannot prove a tab is
+  currently on screen. `G` cannot switch windows — attaching would take over the
+  terminal you are already in — so it reports the `hc attach <terminal>` command
+  instead of moving focus.
+- **VS Code:** select `herdr-core` for `gitpane.sessionBackend`.
+
+Verified with `hc 0.1.22` and `herdr-app 0.1.17` on Linux.
 
 #### Legacy CLI (`herdr`)
 
