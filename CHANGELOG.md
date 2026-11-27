@@ -6,11 +6,20 @@ All notable changes to gitpane are documented here.
 
 ### Added
 - Open repositories and worktrees from a headless Herdr Core terminal. `o` and
-  `v` open a tab in the calling terminal's space through `hc`, `hc ls` drives
-  the liveness markers, and `herdr-core` is available as a session backend.
-  Before this, a machine with `herdr-core` but no desktop client reported "set a
-  command or run gitpane inside tmux or herdr" and could not launch at all.
-  ([#273](https://github.com/affromero/gitpane/issues/273))
+  `v` open a terminal beside the dashboard, `hc ls` drives the liveness markers,
+  and `herdr-core` is available as a session backend. Before this, a machine
+  with `herdr-core` but no desktop client reported "set a command or run gitpane
+  inside tmux or herdr" and could not launch at all.
+  ([#291](https://github.com/affromero/gitpane/issues/291))
+
+### Fixed
+- Show the terminal a Herdr Core launch creates. Without `herdr.space` the
+  window keeps it hidden, so `o` reported success for a terminal nobody could
+  find. A finished or unlabelled calling terminal now reports what to do instead
+  of leaving a hidden worker behind. ([#291](https://github.com/affromero/gitpane/issues/291))
+- Restore the terminal when a signal ends gitpane. A terminated process left the
+  terminal in raw mode with mouse reporting on, so mouse moves spilled escape
+  sequences into the shell.
 
 ## [0.20.0] - 2026-11-24
 
