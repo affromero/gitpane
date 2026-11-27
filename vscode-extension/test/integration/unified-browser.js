@@ -204,12 +204,15 @@ const scenario = String.raw`
   check('menu action carries the selected file and guard', received.at(-1).message.type === 'fileMenuAction' &&
    received.at(-1).message.id === 'file' && received.at(-1).message.action === 'stage' &&
    received.at(-1).message.token === 'test-token' && !doc('changes').querySelector('[role="menu"]'));
-  doc('changes').querySelector('.file-row .menu-action').click(); await tick();
+  const fileMenuButton = doc('changes').querySelector('.file-row .menu-action');
+  fileMenuButton.focus();
+  fileMenuButton.click(); await tick();
   check('file ellipsis opens the same local menu', received.at(-1).message.type === 'fileMenuRequest' &&
    received.at(-1).message.id === 'file');
   send('changes', { type: 'fileMenu', id: 'file', requestId: received.at(-1).message.requestId,
    token: 'second-token', choices: [{ label: 'Open Changes', action: 'open' }] }); await tick();
-  doc('changes').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('file menu receives keyboard focus', doc('changes').activeElement?.getAttribute('role') === 'menuitem');
+  doc('changes').activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   check('escape closes the file menu and returns focus to its button', !doc('changes').querySelector('[role="menu"]') &&
    doc('changes').activeElement === doc('changes').querySelector('.file-row .menu-action'));
   const splitter = document.querySelector('.splitter');
