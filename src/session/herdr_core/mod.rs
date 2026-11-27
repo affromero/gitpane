@@ -266,6 +266,14 @@ pub(crate) fn pane_sessions() -> Result<Vec<(String, PathBuf)>, String> {
     parse_terminals(&output.stdout)
 }
 
+/// Whether a reported directory starts at a root, in either path convention.
+/// A terminal on another machine reports its own platform's paths, so a single
+/// host's `is_absolute` is the wrong test: it answers for this host's syntax,
+/// not the one the path was written in.
+fn is_rooted(cwd: &str) -> bool {
+    cwd.starts_with('/') || cwd.starts_with('\\') || cwd.as_bytes().get(1) == Some(&b':')
+}
+
 fn parse_terminals(output: &[u8]) -> Result<Vec<(String, PathBuf)>, String> {
     let value: Value =
         serde_json::from_slice(output).map_err(|error| format!("invalid hc response: {error}"))?;
@@ -298,11 +306,16 @@ fn parse_terminals(output: &[u8]) -> Result<Vec<(String, PathBuf)>, String> {
         let Some(cwd) = cwd else {
             continue;
         };
-        let path = PathBuf::from(cwd);
-        if !path.is_absolute() {
+        // `cwd` is the directory the terminal reported, which for a terminal on
+        // another machine follows that machine's path syntax. Judging it with
+        // this host's `is_absolute` would drop every remote terminal on
+        // Windows, and drop Unix ones when gitpane itself runs there. A path
+        // that starts at a root is what `live_sessions` matches against, so
+        // accept anything rooted in either convention.
+        if !is_rooted(cwd) {
             continue;
         }
-        panes.push((address.to_string(), path));
+        panes.push((address.to_string(), PathBuf::from(cwd)));
     }
     Ok(panes)
 }
@@ -522,6 +535,28 @@ mod tests {
             vec![
                 ("t8".to_string(), PathBuf::from("/code/app/src")),
                 ("t1b".to_string(), PathBuf::from("/code/app")),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_terminals_keeps_paths_from_either_platform() {
+        // A terminal on another machine reports its own path syntax. Judging it
+        // with this host's `is_absolute` would drop every remote terminal when
+        // gitpane runs on Windows, and Unix ones when it runs there.
+        let out = ls(concat!(
+            r#"{"address":"t1","state":"live","cwd":"/code/app"},"#,
+            r#"{"address":"t2","state":"live","cwd":"C:\\code\\app"},"#,
+            r#"{"address":"t3","state":"live","cwd":"\\\\server\\share"},"#,
+            r#"{"address":"t4","state":"live","cwd":"relative/path"},"#,
+            r#"{"address":"t5","state":"live","cwd":""}"#
+        ));
+        assert_eq!(
+            parse_terminals(&out).unwrap(),
+            vec![
+                ("t1".to_string(), PathBuf::from("/code/app")),
+                ("t2".to_string(), PathBuf::from("C:\\code\\app")),
+                ("t3".to_string(), PathBuf::from("\\\\server\\share")),
             ]
         );
     }
