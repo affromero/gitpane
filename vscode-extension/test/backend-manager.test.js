@@ -177,13 +177,24 @@ function fixture(options = {}) {
     stat: async () => ({ isDirectory: () => true, dev: 1, ino: 1 }),
     createClient: (executable, callbacks) => {
       executed.push(executable);
-      return new BridgeClient(executable, {
+      const client = new BridgeClient(executable, {
         ...callbacks,
-        ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
         spawn: () => spawn(process.execPath, ['-e', server], { stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, GITPANE_TEST_LAUNCHER_CAPABILITY: options.launcherCapability === false ? '0' : '1',
             GITPANE_TEST_BLOCK_MARKER: blockMarker } })
       });
+      if (blockMarker) {
+        const call = client.call.bind(client);
+        client.call = (method, params) => {
+          if (method !== 'external_worktree_read' || params.method !== 'status' ||
+              !params.selection.path.endsWith('blocked') || fsSync.existsSync(blockMarker)) return call(method, params);
+          const originalTimeout = client.timeoutMs;
+          client.timeoutMs = 500;
+          try { return call(method, params); }
+          finally { client.timeoutMs = originalTimeout; }
+        };
+      }
+      return client;
     }
   });
   return {
@@ -204,7 +215,7 @@ function fixture(options = {}) {
 }
 
 test('a stalled outside-worktree refresh times out without blocking other repositories or a retry', async t => {
-  const f = fixture({ timeoutMs: 500, blockExternalOnce: true });
+  const f = fixture({ blockExternalOnce: true });
   t.after(() => { f.manager.dispose(); fsSync.rmSync(f.blockMarker, { force: true }); });
   await f.manager.ready();
   const blocked = path.resolve('private-blocked');
@@ -212,9 +223,11 @@ test('a stalled outside-worktree refresh times out without blocking other reposi
   for (const repo of [blocked, healthy]) {
     f.manager.externalSelections.set(repo, { selection: { repo: path.join(f.root, 'repo'), path: repo }, guard: () => true });
   }
-  const pending = f.manager.externalStatus(blocked);
+  const expired = assert.rejects(f.manager.externalStatus(blocked),
+    error => error.code === 'timeout' && /status.*retry/i.test(error.message) && !error.message.includes(blocked));
   assert.equal((await f.manager.status(path.join(f.root, 'other'), false)).method, 'status');
-  await assert.rejects(pending, error => error.code === 'timeout' && /status.*retry/i.test(error.message) && !error.message.includes(blocked));
+  await expired;
+  assert.ok(fsSync.existsSync(f.blockMarker), 'the worker reached the stalled status request');
   assert.equal((await f.manager.externalStatus(healthy)).is_dirty, false);
   assert.equal((await f.manager.externalStatus(blocked)).is_dirty, false);
 });
