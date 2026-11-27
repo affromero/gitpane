@@ -34,17 +34,13 @@ const VISIBILITY_PROBE_INTERVAL: Duration = Duration::from_secs(3);
 /// noise power-wise; deep sleep has no tick at all.
 const DOZE_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The event sender a terminating signal forwards to. A signal handler cannot
-/// capture, so this is the one place it can reach; it is set once when the
-/// handler is installed.
-#[cfg(unix)]
-static TERMINATE_TX: std::sync::OnceLock<UnboundedSender<Event>> = std::sync::OnceLock::new();
-
 pub(crate) struct Tui {
     pub terminal: Terminal,
     pub event_tx: UnboundedSender<Event>,
     pub event_rx: UnboundedReceiver<Event>,
     task: Option<JoinHandle<()>>,
+    #[cfg(unix)]
+    signal_task: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
     tick_rate: Duration,
     poll_local_interval: Duration,
@@ -68,6 +64,8 @@ impl Tui {
             event_tx,
             event_rx,
             task: None,
+            #[cfg(unix)]
+            signal_task: None,
             cancellation_token: CancellationToken::new(),
             tick_rate: Duration::from_millis(250),
             poll_local_interval: Duration::from_secs(5),
@@ -104,6 +102,8 @@ impl Tui {
     }
 
     pub fn enter(&mut self) -> Result<()> {
+        #[cfg(unix)]
+        self.listen_for_termination()?;
         // Fresh token so `enter()` after `exit()` (inline-command suspend)
         // restarts a live event loop rather than one that sees the previous
         // `exit()`'s cancellation and stops immediately.
@@ -137,7 +137,6 @@ impl Tui {
         }
 
         self.install_panic_hook();
-        self.install_signal_handler();
         self.start_event_loop();
         Ok(())
     }
@@ -176,45 +175,29 @@ impl Tui {
         }
     }
 
-    /// Route terminating signals into the ordinary quit path.
-    ///
-    /// A signal-caused death skips `exit()`, leaving the terminal in raw mode
-    /// with mouse reporting still enabled: every mouse move then arrives as an
-    /// escape sequence the shell echoes as garbage. Handling the signal lets the
-    /// run loop close down through `exit()` instead.
-    ///
-    /// The handler only forwards an event — `send` on an unbounded channel takes
-    /// no lock and allocates nothing after the first send — so it stays async
-    /// signal safe. It installs once; `enter()` re-runs on every inline
-    /// suspend/resume.
+    /// Forward termination from a Tokio task so the app can restore the terminal.
+    /// Keep listening while an inline command has temporarily suspended the TUI.
     #[cfg(unix)]
-    fn install_signal_handler(&self) {
-        static HOOK: std::sync::Once = std::sync::Once::new();
-        let event_tx = self.event_tx.clone();
-        HOOK.call_once(move || {
-            extern "C" fn terminate(_signal: libc::c_int) {
-                // A closed or full channel just drops the event, which is fine
-                // for a process that is exiting anyway. `send` on an unbounded
-                // channel takes no lock and allocates nothing after the first
-                // send, so it stays async-signal-safe.
-                if let Some(tx) = TERMINATE_TX.get() {
-                    let _ = tx.send(Event::Terminate);
-                }
-            }
-            // The handler cannot capture, so the sender lives where it can be
-            // read without a lock.
-            let _ = TERMINATE_TX.set(event_tx);
-            for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-                let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-                action.sa_sigaction = terminate as *const () as usize;
-                unsafe { libc::sigemptyset(&mut action.sa_mask) };
-                unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
-            }
-        });
-    }
+    fn listen_for_termination(&mut self) -> io::Result<()> {
+        use tokio::signal::unix::{SignalKind, signal};
 
-    #[cfg(not(unix))]
-    fn install_signal_handler(&self) {}
+        if self.signal_task.is_some() {
+            return Ok(());
+        }
+        let mut terminate = signal(SignalKind::terminate())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut hangup = signal(SignalKind::hangup())?;
+        let event_tx = self.event_tx.clone();
+        self.signal_task = Some(tokio::spawn(async move {
+            tokio::select! {
+                _ = terminate.recv() => {}
+                _ = interrupt.recv() => {}
+                _ = hangup.recv() => {}
+            }
+            let _ = event_tx.send(Event::Terminate);
+        }));
+        Ok(())
+    }
 
     fn install_panic_hook(&self) {
         // Install exactly once per process: `enter()` runs on every inline
@@ -387,6 +370,10 @@ impl Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.exit();
+        #[cfg(unix)]
+        if let Some(task) = self.signal_task.take() {
+            task.abort();
+        }
     }
 }
 
