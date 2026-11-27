@@ -4,22 +4,17 @@ All notable changes to gitpane are documented here.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-11-27
+
 ### Added
-- Open repositories and worktrees from a headless Herdr Core terminal. `o` and
-  `v` open a terminal beside the dashboard, `hc ls` drives the liveness markers,
-  and `herdr-core` is available as a session backend. Before this, a machine
-  with `herdr-core` but no desktop client reported "set a command or run gitpane
-  inside tmux or herdr" and could not launch at all.
-  ([#291](https://github.com/affromero/gitpane/issues/291))
+- Fetch remote updates in VS Code every 30 seconds by default while Gitpane is visible on macOS or Linux. Set `gitpane.fetchInterval` to change the interval or set it to zero to disable fetching. ([#286](https://github.com/affromero/gitpane/pull/286), closes [#285](https://github.com/affromero/gitpane/issues/285))
+- Open repositories and branch reviews beside Gitpane in Herdr Core terminals, including when the desktop app is running on another machine. ([#292](https://github.com/affromero/gitpane/pull/292), closes [#291](https://github.com/affromero/gitpane/issues/291)) Thanks @expoli.
 
 ### Fixed
-- Show the terminal a Herdr Core launch creates. Without `herdr.space` the
-  window keeps it hidden, so `o` reported success for a terminal nobody could
-  find. A finished or unlabelled calling terminal now reports what to do instead
-  of leaving a hidden worker behind. ([#291](https://github.com/affromero/gitpane/issues/291))
-- Restore the terminal when a signal ends gitpane. A terminated process left the
-  terminal in raw mode with mouse reporting on, so mouse moves spilled escape
-  sequences into the shell.
+- Restore terminal settings when Gitpane exits after SIGTERM, SIGINT, or SIGHUP. ([#292](https://github.com/affromero/gitpane/pull/292)) Thanks @expoli.
+
+### Changed
+- Update Clap to 4.6.8 and ureq to 3.5.2. ([#288](https://github.com/affromero/gitpane/pull/288))
 
 ## [0.20.0] - 2026-11-24
 
