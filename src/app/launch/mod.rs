@@ -206,6 +206,61 @@ impl App {
             self.os_open(argv, parent, "reveal");
         }
     }
+    pub(super) fn open_merge_tool(
+        &mut self,
+        id: &RepoId,
+        path: &std::path::Path,
+        tui: &mut Tui,
+    ) -> Result<()> {
+        let Some(dir) = self.file_op_dir(id) else {
+            return Ok(());
+        };
+        match crate::git::file_ops::merge_tool(&dir, path) {
+            Ok(command) => {
+                self.run_inline_command(command, "Merge tool", tui)?;
+                self.action_tx.send(Action::RefreshRepo(id.clone()))?;
+                if self
+                    .active_worktree
+                    .as_ref()
+                    .is_some_and(|tree| tree.repo_id == *id)
+                {
+                    self.refresh_active_worktree();
+                }
+            }
+            Err(error) => self.action_tx.send(Action::Error(error.to_string()))?,
+        }
+        Ok(())
+    }
+
+    fn run_inline_command(
+        &self,
+        mut command: std::process::Command,
+        label: &str,
+        tui: &mut Tui,
+    ) -> Result<()> {
+        // Restore the alternate screen even when spawning the command fails.
+        tui.exit()?;
+        let status = command.status();
+        tui.enter()?;
+        tui.terminal.clear()?;
+        match status {
+            Err(error) => self.action_tx.send(Action::Error(format!(
+                "{label} failed: {}",
+                crate::git::describe_spawn_error(&error)
+            )))?,
+            Ok(status) if !status.success() => {
+                let code = status
+                    .code()
+                    .map_or_else(|| "signal".to_owned(), |code| code.to_string());
+                self.action_tx
+                    .send(Action::Error(format!("{label} exited with status {code}")))?;
+            }
+            Ok(_) => {}
+        }
+        self.action_tx.send(Action::Render)?;
+        Ok(())
+    }
+
     /// Execute a [`crate::session::launcher::LaunchPlan`] for a verb (`open`/`review`)
     /// targeting `dir`. Needs `tui` so an `Inline` plan can suspend the TUI,
     /// run the command in the inherited terminal, and restore. Ask arrives in L3.
@@ -222,37 +277,9 @@ impl App {
                 spawn_detached(argv, dir, self.action_tx.clone(), label);
             }
             LaunchPlan::Inline(cmd) => {
-                // Suspend the TUI, run the command in the inherited terminal so
-                // an interactive viewer/editor works, then restore. `enter()` is
-                // called unconditionally — a failed command must not leave us
-                // suspended — and `clear()` forces a full repaint of the
-                // re-entered alternate screen.
-                tui.exit()?;
-                let status = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .current_dir(&dir)
-                    .status();
-                tui.enter()?;
-                tui.terminal.clear()?;
-                // Set the error first, then render, so a failure's toast is
-                // painted on the repaint rather than waiting for a later one.
-                match status {
-                    Err(e) => self.action_tx.send(Action::Error(format!(
-                        "{label} failed: {}",
-                        crate::git::describe_spawn_error(&e)
-                    )))?,
-                    Ok(st) if !st.success() => {
-                        let code = st
-                            .code()
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| "signal".to_string());
-                        self.action_tx
-                            .send(Action::Error(format!("{label} exited with status {code}")))?;
-                    }
-                    Ok(_) => {}
-                }
-                self.action_tx.send(Action::Render)?;
+                let mut command = std::process::Command::new("sh");
+                command.arg("-c").arg(cmd).current_dir(dir);
+                self.run_inline_command(command, label, tui)?;
             }
             LaunchPlan::Herdr { create, command } => {
                 self.spawn_herdr_launch(create, command, dir, label);

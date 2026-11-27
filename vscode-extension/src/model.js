@@ -112,6 +112,19 @@ function richComparison(record) {
   return { left: git(original, ''), right: record.kind === 'working_deleted' ? empty : file(current) };
 }
 
+const conflictStageName = { ':1': 'base', ':2': 'ours', ':3': 'theirs' };
+const conflictSideLabel = { base: 'Base', ours: 'Ours (Current)', theirs: 'Theirs (Incoming)' };
+
+function changeDiffTitle(file, group, left, right) {
+  if (group !== 'merge') return `${file} (${group})`;
+  const label = side => conflictSideLabel[side] || 'Absent';
+  return `${file} (${label(left)} ↔ ${label(right)})`;
+}
+
+function richDiffTitle(file, group, plan) {
+  return changeDiffTitle(file, group, conflictStageName[plan.left.ref], conflictStageName[plan.right.ref]);
+}
+
 function sameOrInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -139,4 +152,4 @@ function isSubmodule(repoPath, filePath, submodules) {
   });
 }
 
-module.exports = { Status, RICH_STATUS, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, statusLabel, visibleRepository };
+module.exports = { Status, RICH_STATUS, canonicalPath, changeDiffTitle, changedFileCount, comparison, groups, isSubmodule, richComparison, richDiffTitle, statusLabel, visibleRepository };

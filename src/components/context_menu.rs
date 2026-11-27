@@ -40,6 +40,7 @@ enum MenuAction {
     SubmoduleUpdateLatest,
     // File-row actions (menu opened via `show_file`).
     OpenFile,
+    OpenMergeTool,
     RevealFile,
     CopyFilePath,
     /// Submodule row only: retarget the graph/changes panels onto the submodule.
@@ -96,6 +97,7 @@ pub(crate) struct FileMenuContext {
     pub is_untracked: bool,
     /// Submodule row: no stage/unstage/discard (only Open / Open folder).
     pub is_submodule: bool,
+    pub conflicted: bool,
     /// Submodule row that is already pinned in the repo list: its entry's id,
     /// resolved by the caller so Remove targets the exact listed path.
     pub submodule_repo: Option<RepoId>,
@@ -272,6 +274,7 @@ impl ContextMenu {
             unstaged,
             is_untracked,
             is_submodule,
+            conflicted,
             submodule_repo,
         } = ctx;
         self.visible = true;
@@ -304,11 +307,17 @@ impl ContextMenu {
         }
 
         // Always available: inspect the file or its enclosing folder.
-        let inspect = vec![
+        let mut inspect = vec![
             item("Open".into(), MenuAction::OpenFile),
             item("Open folder".into(), MenuAction::RevealFile),
             item("Copy path".into(), MenuAction::CopyFilePath),
         ];
+        if conflicted && !is_submodule {
+            inspect.insert(
+                0,
+                item("Open in Merge Tool".into(), MenuAction::OpenMergeTool),
+            );
+        }
         // A submodule is its own repo: offer to browse its graph in the
         // panels, and to pin it to (or unpin it from) the repo list.
         let mut graph = Vec::new();
@@ -434,6 +443,7 @@ impl ContextMenu {
             // File actions carry the right-clicked path; `?` makes them no-ops if
             // the menu is somehow in repo mode (no file_path).
             MenuAction::OpenFile => Action::OpenFile(id, self.file_path.clone()?),
+            MenuAction::OpenMergeTool => Action::OpenMergeTool(id, self.file_path.clone()?),
             MenuAction::RevealFile => Action::RevealFile(id, self.file_path.clone()?),
             MenuAction::CopyFilePath => Action::CopyFilePath(id, self.file_path.clone()?),
             MenuAction::OpenSubmoduleGraph => Action::SelectSubmodule {
@@ -625,6 +635,7 @@ mod file_menu_tests {
                 unstaged,
                 is_untracked,
                 is_submodule,
+                conflicted: false,
                 submodule_repo: pinned.then(|| RepoId(repo.join("a.txt"))),
             },
         );

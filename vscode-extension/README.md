@@ -195,8 +195,10 @@ common directory are fetched in sequence. Gitpane reports failures for each
 repository and refreshes the status and visible graph afterward. Fetch
 Workspace is unavailable on Windows.
 
-The extension does not use Gitpane's `[watch] poll_fetch_secs` or automatically
-fetch remotes. VS Code's Git auto-fetch setting can fetch them independently.
+On macOS and Linux, Gitpane automatically fetches every 30 seconds while its
+views are visible. Set **Gitpane: Fetch Interval** to change the interval or
+`0` to turn it off. Automatic fetch failures appear in the Gitpane output
+channel. On Windows, use VS Code's **Git: Autofetch** setting.
 
 Use **Pin Submodule…** from a repository or worktree menu to pin a direct
 submodule, including one without changes. The list comes from VS Code and can
@@ -363,6 +365,7 @@ also search Settings for `@ext:affromero.gitpane-vscode`.
 | `gitpane.worktrees.showOutsideWorkspace` | `true` | Show registered outside worktrees and inspect their changes in the current window. |
 | `gitpane.submodules.autoDiscover` | `true` | Open initialized submodules inside the workspace automatically. Turning this off leaves already open repositories available. |
 | `gitpane.refreshInterval` | `5` | Poll visible repository status, expanded file lists and graphs every 1 to 300 seconds. This does not fetch remotes or change session polling. |
+| `gitpane.fetchInterval` | `30` | Poll remotes while Gitpane is visible on macOS or Linux. Use `0` to turn it off, or an interval in seconds up to 3600. |
 | `gitpane.showSessionLiveness` | `true` | Monitor live sessions while the Explorer view is visible. Disabling it clears session indicators and stops probes. |
 | `gitpane.graph.firstParent` | `false` | Start new graphs in first-parent mode. The graph toggle controls the graph already open. |
 | `gitpane.graph.labelMaxLength` | `-1` | Inherit the native graph label length. Values from 0 to 120 override it; 0 displays only an ellipsis. Hover still shows the full label. |

@@ -11,6 +11,50 @@ class WorkspaceFetch {
     this.output = options.output;
     this.refresh = options.refresh;
     this.active = false;
+    this.visible = false;
+    this.interval = 0;
+    this.cycle = 0;
+    this.disposed = false;
+  }
+
+  configureView({ fetchInterval }) {
+    if (this.interval === fetchInterval) return;
+    this.interval = fetchInterval;
+    this.resetSchedule();
+  }
+
+  setVisible(visible) {
+    if (this.visible === visible) return;
+    this.visible = visible;
+    this.resetSchedule();
+  }
+
+  resetSchedule() {
+    this.cycle++;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.schedule();
+  }
+
+  canFetchAutomatically() {
+    return !this.disposed && this.visible && this.interval > 0 &&
+      process.platform !== 'win32' && this.vscode.workspace.isTrusted === true;
+  }
+
+  schedule() {
+    if (!this.canFetchAutomatically() || this.active || this.timer !== undefined) return;
+    const cycle = this.cycle;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.run(() => this.cycle === cycle && this.canFetchAutomatically()).catch(error => {
+        this.output.appendLine(`Gitpane automatic fetch failed: ${error.message}`);
+      });
+    }, this.interval);
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.resetSchedule();
   }
 
   current(target) {
@@ -18,40 +62,47 @@ class WorkspaceFetch {
       item.commonIdentity === target.commonIdentity && item.commonDir === target.commonDir && item.repoIdentity === target.repoIdentity);
   }
 
-  async run() {
+  async run(automaticGuard) {
+    if (this.disposed || (automaticGuard && !automaticGuard())) return;
     if (this.active) {
-      await this.vscode.window.showInformationMessage('Gitpane is already fetching the workspace.');
+      if (!automaticGuard) await this.vscode.window.showInformationMessage('Gitpane is already fetching the workspace.');
       return;
     }
     this.active = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
     try {
       const targets = this.tree.fetchTargets().map(target => ({ ...target, scopeGeneration: this.backend.generation }));
       if (!targets.length) {
-        await this.vscode.window.showInformationMessage('No repositories found in the workspace.');
+        if (!automaticGuard) await this.vscode.window.showInformationMessage('No repositories found in the workspace.');
         return;
       }
-      const result = await this.vscode.window.withProgress({
+      const result = automaticGuard ? await this.fetch(targets, undefined, automaticGuard) : await this.vscode.window.withProgress({
         location: this.vscode.ProgressLocation.Notification, title: 'Gitpane: Fetch Workspace', cancellable: false
       }, progress => this.fetch(targets, progress));
       let refreshFailure;
-      try { await this.refresh(); }
+      try { if (!automaticGuard || automaticGuard()) await this.refresh(); }
       catch (error) { refreshFailure = error?.message || String(error); }
+      for (const failure of result.failures) this.output.appendLine(`Gitpane fetch failed for ${failure.path}: ${failure.message}`);
+      if (refreshFailure) this.output.appendLine(`Gitpane could not refresh after fetch: ${refreshFailure}`);
+      if (automaticGuard) return;
       if (!result.failures.length && !refreshFailure) {
         await this.vscode.window.showInformationMessage(`Fetched ${result.fetched} ${result.fetched === 1 ? 'repository' : 'repositories'}.`);
         return;
       }
-      for (const failure of result.failures) this.output.appendLine(`Gitpane fetch failed for ${failure.path}: ${failure.message}`);
-      if (refreshFailure) this.output.appendLine(`Gitpane could not refresh after fetch: ${refreshFailure}`);
       const sample = result.failures.slice(0, 3).map(failure => `${failure.path}: ${failure.message}`).join('\n');
       const more = result.failures.length > 3 ? `\n${result.failures.length - 3} more in Gitpane output.` : '';
       const refreshMessage = refreshFailure ? `\nCould not refresh after fetch: ${refreshFailure}` : '';
       const selected = await this.vscode.window.showWarningMessage(
         `Fetched ${result.fetched} of ${targets.length} repositories. ${result.failures.length} failed.${sample ? `\n${sample}` : ''}${more}${refreshMessage}`, 'Show Details');
       if (selected === 'Show Details') this.output.show();
-    } finally { this.active = false; }
+    } finally {
+      this.active = false;
+      this.schedule();
+    }
   }
 
-  async fetch(targets, progress) {
+  async fetch(targets, progress, guard = () => true) {
     const failures = [];
     let fetched = 0;
     let next = 0;
@@ -59,10 +110,10 @@ class WorkspaceFetch {
     const recordFailure = (target, error) => {
       const prefix = error?.code === 'outcome_unknown' ? 'Fetch outcome is unknown. Inspect the repository before retrying: ' : '';
       failures.push({ path: target.path, message: prefix + (error?.message || String(error)) });
-      progress.report({ increment: 100 / targets.length, message: target.path });
+      progress?.report({ increment: 100 / targets.length, message: target.path });
     };
     const prepare = async () => {
-      while (next < targets.length) {
+      while (next < targets.length && guard()) {
         const index = next++;
         const target = targets[index];
         try {
@@ -98,18 +149,19 @@ class WorkspaceFetch {
     const worker = async () => {
       while (next < pending.length) {
         for (const { target, preview } of pending[next++]) {
+          if (!guard()) return;
           try {
             if (!this.current(target)) throw new Error('Repository or workspace changed before fetch.');
             await this.mutations.execute('repo_fetch', { repo: target.path, expected_repo_identity: preview.repo_identity,
               expected_fetch_token: preview.fetch_token }, {
-              lockKey: target.commonDir, validateTarget: () => this.current(target), waitForClose: true
+              lockKey: target.commonDir, validateTarget: () => guard() && this.current(target), waitForClose: true
             });
             fetched++;
           } catch (error) {
             recordFailure(target, error);
             continue;
           }
-          progress.report({ increment: 100 / targets.length, message: target.path });
+          progress?.report({ increment: 100 / targets.length, message: target.path });
         }
       }
     };

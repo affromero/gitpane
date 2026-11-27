@@ -14,7 +14,7 @@
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/v/gitpane.svg?logo=rust&style=flat-square&color=blue" alt="crates.io"></a>
     <a href="https://docs.rs/gitpane"><img src="https://img.shields.io/docsrs/gitpane?logo=rust&style=flat-square" alt="docs.rs"></a>
     <a href="https://deps.rs/repo/github/affromero/gitpane"><img src="https://deps.rs/repo/github/affromero/gitpane/status.svg?style=flat-square" alt="Dependency status"></a>
-    <a href="https://github.com/affromero/gitpane/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.88.0-dea584?style=flat-square&logo=rust" alt="MSRV 1.88.0"></a>
+    <a href="https://github.com/affromero/gitpane/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.91.0-dea584?style=flat-square&logo=rust" alt="MSRV 1.91.0"></a>
     <a href="https://crates.io/crates/gitpane"><img src="https://img.shields.io/crates/d/gitpane?label=downloads&style=flat-square&color=blue" alt="Downloads"></a>
     <br>
     <a href="https://github.com/affromero/gitpane/releases/latest"><img src="https://img.shields.io/github/v/tag/affromero/gitpane?label=release&style=flat-square&color=blue" alt="GitHub Release"></a>
@@ -86,9 +86,9 @@ in an editor tab; selecting a repository keeps the graph in the sidebar.
 The view follows VS Code's Git repository discovery within the current workspace,
 including multi-root workspaces. It updates when workspace folders or detected
 repositories change and refreshes local status while visible. Linked worktrees
-inside the workspace have their own rows and actions. Gitpane does not fetch
-remotes automatically; use **Gitpane: Fetch Workspace** to fetch explicitly on
-macOS or Linux. VS Code's own Git auto-fetch setting works independently.
+inside the workspace have their own rows and actions. On macOS and Linux,
+Gitpane fetches remotes every 30 seconds while visible. Use **Gitpane: Fetch
+Workspace** to fetch immediately.
 
 Install [Gitpane for VS Code from the Marketplace](https://marketplace.visualstudio.com/items?itemName=affromero.gitpane-vscode),
 or run:
@@ -129,6 +129,7 @@ VS Code Settings for **Gitpane**:
 | `gitpane.sortOrder` | `remember` | Remember the toolbar sort per workspace, or select workspace, alphabetical, reverse or dirty order. |
 | `gitpane.worktrees.defaultVisibility` | `native` | Use native `expand_worktrees`, or start expanded or collapsed. Saved choices for individual repositories take precedence. |
 | `gitpane.refreshInterval` | `5` | Seconds between visible repository status, expanded-file and graph refreshes, from 1 to 300. |
+| `gitpane.fetchInterval` | `30` | Seconds between automatic workspace fetches while Gitpane is visible on macOS or Linux. Set to `0` to turn it off. |
 | `gitpane.showSessionLiveness` | `true` | Show live session indicators and monitor sessions while the view is visible. |
 | `gitpane.graph.firstParent` | `false` | Start newly opened graphs in first-parent mode. |
 | `gitpane.graph.labelMaxLength` | `-1` | Inherit native label length, or set 0 to 120 characters. Zero displays an ellipsis. |
@@ -191,6 +192,8 @@ The indicator is also the fastest way through a long pane: click it to jump to t
 <img src="assets/screenshot-commit.png" alt="Commit detail drill down" width="800">
 
 ## Features
+
+On a linked worktree, `↓6 main` means the checkout is missing six commits from the remote default branch `main`. An arrow without a branch name tracks the current branch's upstream. When the upstream is also the remote default branch, only the usual upstream arrow appears.
 
 - **Multi repo overview**: Scans `~/Code` (configurable) for git repos. It shows dirty indicator (`*`), branch (dimmed on the default branch), ahead/behind arrows (`↑↓`), worktree count (`⎇`), dirty submodule (`◈`), unpushed submodule pointer (`⇡`), stash count (`$`), and change count.
 - **Worktree awareness**: Shows the number of linked git worktrees per repo (`⎇2`) and lists them under it. In the agentic AI era, tools like Claude Code create worktrees for parallel development. gitpane lets you see which repos have active parallel work. Worktrees show on startup; press `w` to collapse a repo you want quiet, or set `[ui] expand_worktrees = false` to start every repo collapsed.
@@ -432,6 +435,12 @@ command = "cursor {path}"
 ```
 
 See [`examples/config.toml`](examples/config.toml) for a fully annotated example.
+
+On macOS, GitPane can raise its own soft open-file limit when its filesystem
+watches need more capacity. The increase stays within the inherited hard limit
+and tops out at 16,384. Repository discovery, repository roots, and Git metadata
+get watch slots before optional nested worktree directories. Local polling
+continues to refresh known repositories when a watch cannot be installed.
 
 ### Opening a repo or worktree
 
@@ -848,6 +857,27 @@ Optional tooling for the full local suite:
 ```bash
 cargo install cargo-audit cargo-llvm-cov
 ```
+
+### Runtime benchmarks
+
+For changes likely to affect TUI performance, build the base and proposed
+commits with the same toolchain and Cargo profile, then compare the binaries
+on the same macOS or Linux machine with Python 3.10+ and Git on PATH.
+
+```bash
+python3 scripts/benchmark_runtime.py /tmp/gitpane-base /tmp/gitpane-pr
+```
+
+The script uses an isolated workspace and alternates the binaries after one
+warmup each. It reports first render, watcher setup, file-change visibility,
+idle CPU and resident memory, peak memory, and total CPU. Paste the Markdown
+report into the PR. Use `--format json` for individual measurements.
+The idle and edit measurements start at fixed offsets from launch. Increase
+`--settle-seconds` for workspaces that take longer to start.
+For watcher stress tests, use `--nested-watches --open-file-limit 16384`.
+To help isolate event-driven refresh from polling and throttling in that test,
+add `--poll-local-secs 60 --refresh-cooldown-ms 0`.
+Use `--help` to adjust workspace size or the number of runs.
 
 ### Project structure
 

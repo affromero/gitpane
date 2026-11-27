@@ -6,7 +6,7 @@ human-facing overview, see [README.md](README.md).
 
 ## Setup
 
-- Rust edition 2024, MSRV **1.88.0**. Install a matching toolchain (rustup recommended).
+- Rust edition 2024, MSRV **1.91.0**. Install a matching toolchain (rustup recommended).
 - No services or network access are needed to build, run, or test.
 - Full integration coverage requires `git` on PATH, plus `sh` and `sleep` on
   Unix. CLI tests use `crate::git::git_test_available()` to skip only missing
@@ -157,10 +157,24 @@ Linux or Windows behavior.
 - Open an issue first (bug report or feature request) and reference it with
   `Closes #<n>` in the PR body. Skip the issue only for trivial fixes (typos,
   doc tweaks).
-- The web UI pre-fills `.github/PULL_REQUEST_TEMPLATE.md`, but `gh pr create`
-  does not — structure the PR body yourself with the template's sections:
-  `Closes #<n>`, `## In simple terms` (one or two sentences a user
-  would understand), `## Problem`, `## Fix`, `## Test`.
+- Follow `.github/PULL_REQUEST_TEMPLATE.md` when writing the PR body. Pass the
+  completed body explicitly when using `gh pr create`.
+- Embed GIFs in the Demo section before requesting review whenever a PR
+  changes behavior that can be demonstrated visually, including bug fixes.
+  Cover each affected interface, such as the TUI and VS Code. Show the same
+  steps before and after for changes to existing behavior, or show a new
+  feature in use. If a GIF does not apply, briefly explain why in the Demo
+  section.
+- PR-only screenshots and GIFs may live in a temporary commit. Pin their PR
+  embeds to the commit containing them, remove the files in a cleanup commit
+  before merging, and verify the embeds still load. Merge with a merge commit
+  to preserve the pinned commit. If review-only media already landed on the
+  base branch, remove it in a follow-up change. Keep assets used by the product
+  or maintained documentation.
+- For changes likely to affect TUI runtime, compare the base and proposed
+  binaries with `scripts/benchmark_runtime.py` and include the report in the
+  PR. Build both with the same toolchain and profile, and describe any
+  regressions alongside improvements.
 
 ## Releasing
 

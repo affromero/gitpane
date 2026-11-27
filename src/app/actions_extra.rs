@@ -251,6 +251,7 @@ impl App {
                 unstaged,
                 is_untracked,
                 is_submodule,
+                conflicted,
             } => {
                 // Resolve only for submodule rows: every other right-click
                 // skips the canonicalize syscall and the repo-list scan.
@@ -279,6 +280,7 @@ impl App {
                         unstaged,
                         is_untracked,
                         is_submodule,
+                        conflicted,
                         submodule_repo,
                     },
                 );
@@ -533,6 +535,20 @@ impl App {
                         let sub_state = sub.state.clone();
                         let tx = self.action_tx.clone();
                         tokio::task::spawn_blocking(move || {
+                            let conflict = git2::Repository::open(&repo_path)
+                                .map_err(color_eyre::Report::from)
+                                .and_then(|repo| {
+                                    crate::git::file_ops::conflict_diff(&repo, &sub_path)
+                                });
+                            if let Some(result) = conflict.transpose() {
+                                let content = result
+                                    .unwrap_or_else(|error| format!("Failed to get diff: {error}"));
+                                let _ = tx.send(Action::DiffLoaded {
+                                    generation: diff_gen,
+                                    content,
+                                });
+                                return;
+                            }
                             let submodule_abs = repo_path.join(&sub_path);
                             let short_old = if old_oid.len() >= 7 {
                                 &old_oid[..7]

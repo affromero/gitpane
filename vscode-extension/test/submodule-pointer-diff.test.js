@@ -99,6 +99,7 @@ test('conflict pointer comparisons select available stages and empty sides', asy
   assert.deepEqual(selectedSides(change, { base: sides.base, ours: null, theirs: null }), ['base', null]);
   const f = fixture(t, change, sides);
   await openPointerDiff(f.node, f.provider, f.tree, f.backend, f.links, f.vscode);
+  assert.equal(f.commands[0][3], `${path.join(f.repo.rootUri.fsPath, change.path)} (Ours (Current) ↔ Theirs (Incoming))`);
   assert.equal(await f.links.provideTextDocumentContent(f.commands[0][1]), `Subproject commit ${'2'.repeat(40)}\n`);
   assert.equal(await f.links.provideTextDocumentContent(f.commands[0][2]), `Subproject commit ${'3'.repeat(40)}\n`);
 });

@@ -225,6 +225,7 @@ pub(super) fn query(
                 "branch": worktree.branch,
                 "ahead": worktree.ahead,
                 "behind": worktree.behind,
+                "default_branch_lag": worktree.default_branch_lag,
                 "is_dirty": worktree.is_dirty,
                 "file_count": worktree.file_count,
             }))
@@ -279,6 +280,7 @@ pub(super) fn query(
         "head_oid": result.head_oid,
         "ahead": result.ahead,
         "behind": result.behind,
+        "default_branch_lag": result.default_branch_lag,
         "is_dirty": result.is_dirty,
         "files": files,
         "worktrees": worktrees,

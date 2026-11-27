@@ -35,15 +35,25 @@ What the change does and why this approach.
 
 How the change was verified, including new or updated tests and relevant CI
 checks.
+For changes likely to affect TUI runtime, include the before-and-after
+benchmark report and note any regressions.
 
 - [ ] `just ci` passes
 - [ ] Tests were added or updated where behavior changed
 - [ ] Documentation was updated where needed
 
-## Feature demo
+## Demo
 
-Every feature PR must include a GIF demonstrating the new behavior. Embed the
-GIF here before requesting review.
+Embed GIFs for every change that can be demonstrated visually, including bug
+fixes. Show each affected interface, such as the TUI and VS Code. If existing
+behavior changes, show the same steps before and after the change. For new
+behavior, show it in use. If a GIF does not apply, briefly explain why.
+
+Attach review-only media to the PR or commit it temporarily and embed it using
+a URL pinned to the commit containing the file. Before merging, remove
+review-only files in a follow-up commit on the PR branch and verify that the
+embeds still load. Use a merge commit to preserve the media commit in history.
+Keep media used by the product or maintained documentation.
 
 ## Maintainer review
 
@@ -53,6 +63,11 @@ GIF here before requesting review.
       environment and verify the proposed fix at the commit being merged.
 - [ ] Confirm the required checks passed for that commit. Repeat affected
       verification after conflict resolution or other changes.
+- [ ] Confirm the GIFs demonstrate the change in each affected interface, or
+      that the PR explains why a GIF does not apply.
+- [ ] Confirm review-only media is absent from the final diff and still loads
+      in the PR. If it already landed on the base branch, remove it in a
+      follow-up change.
 
 ## Review assistance
 

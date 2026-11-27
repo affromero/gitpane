@@ -2,7 +2,7 @@
   "name": "gitpane-vscode",
   "displayName": "Gitpane for VS Code",
   "description": "See changes across Gitpane repositories in the Explorer.",
-  "version": "0.19.4",
+  "version": "0.20.0",
   "publisher": "affromero",
   "icon": "media/gitpane.png",
   "license": "MIT",
@@ -104,6 +104,15 @@
           "scope": "window",
           "order": 30,
           "description": "Seconds between repository status, expanded-file and graph refreshes while their views are visible. Does not fetch remotes."
+        },
+        "gitpane.fetchInterval": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 3600,
+          "scope": "window",
+          "order": 35,
+          "description": "Seconds between automatic workspace fetches while Gitpane is visible on macOS or Linux. Set to 0 to turn off automatic fetching."
         },
         "gitpane.showSessionLiveness": {
           "type": "boolean",

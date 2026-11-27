@@ -12,6 +12,15 @@ All notable changes to gitpane are documented here.
   command or run gitpane inside tmux or herdr" and could not launch at all.
   ([#273](https://github.com/affromero/gitpane/issues/273))
 
+## [0.20.0] - 2026-11-24
+
+### Added
+- Compare the current and incoming versions of a conflicted file. Resolve it in the native VS Code Merge Editor or open Git's merge tool from the TUI. ([#278](https://github.com/affromero/gitpane/pull/278), closes [#277](https://github.com/affromero/gitpane/issues/277))
+- See how far a linked worktree is behind the default branch in the TUI and VS Code. ([#283](https://github.com/affromero/gitpane/pull/283), closes [#281](https://github.com/affromero/gitpane/issues/281))
+
+### Changed
+- Batch filesystem watches so the TUI starts monitoring large workspaces sooner. Building from source now requires Rust 1.91. ([#282](https://github.com/affromero/gitpane/pull/282), closes [#280](https://github.com/affromero/gitpane/issues/280))
+
 ## [0.19.4] - 2026-11-23
 
 ### Fixed

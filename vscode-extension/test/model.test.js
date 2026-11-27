@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const { isolatedGitEnv } = require('./integration/git-env');
-const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, visibleRepository } = require('../src/model');
+const { Status, canonicalPath, changedFileCount, comparison, groups, isSubmodule, richComparison, richDiffTitle, visibleRepository } = require('../src/model');
 
 test('changed files retain their staged and unstaged groups', () => {
   const staged = { status: Status.INDEX_MODIFIED, uri: 'file' };
@@ -70,6 +70,20 @@ test('conflict diffs compare available index stages even without a working file'
       { left: side(left), right: side(right) }, `conflict status ${status}`);
   }
   assert.throws(() => comparison('merge', { status: -1, uri: 'conflict.txt' }), /unsupported conflict status/i);
+});
+
+test('conflict titles identify the stages actually displayed from left to right', () => {
+  for (const [base, ours, theirs, expected] of [
+    ['base', 'ours', 'theirs', 'Ours (Current) ↔ Theirs (Incoming)'],
+    ['base', 'ours', null, 'Base ↔ Ours (Current)'],
+    ['base', null, 'theirs', 'Base ↔ Theirs (Incoming)'],
+    ['base', null, null, 'Base ↔ Absent'],
+    [null, 'ours', null, 'Absent ↔ Ours (Current)'],
+    [null, null, 'theirs', 'Absent ↔ Theirs (Incoming)']
+  ]) {
+    const plan = richComparison({ group: 'merge', conflict_stages: { base, ours, theirs } });
+    assert.equal(richDiffTitle('file.txt', 'merge', plan), `file.txt (${expected})`);
+  }
 });
 
 test('conflict comparisons resolve real Git index contents when the working file is missing', t => {

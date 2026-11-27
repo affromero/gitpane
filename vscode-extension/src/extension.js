@@ -15,7 +15,7 @@ const { RepoTerminalProvider } = require('./repo-terminal-provider');
 const { LauncherProvider } = require('./launcher-provider');
 const { MutationManager } = require('./mutation-manager');
 const { SidebarActions } = require('./sidebar-actions');
-const { RICH_STATUS, isSubmodule, richComparison, statusLabel } = require('./model');
+const { RICH_STATUS, isSubmodule, richComparison, richDiffTitle, statusLabel } = require('./model');
 const { RepositoryTree } = require('./repository-tree');
 const { ChangePager, scopedFile, validRecord, validatePage } = require('./change-pager');
 const { LinkDocuments, statusRevision } = require('./link-documents');
@@ -144,6 +144,7 @@ class GitpaneViewProvider {
         worktrees.set(worktreeId, { repoKey, repoToken, path: item.path, childRepoId, childToken });
         return { id: worktreeId, submoduleStateKey: submoduleStateKey(item.path), name: path.basename(item.path), branch: item.branch, live: this.tree.sessionLive?.(item.path) || false,
           dirty: item.is_dirty, fileCount: item.file_count, ahead: item.ahead, behind: item.behind,
+          defaultBranchLag: item.default_branch_lag,
           available: !!child, hasDirtySubmodules: !!childStatus?.has_dirty_submodules,
           hasUnpushedSubmodules: !!childStatus?.has_unpushed_submodules,
           ...incomplete(childStatus, child),
@@ -170,6 +171,7 @@ class GitpaneViewProvider {
             fileCount: summary?.file_count_lower_bound || 0,
             changeCountLowerBound: summary?.file_count_lower_bound,
             ahead: summary?.ahead || 0, behind: summary?.behind || 0,
+            defaultBranchLag: summary?.default_branch_lag,
             ...(active ? { changesPage: pageFor(worktreeId) } : {}), groups: active ? groupsFor(inspected.repo, worktreeId) : [],
             submodules: externalSubmodules(this, vscode, { item, repoKey, repoToken, worktreeId, summary, live, groupsFor, pageFor, errors: externalErrors }) });
         }
@@ -184,6 +186,7 @@ class GitpaneViewProvider {
         dirty: !!status?.is_dirty,
         ahead: status?.ahead || 0,
         behind: status?.behind || 0,
+        defaultBranchLag: status?.default_branch_lag,
         worktree: repo.kind === 'worktree',
         submodule: !!node.submodule,
         pinned: this.pins?.isPinned(repo) || false,
@@ -722,6 +725,7 @@ async function activate(context) {
   });
   const workspaceFetch = new WorkspaceFetch({ tree, backend, mutations, vscode, output,
     refresh: async () => { await provider.refresh(); await Promise.all([graph.pollRevision(), sidebarGraph.pollRevision()]); } });
+  tree.workspaceFetch = workspaceFetch;
   const worktreeContext = (id, repo) => {
     const link = provider.worktrees.get(id);
     const parent = api.repositories.find(item => item.rootUri.toString() === link?.repoKey);
@@ -963,7 +967,7 @@ async function activate(context) {
         const imageAddition = node.group === 'untracked' && plan.left.empty &&
           (right.scheme === 'file' || right.scheme === 'gitpane-blob') && /\.(png|gif)$/i.test(node.record.path);
         const left = imageAddition ? vscode.Uri.joinPath(context.extensionUri, 'media', 'empty.png') : leftSide;
-        const title = `${node.change.uri.fsPath} (${node.group})`;
+        const title = richDiffTitle(node.change.uri.fsPath, node.group, plan);
         if (!await provider.withCurrentChange(node, () => selectedGuard() && vscode.commands.executeCommand('vscode.diff', left, right, title))) {
           throw new Error('The change is no longer in the workspace.');
         }

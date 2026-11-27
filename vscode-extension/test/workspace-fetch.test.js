@@ -22,7 +22,7 @@ function fixture() {
   let refreshes = 0;
   const tree = { fetchTargets: () => targets.map(target => ({ ...target })) };
   const backend = { generation: 1, previewFetch: repo => preview(repo) };
-  const vscode = { ProgressLocation: { Notification: 1 }, window: {
+  const vscode = { workspace: { isTrusted: true }, ProgressLocation: { Notification: 1 }, window: {
     async withProgress(options, operation) { assert.equal(options.cancellable, false); return operation({ report: item => progress.push(item) }); },
     async showInformationMessage(message) { notices.push(message); },
     async showWarningMessage(message) { notices.push(message); }
@@ -60,6 +60,48 @@ test('explicit fetch runs every worktree with its own preview and serializes sha
   assert.equal(f.refreshes, 1);
   assert.equal(f.progress.length, 3);
   assert.match(f.notices.at(-1), /fetched 3 repositories/i);
+});
+
+test('automatic fetch waits for a visible view, refreshes quietly, and stops when disabled', { skip: process.platform === 'win32' }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  t.after(() => f.controller.dispose());
+  f.controller.configureView({ fetchInterval: 30000 });
+  t.mock.timers.tick(30000);
+  assert.equal(f.calls.length, 0);
+
+  f.controller.setVisible(true);
+  t.mock.timers.tick(29999);
+  assert.equal(f.calls.length, 0);
+  t.mock.timers.tick(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.refreshes, 1);
+  assert.deepEqual(f.notices, []);
+  assert.deepEqual(f.progress, []);
+
+  f.controller.configureView({ fetchInterval: 0 });
+  t.mock.timers.tick(60000);
+  assert.equal(f.calls.length, 3);
+});
+
+test('hiding and reopening the view invalidates a queued automatic fetch', { skip: process.platform === 'win32' }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  t.after(() => f.controller.dispose());
+  f.setExecute(async (_method, params, options) => {
+    if (params.repo !== f.main) return;
+    f.controller.setVisible(false);
+    f.controller.setVisible(true);
+    assert.equal(options.validateTarget(), false);
+  });
+  f.controller.configureView({ fetchInterval: 30000 });
+  f.controller.setVisible(true);
+  t.mock.timers.tick(30000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(f.calls.some(([, params]) => params.repo === f.main));
+  assert.ok(!f.calls.some(([, params]) => params.repo === f.linked));
+  assert.equal(f.refreshes, 0);
 });
 
 test('workspace changes during preview stop the affected fetch and preserve partial results', async () => {

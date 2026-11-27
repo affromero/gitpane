@@ -49,6 +49,87 @@ fn apply(path: &Path, name: &str, operation: FileOperation) {
     );
 }
 
+fn add_conflict(repo: &Repository, path: &Path) {
+    let mut index = repo.index().unwrap();
+    let mut entry = index.get_path(path, 0).unwrap();
+    index.remove_path(path).unwrap();
+    for (stage, content) in [
+        (1, b"base version\n".as_slice()),
+        (2, b"current version\n".as_slice()),
+        (3, b"incoming version\n".as_slice()),
+    ] {
+        entry.flags = (entry.flags & !0x3000) | (stage << 12);
+        entry.id = repo.blob(content).unwrap();
+        index.add(&entry).unwrap();
+    }
+    index.write().unwrap();
+}
+
+#[test]
+fn conflict_diff_labels_index_sides_even_when_the_working_file_is_missing() {
+    let (tmp, repo) = fixture(&["conflict.txt"]);
+    let path = Path::new("conflict.txt");
+    add_conflict(&repo, path);
+    std::fs::remove_file(tmp.path().join(path)).unwrap();
+
+    let preview = diff(tmp.path(), path).unwrap();
+    assert!(preview.contains("- Ours (Current): "), "{preview}");
+    assert!(preview.contains("+ Theirs (Incoming): "), "{preview}");
+    assert!(preview.contains("Base: "), "{preview}");
+    assert!(preview.contains("\n-current version\n"), "{preview}");
+    assert!(preview.contains("\n+incoming version\n"), "{preview}");
+
+    let mut index = repo.index().unwrap();
+    index.remove(path, 2).unwrap();
+    index.write().unwrap();
+    let preview = diff(tmp.path(), path).unwrap();
+    assert!(preview.contains("Ours (Current): deleted"), "{preview}");
+    assert!(preview.contains("\n+incoming version\n"), "{preview}");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_merge_tool_resolves_only_the_selected_conflict() {
+    if !crate::git::git_test_available() {
+        return;
+    }
+    let (tmp, repo) = fixture(&["with spaces.txt", "*.txt", "other.txt"]);
+    let selected = Path::new("with spaces.txt");
+    let pattern = Path::new("*.txt");
+    let other = Path::new("other.txt");
+    add_conflict(&repo, selected);
+    add_conflict(&repo, other);
+    add_conflict(&repo, pattern);
+    let mut config = repo.config().unwrap();
+    config.set_str("merge.tool", "fixture").unwrap();
+    config
+        .set_str("mergetool.fixture.cmd", "cat \"$REMOTE\" > \"$MERGED\"")
+        .unwrap();
+    config
+        .set_bool("mergetool.fixture.trustExitCode", true)
+        .unwrap();
+    config.set_bool("mergetool.prompt", false).unwrap();
+    config.set_bool("mergetool.keepBackup", false).unwrap();
+
+    assert!(merge_tool(tmp.path(), pattern).is_err());
+    let output = merge_tool(tmp.path(), selected).unwrap().output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(selected)).unwrap(),
+        "incoming version\n"
+    );
+    let fresh = Repository::open(tmp.path()).unwrap().index().unwrap();
+    assert!(fresh.get_path(selected, 0).is_some());
+    assert!(fresh.get_path(other, 2).is_some());
+    assert!(fresh.get_path(pattern, 2).is_some());
+    assert!(merge_tool(tmp.path(), selected).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn selected_pattern_filename_does_not_change_other_files_or_index_entries() {

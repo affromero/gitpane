@@ -56,6 +56,7 @@ pub(crate) mod workflow;
 struct WatcherSlot {
     requested: u64,
     current: Option<(u64, RepoWatcher)>,
+    build: Arc<Mutex<()>>,
 }
 
 impl WatcherSlot {
@@ -595,9 +596,17 @@ impl App {
         let slot = Arc::clone(&self.watcher);
         // Request and installation use the same lock, so an older build can
         // never replace watches requested for a newer membership snapshot.
-        let generation = slot.lock().unwrap().request();
+        let (generation, build) = {
+            let mut slot = slot.lock().unwrap();
+            (slot.request(), Arc::clone(&slot.build))
+        };
         let repo_count = repo_paths.len();
         tokio::task::spawn_blocking(move || {
+            // Keep at most one replacement alive alongside the current watcher.
+            let _build = build.lock().unwrap();
+            if slot.lock().unwrap().requested != generation {
+                return;
+            }
             let started = std::time::Instant::now();
             match RepoWatcher::new(
                 &repo_paths,
